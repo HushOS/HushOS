@@ -1089,7 +1089,14 @@ export async function getStorageAllowance(userId: string) {
             reservedBytes: '0',
             availableBytes: (figures.shown.free > 0n ? figures.shown.free : 0n).toString(),
             pool: { groupId: figures.pool.groupId, name },
-            own: { usedBytes: own.used.toString(), allowanceBytes: own.allowance.toString() },
+            // What the person's own files may still take, as an upload begin checks it (poolFigures'
+            // `free`: the others' parts in whole GiB, their own to the byte). A refused upload's 402
+            // already names this figure; the save path checks a run against it before starting.
+            own: {
+                usedBytes: own.used.toString(),
+                allowanceBytes: own.allowance.toString(),
+                freeBytes: (figures.free > 0n ? figures.free : 0n).toString(),
+            },
         };
     }
     return {

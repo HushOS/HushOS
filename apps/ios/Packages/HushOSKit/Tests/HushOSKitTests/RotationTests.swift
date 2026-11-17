@@ -346,6 +346,8 @@ final class FakeDrive: @unchecked Sendable {
     var beforeComplete: (() -> Void)?
     /* A completion refused only because a key change re-keyed the file meanwhile (its version unchanged). */
     var rekeyAtComplete = false
+    /* What aborts answer, in order, before the usual answer (a test's upload still finishing). */
+    var abortReplies: [(Int, Any)] = []
     private let lock = NSLock()
     private var target: UInt64 = 0
     /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
@@ -560,6 +562,8 @@ final class FakeDrive: @unchecked Sendable {
             return (200, ["upload": ["id": uploadId, "nodeId": nodeId, "versionId": versionId, "status": "pending", "chunkCount": count],
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
+            if !abortReplies.isEmpty { return abortReplies.removeFirst() }
+            if uploads[rest[1]] == nil { return (404, ["code": "not-found", "message": "This upload no longer exists."]) }
             aborted.append(rest[1])
             return (200, ["aborted": true])
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":

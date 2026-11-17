@@ -388,20 +388,10 @@ fn reseal_form(prior: Integrity) -> CoreResult<Form> {
     }
 }
 
-/*
- * How a copy (or a result made from a source) signs: saved when it came from a
- * link (whose signatures a visitor never sees), else as a reseal, except that a
- * record nobody could check is re-sealed rather than refused, as the web's
- * signatureFormFor does (packages/drive/src/trust.ts): a copy never vouches
- * for it, and one unreadable record no longer stops a copy or a tool. A
- * rotation or rename (reseal_form) still refuses one, as the web's resealForm.
- */
+/* How a copy signs: saved when it came from a link (whose signatures a visitor never sees), else as a reseal. */
 fn copy_form(prior: Integrity, from_link: bool) -> CoreResult<Form> {
     if from_link {
         return Ok(Form::Saved);
-    }
-    if prior == Integrity::Unchecked {
-        return Ok(Form::Resealed);
     }
     reseal_form(prior)
 }
@@ -421,8 +411,10 @@ fn copy_strength(prior: Integrity) -> u8 {
 /// a zip of it Unverified and one saved from a link makes it saved from a
 /// link. Pass it to [`metadata_copy_sign`] or [`version_copy_sign`] (`.copy`
 /// on the phones). A source saved from a link is passed as `SavedFromLink`.
-/// A source nobody could check (`Unchecked`) is re-sealed, never vouched
-/// for, as on the web; no sources is refused, never signed by default.
+/// A source nobody could check (`Unchecked`) makes the result `Resealed`,
+/// never vouched for and never refused, as the web signs a result
+/// (packages/drive's signatureFormFor); a plain copy of one is still refused.
+/// No sources is refused, never signed by default.
 ///
 /// ```
 /// use hushos_core::*;
@@ -438,10 +430,12 @@ fn copy_strength(prior: Integrity) -> u8 {
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn weakest_copy_prior(priors: Vec<Integrity>) -> CoreResult<Integrity> {
-    priors
+    let weakest = priors
         .into_iter()
         .min_by_key(|prior| copy_strength(*prior))
-        .ok_or_else(|| input("A result is signed by its sources, and there are none."))
+        .ok_or_else(|| input("A result is signed by its sources, and there are none."))?;
+    // An unchecked source is re-sealed for a result: the copy form refuses it for a plain copy.
+    Ok(if weakest == Integrity::Unchecked { Integrity::Resealed } else { weakest })
 }
 
 /*
@@ -697,7 +691,7 @@ pub fn version_reseal_sign(
 /// saved statement, whatever `prior` is (a visitor never sees signatures);
 /// otherwise as [`metadata_reseal_sign`] from the original's verdict
 /// (`Verified` ordinary, `SavedFromLink` saved, anything else re-sealed,
-/// `Unchecked` re-sealed). Folders a save from a link creates pass `from_link`.
+/// `Unchecked` refused). Folders a save from a link creates pass `from_link`.
 ///
 /// ```
 /// use hushos_core::*;
@@ -711,9 +705,7 @@ pub fn version_reseal_sign(
 /// assert_eq!(check(verified), Integrity::Verified);
 /// let planted = metadata_copy_sign(seed.clone(), Integrity::UnknownSigner, false, statement.clone(), b"copy".to_vec())?;
 /// assert_eq!(check(planted), Integrity::Resealed);
-/// // A record nobody could check is re-sealed, never vouched for, as the web signs it.
-/// let unchecked = metadata_copy_sign(seed, Integrity::Unchecked, false, statement.clone(), b"copy".to_vec())?;
-/// assert_eq!(check(unchecked), Integrity::Resealed);
+/// assert!(metadata_copy_sign(seed, Integrity::Unchecked, false, statement, b"copy".to_vec()).is_err());
 /// # Ok::<(), hushos_core::CoreError>(())
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -2031,16 +2023,9 @@ mod tests {
             let renamed = metadata_reseal_sign(seed.clone(), prior, statement(), envelope.clone()).unwrap();
             assert_eq!(read_metadata(renamed), verdict, "reseal of {prior:?}");
         }
-        // A copy of a record nobody could check is re-sealed (the web's rule); a rotation still refuses it.
-        let copied =
-            version_copy_sign(seed.clone(), Integrity::Unchecked, false, version(), envelope.clone())
-                .unwrap();
-        assert_eq!(read(copied), Integrity::Resealed);
-        let copied =
-            metadata_copy_sign(seed.clone(), Integrity::Unchecked, false, statement(), envelope.clone())
-                .unwrap();
-        assert_eq!(read_metadata(copied), Integrity::Resealed);
-        assert!(version_reseal_sign(seed, Integrity::Unchecked, version(), envelope).is_err());
+        assert!(version_copy_sign(seed.clone(), Integrity::Unchecked, false, version(), envelope.clone())
+            .is_err());
+        assert!(metadata_copy_sign(seed, Integrity::Unchecked, false, statement(), envelope).is_err());
     }
 
     /* Round 8 (Codex 1): identity key versions stop at 2^53 - 1, as the web's safe integers do. */
@@ -2418,7 +2403,13 @@ mod tests {
             );
             assert_eq!(reads(vec![weak, Integrity::Verified]), Integrity::Resealed, "{weak:?} first");
         }
-        // One source nobody could check: the result is re-sealed, never refused and never vouched for.
+        // One source nobody could check: the result is re-sealed, never refused and never vouched for,
+        // while a plain copy of that record is still refused (copy_form, as packages/crypto's copyForm).
+        assert_eq!(
+            weakest_copy_prior(vec![Integrity::Verified, Integrity::Unchecked]).unwrap(),
+            Integrity::Resealed
+        );
         assert_eq!(reads(vec![Integrity::Verified, Integrity::Unchecked]), Integrity::Resealed);
+        assert!(version_copy_sign(seed, Integrity::Unchecked, false, statement, envelope).is_err());
     }
 }

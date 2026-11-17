@@ -5,8 +5,7 @@ import {
     paddedLength,
 } from '@hushos/crypto/drive';
 import type { SignatureForm } from '@hushos/crypto/signatures';
-import { wholeGibUp } from '@hushos/db/pool-count';
-import type { NodeView } from './api';
+import { DriveApiError, type NodeView, type TrashBatchItem } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
 import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } from './transfers';
@@ -129,6 +128,8 @@ export const NO_ROOM_SHARED =
     'There isn’t enough room in this shared folder for this. Nothing was saved.';
 export const RUN_CANCELLED = 'Cancelled. Nothing was saved.';
 export const RUN_FAILED = 'This couldn’t be saved, so nothing was kept.';
+/* What a run says when this device would not keep its record (the browser's storage full): it stops. */
+export const UNRECORDED = 'This device couldn’t keep a record of this save.';
 
 const OPENINGS: Record<Exclude<StopReason, 'failed'>, string> = {
     cancelled: 'Cancelled.',
@@ -172,20 +173,20 @@ export type Room = { kind: 'own' | 'family'; free: number | null } | { kind: 'sh
 
 /*
  * Whose space a workspace is, and its free bytes as the server checks an
- * upload begin (packages/db/src/pool.ts poolFigures). On the account's own
- * allowance, `availableBytes` exactly. In a family's pool the figures shown
- * count every part in whole GiB, the person's own files included, while the
- * server counts their own part to the byte: the GiB-rounding of their own
- * bytes is given back (their uploads in flight are taken as none; a 402 at
- * begin stays the backstop). A family folder is counted in whole GiB on both
- * sides. Someone else's share: never known.
+ * upload begin there (packages/db/src/pool.ts). On the account's own
+ * allowance, `availableBytes`. In a family's pool, the person's own files
+ * take `own.freeBytes`, which the server computes as it checks a begin (the
+ * shown figures count their own part in whole GiB; an older server without
+ * it leaves the shown figure, which never says more is free than there is).
+ * A family folder of that pool: `availableBytes`, whole GiB on both sides.
+ * Someone else's share: never known.
  */
 export function roomOf(
     storage: {
         workspaceId: string;
         availableBytes: string;
         pool: { groupId: string } | null;
-        own?: { usedBytes: string } | null;
+        own?: { freeBytes?: string } | null;
     } | null,
     workspaceId: string,
     family: string | null,
@@ -193,17 +194,15 @@ export function roomOf(
     const own = storage !== null && workspaceId === storage.workspaceId;
     if (!own && family === null) return { kind: 'shared' };
     if (!storage) return { kind: own ? 'own' : 'family', free: null };
-    const available = BigInt(storage.availableBytes);
-    if (own) {
-        if (!storage.pool) return { kind: 'own', free: Number(available) };
-        // Without the person's own usage the rounding can't be given back: the shown figure,
-        // which never says more is free than the server would take.
-        if (!storage.own) return { kind: 'own', free: Number(available) };
-        const used = BigInt(storage.own.usedBytes);
-        return { kind: 'own', free: Number(available + wholeGibUp(used) - used) };
-    }
+    const available = Number(storage.availableBytes);
+    if (own)
+        return {
+            kind: 'own',
+            free:
+                storage.pool && storage.own?.freeBytes ? Number(storage.own.freeBytes) : available,
+        };
     // A family folder of a family whose pool these figures are not: not known here.
-    return { kind: 'family', free: storage.pool?.groupId === family ? Number(available) : null };
+    return { kind: 'family', free: storage.pool?.groupId === family ? available : null };
 }
 
 /* The server's answer to aborting an upload; `unknown` when there was none (offline, a 5xx). */
@@ -215,6 +214,71 @@ export type AbortFate = 'aborted' | 'gone' | 'finished' | 'denied' | 'unknown';
  * refused because the workspace is no longer this person's: 403 or 404).
  */
 export type ItemFate = 'done' | 'gone' | 'refused' | 'denied';
+
+/*
+ * What an abort's answer means for a clean-up (the server's abortUpload names a
+ * finishing upload and a finished one in `data.upload`): an upload still
+ * finishing is asked about again, every `pauseMs` up to `tries` times (about
+ * ten seconds), and one that is still finishing then is taken as finished: it
+ * lands (a new version kept and said so, a new file removed with the rest).
+ */
+export async function askAbort(
+    abort: () => Promise<unknown>,
+    options: { tries?: number; pauseMs?: number; pause?: (ms: number) => Promise<void> } = {},
+): Promise<AbortFate> {
+    const tries = options.tries ?? 5;
+    const pause =
+        options.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    for (let asked = 1; ; asked++) {
+        try {
+            await abort();
+            return 'aborted';
+        } catch (error) {
+            const fate = abortFateOf(error);
+            if (fate !== 'finishing') return fate;
+            if (asked >= tries) return 'finished';
+            await pause(options.pauseMs ?? 2_000);
+        }
+    }
+}
+
+/* One abort refusal as a fate; `finishing` while the server is still completing it. */
+export function abortFateOf(error: unknown): AbortFate | 'finishing' {
+    if (!(error instanceof DriveApiError)) return 'unknown';
+    if (error.status === 404) return 'gone';
+    if (error.status === 401 || error.status === 403) return 'denied';
+    if (error.status === 409) {
+        const upload = (error.data as { upload?: string } | undefined)?.upload;
+        if (upload === 'completing') return 'finishing';
+        if (upload === 'completed') return 'finished';
+    }
+    return 'unknown';
+}
+
+/* The whole request refused because the workspace is no longer this person's to write. */
+export function deniedWhole(error: unknown) {
+    return error instanceof DriveApiError && (error.status === 403 || error.status === 404);
+}
+
+/*
+ * A trash batch's answers as fates: in the Trash (moved, with a folder that
+ * went, or already there), gone (not found), anything else refused.
+ */
+export function trashFatesOf(results: readonly TrashBatchItem[]) {
+    const fates = new Map<string, ItemFate>();
+    for (const item of results)
+        fates.set(
+            item.id,
+            item.status === 'trashed' || item.status === 'covered'
+                ? 'done'
+                : item.reason === 'trashed'
+                  ? 'done'
+                  : item.reason === 'not-found'
+                    ? 'gone'
+                    : 'refused',
+        );
+    return fates;
+}
 
 export type SaveRunDeps = {
     transfers: Pick<TransferManager, 'enqueue' | 'cancel'>;
@@ -249,7 +313,7 @@ export type SaveRunDeps = {
      * takes it for interrupted; taken before its row is written. Without it,
      * the row's heartbeat says whether it runs.
      */
-    hold?: (runId: string) => () => void;
+    hold?: (runId: string) => Promise<() => void> | (() => void);
     isLive?: (runId: string) => Promise<boolean>;
     /* The session generation the caller's work began in (the transfer manager's enqueue `from`). */
     from?: { generation: number };
@@ -382,7 +446,8 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
         throw new SaveRefused('no-room', NO_ROOM, { needed, free: Math.max(0, room.free) });
     const now = deps.now ?? (() => Date.now());
     const id = deps.newId?.() ?? crypto.randomUUID();
-    const release = deps.hold?.(id);
+    // Held before the row exists: no other tab ever finds the row without its hold.
+    const release = await deps.hold?.(id);
     const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now(), beat: now() };
     try {
         await deps.runs.put(row);
@@ -434,6 +499,11 @@ function createRun(
     const current = () => !abandoned && (deps.current?.() ?? true);
     // Rows written one after another, each the run as it is then.
     let writing = Promise.resolve();
+    /*
+     * A write the journal refused (storage full): the run can no longer promise the next open a
+     * row naming what it made, so it stops and cleans up, and nothing more is published.
+     */
+    let unrecorded: unknown = null;
     const persist = () => {
         if (!current() || sealed) return writing;
         const snapshot = {
@@ -444,8 +514,16 @@ function createRun(
         };
         writing = writing
             .then(() => (current() && !sealed ? deps.runs.put(snapshot) : undefined))
-            .catch(() => {});
+            .catch((error: unknown) => {
+                unrecorded ??= error;
+                void stop('failed', undefined, UNRECORDED);
+            });
         return writing;
+    };
+    /* Every row written so far is on disk; throws when one was refused. */
+    const recorded = async () => {
+        await writing;
+        if (unrecorded) throw unrecorded;
     };
     const beat = setInterval(() => void persist(), deps.beatMs ?? BEAT_MS);
     const unsubscribe = deps.events(onEvent);
@@ -585,7 +663,15 @@ function createRun(
                             // Both kept until it lands: the begun node never published, the new one may.
                             if (!row.nodeIds.includes(nodeId)) row.nodeIds.push(nodeId);
                             output.nodeId = nodeId;
-                            await persist();
+                            void persist();
+                            // On disk before the attach is sent, or not sent at all.
+                            await recorded();
+                        },
+                        // On disk before the completion is sent: nothing is published that the row
+                        // the next open cleans up from does not name.
+                        beforeComplete: async () => {
+                            await recorded();
+                            if (stopping) throw new Error('This save run is stopping.');
                         },
                     },
                 },
@@ -623,7 +709,7 @@ function createRun(
         };
     }
 
-    function stop(reason: StopReason, item?: UploadItem): Promise<RunStopped> {
+    function stop(reason: StopReason, item?: UploadItem, failure?: string): Promise<RunStopped> {
         if (stopping) return stopping;
         // Set before any of it runs: a result handed in from here on is refused (open), and the
         // cancels the clean-up sends are heard here without stopping it twice.
@@ -643,7 +729,7 @@ function createRun(
                 reason,
                 stoppedWords(reason, {
                     shared,
-                    failure: reason === 'failed' ? (item?.error ?? null) : null,
+                    failure: reason === 'failed' ? (failure ?? item?.error ?? null) : null,
                     keptVersions,
                 }),
                 result.cleanup,
@@ -675,14 +761,19 @@ function createRun(
             const made = await deps.makeFolder(into, given, signAs);
             if (stopping) {
                 // Stopped while it was being made: it goes the way the rest of the run went, and
-                // if it cannot, a row names it for the next open.
+                // if it cannot, a row names it for the next open: added to the row the stop kept
+                // (its clean-up left things too), or a row of its own when the stop's went.
                 const done = await stopping;
                 const fate = await discard(deps, row.workspaceId, [made.id]).catch(
                     (): Cleanup => 'left',
                 );
                 if (fate === 'left' && current())
                     await deps.runs
-                        .put({ ...row, nodeIds: [made.id], uploadIds: [], beat: now() })
+                        .put(
+                            done.cleanup === 'left'
+                                ? { ...row, nodeIds: [...row.nodeIds, made.id], beat: now() }
+                                : { ...row, nodeIds: [made.id], uploadIds: [], beat: now() },
+                        )
                         .catch(() => {});
                 throw done;
             }
@@ -690,7 +781,14 @@ function createRun(
             claimed.set(made.id, Promise.resolve(new Set()));
             if (!madeFolders.has(into.id)) {
                 row.nodeIds.push(made.id);
-                await persist();
+                void persist();
+                try {
+                    await recorded();
+                } catch (error) {
+                    // Not recorded: the run stops (set by persist meanwhile), removing this folder with the rest.
+                    const halted = stopping as Promise<RunStopped> | null;
+                    throw halted ? await halted : error;
+                }
             }
             return made;
         },

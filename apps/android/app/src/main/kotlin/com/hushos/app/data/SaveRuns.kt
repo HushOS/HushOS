@@ -45,7 +45,7 @@ data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List
  * The rows, under filesDir: deleted with the account's files at sign-out (AccountStore.ACCOUNT_FILES), and a journal
  * opened before that writes nothing more (endAccount).
  */
-class SaveRunJournal(val file: File, private val epoch: Epoch = account) {
+class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     /* Which account session journals belong to: moved on by every sign-out. */
     class Epoch {
         private val value = AtomicInteger()
@@ -120,6 +120,12 @@ sealed class SaveRoom {
 /* The server's answer for one item: in the Trash or deleted, not found, refused, or the space no longer this person's. */
 enum class SaveItemFate { DONE, GONE, REFUSED, DENIED }
 
+/*
+ * The server's answer to an abort (`data.upload` naming a finishing and a finished upload, packages/drive/src/server.ts):
+ * FINISHING is asked about again; UNKNOWN is no answer.
+ */
+enum class SaveAbortFate { ABORTED, GONE, FINISHED, FINISHING, DENIED, UNKNOWN }
+
 /* What a run asks of the drive. The vault is one (VaultSaveWriter); tests stand one in. */
 interface SaveRunWriter {
     /* Why `target` may not be written now, or null; a key change still walking it is no refusal (uploads wait it out). */
@@ -129,9 +135,12 @@ interface SaveRunWriter {
     fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened
     fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
                      thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened
-    /* `file` as its folder lists it now (its keys after a key change), or null when it is no longer there. */
+    /* `file` as the server lists its folder now (its keys after a key change), or null when it is no longer there. */
     fun fresh(file: Opened, folder: Opened): Opened?
-    fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort
+    /* `folder` and the chain above it as the server holds them now, to seal afresh under. */
+    fun refreshFolder(folder: Opened): Opened
+    /* Never FINISHING: an upload still completing is asked about again, then taken as finished. */
+    fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate
     /* Each item's fate; throws only when the request as a whole got no answer. */
     fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate>
     fun purge(ids: List<String>, workspaceId: String): Map<String, SaveItemFate>
@@ -165,6 +174,20 @@ object SaveRuns {
 
     /* This process: a row another launch left is interrupted, one of this launch's is a live run's. */
     val launch: String = UUID.randomUUID().toString()
+
+    /* Runs live in this process, held weakly: a sign-out abandons them. */
+    private val live = java.util.Collections.newSetFromMap(java.util.WeakHashMap<SaveRun, Boolean>())
+    internal fun register(run: SaveRun) = synchronized(live) { live.add(run) }
+
+    /*
+     * A sign-out (AccountStore.wipe, beside SaveRunJournal.endAccount): every run stops at once, writing nothing more and
+     * deleting nothing afterwards (the session that could is ending).
+     */
+    fun abandonAll(epoch: SaveRunJournal.Epoch = SaveRunJournal.account) {
+        // The runs of one account session (their journals' epoch): a test's own session is never another's sign-out.
+        val runs = synchronized(live) { live.filter { it.journalEpoch === epoch } }
+        for (run in runs) run.abandon()
+    }
 
     /* What a stopped run says: never "nothing was saved" once a new version landed (the web's stoppedWords). */
     fun words(reason: SaveRunStopped.Reason, shared: Boolean, failure: String?, kept: Int): String {
@@ -216,25 +239,28 @@ object SaveRuns {
 
     /* Keeps what an interrupted run made: its row goes, its open uploads aborted (without an answer, the row stays). */
     fun keep(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): Boolean {
-        for (uploadId in row.uploadIds) if (abort(writer, uploadId, row.workspaceId) == Reservations.Abort.PENDING) return false
+        for (uploadId in row.uploadIds) if (abort(writer, uploadId, row.workspaceId) == SaveAbortFate.UNKNOWN) return false
         journal.remove(row.id)
         return true
     }
 
     private fun abort(writer: SaveRunWriter, uploadId: String, workspaceId: String) =
-        runCatching { writer.abortUpload(uploadId, workspaceId) }.getOrDefault(Reservations.Abort.PENDING)
+        runCatching { writer.abortUpload(uploadId, workspaceId) }.getOrDefault(SaveAbortFate.UNKNOWN)
 
     /* Aborts every upload the row names, removes its nodes; the row goes unless something is left. */
     internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>): Pair<SaveCleanup, Int> {
         var unsettled = false
+        var denied = false
         var kept = 0
         for (uploadId in row.uploadIds) when (abort(writer, uploadId, row.workspaceId)) {
-            Reservations.Abort.PENDING -> unsettled = true
-            Reservations.Abort.COMPLETED -> if (uploadId in versions) kept++
+            SaveAbortFate.UNKNOWN, SaveAbortFate.FINISHING -> unsettled = true
+            SaveAbortFate.DENIED -> denied = true
+            SaveAbortFate.FINISHED -> if (uploadId in versions) kept++
             else -> {}
         }
         var cleanup = discard(row.nodeIds, row.workspaceId, writer)
         if (unsettled) cleanup = SaveCleanup.LEFT
+        else if (denied && (cleanup == SaveCleanup.NOTHING || cleanup == SaveCleanup.NO_ACCESS)) cleanup = SaveCleanup.NO_ACCESS
         if (cleanup != SaveCleanup.LEFT) journal.remove(row.id)
         return cleanup to kept
     }
@@ -275,6 +301,7 @@ class SaveRun private constructor(
     private val now: () -> Long,
 ) {
     val id: String get() = row.id
+    internal val journalEpoch: SaveRunJournal.Epoch get() = journal.epoch
     private val lock = Any()
     private val madeFolders = HashSet<String>()
     private val claimed = HashMap<String, MutableSet<String>>()
@@ -282,6 +309,8 @@ class SaveRun private constructor(
     private val versionUploads = HashSet<String>()
     private var stopping: CompletableFuture<SaveRunStopped>? = null
     private var sealed = false
+    /* A sign-out: nothing is written, cleaned up or deleted for this run again. */
+    private var abandoned = false
     private var finished = false
     private var inFlight = 0
     private var keptVersions = 0
@@ -314,7 +343,7 @@ class SaveRun private constructor(
                     is PlannedResult.FromSources -> it.thumbnail
                 }
             }
-            return SaveRun(writer, journal, row, first, room == SaveRoom.Shared, thumbnails, pause, now)
+            return SaveRun(writer, journal, row, first, room == SaveRoom.Shared, thumbnails, pause, now).also { SaveRuns.register(it) }
         }
     }
 
@@ -378,13 +407,33 @@ class SaveRun private constructor(
         val into = parent ?: first
         val given = claim(name, into)
         open()
-        val made = writer.makeFolder(into, given, copy)
+        // A destination a key change is still walking takes the run: its folders wait it out as its uploads do, the folder
+        // looked up again before each try.
+        var parentNow = into
+        var since: Long? = null
+        var attempt = 0
+        var madeHere: Opened? = null
+        while (madeHere == null) {
+            try {
+                madeHere = writer.makeFolder(parentNow, given, copy)
+            } catch (error: Exception) {
+                if (!FamilyUploads.waits(error, since != null)) throw error
+                synchronized(lock) { stopping }?.let { throw it.get() }
+                val start = since ?: now()
+                since = start
+                if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
+                pause(++attempt)
+                parentNow = writer.refreshFolder(parentNow)
+            }
+        }
+        val made: Opened = madeHere
         val waiting = synchronized(lock) { stopping }
         if (waiting != null) {
-            // Made while the run stopped: it goes the way the rest went, and if it cannot, a row names it.
+            // Made while the run stopped: it goes the way the rest went, and if it cannot, a row names it: added to the row the
+            // stop kept (its clean-up left things too), or a row of its own when the stop's went.
             val done = waiting.get()
-            if (SaveRuns.discard(listOf(made.id), row.workspaceId, writer) == SaveCleanup.LEFT)
-                journal.put(row.copy(nodeIds = listOf(made.id), uploadIds = emptyList()))
+            if (!synchronized(lock) { abandoned } && SaveRuns.discard(listOf(made.id), row.workspaceId, writer) == SaveCleanup.LEFT)
+                journal.put(if (done.cleanup == SaveCleanup.LEFT) row.copy(nodeIds = row.nodeIds + made.id) else row.copy(nodeIds = listOf(made.id), uploadIds = emptyList()))
             throw done
         }
         synchronized(lock) {
@@ -425,6 +474,7 @@ class SaveRun private constructor(
         synchronized(lock) { inFlight++ }
         try {
             var replacing = given
+            var folderNow = folder
             var since: Long? = null
             var attempt = 0
             var rekeys = 0
@@ -432,7 +482,7 @@ class SaveRun private constructor(
                 var started: Vault.BegunIds? = null
                 val version = replacing != null
                 try {
-                    val landed = writer.uploadResult(bytes, name, mime, folder, replacing, startedFrom, copy, thumbnail) { ids ->
+                    val landed = writer.uploadResult(bytes, name, mime, folderNow, replacing, startedFrom, copy, thumbnail) { ids ->
                         started = ids
                         noteBegun(ids, tracked, version)
                     }
@@ -442,15 +492,20 @@ class SaveRun private constructor(
                         stopping
                     }
                     if (waiting != null) {
-                        // Landed while the run stopped or after: a new file goes the way the rest went.
+                        // Landed while the run stopped or after: a new file goes the way the rest went (never after a sign-out).
                         val done = waiting.get()
-                        if (tracked) SaveRuns.discard(listOf(landed.id), row.workspaceId, writer)
+                        if (tracked && !synchronized(lock) { abandoned }) SaveRuns.discard(listOf(landed.id), row.workspaceId, writer)
                         throw done
                     }
                     return landed
                 } catch (stale: SaveStale) {
                     settled(started, null, false)
                     throw stale
+                } catch (landed: ResultLanded) {
+                    // It landed, though its row couldn't be finished here: a version kept, a new file the run keeps naming.
+                    settled(started, landed.nodeId, tracked)
+                    synchronized(lock) { if (version) keptVersions++ }
+                    throw landed
                 } catch (done: SaveRunStopped) {
                     throw done
                 } catch (error: Exception) {
@@ -469,7 +524,10 @@ class SaveRun private constructor(
                             if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
                             pause(++attempt)
                         }
-                        replacing?.let { file -> replacing = writer.fresh(file, folder) ?: throw SaveStale(null) }
+                        // The destination and the chain above it as the server holds them now, and the file replaced, so
+                        // nothing is sealed again under keys the change replaced.
+                        folderNow = writer.refreshFolder(folderNow)
+                        replacing?.let { file -> replacing = writer.fresh(file, folderNow) ?: throw SaveStale(null) }
                         continue
                     }
                     // Kept in the row: the stop aborts its upload and removes its node, whatever got that far.
@@ -530,6 +588,7 @@ class SaveRun private constructor(
     fun abandon() = synchronized(lock) {
         if (stopping != null) return@synchronized
         sealed = true
+        abandoned = true
         stopping = CompletableFuture.completedFuture(
             SaveRunStopped(SaveRunStopped.Reason.SIGNED_OUT, SaveRuns.words(SaveRunStopped.Reason.SIGNED_OUT, shared, null, keptVersions), SaveCleanup.LEFT, keptVersions))
     }
@@ -549,9 +608,9 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
 
     /*
      * The account's own Drive, a family folder, or a share. Free bytes as the server checks a begin (packages/db/src/pool.ts):
-     * exact on an own allowance; in a family's pool the shown figure counts the person's own files in whole GiB where the
-     * server counts them to the byte, so that rounding is given back (the web's roomOf); a family folder is whole GiB on both
-     * sides.
+     * on an own allowance `availableBytes`; in a family's pool the server's own figure for the person's files
+     * (`own.freeBytes`, the web's roomOf; an older server without it leaves the shown one, never more than there is); a
+     * family folder is whole GiB on both sides.
      */
     override fun room(workspaceId: String): SaveRoom {
         val own = workspaceId.equals(vault.workspaceId, ignoreCase = true)
@@ -559,11 +618,9 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         if (!own && family == null) return SaveRoom.Shared
         val figures = runCatching(storage).getOrNull() ?: return if (own) SaveRoom.Own(null) else SaveRoom.Family(null)
         if (own) {
-            val used = figures.ownUsedBytes
-            if (figures.pool == null || used == null) return SaveRoom.Own(figures.free)
-            val gib = 1L shl 30
-            val rounded = if (used <= 0) 0L else ((used + gib - 1) / gib) * gib
-            return SaveRoom.Own(figures.free + (rounded - used))
+            val free = figures.ownFreeBytes
+            if (figures.pool == null || free == null) return SaveRoom.Own(figures.free)
+            return SaveRoom.Own(free.coerceAtLeast(0L))
         }
         return SaveRoom.Family(if (figures.pool?.groupId.equals(family, ignoreCase = true)) figures.free else null)
     }
@@ -583,17 +640,36 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
                               thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened =
         vault.uploadResult(bytes, name, mime, folder.id, replacing, startedFrom, copy, thumbnail = thumbnail, onBegun = onBegun)
 
+    /* A row as the server serves it now, opened afresh (through the family's ledger in a family folder). */
+    private fun openServed(node: NodeView): Opened =
+        if (vault.isFamilyWorkspace(node.workspaceId)) vault.openListed(node) else vault.open(node, replace = true)
+
     override fun fresh(file: Opened, folder: Opened): Opened? {
         var after: String? = null
         do {
             val page = vault.api.children(folder.id, folder.node.workspaceId, after)
-            page.children.firstOrNull { it.id == file.id }?.let { return vault.open(it) }
+            page.children.firstOrNull { it.id == file.id }?.let { return openServed(it) }
             after = page.nextCursor
         } while (after != null)
         return null
     }
 
-    override fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = vault.api.abortUpload(uploadId, workspaceId)
+    override fun refreshFolder(folder: Opened): Opened {
+        val listing = vault.api.children(folder.id, folder.node.workspaceId, null)
+        // The chain above first, so the folder opens under its parent's key as served now.
+        for (above in listing.ancestors) runCatching { openServed(above) }
+        return openServed(listing.folder)
+    }
+
+    /* An upload still finishing is asked about again for about ten seconds, then taken as finished: it lands. */
+    override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
+        repeat(5) { asked ->
+            val fate = vault.api.abortUploadFate(uploadId, workspaceId)
+            if (fate != SaveAbortFate.FINISHING) return fate
+            if (asked < 4) Thread.sleep(2_000)
+        }
+        return SaveAbortFate.FINISHED
+    }
 
     override fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> {
         val fates = HashMap<String, SaveItemFate>()

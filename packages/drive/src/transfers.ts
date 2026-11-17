@@ -186,6 +186,11 @@ export type Produced = {
      * that may be published. Awaited; a rejection stops the attach (the run is stopping).
      */
     onAttach?: (ids: { workspaceId: string; nodeId: string }) => Promise<void> | void;
+    /*
+     * Awaited before the completion is sent: the run's row naming this upload must be on disk
+     * before anything is published. A rejection fails the upload (its run stops and cleans up).
+     */
+    beforeComplete?: () => Promise<void>;
 };
 
 /* A produced new version whose file moved on to `currentVersionId` (UploadItem.stale). */
@@ -513,6 +518,11 @@ function isSourceGone(error: unknown) {
     return error instanceof Error && error.message.includes('no longer on this device');
 }
 
+/* Bytes that are only in this page (a copy of something shared, or a tool's result): no file to ask for again. */
+function onlyHere(origin: UploadOrigin) {
+    return origin === 'copy' || origin === 'result';
+}
+
 /* Whether an in-memory file's parts were moved away already (to a worker since lost). */
 function detached(file: MemoryFile) {
     return file.parts.reduce((total, part) => total + part.byteLength, 0) !== file.size;
@@ -696,6 +706,15 @@ export function createTransferManager(options: TransferManagerOptions) {
                 clearBackoff(u);
                 u.inFlight.clear();
                 set(u, { status: 'paused', error: 'Unlock this device to continue.' });
+                options.onEvent?.({ type: 'locked', item: u.item });
+            } else if (
+                u.produced &&
+                (u.item.status === 'paused' ||
+                    u.item.status === 'failed' ||
+                    u.item.status === 'completing')
+            ) {
+                // A tool's result that is not done is told too, whatever it was doing: its run stops
+                // and cleans up rather than wait for an unlock with its bytes in this page.
                 options.onEvent?.({ type: 'locked', item: u.item });
             }
         }
@@ -1484,6 +1503,8 @@ export function createTransferManager(options: TransferManagerOptions) {
             .map(([partNumber, part]) => ({ partNumber, etag: part.etag }));
         try {
             let result: { node: NodeView | null };
+            await u.produced?.beforeComplete?.();
+            if (u.generation !== generation) return;
             try {
                 result = await api.completeUpload(workspaceOf(u), u.uploadId, parts);
             } catch (error) {
@@ -2020,7 +2041,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 } else set(u, { error: 'This copy couldn’t be read just now. Try again.' });
                 return;
             }
-            if (u.item.origin === 'copy') {
+            if (onlyHere(u.item.origin)) {
                 await lost(u);
                 return;
             }
@@ -2177,7 +2198,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (!u || u.item.status !== 'failed') return;
         if (!u.file) {
             // A lost copy has nothing to retry with; the list keeps its row until removed.
-            if (u.item.needsFile || u.item.origin !== 'copy') return;
+            if (u.item.needsFile || !onlyHere(u.item.origin)) return;
             // A copy whose bytes a lock took while it sat failed: back from its sealed stash, or
             // reported lost when there is none, the way resume brings a paused one back.
             u.attempts.clear();
@@ -2383,7 +2404,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         // Copies without bytes on this device are lost, not left waiting for a file nobody has.
         for (const id of ids) {
             const u = uploads.get(id)!;
-            if (u.item.origin === 'copy' && !u.stash) await lost(u);
+            if (onlyHere(u.item.origin) && !u.stash) await lost(u);
         }
         // Stashed bytes need nobody: continue from them at once.
         for (const id of stashed) void resume(id);

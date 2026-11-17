@@ -42,7 +42,14 @@ export const storageResponse = t.Object({
             reservedBytes: t.String(),
             availableBytes: t.String(),
             pool: t.Nullable(t.Object({ groupId: t.String(), name: t.String() })),
-            own: t.Nullable(t.Object({ usedBytes: t.String(), allowanceBytes: t.String() })),
+            own: t.Nullable(
+                t.Object({
+                    usedBytes: t.String(),
+                    allowanceBytes: t.String(),
+                    // What the person's own files may still take in the pool, as an upload begin checks it.
+                    freeBytes: t.String(),
+                }),
+            ),
         }),
     ),
 });

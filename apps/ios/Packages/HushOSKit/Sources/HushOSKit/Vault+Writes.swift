@@ -611,6 +611,8 @@ extension Vault {
         /* The metadata to show once it lands: a replacement's own, with the new size and date. */
         let final: NodeMetadata
         let replacing: Bool
+        /* A tool's new version (the save path): the file's name record is left as it is, never signed again. */
+        let keepName: Bool
         /* What a replacement's name record may be re-signed against once it lands (`Landing`). */
         let landing: Landing?
     }
@@ -686,7 +688,7 @@ extension Vault {
      */
     private func begin(source: PlainSource, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
                        signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false,
-                       moveOf: MoveSource? = nil, expected: String?? = nil) async throws -> Begun {
+                       moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
@@ -724,7 +726,9 @@ extension Vault {
         if let replacing {
             // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is
             // sent. In a family folder that is the family's judgement, asked at completion.
-            if !family { _ = try await changeSigners() }
+            // A tool's new version (`keepName`) leaves the name record as it is (docs/editing-design.md section 3, as the web
+            // does): nothing is signed again, so nothing waits on whom to trust.
+            if !family, !keepName { _ = try await changeSigners() }
             nodeId = replacing.id
             // In a family folder the file's key only as the ledger holds it rooted at the folder's current key (KEY_CHANGE_PENDING otherwise).
             if family {
@@ -737,8 +741,9 @@ extension Vault {
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": expectedVersion ?? NSNull()]
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
-            final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
-                                 attributes: replacing.metadata.attributes)
+            final = keepName ? replacing.metadata
+                : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
+                               attributes: replacing.metadata.attributes)
         } else {
             let parent = try await resolve(parentId)
             // The folder's key as the ledger holds it, before anything is asked of the server: a key change that hasn't
@@ -788,7 +793,7 @@ extension Vault {
         return Begun(
             workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
             content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
-            urls: urls, final: final, replacing: replacing != nil,
+            urls: urls, final: final, replacing: replacing != nil, keepName: keepName,
             landing: replacing.map { Landing(versionId: versionId, metadataVersion: $0.node.metadataVersion) }
         )
     }
@@ -806,8 +811,10 @@ extension Vault {
     }
 
     /* Completes on the server with every part's ETag; a replacement's metadata is sealed again with its new size and date. */
-    private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing: Bool,
-                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String], landing: Landing?) async throws -> Opened {
+    private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing given: Bool,
+                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String], landing: Landing?, keepName: Bool = false) async throws -> Opened {
+        // A tool's new version keeps the name record as it is: completed as a new file is, adopted with the record unchanged.
+        let replacing = given && !keepName
         // Built here, not passed in: a dictionary of Any made in this call can be handed to the API; a parameter could not.
         let parts: [[String: Any]] = etags.keys.sorted().map { ["partNumber": $0, "etag": etags[$0]!] }
         // A family folder's replacement is checked before the version goes live: the file's key as the ledger holds it and the
@@ -884,13 +891,13 @@ extension Vault {
     private func upload(
         source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
-        moveOf: MoveSource?, expected: String?? = nil, onBegun: @Sendable (BegunIds) -> Void = { _ in },
+        moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) -> Void = { _ in },
         progress: @Sendable (Double) -> Void
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
                                         thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf,
-                                        expected: expected)
+                                        expected: expected, keepName: keepName)
             onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
             var urls = begun.urls
             let handle = try PlainReader(source)
@@ -931,7 +938,8 @@ extension Vault {
                 while true {
                     do {
                         return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
-                                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+                                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing,
+                                                  keepName: begun.keepName)
                     } catch DriveAPIError.transport(let why) {
                         attempt += 1
                         guard moveOf != nil, attempt < 4 else { throw DriveAPIError.transport(why) }
@@ -971,7 +979,7 @@ extension Vault {
         do {
             return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
                                     thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
-                                    expected: replacing == nil ? nil : .some(startedFrom),
+                                    expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
                                     onBegun: { ids in begun.ids = ids; onBegun(ids) }, progress: progress)
         } catch {
             let raced: Bool
@@ -988,9 +996,10 @@ extension Vault {
             // As the server holds the file now: gone from its folder, or someone else's version current, is
             // stale (never a new file where it was); the same version is only its key having moved, sealed
             // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
-            let listed = try await children(of: parentId, in: replacing.node.workspaceId)
-            guard let fresh = listed.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil) }
-            let current = fresh.node.currentVersion?.id
+            // From the server itself, never the catalogue, which may not have heard of another device's save yet.
+            let listed = try await listChildren(of: parentId, in: replacing.node.workspaceId)
+            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil) }
+            let current = fresh.currentVersion?.id
             if current != startedFrom { throw SaveStale(currentVersionId: current) }
             throw SaveRekeyed()
         }

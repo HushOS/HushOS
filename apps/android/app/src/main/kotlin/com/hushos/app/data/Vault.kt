@@ -2083,8 +2083,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // its folder, or someone else's version current, is stale (never a new file where it was); the same version is only
             // its key having moved, sealed afresh. A family's key-change refusal (KeyChangeConflict) is waited out by the run.
             if (error is KeyChangeConflict || error.status != 409 || (error.code != "stale" && error.code != "conflict")) throw error
+            // A completion's `conflicted` only (finishCompleting): "This upload was cancelled" is a 409 `conflict` too.
+            val conflicted = error.code == "conflict" && error.data?.optBoolean("conflicted") == true
+            if (error.code == "conflict" && !conflicted) throw error
             if (replacing == null) {
-                if (error.code == "conflict") throw SaveRekeyed()
+                if (conflicted) throw SaveRekeyed()
                 throw error
             }
             val current = servedNode(parentId, replacing.node.workspaceId, replacing.id) ?: throw SaveStale(null)
@@ -2123,7 +2126,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
         // family folder as its member list judges it.
-        val keptName = replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
+        // A tool's new version (`result`) leaves the name record as it is (docs/editing-design.md section 3, as the web does):
+        // nothing is signed again, so nothing waits on whom to trust.
+        val keptName = if (result) null else replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
         val size = plain.size.toULong()
         val modified = Instant.ofEpochMilli(plain.modified).toString()
         val madeVersion = IdField.VERSION.mint(ws)
@@ -2213,7 +2218,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
         onBegun(BegunIds(ws, begun.uploadId, nodeId))
         try {
             return uploadReserved(plain, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
-                family, job, moveOf != null, progress)
+                family, job, moveOf != null, progress, result)
         } finally {
             Reservations.idle(begun.uploadId)
         }
@@ -2223,7 +2228,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun uploadReserved(plain: Plain, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
                                thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
-                               moved: Boolean, progress: (Float) -> Unit): Opened {
+                               moved: Boolean, progress: (Float) -> Unit, result: Boolean = false): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -2277,6 +2282,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
         Reservations.completed(context, begun.uploadId)
         // A move's completion deleted its source with it: whatever fails after it (its row not kept, the family let go of
         // meanwhile) is a move that happened, never one to report as failed.
+        if (result) {
+            // A tool's result: whatever fails after its completion is a save that landed, never a race or a failure
+            // (ResultLanded names the node, so its run keeps it and counts it).
+            try {
+                return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, null, mime, size, modified, keepName = true)
+            } catch (error: Exception) {
+                throw ResultLanded(node.id, error)
+            }
+        }
         if (job.isEmpty() && !moved) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
         try {
             return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
@@ -2303,11 +2317,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* What follows a landed completion: the node checked, a new version's name signed again, the row adopted. */
     private fun finishLanded(landed: NodeView, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
-                             keptName: Integrity?, mime: String?, size: ULong, modified: String): Opened {
+                             keptName: Integrity?, mime: String?, size: ULong, modified: String, keepName: Boolean = false): Opened {
         var node = landed
         checkWritten(node, ws, nodeId)
         var final = metadata
-        if (replacing != null) {
+        if (replacing != null && !keepName) {
             // The name is signed again only while the family write still stands (its reply gate, before anything is sealed).
             synchronized(familyCopiesLock) { requireWriteStands(ws) }
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
@@ -2366,6 +2380,9 @@ class SaveStale(val currentVersionId: String?) : Exception("Someone else saved a
 
 /* An upload refused only because a key change reached its file or folder while it went up: looked up again and sealed afresh. */
 class SaveRekeyed : Exception("This file’s keys changed while it was saving.")
+
+/* A tool's result that landed, whose row couldn't be finished here: its run keeps it (a version kept, a file to remove). */
+class ResultLanded(val nodeId: String, cause: Throwable) : Exception("Saved. It will show once the folder refreshes.", cause)
 
 /*
  * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the server deletes it in the

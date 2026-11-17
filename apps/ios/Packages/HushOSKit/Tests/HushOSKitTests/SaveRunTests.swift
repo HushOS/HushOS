@@ -29,6 +29,12 @@ actor FakeWriter: SaveRunWriter {
     var finished = Set<String>()
     var aborted: [String] = []
     var uploads: [(name: String, folder: String, replacing: String?, keyEpoch: UInt64?, startedFrom: String?, signing: (metadata: Signing, version: Signing))] = []
+    /* The destination's key epoch each upload and folder was sealed under, and each folder refresh. */
+    var folderEpochs: [UInt64] = []
+    var refreshes = 0
+    var folderAnswers: [@Sendable () throws -> Void] = []
+    var landing: (@Sendable () async -> Void)?
+    var making: (@Sendable () async -> Void)?
     var freshFile: Opened??
     /* What each upload does once begun, in order (default: land). */
     var answers: [@Sendable (Int) throws -> Void] = []
@@ -56,6 +62,9 @@ actor FakeWriter: SaveRunWriter {
         return names
     }
     func makeFolder(in folder: Opened, name: String, signing: Signing) async throws -> Opened {
+        folderEpochs.append(folder.node.keyEpoch)
+        if !folderAnswers.isEmpty { try folderAnswers.removeFirst()() }
+        await making?()
         live.insert("made-\(name)")
         return opened("made-\(name)", parent: folder.id)
     }
@@ -64,14 +73,23 @@ actor FakeWriter: SaveRunWriter {
         count += 1
         let n = count
         uploads.append((name, folder.id, replacing?.id, replacing?.node.keyEpoch, startedFrom, signing))
+        folderEpochs.append(folder.node.keyEpoch)
         let nodeId = replacing?.id ?? "node-\(n)"
         open.insert("up-\(n)")
         onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(n)", nodeId: nodeId))
         if !answers.isEmpty { try answers.removeFirst()(n) }
+        await landing?()
         finish("up-\(n)")
         if replacing == nil { live.insert(nodeId) }
         return opened(nodeId, parent: folder.id)
     }
+    func refreshFolder(_ folder: Opened) async throws -> Opened {
+        refreshes += 1
+        return opened(folder.id, parent: folder.node.parentId, keyEpoch: folder.node.keyEpoch + 1)
+    }
+    func folderAnswer(_ next: @escaping @Sendable () throws -> Void) { folderAnswers.append(next) }
+    func set(landing: @escaping @Sendable () async -> Void) { self.landing = landing }
+    func set(making: @escaping @Sendable () async -> Void) { self.making = making }
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened? {
         if let freshFile { return freshFile }
         return file
@@ -384,14 +402,79 @@ let own = SaveSources.ownWriting
         #expect(!accountJournal.live)
     }
 
+    @Test func aNewFileRefusedForAKeyChangeIsSealedAgainUnderTheFolderAsTheServerHoldsItNow() async throws {
+        let writer = FakeWriter()
+        await writer.answer { _ in throw SaveRekeyed() }
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal(), pause: { _ in })
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        // Sealed first under the folder as held, then under the folder looked up again.
+        #expect(await writer.folderEpochs == [1, 2])
+        #expect(await writer.refreshes == 1)
+    }
+
+    @Test func aResultFolderWaitsOutAKeyChangeAsItsUploadsDo() async throws {
+        let writer = FakeWriter()
+        await writer.folderAnswer { throw DriveAPIError.rotating("Finishing a key change…") }
+        let run = try await SaveRun.start(writer: writer, targets: [opened("fam")], results: [], journal: journal(), pause: { _ in })
+        let made = try await run.folder("Archive", sources: own)
+        #expect(made.id == "made-Archive")
+        #expect(await writer.folderEpochs == [1, 2])
+    }
+
+    @Test func aLateFolderThatCannotBeRemovedIsAddedToTheRowAFailedCleanUpKept() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        let gate = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        let making = Task { try await run.folder("Archive", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        // The stop's clean-up fails for the file it made, and later for the late folder too.
+        await writer.refuse("node-1")
+        await writer.refuse("made-Archive")
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        await gate.open()
+        _ = try? await making.value
+        #expect(rows.list().map(\.nodeIds) == [["node-1", "made-Archive"]])
+    }
+
+    @Test func aSignOutAbandonsLiveRunsAndOneThatLandsAfterDeletesNothing() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(landing: { await gate.wait() })
+        let session = SaveRunJournal.Epoch()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal(session))
+        let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        // What AccountStore.wipe does through SaveRuns.abandonAll(), on this run's own session.
+        SaveRuns.abandonAll(session)
+        await gate.open()
+        do {
+            _ = try await saving.value
+            Issue.record("a result went on after a sign-out")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .signedOut)
+        }
+        #expect(await writer.trashed.isEmpty)
+        #expect(await writer.aborted.isEmpty)
+    }
+
     @Test func aResultOfSeveralSourcesIsSignedAsTheirWeakestUncheckedResealed() throws {
         let signing = try SaveRuns.signing(.from([.file(metadata: .verified, version: .verified, fromLink: false),
                                                    .file(metadata: .verified, version: .unchecked, fromLink: false)]))
-        #expect(signing.version == .copy(.unchecked))
+        #expect(signing.version == .copy(.resealed))
         // Re-sealed, never refused: as the web signs a source nobody could check.
         let seed = try randomBytes(length: 32)
         let statement = VersionStatement(workspaceId: "ws", nodeId: "n", versionId: "v", objectId: "o", contentSuite: 3)
         guard case .copy(let prior) = signing.version else { Issue.record("not a copy"); return }
+        // A plain copy of the unchecked record itself is still refused, as on the web and Android.
+        #expect(throws: (any Error).self) {
+            _ = try versionCopySign(signingSeed: try randomBytes(length: 32), prior: .unchecked, fromLink: false,
+                                    statement: VersionStatement(workspaceId: "ws", nodeId: "n", versionId: "v", objectId: "o", contentSuite: 3),
+                                    contentKeyEnvelope: Data([1]))
+        }
         let signature = try versionCopySign(signingSeed: seed, prior: prior, fromLink: false, statement: statement, contentKeyEnvelope: Data([1]))
         let me = TrustedKeys(current: try signingPublicKey(signingSeed: seed), retired: [], seen: false)
         #expect(versionIntegrity(trusted: me, statement: statement, contentKeyEnvelope: Data([1]), signature: signature) == .resealed)
@@ -533,6 +616,68 @@ extension OnFakeDrive {
             #expect(server.completed.isEmpty)
             #expect(server.aborted.count == 1)
             #expect(server.nodes[server.g]?.currentVersion?.id == atCompletion.id)
+        }
+
+        /*
+         * A tool's new version leaves the file's name record as it is (docs/editing-design.md section 3, as the web
+         * does): nothing signed again, and nothing waits on whom to trust. A vault with no trust set loaded still saves.
+         */
+        @Test func aToolsNewVersionLeavesTheNameRecordAndNeedsNoTrustSet() async throws {
+            let server = try FakeDrive()
+            FakeDrive.current = server
+            let vault = Vault(api: DriveAPI(session: server.session, configuration: FakeDrive.configuration), session: server.session)
+            await vault.adopt(workspace: WorkspaceView(workspaceId: server.workspace, changeSeq: nil, grant: nil, root: server.nodes[server.root]),
+                              key: server.workspaceKey)
+            await vault.adopt(identity: server.identity)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let before = try #require(server.nodes[server.g])
+            let landed = try await vault.uploadResult(Data([1, 2]), name: g.name, mime: nil, in: b.id, replacing: g,
+                                                      startedFrom: g.node.currentVersion!.id, signing: (.own, .own))
+            let after = try #require(server.nodes[server.g])
+            #expect(after.currentVersion?.id != before.currentVersion?.id)
+            #expect(after.metadataVersion == before.metadataVersion)
+            #expect(after.metadataEnvelope == before.metadataEnvelope)
+            #expect(landed.name == g.name)
+        }
+
+        /* An abort answered "still finishing" is asked again, and settles as what the server then says. */
+        @Test func anUploadStillFinishingIsAskedAgainBeforeTheCleanUpDecides() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            server.abortReplies = [(409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]]),
+                                   (409, ["code": "conflict", "message": "finished", "data": ["upload": "completed"]])]
+            #expect(await vault.abortUpload("up", in: server.workspace) == .finished)
+            server.abortReplies = [(409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]])]
+            #expect(await vault.abortUpload("up", in: server.workspace) == .gone)
+        }
+
+        /*
+         * The catalogue is ready but has not heard of another device's save: the race is still told apart from a
+         * key change by asking the server itself. Fails if the check reads the catalogue (SaveRekeyed, retried).
+         */
+        @Test func aRaceTheCatalogueHasNotHeardOfIsStaleNotRekeyed() async throws {
+            let feed = try FeedServer()
+            let server = feed.drive
+            FakeDrive.current = server
+            FeedServer.current = feed
+            let vault = Vault(api: DriveAPI(session: server.session, configuration: FeedServer.configuration), session: server.session)
+            await vault.adopt(workspace: WorkspaceView(workspaceId: server.workspace, changeSeq: nil, grant: nil, root: server.nodes[server.root]),
+                              key: server.workspaceKey)
+            await vault.adopt(identity: server.identity)
+            await vault.adopt(signers: try server.ownerTrusts())
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("mirror-\(UUID().uuidString).sqlite")
+            await vault.useMirror(try #require(Mirror(url: file)), page: 2)
+            #expect(await vault.buildCatalogue())
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let theirs = newer(server)
+            replaceVersion(server, theirs)
+            #expect(await vault.catalogueChildren(of: server.b)?.first { $0.id == server.g }?.node.currentVersion?.id == g.node.currentVersion?.id)
+            await #expect(throws: SaveStale(currentVersionId: theirs.id)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g,
+                                                 startedFrom: g.node.currentVersion!.id, signing: (.own, .own))
+            }
         }
 
         /* A completion refused only because the file was re-keyed (its version unchanged): to be sealed afresh, never stale, never failed. */

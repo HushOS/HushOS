@@ -357,10 +357,10 @@ public final class DriveAPI: Sendable {
 
     /*
      * The server's answer to an abort, for a clean-up that must know (the save path): aborted, gone (no
-     * such upload), finished (it landed), denied (not this person's any more), or unknown (no answer, or
-     * one still finishing, which may yet land).
+     * such upload), finished (it landed), finishing (still completing: ask again), denied (not this
+     * person's any more), or unknown (no answer).
      */
-    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, denied, unknown }
+    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, finishing, denied, unknown }
 
     public func abortUploadFate(uploadId: String, workspaceId: String) async -> AbortFate {
         guard let request = try? mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]),
@@ -371,7 +371,11 @@ public final class DriveAPI: Sendable {
         case 401, 403: return .denied
         case 409:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            return (body?["data"] as? [String: Any])?["upload"] as? String == "completing" ? .unknown : .finished
+            switch (body?["data"] as? [String: Any])?["upload"] as? String {
+            case "completing": return .finishing
+            case "completed": return .finished
+            default: return .unknown
+            }
         default: return .unknown
         }
     }

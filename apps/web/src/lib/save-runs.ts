@@ -1,5 +1,4 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { DriveApiError } from '@hushos/drive/api';
 import {
     createIndexedDbRunJournal,
     createMemoryRunJournal,
@@ -9,12 +8,14 @@ import {
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import {
     abandonRuns,
+    askAbort,
     cleanUpInterrupted,
+    deniedWhole,
     interruptedRuns,
     keepInterrupted,
     roomOf,
     startRun,
-    type AbortFate,
+    trashFatesOf,
     type ItemFate,
     type RunPlan,
     type SaveRunDeps,
@@ -62,16 +63,24 @@ function runs() {
 const LOCK_PREFIX = 'drive-save-run:';
 const locks = () => (typeof navigator === 'undefined' ? undefined : navigator.locks);
 
-/* Holds a Web Lock named for the run while it runs: another tab's next open never takes it for interrupted. */
+/*
+ * Holds a Web Lock named for the run while it runs, so another tab's next open never takes it
+ * for interrupted: resolves once the lock is granted (its row is written only then), with what
+ * lets it go.
+ */
 function hold(runId: string) {
-    let release = () => {};
-    const held = new Promise<void>((resolve) => {
-        release = resolve;
+    return new Promise<() => void>((granted, refused) => {
+        let release = () => {};
+        const held = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        locks()!
+            .request(`${LOCK_PREFIX}${runId}`, () => {
+                granted(release);
+                return held;
+            })
+            .catch(refused);
     });
-    void locks()
-        ?.request(`${LOCK_PREFIX}${runId}`, () => held)
-        .catch(() => {});
-    return release;
 }
 async function isLive(runId: string) {
     const state = await locks()!.query();
@@ -82,10 +91,6 @@ async function isLive(runId: string) {
 function storageNow(queryClient: QueryClient) {
     return queryClient.fetchQuery({ ...storageQueryOptions, staleTime: 0 });
 }
-
-/* The whole request refused because the workspace is no longer this person's to write. */
-const denied = (error: unknown) =>
-    error instanceof DriveApiError && (error.status === 403 || error.status === 404);
 
 function deps(queryClient: QueryClient): SaveRunDeps {
     const from = { generation: deviceSession.generation() };
@@ -121,45 +126,20 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             );
             return made!;
         },
-        abortUpload: async (workspaceId, uploadId): Promise<AbortFate> => {
-            try {
-                await driveApi.abortUpload(workspaceId, uploadId);
-                return 'aborted';
-            } catch (error) {
-                if (!(error instanceof DriveApiError)) return 'unknown';
-                if (error.status === 404) return 'gone';
-                if (error.status === 401 || error.status === 403) return 'denied';
-                if (error.status === 409) {
-                    const upload = (error.data as { upload?: string } | undefined)?.upload;
-                    // Finishing: it may still land, so the row stays to ask again.
-                    return upload === 'completing' ? 'unknown' : 'finished';
-                }
-                return 'unknown';
-            }
-        },
+        // An upload still finishing is asked about again for about ten seconds (askAbort).
+        abortUpload: (workspaceId, uploadId) =>
+            askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),
         trash: async (workspaceId, ids) => {
             const fates = new Map<string, ItemFate>();
             for (let at = 0; at < ids.length; at += MAX_TRASH_BATCH) {
                 const batch = ids.slice(at, at + MAX_TRASH_BATCH);
-                let answer;
                 try {
-                    answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
+                    const answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
+                    for (const [id, fate] of trashFatesOf(answer.results)) fates.set(id, fate);
                 } catch (error) {
-                    if (!denied(error)) throw error;
+                    if (!deniedWhole(error)) throw error;
                     for (const id of batch) fates.set(id, 'denied');
-                    continue;
                 }
-                for (const item of answer.results)
-                    fates.set(
-                        item.id,
-                        item.status === 'trashed' || item.status === 'covered'
-                            ? 'done'
-                            : item.reason === 'trashed'
-                              ? 'done'
-                              : item.reason === 'not-found'
-                                ? 'gone'
-                                : 'refused',
-                    );
             }
             return fates;
         },
@@ -176,7 +156,7 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                         try {
                             return await clientFor(ws).purgeMany(ws, nodeIds);
                         } catch (error) {
-                            if (denied(error)) for (const id of nodeIds) refusedWhole.add(id);
+                            if (deniedWhole(error)) for (const id of nodeIds) refusedWhole.add(id);
                             throw error;
                         }
                     },

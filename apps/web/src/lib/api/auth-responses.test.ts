@@ -293,7 +293,11 @@ const cases: Record<string, Case> = {
                     reservedBytes: '0',
                     availableBytes: '10995114130276352',
                     pool: { groupId: userId, name: 'The Lovelaces' },
-                    own: { usedBytes: '1999999999', allowanceBytes: '5368709120' },
+                    own: {
+                        usedBytes: '1999999999',
+                        allowanceBytes: '5368709120',
+                        freeBytes: '3368709121',
+                    },
                 },
             } satisfies Reply<typeof auth.getStorageAllowance>,
             none: { storage: null } satisfies Reply<typeof auth.getStorageAllowance>,

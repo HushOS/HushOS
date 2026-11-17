@@ -71,12 +71,21 @@ class SaveRunTest {
         var fresh: ((Opened) -> Opened?)? = null
         var listing: (() -> Unit)? = null
         val answers = ArrayDeque<(Int) -> Unit>()
+        /* The destination's key epoch each upload and folder was sealed under, and each folder refresh. */
+        val folderEpochs = ArrayList<ULong>()
+        var refreshes = 0
+        val folderAnswers = ArrayDeque<() -> Unit>()
+        var making: (() -> Unit)? = null
+        var landing: (() -> Unit)? = null
         private var count = 0
 
         override fun refusal(target: Opened) = refusal
         override fun room(workspaceId: String) = room
         override fun names(folder: Opened): List<String> { listing?.invoke(); return names }
         override fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened {
+            folderEpochs += folder.node.keyEpoch
+            folderAnswers.removeFirstOrNull()?.invoke()
+            making?.invoke()
             live += "made-$name"
             return Opened(NodeView("made-$name", "ws", folder.id, "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, null, null, null, emptyMap()))
         }
@@ -84,11 +93,13 @@ class SaveRunTest {
                                   thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened {
             val n = ++count
             uploads.add(Triple(name, replacing, copy))
+            folderEpochs += folder.node.keyEpoch
             this.startedFrom.add(startedFrom)
             val nodeId = replacing?.id ?: "node-$n"
             open += "up-$n"
             onBegun(Vault.BegunIds("ws", "up-$n", nodeId))
             answers.removeFirstOrNull()?.invoke(n)
+            landing?.invoke()
             open -= "up-$n"
             finished += "up-$n"
             if (replacing == null) live += nodeId
@@ -98,11 +109,15 @@ class SaveRunTest {
             val look = fresh ?: return file
             return look(file)
         }
-        override fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort {
-            if (offline) return Reservations.Abort.PENDING
+        override fun refreshFolder(folder: Opened): Opened {
+            refreshes++
+            return Opened(folder.node.copy(keyEpoch = folder.node.keyEpoch + 1uL), folder.metadata)
+        }
+        override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
+            if (offline) return SaveAbortFate.UNKNOWN
             aborted += uploadId
-            if (uploadId in finished) return Reservations.Abort.COMPLETED
-            return if (open.remove(uploadId)) Reservations.Abort.RELEASED else Reservations.Abort.GONE
+            if (uploadId in finished) return SaveAbortFate.FINISHED
+            return if (open.remove(uploadId)) SaveAbortFate.ABORTED else SaveAbortFate.GONE
         }
         override fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> {
             if (offline) throw Unreachable()
@@ -404,6 +419,78 @@ class SaveRunTest {
         assertFalse(accountJournal.live)
     }
 
+    @Test
+    fun aNewFileRefusedForAKeyChangeIsSealedAgainUnderTheFolderAsTheServerHoldsItNow() {
+        val writer = FakeWriter().apply { answers.add { throw SaveRekeyed() } }
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal(), pause = {})
+        run.file(byteArrayOf(1), "a", null, own)
+        // Sealed first under the folder as held, then under the folder looked up again.
+        assertEquals(listOf(1uL, 2uL), writer.folderEpochs)
+        assertEquals(1, writer.refreshes)
+    }
+
+    @Test
+    fun aResultFolderWaitsOutAKeyChangeAsItsUploadsDo() {
+        val writer = FakeWriter().apply { folderAnswers.add { throw ApiError(409, "Finishing a key change…", "rotating") } }
+        val run = SaveRun.start(writer, listOf(opened("fam")), emptyList(), journal(), pause = {})
+        assertEquals("made-Archive", run.folder("Archive", own).id)
+        assertEquals(listOf(1uL, 2uL), writer.folderEpochs)
+    }
+
+    @Test
+    fun aLateFolderThatCannotBeRemovedIsAddedToTheRowAFailedCleanUpKept() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        writer.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
+        val pool = Executors.newSingleThreadExecutor()
+        val folder = pool.submit<Opened> { run.folder("Archive", own) }
+        assertTrue(making.await(5, TimeUnit.SECONDS))
+        // The stop's clean-up fails for the file it made, and later for the late folder too.
+        writer.refuse += "node-1"
+        writer.refuse += "made-Archive"
+        assertEquals(SaveCleanup.LEFT, run.cancel().cleanup)
+        go.countDown()
+        runCatching { folder.get(5, TimeUnit.SECONDS) }
+        assertEquals(listOf(listOf("node-1", "made-Archive")), rows.list().map { it.nodeIds })
+        pool.shutdown()
+    }
+
+    @Test
+    fun aSignOutAbandonsLiveRunsAndOneThatLandsAfterDeletesNothing() {
+        val writer = FakeWriter()
+        val landing = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        writer.landing = { landing.countDown(); go.await(5, TimeUnit.SECONDS) }
+        val session = SaveRunJournal.Epoch()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal(session))
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(landing.await(5, TimeUnit.SECONDS))
+        // What AccountStore.wipe does through SaveRuns.abandonAll(), on this run's own session.
+        SaveRuns.abandonAll(session)
+        go.countDown()
+        val thrown = runCatching { saving.get(5, TimeUnit.SECONDS) }.exceptionOrNull()?.cause
+        assertEquals(SaveRunStopped.Reason.SIGNED_OUT, (thrown as SaveRunStopped).reason)
+        assertTrue(writer.trashed.isEmpty())
+        assertTrue(writer.aborted.isEmpty())
+        pool.shutdown()
+    }
+
+    @Test
+    fun aResultThatLandedButCouldNotBeFinishedHereIsKeptNotFailed() {
+        val doc = opened("doc", parent = "f", version = "v1")
+        val writer = FakeWriter().apply { answers.add { throw ResultLanded("doc", IllegalStateException("row")) } }
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), journal())
+        assertThrows(ResultLanded::class.java) { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        val stopped = run.cancel()
+        assertEquals(1, stopped.keptVersions)
+        assertTrue(writer.trashed.isEmpty())
+    }
+
     /* Real statements: a result of a verified source and one nobody could check is re-sealed (never refused, never vouched for). */
     @Test
     fun aResultWithAnUncheckedSourceIsResealedNotRefused() {
@@ -492,6 +579,49 @@ class SaveResultTest {
         assertEquals(theirs, raced.currentVersionId)
         assertTrue(theirs != startedFrom)
         assertTrue(server.requests.any { it.contains("/abort") })
+    }
+
+    /*
+     * A tool's new version leaves the file's name record as it is (docs/editing-design.md section 3, as the web does):
+     * nothing is signed again (so nothing waits on whom to trust). Fails if the record is sealed or signed again.
+     */
+    @Test
+    fun aToolsNewVersionLeavesTheNameRecordAndNeedsNoTrustSet() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val before = server.node(id)
+        val (version, envelope) = before.metadataVersion to before.metadataEnvelope
+        val sent = server.requests.size
+        vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, doc.node.currentVersion!!.id, copy = null)
+        assertTrue(server.node(id).version?.id != doc.node.currentVersion!!.id)
+        assertEquals(version, server.node(id).metadataVersion)
+        assertEquals(envelope, server.node(id).metadataEnvelope)
+        assertFalse(server.requests.drop(sent).any { it.contains("/nodes/$id/metadata") })
+    }
+
+    /* An abort answered "still finishing" is asked again, and settles as the server then says. */
+    @Test
+    fun anUploadStillFinishingIsAskedAgainBeforeTheCleanUpDecides() {
+        val replies = ArrayDeque(listOf("completing", "completed"))
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "abort" && replies.isNotEmpty())
+                409 to JSONObject().put("code", "conflict").put("message", "finishing").put("data", JSONObject().put("upload", replies.removeFirst()))
+            else null
+        }
+        val writer = VaultSaveWriter(vault) { throw IllegalStateException("not asked") }
+        assertEquals(SaveAbortFate.FINISHED, writer.abortUpload("up", server.workspace))
+        assertTrue(replies.isEmpty())
+    }
+
+    /* A new file's 409 that is not the completion's `conflicted` ("This upload was cancelled") is no key change. */
+    @Test
+    fun aCancelledUploadIsNotTakenForAKeyChange() {
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "complete") 409 to JSONObject().put("code", "conflict").put("message", "This upload was cancelled.")
+            else null
+        }
+        val thrown = runCatching { vault.uploadResult("mine".toByteArray(), "new.txt", null, server.root, null, null, copy = null) }.exceptionOrNull()
+        assertTrue("$thrown", thrown is ApiError && thrown !is SaveRekeyed)
     }
 
     /* A completion refused only because the file was re-keyed (its version unchanged): sealed afresh, never stale, never failed. */

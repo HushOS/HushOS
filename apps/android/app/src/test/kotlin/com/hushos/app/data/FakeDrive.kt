@@ -803,7 +803,8 @@ class FakeDrive : AutoCloseable {
             // As packages/db/src/drive.ts abortUpload answers: open or aborted → 200, completed → 409, no row → 404.
             post && at("drive", "uploads", "*", "abort") -> when {
                 uploads.remove(segments[2]) != null || segments[2] in abortedUploads -> { abortedUploads.add(segments[2]); ok(JSONObject().put("aborted", true)) }
-                segments[2] in completedUploads -> 409 to JSONObject().put("message", DriveApi.ALREADY_FINISHED)
+                segments[2] in completedUploads -> 409 to JSONObject().put("message", DriveApi.ALREADY_FINISHED).put("code", "conflict")
+                    .put("data", JSONObject().put("upload", "completed"))
                 else -> 404 to JSONObject().put("message", "This upload no longer exists.")
             }
             post && at("drive", "uploads", "*", "complete") -> {
@@ -829,7 +830,9 @@ class FakeDrive : AutoCloseable {
                 val node = if (n.getBoolean("existing")) {
                     val existing = node(n.getString("id"))
                     val expected = if (n.isNull("expectedVersionId")) null else n.getString("expectedVersionId")
-                    if (existing.version?.id != expected) return conflict("A newer version is there")
+                    // As packages/db finishCompleting answers: `conflicted`, naming the version current now.
+                    if (existing.version?.id != expected) return 409 to JSONObject().put("code", "conflict").put("message", "A newer version is there")
+                        .put("data", JSONObject().put("conflicted", true).put("currentVersionId", existing.version?.id ?: JSONObject.NULL))
                     existing.also { bump(it) }
                 } else Node(n.getString("id"), upload.ws, n.getString("parentId"), "file", n.getLong("keyEpoch"), n.getLong("parentKeyEpoch"),
                     n.getString("keyEnvelope"), 1L, n.getString("metadataEnvelope"), userId, n.getString("metadataSignature"), changeSeq = changeSeq++)

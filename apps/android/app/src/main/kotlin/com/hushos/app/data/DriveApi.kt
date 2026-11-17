@@ -551,6 +551,27 @@ class DriveApi(val session: Shared.Session) : RootApi {
      * 409 "finishing" (completing: its bytes stay reserved until it completes or the expiry sweep settles it), any other
      * answer, no answer and an ended session are PENDING, asked again later.
      */
+    /*
+     * The save path's reading of an abort's answer (SaveRuns.kt): `FINISHING` while the server is still completing it
+     * (`data.upload` "completing"), to be asked about again.
+     */
+    fun abortUploadFate(uploadId: String, workspaceId: String): SaveAbortFate = try {
+        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        SaveAbortFate.ABORTED
+    } catch (_: NotFound) {
+        SaveAbortFate.GONE
+    } catch (error: ApiError) {
+        when {
+            error.status == 409 && error.data?.optString("upload") == "completed" -> SaveAbortFate.FINISHED
+            error.status == 409 && error.data?.optString("upload") == "completing" -> SaveAbortFate.FINISHING
+            error.status == 401 || error.status == 403 -> SaveAbortFate.DENIED
+            error.status == 404 -> SaveAbortFate.GONE
+            else -> SaveAbortFate.UNKNOWN
+        }
+    } catch (_: Exception) {
+        SaveAbortFate.UNKNOWN
+    }
+
     fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
         send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
         Reservations.Abort.RELEASED
@@ -558,7 +579,10 @@ class DriveApi(val session: Shared.Session) : RootApi {
         Reservations.Abort.GONE
     } catch (error: ApiError) {
         when {
-            error.status == 409 && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            // By the server's `data.upload` (packages/drive/src/server.ts abortUpload), as the web and iOS read it.
+            error.status == 409 && error.data?.optString("upload") == "completed" -> Reservations.Abort.COMPLETED
+            // A server from before `data.upload` says so only in words.
+            error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
             error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
             else -> Reservations.Abort.PENDING
         }

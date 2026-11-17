@@ -98,6 +98,28 @@ class FamilyWritesTest {
     }
 
     /*
+     * A tool's result signed by its sources goes into a family folder through the ledger (the save path, as on the web and
+     * iOS), with its folder: a plain copy into one stays refused. Another phone reads it. Fails if results are refused.
+     */
+    @Test
+    fun aSourceSignedResultGoesIntoAFamilyFolderThroughItsLedger() {
+        val phone = opened()
+        val vault = phone.vault
+        val sources = Prior(com.hushos.core.Integrity.VERIFIED, com.hushos.core.Integrity.RESEALED)
+        val folder = vault.createFolder(family.rootId, "Converted", sources, result = true)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, folder.id))
+        val out = vault.uploadResult("tool output".toByteArray(), "Out.txt", "text/plain", folder.id, null, null, copy = sources)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, out.id))
+        assertThrows(FamilyUnavailable::class.java) { vault.createFolder(family.rootId, "Plain copy", sources) }
+        vault.close()
+        val other = family.phone()
+        accepted(other)
+        val inside = other.vault.listChildren(folder.id, family.workspaceId).single()
+        assertEquals("Out.txt", inside.name)
+        assertEquals("tool output", read(other.vault, inside))
+    }
+
+    /*
      * The write barrier: while the family's guard is owed, nothing is written into its folder, whether the guard was
      * owed before the write began or became owed while it was on its way (a sync meanwhile that couldn't store it).
      * Fails if a family write passes without the guard kept, at its entry or at its final gate.

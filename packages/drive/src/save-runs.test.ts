@@ -19,7 +19,7 @@ import {
     type Integrity,
 } from '@hushos/crypto/signatures';
 import { countedPool, wholeGibUp } from '../../db/src/pool-count';
-import type { NodeView } from './api';
+import { DriveApiError, type NodeView } from './api';
 import type { DriveNode } from './client';
 import { createMemoryRunJournal, type RunRow } from './journal';
 import {
@@ -30,6 +30,7 @@ import {
     RunStopped,
     SaveRefused,
     abandonRuns,
+    askAbort,
     cleanUpInterrupted,
     interruptedRuns,
     keepInterrupted,
@@ -189,7 +190,7 @@ describe('the room a run checks against', () => {
         };
     }
 
-    test('in a family’s pool, the person’s own files are given back their GiB rounding, as the server counts them', () => {
+    test('in a family’s pool, the person’s own files take what the server says they may, never the rounded figure', () => {
         for (const me of [0n, 1n, GIB - 1n, GIB, GIB + 1n, 7n * GIB + 12_345n]) {
             const figures = pool(
                 { me, folders: 3n * GIB + 5n, others: [2n * GIB + 9n] },
@@ -199,7 +200,7 @@ describe('the room a run checks against', () => {
                 workspaceId: 'mine',
                 availableBytes: figures.shown.toString(),
                 pool: { groupId: 'fam' },
-                own: { usedBytes: me.toString() },
+                own: { freeBytes: figures.serverOwn.toString() },
             };
             expect(roomOf(storage, 'mine', null)).toEqual({
                 kind: 'own',
@@ -210,6 +211,9 @@ describe('the room a run checks against', () => {
                 kind: 'family',
                 free: Number(figures.serverFolders),
             });
+            // An older server without the figure: the shown one, never more than the server's.
+            const older = roomOf({ ...storage, own: {} }, 'mine', null) as { free: number };
+            expect(older.free).toBeLessThanOrEqual(Number(figures.serverOwn));
         }
     });
 
@@ -571,6 +575,44 @@ function world(
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 const own = { sources: OWN_WRITING } as const;
 const bytes = (n = 1) => new Uint8Array(n);
+
+describe('an abort’s answer', () => {
+    const refusal = (status: number, data?: unknown) =>
+        new DriveApiError('refused', status === 409 ? 'conflict' : 'not-found', status, data);
+
+    test('a finishing upload is asked about again, and taken as finished if it still is after the tries', async () => {
+        const pauses: number[] = [];
+        const answers = [
+            refusal(409, { upload: 'completing' }),
+            refusal(409, { upload: 'completing' }),
+        ];
+        const fate = await askAbort(
+            async () => {
+                const next = answers.shift();
+                if (next) throw next;
+            },
+            { pause: async (ms) => void pauses.push(ms) },
+        );
+        expect(fate).toBe('aborted');
+        expect(pauses).toEqual([2_000, 2_000]);
+        expect(
+            await askAbort(() => Promise.reject(refusal(409, { upload: 'completing' })), {
+                tries: 3,
+                pause: async () => {},
+            }),
+        ).toBe('finished');
+    });
+
+    test('finished, gone, denied and no answer each say what they are; an unnamed 409 is no answer', async () => {
+        const ask = (error: unknown) =>
+            askAbort(() => Promise.reject(error), { pause: async () => {} });
+        expect(await ask(refusal(409, { upload: 'completed' }))).toBe('finished');
+        expect(await ask(refusal(404))).toBe('gone');
+        expect(await ask(refusal(403))).toBe('denied');
+        expect(await ask(refusal(409))).toBe('unknown');
+        expect(await ask(new TypeError('Failed to fetch'))).toBe('unknown');
+    });
+});
 
 describe('a save run', () => {
     test('refuses a read-only family folder before anything is made; one waiting for a key change takes the run', async () => {
@@ -1102,6 +1144,53 @@ describe('a save run', () => {
         expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([['late-folder']]);
     });
 
+    test('a late folder that cannot be removed is added to the row a failed clean-up kept, never replacing it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        let finishMaking: (made: DriveNode) => void = () => {};
+        w.deps.makeFolder = () =>
+            new Promise<DriveNode>((resolve) => {
+                finishMaking = resolve;
+            });
+        const making = run.folder('Archive', own);
+        await tick();
+        // The stop's clean-up fails for the file it made, and later for the late folder too.
+        w.server.refuse.add('node-a');
+        expect((await run.cancel()).cleanup).toBe('left');
+        w.server.refuse.add('late-folder');
+        w.server.live.add('late-folder');
+        finishMaking(folder('late-folder'));
+        await expect(making).rejects.toBeInstanceOf(RunStopped);
+        expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([
+            ['node-a', 'late-folder'],
+        ]);
+    });
+
+    test('a row the journal refuses to write stops the run: nothing is attached or completed that it does not name', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        const produced = w.queued.get(a!)!.input.produced!;
+        // Storage full: the begin's row can't be written.
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.begin(a!, 'up-a', 'node-a');
+        await expect(produced.beforeComplete!()).rejects.toThrow();
+        await expect(
+            produced.onAttach!({ workspaceId: 'ws-own', nodeId: 'n-2' }),
+        ).rejects.toThrow();
+        const stopped = (await saved.catch((error: unknown) => error)) as RunStopped;
+        expect(stopped).toMatchObject({ reason: 'failed' });
+        expect(stopped.message).toMatch(/couldn’t keep a record/);
+        // Its upload was aborted on the server all the same.
+        expect(w.server.aborted).toContain('up-a');
+    });
+
     test('the next open lists a closed tab’s run, not a live one, and cleans it up from its ids alone', async () => {
         const w = world();
         const left: RunRow = {
@@ -1154,22 +1243,35 @@ describe('a save run', () => {
         ]);
     });
 
-    test('takes its hold before its row is written, so no tab sees the row unheld', async () => {
+    test('its row is written only once its lock is held, and the lock is held for as long as the run runs', async () => {
         const w = world();
-        const order: string[] = [];
-        w.deps.hold = () => {
-            order.push('hold');
-            return () => order.push('release');
+        // A lock manager that grants a moment later, as the browser's does.
+        const held = new Set<string>();
+        const unheldWrites: string[] = [];
+        w.deps.hold = async (id) => {
+            await tick();
+            held.add(id);
+            return () => held.delete(id);
         };
+        w.deps.isLive = async (id) => held.has(id);
         const put = w.runs.put.bind(w.runs);
         w.runs.put = async (row) => {
-            order.push('row');
+            if (!held.has(row.id)) unheldWrites.push(row.id);
             await put(row);
         };
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
-        expect(order.slice(0, 2)).toEqual(['hold', 'row']);
+        expect(unheldWrites).toEqual([]);
+        // Another tab's next open, at any point while it runs: never interrupted.
+        expect(await interruptedRuns({ runs: w.runs, isLive: w.deps.isLive })).toEqual([]);
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await tick();
+        expect(unheldWrites).toEqual([]);
+        expect(await interruptedRuns({ runs: w.runs, isLive: w.deps.isLive })).toEqual([]);
         await run.finish();
-        expect(order.at(-1)).toBe('release');
+        expect(held.size).toBe(0);
     });
 
     test('finish is refused while a result is on its way, and drops the row once all are in', async () => {

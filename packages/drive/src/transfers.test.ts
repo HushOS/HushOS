@@ -2616,6 +2616,54 @@ describe('produced results', () => {
         expect(begun).toEqual([{ uploadId: 'up-1', nodeId: h.server.begins[0]!.node.id }]);
     });
 
+    test('a paused result hears of a lock, and resumed without its bytes is lost, never left waiting for a file', async () => {
+        const events: { type: string; id: string }[] = [];
+        let lockOnSend = false;
+        const h = harness({
+            onEvent: (event) => events.push({ type: event.type, id: event.item.id }),
+            send: async (_objectId, index) => {
+                if (lockOnSend) throw new Error('Your account was locked. Please try again.');
+                return { ok: true, etag: `etag-${index}`, bytes: CHUNK + 16 };
+            },
+            encryptHold: () => (lockOnSend ? undefined : new Promise(() => {})),
+        });
+        const [result] = h.manager.enqueue([
+            {
+                file: memory('out.bin', 2 * CHUNK),
+                parent: node('root', null),
+                origin: 'result',
+                produced: {},
+            },
+        ]);
+        await settle(200);
+        await h.manager.pause(result!);
+        await settle(50);
+        expect(h.item(result!).status).toBe('paused');
+        // Another upload meets the lock: the worker, and the result's bytes with it, are gone.
+        lockOnSend = true;
+        h.manager.enqueue([{ file: fakeFile(CHUNK, 'other.bin'), parent: node('root', null) }]);
+        await settle(500);
+        expect(events).toContainEqual({ type: 'locked', id: result! });
+        await h.manager.resume(result!);
+        await settle(200);
+        expect(events).toContainEqual({ type: 'lost', id: result! });
+        expect(h.item(result!).status).toBe('failed');
+    });
+
+    test('a result whose run cannot record it is never completed', async () => {
+        const h = harness();
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('out.txt'),
+                parent: node('root', null),
+                produced: { beforeComplete: () => Promise.reject(new Error('not recorded')) },
+            },
+        ]);
+        await settle(3_000);
+        expect(h.item(id!).status).toBe('failed');
+        expect(h.server.completed).toEqual([]);
+    });
+
     test('a produced version whose file left its folder is stale, never attached as a new file there', async () => {
         const h = harness({
             conflict: true,
