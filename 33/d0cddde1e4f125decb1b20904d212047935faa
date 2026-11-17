@@ -1,0 +1,69 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_f66a5496e48bc2 642,644-646
+apps/android/app/build.gradle.kts
+  s_c60e24772e04af::t_e8933202c008cc 241-264
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_61b49ecb409d59 63-65,156,172-179,208-213,217-221,227
+apps/android/app/src/test/kotlin/com/hushos/app/UnconfinedScopes.kt
+  s_c60e24772e04af::t_ef050ee38e4e1d 1-24
+apps/android/app/src/test/kotlin/com/hushos/app/data/ToolRunsTest.kt
+  s_c60e24772e04af::t_12f98b34f26cd5 32,34-36,48-51,264-277,393-418
+apps/android/app/src/test/kotlin/com/hushos/app/data/UploadWorkerTest.kt
+  s_c60e24772e04af::t_ba6f14d3e03b3d 3,39-42,227
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelRacesTest.kt
+  s_c60e24772e04af::t_fd6c55032d638c 3,46-49,57
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamiliesModelSessionTest.kt
+  s_c60e24772e04af::t_eec41b2742fdf8 3,41-44,55
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyManageModelTest.kt
+  s_c60e24772e04af::t_c6e1525aa877ea 3,46-49,57
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRemovalModelTest.kt
+  s_c60e24772e04af::t_3d52e4d627aea0 3-4,28-31,36
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyRolesModelTest.kt
+  s_c60e24772e04af::t_cd356cf56a8f0d 3,40-43,51
+apps/android/app/src/test/kotlin/com/hushos/app/ui/FamilyWorkScheduleTest.kt
+  s_c60e24772e04af::t_91d39bcaacb0e9 3,35-38,46
+apps/android/app/src/test/kotlin/com/hushos/app/ui/LeaveDialogStateTest.kt
+  s_c60e24772e04af::t_823fe706057d13 3,41-44,52
+apps/android/app/src/test/kotlin/com/hushos/app/ui/SharingRefreshTest.kt
+  s_c60e24772e04af::t_481c753b8b285b 3-4,25-28,173
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_95a57261c5fec7 682
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ToolRuns.swift
+  s_c60e24772e04af::t_7288f91347070a 96-98,152-154,156-157,159-167,169
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ToolRunsTests.swift
+  s_c60e24772e04af::t_9e6490e2d10f21 132,136,141-142
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_ca0ca7310433fc 28-32,53
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_0e3523db186766 373-395,522-534
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_254df67904ca73 5,130-158,254-255,364-368
+apps/web/src/lib/tools/sources.ts
+  s_c60e24772e04af::t_0874db14ee84ff 9-11
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_4f75bb9da8dba1 287-288,311-313,331,334-337,339-341,347-348,352,1001,1005,1023,1056-1066,1130
+docs/file-tools-design.md
+  s_c60e24772e04af::t_318d152b7fbf8e 150,152
+e2e/tools-harness.spec.ts
+  s_c60e24772e04af::t_d6f80cfb66bf50 145-149
+packages/drive/src/downloads.test.ts
+  s_c60e24772e04af::t_b2961fb4d96cd3 669-702
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_04595d38b80f6f 507-512,526-529,531,586-587,595-596
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "33d0cddde1e4f125decb1b20904d212047935faa",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
