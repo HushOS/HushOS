@@ -187,8 +187,10 @@ public final class SaveRunJournal: @unchecked Sendable {
 
     /* Sign-out, deletion, removal: the rows go, a staging file with them, and no journal opened before writes again. */
     public static func endAccount() {
-        account.end()
+        // The session ends under the file's lock too: a write under way finishes before the delete, and one after it
+        // sees the session ended and writes nothing.
         lock(for: defaultURL).withLock {
+            account.end()
             try? FileManager.default.removeItem(at: defaultURL)
             dropStaging(defaultURL)
         }
@@ -529,10 +531,11 @@ public enum SaveRuns {
     }
 
     /*
-     * Runs another launch left behind, for the next open to offer to delete or keep what they made. Settled here and
-     * never offered: a row with nothing made, only reservations to let go (a finished run's stale version, or a version
-     * run that ended mid-upload: each aborted, the row gone once none is left without an answer), and one the person
-     * already answered "delete" for that waits for a folder that may still land (applied again quietly).
+     * Runs another launch left behind, for the next open to offer to delete or keep what they made, returned at once,
+     * never after the network. Never offered, and settled in the background (settleQuietly): a row with nothing made,
+     * only reservations to let go (a finished run's stale version, or a version run that ended mid-upload: each aborted,
+     * the row gone once none is left without an answer), and one the person already answered "delete" for that waits for
+     * a folder that may still land (only looked for: one found is offered again, never deleted unasked).
      */
     public static func interrupted(writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(), now: Date = Date()) async -> [SaveRunRow] {
         await interrupted(writer: writer, journal: journal, now: now, launch: launch)
@@ -554,10 +557,10 @@ public enum SaveRuns {
         }
         // In the background: the rows to offer come back now, never after the network.
         if !quiet.isEmpty {
-            let before = quietWork.task
-            quietWork.task = Task.detached {
-                await before?.value
-                for row in quiet { await settleQuietly(row, writer: writer, journal: journal, now: now) }
+            // Each start chained after the last, swapped in under one lock: two opens never settle at once.
+            let rows = quiet
+            quietWork.chain {
+                for row in rows { await settleQuietly(row, writer: writer, journal: journal, now: now) }
             }
         }
         return offered
@@ -568,9 +571,15 @@ public enum SaveRuns {
     final class QuietWork: @unchecked Sendable {
         private let lock = NSLock()
         private var held: Task<Void, Never>?
-        var task: Task<Void, Never>? {
-            get { lock.withLock { held } }
-            set { lock.withLock { held = newValue } }
+        var task: Task<Void, Never>? { lock.withLock { held } }
+        func chain(_ work: @escaping @Sendable () async -> Void) {
+            lock.withLock {
+                let before = held
+                held = Task.detached {
+                    await before?.value
+                    await work()
+                }
+            }
         }
     }
     static func quietlySettled() async { await quietWork.task?.value }
@@ -582,12 +591,18 @@ public enum SaveRuns {
      * passed: never made, and the row goes. No answer: looked for again at the next open.
      */
     private static func settleQuietly(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Date) async {
+        // Read again first, and again before writing: still this session's, and the row on disk still the one read
+        // (another open's settling, or a clean-up, may have changed it).
+        func stillSo() -> Bool { journal.live && journal.list().first(where: { $0.id == row.id }) == row }
+        guard stillSo() else { return }
         if row.nodeIds.isEmpty {
             var left: [String] = []
             for uploadId in row.uploadIds {
                 if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
+                guard journal.live else { return }
             }
-            if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
+            guard left.count < row.uploadIds.count, stillSo() else { return }
+            if left.isEmpty { journal.retire(row) } else {
                 var next = row
                 next.uploadIds = left
                 try? journal.put(next)
@@ -598,16 +613,18 @@ public enum SaveRuns {
         for id in row.nodeIds {
             let items: Int?
             do { items = try await writer.lookFolder(id, in: row.workspaceId) } catch { return }
+            guard journal.live else { return }
             if let items { holds = (holds ?? 0) + items }
         }
         if let holds {
+            guard stillSo() else { return }
             var again = row
             again.chosen = nil
             again.holds = holds
             try? journal.put(again)
             return
         }
-        if (row.uncertain ?? [:]).values.allSatisfy({ now.timeIntervalSince($0) >= creationSettle }) { journal.retire(row) }
+        if (row.uncertain ?? [:]).values.allSatisfy({ now.timeIntervalSince($0) >= creationSettle }), stillSo() { journal.retire(row) }
     }
 
     /*
@@ -1052,12 +1069,12 @@ public actor SaveRun {
 
     /* A new folder for results under the next free name in `parent` (the run's first target by default). */
     public func folder(_ name: String, in parent: Opened? = nil, sources: SaveSources) async throws -> Opened {
+        // On its way from its first line, as file's.
+        inFlight += 1
+        defer { inFlight -= 1 }
         try await open()
         let signing = try SaveRuns.signing(sources)
         let into = parent ?? first
-        // On its way until it returns: finish waits for it as for a result (waiting()).
-        inFlight += 1
-        defer { inFlight -= 1 }
         do {
             return try await makeFolder(name, into: into, signing: signing.metadata)
         } catch {
@@ -1187,6 +1204,10 @@ public actor SaveRun {
 
     /* A new file under the next free name in its folder; never replaces anything. */
     public func file(_ bytes: Data, name: String, mime: String?, sources: SaveSources, thumbnail: Data? = nil, in folder: Opened? = nil) async throws -> Opened {
+        // On its way from its first line: finish refuses until it returns (a result still being prepared never meets a
+        // finished run, and no later failure of it removes what finish said was saved).
+        inFlight += 1
+        defer { inFlight -= 1 }
         try await open()
         let signing = try SaveRuns.signing(sources)
         let thumb = try takeThumbnail(thumbnail)
@@ -1201,6 +1222,9 @@ public actor SaveRun {
     /* A new version of `file` (in `folder`), unless someone else saved since the work started from `startedFrom`. */
     public func version(_ bytes: Data, of file: Opened, in folder: Opened, startedFrom: String?, sources: SaveSources,
                         mime: String? = nil, thumbnail: Data? = nil) async throws -> VersionSaved {
+        // On its way from its first line, as file's.
+        inFlight += 1
+        defer { inFlight -= 1 }
         try await open()
         let signing = try SaveRuns.signing(sources)
         let thumb = try takeThumbnail(thumbnail)
@@ -1214,8 +1238,7 @@ public actor SaveRun {
 
     private func upload(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing given: Opened?, startedFrom: String?,
                         thumbnail: Data?, signing: (metadata: Signing, version: Signing), tracked: Bool) async throws -> Opened {
-        inFlight += 1
-        defer { inFlight -= 1 }
+        // On its way as its file() or version() call.
         var replacing = given
         var folderNow = folder
         var since: Date?
@@ -1290,6 +1313,13 @@ public actor SaveRun {
     private func stop(_ reason: SaveRunStopped.Reason, _ failure: String? = nil) async -> SaveRunStopped {
         if let stopped { return stopped }
         if let stopping { return await stopping.value }
+        // Finished: what it made was saved and stays. A late stop removes nothing, and says so when there was any.
+        if finished {
+            var done = SaveRunStopped(reason: reason, message: keptVersions > 0 || state.nodeCount > 0 ? SaveRuns.alreadySaved : SaveRuns.cancelled,
+                                      cleanup: .nothing)
+            done.keptVersions = keptVersions
+            return done
+        }
         if state.abandoned { abandon(); return stopped! }
         let writer = self.writer
         let state = self.state
@@ -1356,14 +1386,8 @@ public actor SaveRun {
      * result; one that lands afterwards is removed as it lands). A new version that landed is kept.
      */
     public func cancel() async -> SaveRunStopped {
-        if finished {
-            // What it made was saved and stays: said so when there was any.
-            var done = SaveRunStopped(reason: .cancelled, message: keptVersions > 0 || state.nodeCount > 0 ? SaveRuns.alreadySaved : SaveRuns.cancelled,
-                                      cleanup: .nothing)
-            done.keptVersions = keptVersions
-            return done
-        }
-        return await stop(.cancelled)
+        // After finish, what it made was saved and stays (stop says so).
+        await stop(.cancelled)
     }
 
     /* A sign-out: the run stops writing at once, asking nothing of the server (the session is ending). */
@@ -1439,8 +1463,16 @@ extension Vault: SaveRunWriter {
 
     /* From the server itself, never the catalogue (which may not have heard of a key change or another device's save yet). */
     public func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? {
+        // The server's listing pages, counted as they come: nothing opened, remembered or cached here.
         do {
-            return try await listChildren(of: id, in: workspaceId).children.count
+            var items = 0
+            var after: String?
+            repeat {
+                let page = try await api.children(of: id, workspaceId: workspaceId, after: after)
+                items += page.children.count
+                after = page.nextCursor
+            } while after != nil
+            return items
         } catch DriveAPIError.notFound {
             return nil
         } catch DriveAPIError.trashed {

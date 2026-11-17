@@ -173,8 +173,18 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
         fun of(context: android.content.Context) = SaveRunJournal(File(context.filesDir, FILE))
 
-        /* Sign-out, deletion, removal: no journal opened before writes again (the file goes with the account's files). */
-        fun endAccount() = account.end()
+        /*
+         * Sign-out, deletion, removal: the session ends and the journal in `files` goes, both under the file's lock, so a
+         * write already under way finishes before the delete, and one after it sees the session ended and writes nothing.
+         */
+        fun endAccount(files: File) {
+            val file = File(files, FILE)
+            synchronized(locks.computeIfAbsent(file.absoluteFile.normalize().path) { Any() }) {
+                account.end()
+                file.delete()
+                File(files, STAGING).delete()
+            }
+        }
     }
 }
 
@@ -408,13 +418,19 @@ object SaveRuns {
      * once CREATION_SETTLE_MS has passed: never made, and the row goes. No answer: looked for again next launch.
      */
     private fun lookAgain(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long) {
+        // Read again first, and again before writing: another launch's look, or a clean-up, may have changed the row.
+        fun stillSo() = journal.live && journal.list().firstOrNull { it.id == row.id } == row
+        if (!stillSo()) return
         var holds: Int? = null
-        for (id in row.nodeIds) writer.lookFolder(id, row.workspaceId)?.let { holds = (holds ?: 0) + it }
+        for (id in row.nodeIds) {
+            writer.lookFolder(id, row.workspaceId)?.let { holds = (holds ?: 0) + it }
+            if (!journal.live) return
+        }
         if (holds != null) {
-            journal.put(row.copy(chosenDelete = false, holds = holds))
+            if (stillSo()) journal.put(row.copy(chosenDelete = false, holds = holds))
             return
         }
-        if (row.uncertain.values.all { now - it >= CREATION_SETTLE_MS }) journal.retire(row)
+        if (row.uncertain.values.all { now - it >= CREATION_SETTLE_MS } && stillSo()) journal.retire(row)
     }
 
     /*
@@ -711,18 +727,29 @@ class SaveRun private constructor(
     }
 
     /* A new folder for results under the next free name in `parent` (the run's first target by default). */
-    fun folder(name: String, sources: SaveSources, parent: Opened? = null): Opened {
+    fun folder(name: String, sources: SaveSources, parent: Opened? = null): Opened = onItsWay {
         open()
         val copy = SaveRuns.signing(sources)
         val into = parent ?: first
-        // On its way until it returns: finish waits for it as for a result (waiting()).
-        synchronized(lock) { inFlight++ }
         try {
-            return try {
-                makeFolder(name, into, copy)
-            } catch (error: Exception) {
-                throw failed(error)
-            }
+            makeFolder(name, into, copy)
+        } catch (error: Exception) {
+            throw failed(error)
+        }
+    }
+
+    /*
+     * One of the run's own operations (folder, file, version), on its way from its first line: finish refuses while one is,
+     * so a result still being prepared (its folder being listed) never meets a finished run, and no later failure of it
+     * removes what finish said was saved. One begun after finish is refused.
+     */
+    private inline fun <T> onItsWay(work: () -> T): T {
+        synchronized(lock) {
+            if (finished && stopping == null) throw SaveRunRefusal("This save has finished.")
+            inFlight++
+        }
+        try {
+            return work()
         } finally {
             synchronized(lock) { inFlight-- }
         }
@@ -874,7 +901,7 @@ class SaveRun private constructor(
     }
 
     /* A new file under the next free name in its folder; never replaces anything. */
-    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null): Opened {
+    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null): Opened = onItsWay {
         open()
         val copy = SaveRuns.signing(sources)
         val thumb = takeThumbnail(thumbnail)
@@ -882,16 +909,16 @@ class SaveRun private constructor(
         val given = try { claim(name, into) } catch (error: Exception) { throw failed(error) }
         open()
         val tracked = synchronized(lock) { into.id !in madeFolders }
-        return upload(bytes, given, mime, into, null, null, copy, thumb, tracked)
+        upload(bytes, given, mime, into, null, null, copy, thumb, tracked)
     }
 
     /* A new version of `file` (in `folder`), unless someone else saved since the work started from `startedFrom`. */
     fun version(bytes: ByteArray, file: Opened, folder: Opened, startedFrom: String?, sources: SaveSources, mime: String? = null,
-                thumbnail: ByteArray? = null): VersionSaved {
+                thumbnail: ByteArray? = null): VersionSaved = onItsWay {
         open()
         val copy = SaveRuns.signing(sources)
         val thumb = takeThumbnail(thumbnail)
-        return try {
+        try {
             VersionSaved.Saved(upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false))
         } catch (stale: SaveStale) {
             VersionSaved.Stale(stale.currentVersionId)
@@ -900,81 +927,77 @@ class SaveRun private constructor(
 
     private fun upload(bytes: ByteArray, name: String, mime: String?, folder: Opened, given: Opened?, startedFrom: String?, copy: Prior?,
                        thumbnail: ByteArray?, tracked: Boolean): Opened {
-        synchronized(lock) { inFlight++ }
-        try {
-            var replacing = given
-            var folderNow = folder
-            var since: Long? = null
-            var attempt = 0
-            var rekeys = 0
-            while (true) {
-                var started: Vault.BegunIds? = null
-                val version = replacing != null
-                try {
-                    // The begin's ids are on disk before a part is sent (a refused write aborts the upload there).
-                    val landed = writer.uploadResult(bytes, name, mime, folderNow, replacing, startedFrom, copy, thumbnail,
-                        onBegun = { ids ->
-                            started = ids
-                            noteBegun(ids, tracked, version)
-                        },
-                        onCompleting = { uploadId -> completingNow(uploadId) })
-                    val recorded = runCatching { settled(started, landed.id, tracked, kept = version) }.isSuccess
-                    val waiting = synchronized(lock) { stopping }
-                    if (waiting != null) {
-                        // Landed while the run stopped or after: a new file goes the way the rest went, and if it can't, a row
-                        // names it for the next open (keepLate). Never after a sign-out.
-                        val done = waiting.get()
-                        if (tracked && !synchronized(lock) { abandoned } &&
-                            SaveRuns.discard(listOf(landed.id), row.workspaceId, writer) == SaveCleanup.LEFT) keepLate(landed.id, done.cleanup == SaveCleanup.LEFT)
-                        throw done
-                    }
-                    // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
-                    if (!recorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
-                    return landed
-                } catch (stale: SaveStale) {
-                    runCatching { settled(started, null, false) }
-                    throw stale
-                } catch (landed: ResultLanded) {
-                    // Completed, but the server named another item than the one written: nothing to file. The run stops; its
-                    // row names the begun node, so a new file goes with the rest and a new version is kept (its abort: finished).
-                    throw stop(SaveRunStopped.Reason.FAILED)
-                } catch (done: SaveRunStopped) {
+        // On its way as its file() or version() call (onItsWay).
+        var replacing = given
+        var folderNow = folder
+        var since: Long? = null
+        var attempt = 0
+        var rekeys = 0
+        while (true) {
+            var started: Vault.BegunIds? = null
+            val version = replacing != null
+            try {
+                // The begin's ids are on disk before a part is sent (a refused write aborts the upload there).
+                val landed = writer.uploadResult(bytes, name, mime, folderNow, replacing, startedFrom, copy, thumbnail,
+                    onBegun = { ids ->
+                        started = ids
+                        noteBegun(ids, tracked, version)
+                    },
+                    onCompleting = { uploadId -> completingNow(uploadId) })
+                val recorded = runCatching { settled(started, landed.id, tracked, kept = version) }.isSuccess
+                val waiting = synchronized(lock) { stopping }
+                if (waiting != null) {
+                    // Landed while the run stopped or after: a new file goes the way the rest went, and if it can't, a row
+                    // names it for the next open (keepLate). Never after a sign-out.
+                    val done = waiting.get()
+                    if (tracked && !synchronized(lock) { abandoned } &&
+                        SaveRuns.discard(listOf(landed.id), row.workspaceId, writer) == SaveCleanup.LEFT) keepLate(landed.id, done.cleanup == SaveCleanup.LEFT)
                     throw done
-                } catch (error: Exception) {
-                    synchronized(lock) { stopping }?.let { throw it.get() }
-                    val rekeyed = error is SaveRekeyed
-                    if (rekeyed || FamilyUploads.waits(error, since != null)) {
-                        // A key change reached the file or its folder: what this upload began is over, the file is looked up
-                        // again (its keys as the server holds them now; startedFrom kept for the version check), and it is
-                        // sealed afresh, after a pause while the change is still walking (apps/android/AGENTS.md, family uploads).
-                        runCatching { settled(started, null, false) }
-                        if (rekeyed) {
-                            if (++rekeys > 3) throw stop(SaveRunStopped.Reason.FAILED, error.message)
-                        } else {
-                            val start = since ?: now()
-                            since = start
-                            if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
-                            waitOut(++attempt)
-                        }
-                        // The destination and the chain above it as the server holds them now (a family's synced again first),
-                        // and the file replaced, so nothing is sealed again under keys the change replaced.
-                        val wait = Wait(since, attempt)
-                        val (folderFresh, replacingFresh) = refreshed(folderNow, replacing, wait)
-                        folderNow = folderFresh
-                        replacing = replacingFresh
-                        since = wait.since
-                        attempt = wait.attempt
-                        continue
-                    }
-                    // Kept in the row: the stop aborts its upload and removes its node, whatever got that far.
-                    started?.let { runCatching { noteBegun(it, tracked, version) } }
-                    if (error is SaveUnrecorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
-                    val noRoom = SaveRuns.isNoRoom(error)
-                    throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else error.message)
                 }
+                // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
+                if (!recorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
+                return landed
+            } catch (stale: SaveStale) {
+                runCatching { settled(started, null, false) }
+                throw stale
+            } catch (landed: ResultLanded) {
+                // Completed, but the server named another item than the one written: nothing to file. The run stops; its
+                // row names the begun node, so a new file goes with the rest and a new version is kept (its abort: finished).
+                throw stop(SaveRunStopped.Reason.FAILED)
+            } catch (done: SaveRunStopped) {
+                throw done
+            } catch (error: Exception) {
+                synchronized(lock) { stopping }?.let { throw it.get() }
+                val rekeyed = error is SaveRekeyed
+                if (rekeyed || FamilyUploads.waits(error, since != null)) {
+                    // A key change reached the file or its folder: what this upload began is over, the file is looked up
+                    // again (its keys as the server holds them now; startedFrom kept for the version check), and it is
+                    // sealed afresh, after a pause while the change is still walking (apps/android/AGENTS.md, family uploads).
+                    runCatching { settled(started, null, false) }
+                    if (rekeyed) {
+                        if (++rekeys > 3) throw stop(SaveRunStopped.Reason.FAILED, error.message)
+                    } else {
+                        val start = since ?: now()
+                        since = start
+                        if (now() - start >= FamilyUploads.GIVE_UP_MS) throw stop(SaveRunStopped.Reason.FAILED, FamilyUploads.GAVE_UP)
+                        waitOut(++attempt)
+                    }
+                    // The destination and the chain above it as the server holds them now (a family's synced again first),
+                    // and the file replaced, so nothing is sealed again under keys the change replaced.
+                    val wait = Wait(since, attempt)
+                    val (folderFresh, replacingFresh) = refreshed(folderNow, replacing, wait)
+                    folderNow = folderFresh
+                    replacing = replacingFresh
+                    since = wait.since
+                    attempt = wait.attempt
+                    continue
+                }
+                // Kept in the row: the stop aborts its upload and removes its node, whatever got that far.
+                started?.let { runCatching { noteBegun(it, tracked, version) } }
+                if (error is SaveUnrecorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
+                val noRoom = SaveRuns.isNoRoom(error)
+                throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else error.message)
             }
-        } finally {
-            synchronized(lock) { inFlight-- }
         }
     }
 

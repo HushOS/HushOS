@@ -994,6 +994,52 @@ let own = SaveSources.ownWriting
         await SaveRuns.quietlySettled()
     }
 
+    /*
+     * finish is refused while a result is still being prepared (its folder being listed), never a success; once finished,
+     * a stop removes nothing and new work is refused.
+     */
+    @Test func finishIsRefusedWhileAResultIsBeingPreparedAndOnceFinishedNothingIsRemoved() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        let gate = AsyncGate()
+        await writer.set(listing: { await gate.wait() })
+        await writer.set(namesFail: true)
+        let next = Task { try await run.file(Data([2]), name: "b", mime: nil, sources: own, in: opened("g")) }
+        try await Task.sleep(for: .milliseconds(50))
+        await #expect(throws: SaveRunRefusal.self) { try await run.finish() }
+        // The listing fails: the run was never finished, so it stops all or nothing.
+        await gate.open()
+        await #expect(throws: SaveRunStopped.self) { _ = try await next.value }
+        await #expect(throws: SaveRunStopped.self) { try await run.finish() }
+
+        // Finished: a cancel after that removes nothing, and new work is refused.
+        let other = FakeWriter()
+        let done = try await SaveRun.start(writer: other, targets: [opened("f")], results: [], journal: journal())
+        _ = try await done.file(Data([1]), name: "a", mime: nil, sources: own)
+        try await done.finish()
+        #expect(await done.cancel().message == SaveRuns.alreadySaved)
+        #expect(await other.live.contains("node-1"))
+        await #expect(throws: SaveRunRefusal.self) { _ = try await done.file(Data([2]), name: "b", mime: nil, sources: own) }
+    }
+
+    /* Two opens at once never settle one row twice: the second finds it changed and leaves it. */
+    @Test func twoOpensLookForAnAnsweredRowOnce() async throws {
+        let writer = FakeWriter()
+        let looks = Locked(0)
+        await writer.set(looking: { looks.value += 1 })
+        await writer.makeLive("slow")
+        let rows = journal()
+        try rows.put(SaveRunRow(id: "answered", workspaceId: "ws", nodeIds: ["slow"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                                uncertain: ["slow": Date()], chosen: "delete"))
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        await SaveRuns.quietlySettled()
+        #expect(looks.value == 1)
+        #expect(rows.list().first?.chosen == nil && rows.list().first?.holds == 0)
+    }
+
     /* finish waits for a folder still being made: the row stays until its creation settles. */
     @Test func finishWaitsForAFolderStillBeingMade() async throws {
         let writer = FakeWriter()

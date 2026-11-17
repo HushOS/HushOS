@@ -133,6 +133,14 @@ export const RUN_CANCELLED = 'Cancelled. Nothing was saved.';
 export const RUN_FAILED = 'This couldn’t be saved, so nothing was kept.';
 /* What a run says when this device would not keep its record (the browser's storage full): it stops. */
 export const UNRECORDED = 'This device couldn’t keep a record of this save.';
+/* finish() refused: a result, a folder or a version is still on its way (`waiting()`). */
+export class RunBusy extends Error {
+    constructor() {
+        super('This save run still has results on their way.');
+        this.name = 'RunBusy';
+    }
+}
+
 /* A cancel after the run finished: what it made was saved, and stays. */
 export const ALREADY_SAVED = 'This was already saved, so it was kept.';
 
@@ -623,8 +631,19 @@ function createRun(
     const mayExist = new Set<string>();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
-    /* folder() calls not yet returned: finish waits for them as for results. */
-    let folderCalls = 0;
+    /* folder(), file() and version() calls not yet returned: finish waits for them (onItsWay). */
+    let calls = 0;
+    /*
+     * One of the run's own operations, on its way from its first line, before anything is awaited:
+     * finish refuses while one is, so a result still being prepared (its folder being listed) never
+     * meets a finished run, and no later failure of it removes what finish said was saved.
+     */
+    function onItsWay<T>(work: () => Promise<T>): Promise<T> {
+        calls += 1;
+        return work().finally(() => {
+            calls -= 1;
+        });
+    }
     /*
      * A creation answered (made, or refused with a reason): no longer uncertain in the row, written
      * while the run may still write (after a stop sealed it the mark stays, which only keeps a row
@@ -1063,52 +1082,49 @@ function createRun(
 
     const run: LiveRun = {
         id: row.id,
-        async folder(name, options) {
-            // On its way until it returns: finish waits for it (waiting()).
-            folderCalls += 1;
-            try {
-                return await makeFolder(name, options);
-            } finally {
-                folderCalls -= 1;
-            }
+        folder(name, options) {
+            return onItsWay(() => makeFolder(name, options));
         },
-        async file(result) {
-            await open();
-            const into = result.into ?? plan.targets[0]!;
-            const thumbnail = takeThumbnail(result.thumbnail);
-            let file: MemoryFile;
-            try {
-                const name = claim(await namesTaken(into), result.name);
-                file = memoryFile(name, result.bytes, result.mime, thumbnail, result.modified);
-            } catch (error) {
-                return failed(error);
-            }
-            // Checked again with nothing awaited before the enqueue: a stop that began while the
-            // folder was listed refuses this result, which then never reaches the queue.
-            await open();
-            return (await enqueue('file', file, into, result.sources, {})) as NodeView | null;
+        file(result) {
+            return onItsWay(async () => {
+                await open();
+                const into = result.into ?? plan.targets[0]!;
+                const thumbnail = takeThumbnail(result.thumbnail);
+                let file: MemoryFile;
+                try {
+                    const name = claim(await namesTaken(into), result.name);
+                    file = memoryFile(name, result.bytes, result.mime, thumbnail, result.modified);
+                } catch (error) {
+                    return failed(error);
+                }
+                // Checked again with nothing awaited before the enqueue: a stop that began while the
+                // folder was listed refuses this result, which then never reaches the queue.
+                await open();
+                return (await enqueue('file', file, into, result.sources, {})) as NodeView | null;
+            });
         },
-        async version(result) {
-            await open();
-            if (result.folder.id !== result.file.parentId)
-                throw new Error('A new version is saved from the folder its file is in.');
-            const thumbnail = takeThumbnail(result.thumbnail);
-            const file = memoryFile(
-                result.file.name,
-                result.bytes,
-                result.mime ?? result.file.metadata?.mime,
-                thumbnail,
-                result.modified,
-            );
-            return (await enqueue('version', file, result.folder, result.sources, {
-                replaces: result.file,
-                startedFrom: result.startedFrom,
-            })) as VersionSaved;
+        version(result) {
+            return onItsWay(async () => {
+                await open();
+                if (result.folder.id !== result.file.parentId)
+                    throw new Error('A new version is saved from the folder its file is in.');
+                const thumbnail = takeThumbnail(result.thumbnail);
+                const file = memoryFile(
+                    result.file.name,
+                    result.bytes,
+                    result.mime ?? result.file.metadata?.mime,
+                    thumbnail,
+                    result.modified,
+                );
+                return (await enqueue('version', file, result.folder, result.sources, {
+                    replaces: result.file,
+                    startedFrom: result.startedFrom,
+                })) as VersionSaved;
+            });
         },
         async finish() {
             if (stopping) throw await stopping;
-            if (pending.size || folderCalls)
-                throw new Error('This save run still has results on their way.');
+            if (pending.size || calls) throw new RunBusy();
             finished = true;
             sealed = true;
             await writing;
@@ -1142,7 +1158,7 @@ function createRun(
             return stop('cancelled');
         },
         waiting() {
-            return pending.size + folderCalls;
+            return pending.size + calls;
         },
         lock() {
             return stop('locked');
@@ -1359,10 +1375,8 @@ export async function interruptedRuns(
         else left.push(row);
     }
     // In the background: the rows to offer come back now, never after the network.
-    if (quiet.length) {
-        const work = settleQuietly(deps, quiet, now);
-        quietWork = quietWork.then(() => work);
-    }
+    // Each start chained after the last, so two opens' rows are never settled at once.
+    if (quiet.length) quietWork = quietWork.then(() => settleQuietly(deps, quiet, now));
     return left;
 }
 
@@ -1379,6 +1393,7 @@ async function settleQuietly(
 ) {
     for (const row of rows) {
         try {
+            if (!(await stillSo(deps, row))) continue;
             if (row.chosen === 'delete') await lookAgain(deps, row, now());
             else if (deps.abortUpload)
                 await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
@@ -1403,15 +1418,48 @@ async function lookAgain(
     let holds: number | null = null;
     for (const id of row.nodeIds) {
         const items = await deps.lookFolder(row.workspaceId, id);
+        if (!signedIn(deps)) return;
         if (items !== null) holds = (holds ?? 0) + items;
     }
     if (holds !== null) {
+        if (!(await stillSo(deps, row))) return;
         const { chosen: _answer, ...rest } = row;
         await deps.runs.put({ ...rest, holds });
         return;
     }
     const settled = (row.uncertain ?? []).every((held) => now - held.at >= CREATION_SETTLE_MS);
-    if (settled) await retire(deps.runs, row);
+    if (settled && (await stillSo(deps, row))) await retire(deps.runs, row);
+}
+
+/* Still this session's (no sign-out since). */
+function signedIn(deps: Partial<Pick<SaveRunDeps, 'current'>>) {
+    return deps.current?.() ?? true;
+}
+
+/*
+ * Before acting on a row read earlier, and again before writing it: still this session's, and the
+ * row on disk still the one read (another open, or this one's clean-up, may have changed it).
+ */
+async function stillSo(
+    deps: Pick<SaveRunDeps, 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    row: RunRow,
+) {
+    if (!signedIn(deps)) return false;
+    const held = (await deps.runs.list()).find((each) => each.id === row.id);
+    return held !== undefined && signedIn(deps) && stable(held) === stable(row);
+}
+function stable(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+    if (value && typeof value === 'object')
+        return `{${Object.keys(value)
+            .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+            .sort()
+            .map(
+                (key) =>
+                    `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`,
+            )
+            .join(',')}}`;
+    return JSON.stringify(value);
 }
 
 /*
@@ -1446,13 +1494,18 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
 }
 
 /* A nodeless row's uploads aborted; it goes once none is left without an answer. */
-async function settleUploads(deps: Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row: RunRow) {
+async function settleUploads(
+    deps: Pick<SaveRunDeps, 'runs' | 'abortUpload'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    row: RunRow,
+) {
     const left: string[] = [];
-    for (const uploadId of row.uploadIds)
+    for (const uploadId of row.uploadIds) {
         if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') left.push(uploadId);
+        if (!signedIn(deps)) return;
+    }
+    if (left.length === row.uploadIds.length || !(await stillSo(deps, row))) return;
     if (!left.length) await retire(deps.runs, row);
-    else if (left.length < row.uploadIds.length)
-        await deps.runs.put({ ...row, uploadIds: left }).catch(() => {});
+    else await deps.runs.put({ ...row, uploadIds: left }).catch(() => {});
 }
 
 /*

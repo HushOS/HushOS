@@ -29,6 +29,7 @@ import {
     RecordNotUpdated,
     OWN_WRITING,
     RUN_CANCELLED,
+    RunBusy,
     RunStopped,
     SaveRefused,
     abandonRuns,
@@ -1520,10 +1521,13 @@ describe('a save run', () => {
     test('the rows to offer come back at once: the quiet ones are settled after, never before', async () => {
         const w = world();
         let answer: () => void = () => {};
-        w.deps.lookFolder = () =>
-            new Promise<number | null>((resolve) => {
-                answer = () => resolve(null);
-            });
+        const answered = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        w.deps.lookFolder = async () => {
+            await answered;
+            return null;
+        };
         await w.runs.put({
             id: 'asked',
             workspaceId: 'ws-own',
@@ -1547,6 +1551,95 @@ describe('a save run', () => {
         expect(offered.map((row) => row.id)).toEqual(['asked']);
         answer();
         await quietlySettled();
+    });
+
+    test('finish is refused while a result is still being prepared, and once finished nothing is removed', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        // The next result's folder is still being listed: finish is refused, never a success.
+        let fail: (error: Error) => void = () => {};
+        w.deps.namesIn = () =>
+            new Promise<string[]>((_resolve, reject) => {
+                fail = reject;
+            });
+        const next = run
+            .file({ name: 'b', bytes: bytes(), mime: null, ...own, into: folder('g') })
+            .catch((error: unknown) => error);
+        await tick();
+        await expect(run.finish()).rejects.toBeInstanceOf(RunBusy);
+        // The listing fails: the run was never finished, so it stops all or nothing.
+        fail(new TypeError('Failed to fetch'));
+        expect(await next).toBeInstanceOf(RunStopped);
+        await expect(run.finish()).rejects.toBeInstanceOf(RunStopped);
+
+        // Finished: a stop after that (the app's lock) removes nothing, and new work is refused.
+        const v = world();
+        const done = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const kept = done.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await kept;
+        await done.finish();
+        const [locked] = await lockRuns();
+        expect(locked ?? (await done.cancel())).toMatchObject({
+            message: ALREADY_SAVED,
+            cleanup: 'nothing',
+        });
+        expect(v.server.live.has('node-a')).toBe(true);
+        await expect(
+            done.file({ name: 'b', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toThrow();
+    });
+
+    test('the quiet look writes nothing after a sign-out, and two opens never settle one row twice', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const answered: RunRow = {
+            id: 'answered',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        };
+        await w.runs.put(answered);
+        w.server.live.add('slow');
+        // Signed out while it looked: the answer and the row stay as they were.
+        let looks = 0;
+        const look = w.deps.lookFolder!;
+        w.deps.lookFolder = async (ws, id) => {
+            looks += 1;
+            const items = await look(ws, id);
+            session = false;
+            return items;
+        };
+        await interruptedRuns({ ...w.deps, isLive: async () => false });
+        await quietlySettled();
+        expect(w.runs.rows.get('answered')).toEqual(answered);
+        // Signed in again: two opens at once look once; the second finds the row changed and leaves it.
+        session = true;
+        w.deps.lookFolder = async (ws, id) => {
+            looks += 1;
+            return look(ws, id);
+        };
+        looks = 0;
+        await Promise.all([
+            interruptedRuns({ ...w.deps, isLive: async () => false }),
+            interruptedRuns({ ...w.deps, isLive: async () => false }),
+        ]);
+        await quietlySettled();
+        expect(looks).toBe(1);
+        expect(w.runs.rows.get('answered')).toMatchObject({ holds: 0 });
+        expect(w.runs.rows.get('answered')!.chosen).toBeUndefined();
     });
 
     test('finish waits for a folder still being made: the row stays until its creation settles', async () => {

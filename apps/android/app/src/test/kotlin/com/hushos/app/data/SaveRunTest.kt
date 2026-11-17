@@ -503,8 +503,34 @@ class SaveRunTest {
         assertFalse(rows.file.exists())
         // The real sign-out ends every journal on the account's session.
         val accountJournal = journal(SaveRunJournal.account)
-        SaveRunJournal.endAccount()
+        SaveRunJournal.endAccount(accountJournal.file.parentFile!!)
         assertFalse(accountJournal.live)
+    }
+
+    /*
+     * A wipe that comes while a write is under way (between its staging file and the rename): it waits for that write under
+     * the file's lock, then deletes; the journal, both its rows included, never comes back.
+     */
+    @Test
+    fun aWipeDuringAWriteLeavesNoJournalBehind() {
+        val dir = Files.createTempDirectory("save-runs").toFile()
+        val rows = SaveRunJournal(File(dir, SaveRunJournal.FILE))
+        rows.put(SaveRunRow("one", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("two", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch"))
+        var wiper: Thread? = null
+        var wipedMidWrite = false
+        rows.staged = {
+            rows.staged = null
+            wiper = Thread { SaveRunJournal.endAccount(dir) }.also { it.start() }
+            // Held mid-write: long enough for a wipe that doesn't wait for the lock to delete first.
+            wiper!!.join(300)
+            wipedMidWrite = !wiper!!.isAlive
+        }
+        rows.put(SaveRunRow("one", "ws", listOf("node-1", "node-3"), emptyList(), 1L, "an-earlier-launch"))
+        wiper!!.join(5_000)
+        assertFalse("the wipe deleted the journal while a write was under way", wipedMidWrite)
+        assertFalse(File(dir, SaveRunJournal.FILE).exists())
+        assertFalse(rows.live)
     }
 
     @Test
@@ -876,6 +902,55 @@ class SaveRunTest {
         assertTrue("interrupted waited for a look", System.nanoTime() - began < 1_000_000_000L)
         answer.countDown()
         SaveRuns.quietlySettled()
+    }
+
+    /*
+     * finish is refused while a result is still being prepared (its folder being listed), never a success; once finished, a
+     * stop removes nothing and new work is refused.
+     */
+    @Test
+    fun finishIsRefusedWhileAResultIsBeingPreparedAndOnceFinishedNothingIsRemoved() {
+        val listing = CountDownLatch(1)
+        val fail = CountDownLatch(1)
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.listing = { listing.countDown(); fail.await(5, TimeUnit.SECONDS); throw Unreachable() }
+        val pool = Executors.newSingleThreadExecutor()
+        val next = pool.submit<Opened> { run.file(byteArrayOf(2), "b", null, own, folder = opened("g")) }
+        assertTrue(listing.await(5, TimeUnit.SECONDS))
+        assertThrows(SaveRunRefusal::class.java) { run.finish() }
+        // The listing fails: the run was never finished, so it stops all or nothing.
+        fail.countDown()
+        assertTrue(runCatching { next.get(5, TimeUnit.SECONDS) }.exceptionOrNull()?.cause is SaveRunStopped)
+        assertThrows(SaveRunStopped::class.java) { run.finish() }
+        pool.shutdown()
+
+        // Finished: a cancel after that removes nothing, and new work is refused.
+        val other = FakeWriter()
+        val done = SaveRun.start(other, listOf(opened("f")), emptyList(), journal())
+        done.file(byteArrayOf(1), "a", null, own)
+        done.finish()
+        assertEquals(SaveRuns.ALREADY_SAVED, done.cancel().message)
+        assertTrue("node-1" in other.live)
+        assertThrows(SaveRunRefusal::class.java) { done.file(byteArrayOf(2), "b", null, own) }
+    }
+
+    /* Two launches' looks never settle one row twice: the second finds it changed and leaves it. */
+    @Test
+    fun twoOpensLookForAnAnsweredRowOnce() {
+        var looks = 0
+        val writer = FakeWriter().apply { live += "slow"; looking = { looks++ } }
+        val rows = journal()
+        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true))
+        SaveRuns.interrupted(rows, writer, now = 2L)
+        SaveRuns.interrupted(rows, writer, now = 2L)
+        SaveRuns.quietlySettled()
+        assertEquals(1, looks)
+        val row = rows.list().single()
+        assertFalse(row.chosenDelete)
+        assertEquals(0, row.holds)
     }
 
     /* finish waits for a folder still being made: the row stays until its creation settles. */

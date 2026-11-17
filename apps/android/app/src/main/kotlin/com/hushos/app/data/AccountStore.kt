@@ -53,7 +53,7 @@ class AccountStore(private val files: File, private val cache: File, private val
         // The save path's runs stop at once, writing and deleting nothing more; no run writes a row again (their file goes
         // with ACCOUNT_FILES below).
         SaveRuns.abandonAll()
-        SaveRunJournal.endAccount()
+        SaveRunJournal.endAccount(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
         // What this process held of the account's saves (numbers given, bounds last read) goes with them.
         WriteBacks.forgetHere()
