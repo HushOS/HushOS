@@ -4,7 +4,16 @@ import {
     type Range,
     type Virtualizer,
 } from '@tanstack/react-virtual';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+    useCallback,
+    useContext,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
+import { FirstPaintContext } from '@/components/drive/first-paint';
 
 /*
  * A long list draws only the items near the screen. A folder of a few thousand files
@@ -17,11 +26,12 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
  * from both boxes. Content above the list (the path, a banner) is never counted by hand.
  *
  * Items keep their place with spacers rather than absolute positions, so a table stays
- * a table (its columns, its row semantics) and a grid stays a CSS grid. Nothing in the list
- * is the browser's scroll anchor: a spacer that grew as rows were drawn above it would have
- * the browser scroll on by as much, and on; a kept row far from the screen (the one with the
- * keys) would pull the list back towards itself as the rows around it were drawn again. Rows
- * that must stay drawn off screen, the focused one and one being dragged, are kept with `keep`.
+ * a table (its columns, its row semantics) and a grid stays a CSS grid. The list keeps the
+ * rows on screen in place itself as items arrive or leave above them (a sync, an upload, a
+ * move), by as many rows as the first row on screen moved; the browser's scroll anchoring
+ * is off inside it, as Chrome's let rows slide under a sync and Safari has none, and the
+ * two together would move twice. Rows that must stay drawn off screen, the focused one and
+ * one being dragged, are kept with `keep`.
  */
 
 type Scroller = HTMLElement | Window;
@@ -149,12 +159,18 @@ export function useVirtualRows({
     size,
     list,
     keep,
+    ids,
+    perLine = 1,
     overscan = 8,
 }: {
     count: number;
     size: number;
     list: HTMLElement | null;
     keep: number[];
+    /* The items' ids in order, to keep the rows on screen in place when items arrive or leave above them. */
+    ids: readonly string[];
+    /* Items per line: a grid's columns. */
+    perLine?: number;
     overscan?: number;
 }) {
     const keepKey = keep.join();
@@ -191,6 +207,7 @@ export function useVirtualRows({
         if (measured.current !== null && measured.current !== size) virtualizer.measure();
         measured.current = size;
     }, [virtualizer, size]);
+    useKeepInPlace(virtualizer, ids, perLine, size);
     const items = virtualizer.getVirtualItems();
     const total = virtualizer.getTotalSize();
     return useMemo(() => {
@@ -207,6 +224,49 @@ export function useVirtualRows({
             first: virtualizer.range?.startIndex ?? 0,
         };
     }, [items, total, virtualizer]);
+}
+
+/*
+ * When items arrive or leave above the screen, scroll by as many lines, so the rows on screen
+ * stay where they were. Measured by ids, not pixels: the first item on screen and the one
+ * after it, before and after. A new order (the list sorted again) moves that neighbour too,
+ * and is left where it lands.
+ */
+function useKeepInPlace(
+    virtualizer: ListVirtualizer,
+    ids: readonly string[],
+    perLine: number,
+    size: number,
+) {
+    const last = useRef<{
+        ids: readonly string[];
+        id: string;
+        next: string | undefined;
+        line: number;
+        perLine: number;
+    } | null>(null);
+    useLayoutEffect(() => {
+        const first = virtualizer.range?.startIndex ?? 0;
+        const before = last.current;
+        const list = virtualizer.scrollElement;
+        if (
+            list &&
+            before &&
+            before.ids !== ids &&
+            before.perLine === perLine &&
+            (virtualizer.scrollOffset ?? 0) > 0
+        ) {
+            const now = ids.indexOf(before.id);
+            const kept = now >= 0 && ids[now + 1] === before.next;
+            const moved = kept ? Math.floor(now / perLine) - before.line : 0;
+            if (moved !== 0) scrollerOf(list).scrollBy({ top: moved * size });
+        }
+        const index = first * perLine;
+        last.current =
+            index < ids.length
+                ? { ids, id: ids[index]!, next: ids[index + 1], line: first, perLine }
+                : null;
+    });
 }
 
 /*
@@ -230,13 +290,17 @@ function useDrawnSize<T>(
     }, [element]);
     useLayoutEffect(() => {
         if (!element) return;
-        // Once now, before the first paint: the observer's first answer lands a frame later,
-        // and a grid would show that frame in the estimate's two columns.
-        measure();
         const observer = new ResizeObserver(measure);
         observer.observe(element);
         return () => observer.disconnect();
     }, [element, measure]);
+    // Before the first paint the list is in, and again as the drive's first paint shows the
+    // page: the observer's answer lands a frame later, and a grid would show that frame in
+    // the estimate's two columns.
+    const shown = useContext(FirstPaintContext) === null;
+    useLayoutEffect(() => {
+        if (shown) measure();
+    }, [shown, measure]);
     return size;
 }
 
@@ -254,19 +318,26 @@ function rowHeight(body: HTMLElement) {
  * (a phone hides three) would add columns of its own and squeeze the name.
  */
 export function VirtualTableBody({
-    count,
+    ids,
     estimate,
     keep,
     row,
 }: {
-    count: number;
+    /* The rows' ids, in order. */
+    ids: readonly string[];
     estimate: number;
     keep: number[];
     row: (index: number, stagger: number) => ReactNode;
 }) {
     const [body, setBody] = useState<HTMLTableSectionElement | null>(null);
     const size = useDrawnSize(body, rowHeight, estimate, String);
-    const { placed, after, first } = useVirtualRows({ count, size, list: body, keep });
+    const { placed, after, first } = useVirtualRows({
+        count: ids.length,
+        size,
+        list: body,
+        keep,
+        ids,
+    });
     const spacer = (key: string, height: number) => (
         <tr key={key} aria-hidden="true">
             {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label -- an empty spacer, hidden from screen readers */}
@@ -304,13 +375,14 @@ function gridShape(grid: HTMLElement): GridShape | null {
  * for. `tile(index, stagger)` draws one tile, an `li` with its key.
  */
 export function VirtualGrid({
-    count,
+    ids,
     keep,
     tile,
     className,
     ...props
 }: {
-    count: number;
+    /* The tiles' ids, in order. */
+    ids: readonly string[];
     keep: number[];
     tile: (index: number, stagger: number) => ReactNode;
     className?: string;
@@ -324,12 +396,15 @@ export function VirtualGrid({
         { columns: 2, height: 180, gap: 8 },
         (shape) => `${shape.columns} ${shape.height} ${shape.gap}`,
     );
+    const count = ids.length;
     const lines = Math.ceil(count / columns);
     const { placed, after, first } = useVirtualRows({
         count: lines,
         size: height + gap,
         list: grid,
         keep: keep.map((index) => Math.floor(index / columns)),
+        ids,
+        perLine: columns,
         overscan: 3,
     });
     const spacer = (key: string, room: number) => (

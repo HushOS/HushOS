@@ -186,13 +186,14 @@ export async function dragOnto(page: Page, source: Locator, target: Locator, say
  * Makes `names` as folders inside the folder on screen, fast: through the app's own Drive
  * client in the page, so each is sealed and signed exactly as the New folder dialog does,
  * without opening the dialog hundreds of times. Folders, as a file needs an upload; a list
- * test wants rows, not their bytes. The page then lists the folder afresh.
+ * test wants rows, not their bytes. The page then lists the folder afresh, unless `reload` is
+ * false: the rows then arrive the way another device's do, when the tab next polls for changes.
  *
  * It needs the dev server, which serves the app's modules by their source path, as every e2e
  * run starts or is pointed at today (E2E_BASE_URL at a verification launch). A built server
  * serves hashed chunks with no way in from outside, and the helper says so instead of guessing.
  */
-export async function seedFolders(page: Page, names: string[]) {
+export async function seedFolders(page: Page, names: string[], { reload = true } = {}) {
     const folderId = /\/app\/drive\/f\/([^/?#]+)/.exec(page.url())?.[1];
     if (!folderId) throw new Error('seedFolders needs a folder of ones own on screen.');
     const failure = await page.evaluate(
@@ -219,7 +220,7 @@ export async function seedFolders(page: Page, names: string[]) {
         { folderId, names },
     );
     if (failure) throw new Error(failure);
-    await page.reload();
+    if (reload) await page.reload();
 }
 
 /* Opens the New folder dialog from the folder's Add menu. */

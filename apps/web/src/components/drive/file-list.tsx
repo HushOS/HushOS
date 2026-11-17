@@ -174,8 +174,10 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
             const holder = rowOf(event.target);
             if (holder) setHolding(holder);
         };
-        // Focus leaving the rows (for anything but another row, which focusin records) lets go.
+        // Focus leaving the rows (for anything but another row, which focusin records) lets go,
+        // but not the window losing focus: back in it, the keys are on the same row.
         const leave = (event: FocusEvent) => {
+            if (!document.hasFocus()) return;
             if (rowOf(event.target) && !rowOf(event.relatedTarget)) setHolding(null);
         };
         document.addEventListener('focusin', follow);

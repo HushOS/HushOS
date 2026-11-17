@@ -40,19 +40,34 @@ const duplicates = (p: Page) =>
         return ids.length - new Set(ids).size;
     });
 const rowCount = async (p: Page) => Number(await p.locator('table').getAttribute('aria-rowcount'));
-/* The name of each drawn item whose middle is inside the sheet's visible part. */
+/* How many drawn items have their middle inside the sheet's visible part. */
 const onScreen = (p: Page) =>
     p.evaluate(() => {
-        const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
-        const box =
-            sheet.scrollHeight > sheet.clientHeight
-                ? sheet.getBoundingClientRect()
-                : { top: 0, bottom: innerHeight };
+        const box = document
+            .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+            .getBoundingClientRect();
         return [...document.querySelectorAll<HTMLElement>('[data-node-id]')].filter((item) => {
             const rect = item.getBoundingClientRect();
             const middle = (rect.top + rect.bottom) / 2;
             return middle > box.top && middle < box.bottom;
-        });
+        }).length;
+    });
+
+/* Rows the table draws past each edge of the screen (virtual-list.tsx's overscan). */
+const OVERSCAN = 8;
+/* The index of the first row whose middle is on screen, from its aria-rowindex. */
+const firstOnScreen = (p: Page) =>
+    p.evaluate(() => {
+        const box = document
+            .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+            .getBoundingClientRect();
+        const first = [...document.querySelectorAll<HTMLElement>('tbody [data-node-id]')].find(
+            (item) => {
+                const rect = item.getBoundingClientRect();
+                return (rect.top + rect.bottom) / 2 > box.top;
+            },
+        );
+        return Number(first?.getAttribute('aria-rowindex') ?? 2) - 2;
     });
 
 /* The sheet's scroll position once it has stopped moving (a key's scroll is animated). */
@@ -188,10 +203,13 @@ test('the keys stay on a row the selection let go of while the list scrolls on',
     // Escape lets go of the selection, not of the keys.
     await page.keyboard.press('Escape');
     await expect(selection(page)).toHaveCount(0);
-    await page.keyboard.press('PageDown');
-    await page.keyboard.press('PageDown');
-    // The keys' scroll is animated: wait for it to come to rest, well past the drawn rows.
-    await expect.poll(() => settledScroll(page), { timeout: 10_000 }).toBeGreaterThan(57 * 20);
+    // Page Down until the first row on screen is past the rows drawn around row-006, whatever
+    // the window's height (each press's scroll is animated: wait for it to come to rest).
+    for (let press = 0; press < 30 && (await firstOnScreen(page)) <= 6 + 2 * OVERSCAN; press++) {
+        await page.keyboard.press('PageDown');
+        await settledScroll(page);
+    }
+    expect(await firstOnScreen(page)).toBeGreaterThan(6 + 2 * OVERSCAN);
     await expect(row(page, 6)).toHaveCount(1);
     await expect(row(page, 6)).not.toBeInViewport();
     await expect(nameOf(page, 6)).toBeFocused();
@@ -223,12 +241,7 @@ test('the grid draws only the tiles near the screen, each placed in the whole li
         });
         await expect(row(page, 0)).toHaveCount(0);
         // Every tile on screen is the item its position says: row-150 is item 151 of 300.
-        await expect
-            .poll(async () => {
-                const tiles = await onScreen(page);
-                return tiles.length > 0;
-            })
-            .toBe(true);
+        await expect.poll(() => onScreen(page)).toBeGreaterThan(0);
         const placed = await page.evaluate(() =>
             [...document.querySelectorAll<HTMLElement>('[data-node-id]')].map((tile) => [
                 tile.querySelector('[data-row-name]')?.getAttribute('aria-label'),
@@ -238,6 +251,35 @@ test('the grid draws only the tiles near the screen, each placed in the whole li
         for (const [label, position] of placed)
             expect(Number(position)).toBe(Number(label!.slice(4)) + 1);
         expect(await duplicates(page)).toBe(0);
+        // And where CSS's own columns put it: a tile sits on line (its index / columns), so a
+        // list that counted columns differently from the grid would place tiles off their lines.
+        const layout = await page.evaluate(() => {
+            const grid = document.querySelector<HTMLElement>('ul[aria-label="Contents of Long"]')!;
+            const style = getComputedStyle(grid);
+            const columns = style.gridTemplateColumns.split(' ').length;
+            const gap = parseFloat(style.rowGap);
+            const top = grid.getBoundingClientRect().top + parseFloat(style.paddingTop);
+            const tiles = [...grid.querySelectorAll<HTMLElement>('[data-node-id]')];
+            const height = tiles[0]!.getBoundingClientRect().height;
+            return {
+                columns,
+                lefts: new Set(tiles.map((tile) => Math.round(tile.getBoundingClientRect().left)))
+                    .size,
+                off: tiles.filter((tile) => {
+                    const line = Math.floor(
+                        (Number(tile.getAttribute('aria-posinset')) - 1) / columns,
+                    );
+                    // A few pixels of rounding over many lines; a wrong count is whole lines out.
+                    return (
+                        Math.abs(tile.getBoundingClientRect().top - top - line * (height + gap)) >
+                        (height + gap) / 4
+                    );
+                }).length,
+            };
+        });
+        expect(layout.columns).toBeGreaterThan(2);
+        expect(layout.lefts).toBe(layout.columns);
+        expect(layout.off).toBe(0);
     } finally {
         await page.getByRole('button', { name: 'Show as list' }).click();
     }
@@ -319,5 +361,44 @@ test('a range that was never drawn together goes to the Trash whole', async () =
     await expect(row(page, 2)).toHaveCount(0);
     await expect(row(page, 120)).toHaveCount(0);
     await expect(rows(page).nth(2)).toContainText(name(251));
+    expect(await duplicates(page)).toBe(0);
+});
+
+test('rows that arrive above the screen leave the rows on it where they were', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    // Deep enough that the list's top, and the rows about to arrive there, are well off screen.
+    await scrollToRow(page, before - 1 - 20);
+    await settledScroll(page);
+    expect(await firstOnScreen(page)).toBeGreaterThan(2 * OVERSCAN);
+    /* The row under a fixed point of the sheet, and where its top is. */
+    const under = () =>
+        page.evaluate(() => {
+            const box = document
+                .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+                .getBoundingClientRect();
+            const item = document
+                .elementFromPoint(box.left + 400, box.top + 250)
+                ?.closest<HTMLElement>('[data-node-id]');
+            return item
+                ? {
+                      name: item.querySelector('[data-row-name]')?.textContent,
+                      top: Math.round(item.getBoundingClientRect().top),
+                  }
+                : null;
+        });
+    const still = await under();
+    expect(still).not.toBeNull();
+    // Three folders that sort above everything on screen, made the way another device would
+    // make them: the tab hears of them when it next polls for changes, as with any sync.
+    await seedFolders(page, ['aa-0', 'aa-1', 'aa-2'], { reload: false });
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3), {
+        timeout: 90_000,
+    });
+    await settledScroll(page);
+    const after = await under();
+    expect(after?.name).toBe(still!.name);
+    // Scroll offsets snap to whole device pixels.
+    expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);
     expect(await duplicates(page)).toBe(0);
 });

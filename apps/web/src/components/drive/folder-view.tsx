@@ -1336,9 +1336,10 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [moreFor, setMoreFor] = useState<string | null>(null);
     /*
      * Rows drawn wherever the list is scrolled: the one the arrows are on, the one holding the
-     * keys, the one being dragged, and the one whose ⋯ menu is open.
+     * keys, the one being dragged, the one whose ⋯ menu is open, and the one being renamed
+     * (the dialog gives the keys back to it, wherever the list has scrolled meanwhile).
      */
-    const keep = [focused, holding, dragFrom, moreFor].flatMap((id) => {
+    const keep = [focused, holding, dragFrom, moreFor, renaming?.id].flatMap((id) => {
         const index = id ? ids.indexOf(id) : -1;
         return index >= 0 ? [index] : [];
     });
@@ -1644,7 +1645,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                     </tr>
                                 </thead>
                                 <VirtualTableBody
-                                    count={rows.length}
+                                    ids={ids}
                                     estimate={57}
                                     keep={keep}
                                     row={(index, stagger) => {
@@ -1673,7 +1674,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                             <VirtualGrid
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 className="grid grid-cols-2 content-start gap-2 px-3 pt-1 pb-6 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] sm:gap-3 sm:px-6"
-                                count={rows.length}
+                                ids={ids}
                                 keep={keep}
                                 tile={(index, stagger) => {
                                     const node = rows[index]!;
