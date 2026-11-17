@@ -1,4 +1,3 @@
-import CoreImage.CIFilterBuiltins
 import HushOSKit
 import SwiftUI
 import UIKit
@@ -158,7 +157,7 @@ struct DeviceAskView: View {
             case .waiting(let qr):
                 if let qr, approver == nil {
                     VStack(spacing: Alpine.Space.s4) {
-                        QRCode(text: qr).frame(width: 208, height: 208)
+                        BrandQRCode(text: qr, dots: false, label: StepWords.askCode).frame(width: 208, height: 208)
                         Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
@@ -219,29 +218,6 @@ struct ShownCode: View {
         }
         .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-    }
-}
-
-/* A QR code, dark on white in both appearances with its quiet zone, so any camera reads it. */
-struct QRCode: View {
-    let text: String
-
-    var body: some View {
-        if let image = Self.image(text) {
-            Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
-                .padding(Alpine.Space.s3)
-                .background(Color.white, in: RoundedRectangle(cornerRadius: Alpine.Radius.control, style: .continuous))
-                .accessibilityLabel(StepWords.askCode)
-        }
-    }
-
-    static func image(_ text: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(text.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
-              let rendered = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: rendered)
     }
 }
 

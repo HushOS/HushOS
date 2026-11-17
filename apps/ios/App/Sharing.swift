@@ -1,4 +1,3 @@
-import CoreImage.CIFilterBuiltins
 import HushOSKit
 import SwiftUI
 import UIKit
@@ -521,7 +520,7 @@ private struct LinkCard: View {
             .disabled(busy)
             if qr, let url {
                 VStack(spacing: Alpine.Space.s2) {
-                    QRCodeView(text: url.absoluteString).frame(width: 180, height: 180)
+                    BrandQRCode(text: url.absoluteString, dots: true, label: "QR code for the link").frame(width: 180, height: 180)
                     Text("Whoever scans it can open “\(item.name)”\(link.hasPassword ? " with the password" : "").")
                         .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
                 }
@@ -1107,24 +1106,22 @@ struct OwnWordsSheet: View {
     }
 }
 
-/* A link as a QR code, drawn crisp at any size. */
-struct QRCodeView: View {
+/*
+ * A QR code with the HushOS mark in the middle (HushOSKit's `BrandQR`, the web's look), dark on
+ * white in both appearances with its quiet zone, so any camera reads it. Links are drawn in dots;
+ * a code another device reads off this screen keeps square modules.
+ */
+struct BrandQRCode: View {
     let text: String
+    let dots: Bool
+    let label: String
 
     var body: some View {
-        if let image = Self.render(text) {
-            Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
-                .padding(Alpine.Space.s2).background(Color.white, in: RoundedRectangle(cornerRadius: Alpine.Radius.control))
-                .accessibilityLabel("QR code for the link")
+        if let image = BrandQR.image(text, dots: dots) {
+            Image(decorative: image, scale: 1).interpolation(.high).antialiased(true).resizable().scaledToFit()
+                .padding(Alpine.Space.s2)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: Alpine.Radius.control, style: .continuous))
+                .accessibilityElement().accessibilityLabel(label).accessibilityAddTraits(.isImage)
         }
-    }
-
-    static func render(_ text: String) -> UIImage? {
-        let filter = CIFilter.qrCodeGenerator()
-        filter.message = Data(text.utf8)
-        filter.correctionLevel = "M"
-        guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 8, y: 8)),
-              let cg = CIContext().createCGImage(output, from: output.extent) else { return nil }
-        return UIImage(cgImage: cg)
     }
 }
