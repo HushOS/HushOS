@@ -310,13 +310,27 @@ export function NodeMoreButton({
 export function SharedNodeMenu({
     handle,
     entriesFor,
+    onRow,
 }: {
     handle: NodeMenuHandle;
     /* The entries for the row with this id, or null once it has left the list. */
     entriesFor: (id: string) => MenuEntry[][] | null;
+    /* The row whose menu is open, and null once it has closed, for the list to keep it drawn. */
+    onRow?: (id: string | null) => void;
 }) {
     return (
-        <DropdownMenu handle={handle}>
+        <DropdownMenu
+            handle={handle}
+            onOpenChange={(open, details) => {
+                if (!open) return;
+                const row = details.trigger?.closest<HTMLElement>('[data-node-id]');
+                onRow?.(row?.dataset.nodeId ?? null);
+            }}
+            // After the closing animation, so the trigger is still there to take the focus back.
+            onOpenChangeComplete={(open) => {
+                if (!open) onRow?.(null);
+            }}
+        >
             {({ payload }) => {
                 const entries = typeof payload === 'string' ? entriesFor(payload) : null;
                 return entries && <NodeMoreContent entries={entries} />;

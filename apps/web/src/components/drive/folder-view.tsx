@@ -516,6 +516,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         selected,
         setSelected,
         focused,
+        holding,
         marquee,
         select,
         toggle,
@@ -1308,17 +1309,17 @@ export function FolderView({ folderId }: { folderId: string }) {
         folderId,
         calls: itemCalls,
     });
-    /* Rows drawn wherever the list is scrolled: the one with the keys, the one being dragged. */
-    const keep = [focused, dragFrom].flatMap((id) => {
-        const index = id ? ids.indexOf(id) : -1;
-        return index >= 0 ? [index] : [];
-    });
     /*
      * One right-click menu for the whole list: a row's when the click was on a row, the
      * space's otherwise. It reads which from where the press began, before it opens.
      */
     const [menuFor, setMenuFor] = useState<string | null>(null);
     const menuNode = menuFor ? (rows.find((row) => row.id === menuFor) ?? null) : null;
+    // A row's menu closes when the row leaves the list (trashed or moved elsewhere), rather than
+    // turning into the space's menu under a pointer on its way to Move to Trash.
+    const [contextOpen, setContextOpen] = useState(false);
+    const rowGone = menuFor !== null && menuNode === null;
+    if (rowGone && contextOpen) setContextOpen(false);
     const aimMenu = (event: SyntheticEvent) => {
         const target = event.target instanceof Element ? event.target : null;
         const id = target?.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? null;
@@ -1331,6 +1332,16 @@ export function FolderView({ folderId }: { folderId: string }) {
         if (id && !selected.has(id)) select(id);
     };
     const moreMenu = useNodeMenuHandle();
+    /* The row whose ⋯ menu is open: kept drawn, so the menu keeps its anchor and its way back. */
+    const [moreFor, setMoreFor] = useState<string | null>(null);
+    /*
+     * Rows drawn wherever the list is scrolled: the one the arrows are on, the one holding the
+     * keys, the one being dragged, and the one whose ⋯ menu is open.
+     */
+    const keep = [focused, holding, dragFrom, moreFor].flatMap((id) => {
+        const index = id ? ids.indexOf(id) : -1;
+        return index >= 0 ? [index] : [];
+    });
 
     const actions: NodeActions = {
         onOpen: open,
@@ -1486,7 +1497,7 @@ export function FolderView({ folderId }: { folderId: string }) {
 
             <div className="flex min-h-0 flex-1">
                 {/* The space itself has a menu too: what you can do here, without a selection. */}
-                <ContextMenu>
+                <ContextMenu open={contextOpen && !rowGone} onOpenChange={setContextOpen}>
                     <ContextMenuTrigger
                         render={<div />}
                         className="@container/list flex min-h-0 min-w-0 flex-1 flex-col"
@@ -1678,9 +1689,10 @@ export function FolderView({ folderId }: { folderId: string }) {
                             />
                         )}
                     </ContextMenuTrigger>
-                    <ContextMenuContent className={menuNode ? 'w-60' : undefined}>
-                        {menuNode ? (
-                            <NodeContextMenuItems entries={entriesFor(menuNode)} />
+                    <ContextMenuContent className={menuFor ? 'w-60' : undefined}>
+                        {menuFor ? (
+                            // Empty for the moment it fades out after its row has gone.
+                            menuNode && <NodeContextMenuItems entries={entriesFor(menuNode)} />
                         ) : (
                             <>
                                 {canAdd && (
@@ -1721,6 +1733,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 </ContextMenu>
                 <SharedNodeMenu
                     handle={moreMenu}
+                    onRow={setMoreFor}
                     entriesFor={(id) => {
                         const node = rows.find((row) => row.id === id);
                         return node ? entriesFor(node) : null;

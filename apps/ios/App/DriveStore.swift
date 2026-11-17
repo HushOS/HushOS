@@ -14,12 +14,11 @@ import UniformTypeIdentifiers
 final class DriveStore {
     private(set) var vault: Vault
     var folders: [String: [Opened]] = [:] {
-        didSet { foldersRevision &+= 1 }
+        // Any change lets go of every sorted copy: a closed folder's decrypted rows are not kept.
+        didSet { sorted.removeAll() }
     }
-    /* Bumped by any change to `folders`: what a folder's sorted rows were sorted from. */
-    @ObservationIgnored private var foldersRevision = 0
-    /* Each folder's rows as last sorted, with the order and the revision they were sorted at. */
-    @ObservationIgnored private var sorted: [String: (revision: Int, key: SortKey, ascending: Bool, items: [Opened])] = [:]
+    /* Each folder's rows as last sorted, with the order they were sorted in; emptied whenever `folders` changes. */
+    @ObservationIgnored private var sorted: [String: (key: SortKey, ascending: Bool, items: [Opened])] = [:]
 
     /*
      * A folder's rows in a list's order, or nil before it is listed. Sorted once per change of the
@@ -28,15 +27,10 @@ final class DriveStore {
      */
     func sortedChildren(of folderId: String, by key: SortKey, ascending: Bool) -> [Opened]? {
         // Read through the observed property, so a screen showing these rows follows their changes.
-        guard let rows = folders[folderId] else {
-            sorted[folderId] = nil
-            return nil
-        }
-        if let held = sorted[folderId], held.revision == foldersRevision, held.key == key, held.ascending == ascending {
-            return held.items
-        }
+        guard let rows = folders[folderId] else { return nil }
+        if let held = sorted[folderId], held.key == key, held.ascending == ascending { return held.items }
         let items = key.sort(rows, ascending: ascending)
-        sorted[folderId] = (foldersRevision, key, ascending, items)
+        sorted[folderId] = (key, ascending, items)
         return items
     }
     /* Bumped whenever the offline list changes, so views showing it refresh. */

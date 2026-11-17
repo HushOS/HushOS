@@ -17,10 +17,11 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode
  * from both boxes. Content above the list (the path, a banner) is never counted by hand.
  *
  * Items keep their place with spacers rather than absolute positions, so a table stays
- * a table (its columns, its row semantics) and a grid stays a CSS grid. Spacers are never
- * the browser's scroll anchor: one that grew as rows were drawn above it would have the
- * browser scroll on by as much, and on, and on. Rows that must stay drawn off screen,
- * the focused one and one being dragged, are kept with `keep`.
+ * a table (its columns, its row semantics) and a grid stays a CSS grid. Nothing in the list
+ * is the browser's scroll anchor: a spacer that grew as rows were drawn above it would have
+ * the browser scroll on by as much, and on; a kept row far from the screen (the one with the
+ * keys) would pull the list back towards itself as the rows around it were drawn again. Rows
+ * that must stay drawn off screen, the focused one and one being dragged, are kept with `keep`.
  */
 
 type Scroller = HTMLElement | Window;
@@ -160,7 +161,9 @@ export function useVirtualRows({
     const rangeExtractor = useCallback(
         (range: Range) => {
             const indexes = defaultRangeExtractor(range);
-            const extra = keep.filter(
+            // Each index once: the row with the keys is often the one being dragged, and a
+            // second copy of a row would be a second element under the same key.
+            const extra = [...new Set(keep)].filter(
                 (index) => index >= 0 && index < range.count && !indexes.includes(index),
             );
             return extra.length ? [...indexes, ...extra].sort((a, b) => a - b) : indexes;
@@ -227,6 +230,9 @@ function useDrawnSize<T>(
     }, [element]);
     useLayoutEffect(() => {
         if (!element) return;
+        // Once now, before the first paint: the observer's first answer lands a frame later,
+        // and a grid would show that frame in the estimate's two columns.
+        measure();
         const observer = new ResizeObserver(measure);
         observer.observe(element);
         return () => observer.disconnect();
@@ -262,7 +268,7 @@ export function VirtualTableBody({
     const size = useDrawnSize(body, rowHeight, estimate, String);
     const { placed, after, first } = useVirtualRows({ count, size, list: body, keep });
     const spacer = (key: string, height: number) => (
-        <tr key={key} aria-hidden="true" style={{ overflowAnchor: 'none' }}>
+        <tr key={key} aria-hidden="true">
             {/* oxlint-disable-next-line jsx-a11y/control-has-associated-label -- an empty spacer, hidden from screen readers */}
             <td style={{ height, padding: 0, border: 0 }} />
         </tr>
@@ -274,7 +280,11 @@ export function VirtualTableBody({
         children.push(row(index, Math.max(0, index - first)));
     }
     if (after > 0) children.push(spacer('gap-end', after));
-    return <tbody ref={setBody}>{children}</tbody>;
+    return (
+        <tbody ref={setBody} style={{ overflowAnchor: 'none' }}>
+            {children}
+        </tbody>
+    );
 }
 
 type GridShape = { columns: number; height: number; gap: number };
@@ -323,11 +333,7 @@ export function VirtualGrid({
         overscan: 3,
     });
     const spacer = (key: string, room: number) => (
-        <li
-            key={key}
-            aria-hidden="true"
-            style={{ gridColumn: '1 / -1', height: room - gap, overflowAnchor: 'none' }}
-        />
+        <li key={key} aria-hidden="true" style={{ gridColumn: '1 / -1', height: room - gap }} />
     );
     const children: ReactNode[] = [];
     for (const { index: line, before } of placed) {
@@ -338,7 +344,15 @@ export function VirtualGrid({
     }
     if (after > gap) children.push(spacer('gap-end', after));
     return (
-        <ul ref={setGrid} className={className} {...props}>
+        <ul
+            ref={setGrid}
+            // The role again: Safari's VoiceOver drops a list's semantics when its markers are styled away.
+            // oxlint-disable-next-line jsx-a11y/no-redundant-roles
+            role="list"
+            className={className}
+            style={{ overflowAnchor: 'none' }}
+            {...props}
+        >
             {children}
         </ul>
     );

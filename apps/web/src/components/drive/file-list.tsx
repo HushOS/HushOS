@@ -65,6 +65,12 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     const [marquee, setMarquee] = useState<Marquee | null>(null);
     /* The row the arrows just moved to, to scroll to (and focus) once it is drawn. */
     const reveal = useRef<{ id: string; takeKeys: boolean } | null>(null);
+    /*
+     * The row holding the page's real keyboard focus (its name, its thumbnail, its ⋯ button),
+     * whatever the selection says: a long list keeps it drawn, so a scroll never takes the
+     * focused element out of the page. Null once the focus leaves the list's rows.
+     */
+    const [holding, setHolding] = useState<string | null>(null);
 
     function select(id: string, event?: Modifiers) {
         const toggle = coarse || Boolean(event?.metaKey || event?.ctrlKey);
@@ -151,6 +157,11 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
      * WebKit focuses no button on a click, so there `keyed` alone marks the row.
      */
     useEffect(() => {
+        const rowOf = (target: EventTarget | null) => {
+            const row =
+                target instanceof Element ? target.closest<HTMLElement>('[data-node-id]') : null;
+            return row && root.current?.contains(row) ? (row.dataset.nodeId ?? null) : null;
+        };
         const follow = (event: FocusEvent) => {
             const name =
                 event.target instanceof Element ? event.target.closest('[data-row-name]') : null;
@@ -160,9 +171,19 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
                     : undefined;
             if (id) setFocused(id);
             setKeyed(false);
+            const holder = rowOf(event.target);
+            if (holder) setHolding(holder);
+        };
+        // Focus leaving the rows (for anything but another row, which focusin records) lets go.
+        const leave = (event: FocusEvent) => {
+            if (rowOf(event.target) && !rowOf(event.relatedTarget)) setHolding(null);
         };
         document.addEventListener('focusin', follow);
-        return () => document.removeEventListener('focusin', follow);
+        document.addEventListener('focusout', leave);
+        return () => {
+            document.removeEventListener('focusin', follow);
+            document.removeEventListener('focusout', leave);
+        };
     }, [root]);
 
     const latest = useRef({ ids, selected, select });
@@ -330,6 +351,7 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         selectAll,
         moveFocus,
         focusShown,
+        holding,
     };
 }
 

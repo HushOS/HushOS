@@ -6,6 +6,8 @@ import { grip, newFolder, newPage, openFolder, registerAccount, seedFolders } fr
  * virtual-list.tsx): the keys, a Shift-click range, the row semantics and the right-click
  * menu must reach rows that are not drawn, or were never drawn together. One account and a
  * folder of 300 rows for the whole file; each test starts at the top with nothing selected.
+ * The last two change the folder (a drag moves a row, a range goes to the Trash), so they
+ * run last and count from what is there rather than from 300.
  */
 
 let page: Page;
@@ -29,8 +31,45 @@ async function scrollToRow(p: Page, index: number) {
     }, index);
 }
 
+/* How many drawn items share an id with another: a row drawn twice is two elements for one item. */
+const duplicates = (p: Page) =>
+    p.evaluate(() => {
+        const ids = [...document.querySelectorAll('[data-node-id]')].map((item) =>
+            item.getAttribute('data-node-id'),
+        );
+        return ids.length - new Set(ids).size;
+    });
+const rowCount = async (p: Page) => Number(await p.locator('table').getAttribute('aria-rowcount'));
+/* The name of each drawn item whose middle is inside the sheet's visible part. */
+const onScreen = (p: Page) =>
+    p.evaluate(() => {
+        const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+        const box =
+            sheet.scrollHeight > sheet.clientHeight
+                ? sheet.getBoundingClientRect()
+                : { top: 0, bottom: innerHeight };
+        return [...document.querySelectorAll<HTMLElement>('[data-node-id]')].filter((item) => {
+            const rect = item.getBoundingClientRect();
+            const middle = (rect.top + rect.bottom) / 2;
+            return middle > box.top && middle < box.bottom;
+        });
+    });
+
+/* The sheet's scroll position once it has stopped moving (a key's scroll is animated). */
+const settledScroll = (p: Page) =>
+    p.evaluate(async () => {
+        const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+        let last = -1;
+        while (sheet.scrollTop !== last) {
+            last = sheet.scrollTop;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        return last;
+    });
+
 async function reset(p: Page) {
     await p.keyboard.press('Escape');
+    await p.evaluate(() => window.scrollTo(0, 0));
     await scrollToRow(p, 0);
     await expect(row(p, 0)).toBeInViewport();
     await expect(p.locator('[data-node-id][aria-selected=true]')).toHaveCount(0);
@@ -119,4 +158,166 @@ test('a right-click on a row deep in the list selects it and its menu acts on it
     await expect(dialog.getByRole('textbox')).toHaveValue(name(180));
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
+});
+
+test('the ⋯ menu of a row deep in the list acts on that row and gives the keys back', async () => {
+    await reset(page);
+    await scrollToRow(page, 218);
+    await expect(row(page, 220)).toBeVisible();
+    const more = page.getByRole('button', { name: `More for ${name(220)}`, exact: true });
+    await more.click();
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('menuitem', { name: /^Open/ })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(more).toBeFocused();
+    await more.click();
+    await menu.getByRole('menuitem', { name: /^Rename/ }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('textbox')).toHaveValue(name(220));
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+});
+
+test('the keys stay on a row the selection let go of while the list scrolls on', async () => {
+    await reset(page);
+    // Tab's way in: the keys on a row's name, the arrows on from there.
+    await nameOf(page, 5).focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(nameOf(page, 6)).toBeFocused();
+    // Escape lets go of the selection, not of the keys.
+    await page.keyboard.press('Escape');
+    await expect(selection(page)).toHaveCount(0);
+    await page.keyboard.press('PageDown');
+    await page.keyboard.press('PageDown');
+    // The keys' scroll is animated: wait for it to come to rest, well past the drawn rows.
+    await expect.poll(() => settledScroll(page), { timeout: 10_000 }).toBeGreaterThan(57 * 20);
+    await expect(row(page, 6)).toHaveCount(1);
+    await expect(row(page, 6)).not.toBeInViewport();
+    await expect(nameOf(page, 6)).toBeFocused();
+    // And further, by hand.
+    await scrollToRow(page, 150);
+    await expect(row(page, 150)).toBeVisible();
+    await expect(nameOf(page, 6)).toBeFocused();
+
+    // The same for the ⋯ button, which the selection never knows about.
+    await reset(page);
+    const more = page.getByRole('button', { name: `More for ${name(3)}`, exact: true });
+    await more.focus();
+    await scrollToRow(page, 180);
+    await expect(row(page, 180)).toBeVisible();
+    await expect(more).toBeFocused();
+});
+
+test('the grid draws only the tiles near the screen, each placed in the whole list', async () => {
+    await reset(page);
+    await page.getByRole('button', { name: 'Show as grid' }).click();
+    try {
+        const grid = page.getByRole('list', { name: 'Contents of Long' });
+        await expect(grid).toBeVisible();
+        await expect(rows(page).first()).toHaveAttribute('aria-setsize', String(COUNT));
+        expect(await rows(page).count()).toBeLessThan(120);
+        await page.evaluate(() => {
+            const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+            sheet.scrollTop = sheet.scrollHeight / 2;
+        });
+        await expect(row(page, 0)).toHaveCount(0);
+        // Every tile on screen is the item its position says: row-150 is item 151 of 300.
+        await expect
+            .poll(async () => {
+                const tiles = await onScreen(page);
+                return tiles.length > 0;
+            })
+            .toBe(true);
+        const placed = await page.evaluate(() =>
+            [...document.querySelectorAll<HTMLElement>('[data-node-id]')].map((tile) => [
+                tile.querySelector('[data-row-name]')?.getAttribute('aria-label'),
+                tile.getAttribute('aria-posinset'),
+            ]),
+        );
+        for (const [label, position] of placed)
+            expect(Number(position)).toBe(Number(label!.slice(4)) + 1);
+        expect(await duplicates(page)).toBe(0);
+    } finally {
+        await page.getByRole('button', { name: 'Show as list' }).click();
+    }
+});
+
+test('at a phone’s width the window scrolls and the rows drawn follow it', async () => {
+    await reset(page);
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 844 });
+    try {
+        await expect(row(page, 0)).toBeVisible();
+        await page.evaluate(() => {
+            const height = document.querySelector('[data-node-id]')!.getBoundingClientRect().height;
+            const top = document.querySelector('tbody')!.getBoundingClientRect().top + scrollY;
+            window.scrollTo(0, top + height * 200);
+        });
+        await expect(row(page, 200)).toBeInViewport();
+        await expect(row(page, 200)).toHaveAttribute('aria-rowindex', '202');
+        expect(await rows(page).count()).toBeLessThan(60);
+        await expect(row(page, 0)).toHaveCount(0);
+    } finally {
+        await page.setViewportSize(size);
+    }
+});
+
+test('a row dragged up past the drawn rows into a folder is drawn once, and leaves', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    await scrollToRow(page, 198);
+    const source = row(page, 200);
+    await expect(source).toBeVisible();
+    const id = (await source.getAttribute('data-node-id'))!;
+    await source.hover({ position: { x: 600, y: 28 } });
+    await page.mouse.down();
+    await page.mouse.move(700, 400, { steps: 4 });
+    const card = page.locator('[data-drag-card]');
+    await expect(card).toContainText(name(200));
+    // The list scrolls up under the drag, far past the rows drawn around the one picked up.
+    // Its target sits clear of the selection bar at the foot of the sheet.
+    await scrollToRow(page, 140);
+    await expect(row(page, 143)).toBeVisible();
+    expect(await duplicates(page)).toBe(0);
+    expect(await page.locator(`[data-node-id="${id}"]`).count()).toBe(1);
+    const target = (await row(page, 143).boundingBox())!;
+    const x = target.x + 300;
+    const y = target.y + target.height / 2;
+    await page.mouse.move(x, y, { steps: 4 });
+    let nudge = 0;
+    await expect(async () => {
+        nudge = 1 - nudge;
+        await page.mouse.move(x + nudge, y);
+        await expect(card.getByText(`Move to “${name(143)}”`)).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 20_000 });
+    await page.mouse.up();
+    await expect(page.getByText(`“${name(200)}” moved to “${name(143)}”`)).toBeVisible();
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before - 1));
+    await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCount(0);
+    expect(await duplicates(page)).toBe(0);
+});
+
+test('a range that was never drawn together goes to the Trash whole', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    await row(page, 2).click(grip);
+    await scrollToRow(page, 245);
+    await expect(row(page, 250)).toBeVisible();
+    await row(page, 250).click({ ...grip, modifiers: ['Shift'] });
+    const label = (await selection(page).innerText()).match(/(\d+) selected/)!;
+    const picked = Number(label[1]);
+    // From row-002 to row-250, less the row the drag moved away.
+    expect(picked).toBe(before - 1 - 2 - (COUNT - 251));
+    await page.keyboard.press('Delete');
+    await expect(page.getByText(`${picked} items moved to Trash`)).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before - picked));
+    await scrollToRow(page, 0);
+    await expect(row(page, 1)).toBeVisible();
+    await expect(row(page, 2)).toHaveCount(0);
+    await expect(row(page, 120)).toHaveCount(0);
+    await expect(rows(page).nth(2)).toContainText(name(251));
+    expect(await duplicates(page)).toBe(0);
 });
