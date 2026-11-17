@@ -77,10 +77,17 @@ class SaveRunTest {
         val folderAnswers = ArrayDeque<() -> Unit>()
         var making: (() -> Unit)? = null
         var landing: (() -> Unit)? = null
+        /* Runs before the begin's ids reach the run (a begin still on its way). */
+        var beginning: (() -> Unit)? = null
+        /* What each folder refresh does, in order (default: the folder at the next key epoch). */
+        val refreshAnswers = ArrayDeque<() -> Unit>()
+        /* Uploads the server is still completing: an abort is answered UNKNOWN (VaultSaveWriter.abortUpload after its tries). */
+        val completing = HashSet<String>()
+        var roomHook: (() -> Unit)? = null
         private var count = 0
 
         override fun refusal(target: Opened) = refusal
-        override fun room(workspaceId: String) = room
+        override fun room(workspaceId: String): SaveRoom { roomHook?.invoke(); return room }
         override fun names(folder: Opened): List<String> { listing?.invoke(); return names }
         override fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened {
             folderEpochs += folder.node.keyEpoch
@@ -97,7 +104,15 @@ class SaveRunTest {
             this.startedFrom.add(startedFrom)
             val nodeId = replacing?.id ?: "node-$n"
             open += "up-$n"
-            onBegun(Vault.BegunIds("ws", "up-$n", nodeId))
+            beginning?.invoke()
+            try {
+                onBegun(Vault.BegunIds("ws", "up-$n", nodeId))
+            } catch (error: Exception) {
+                // As the vault does: nothing is sent, the reservation goes.
+                open -= "up-$n"
+                aborted += "up-$n"
+                throw error
+            }
             answers.removeFirstOrNull()?.invoke(n)
             landing?.invoke()
             open -= "up-$n"
@@ -111,10 +126,12 @@ class SaveRunTest {
         }
         override fun refreshFolder(folder: Opened): Opened {
             refreshes++
+            refreshAnswers.removeFirstOrNull()?.invoke()
             return Opened(folder.node.copy(keyEpoch = folder.node.keyEpoch + 1uL), folder.metadata)
         }
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
             if (offline) return SaveAbortFate.UNKNOWN
+            if (uploadId in completing) return SaveAbortFate.UNKNOWN
             aborted += uploadId
             if (uploadId in finished) return SaveAbortFate.FINISHED
             return if (open.remove(uploadId)) SaveAbortFate.ABORTED else SaveAbortFate.GONE
@@ -386,14 +403,18 @@ class SaveRunTest {
         assertEquals(listOf("other"), SaveRuns.interrupted(rows).map { it.id })
         writer.offline = true
         assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(other, writer, rows))
-        assertFalse(SaveRuns.keep(other, writer, rows))
+        assertTrue(rows.list().any { it.id == "other" })
+        // Keep with no answer (offline, an older server): the row goes all the same; the server lets an open upload expire.
+        SaveRuns.keep(other, writer, rows)
+        assertFalse(rows.list().any { it.id == "other" })
         writer.offline = false
+        rows.put(other)
         writer.denied = true
         assertEquals(SaveCleanup.NO_ACCESS, SaveRuns.cleanUp(other, writer, rows))
         assertFalse(rows.list().any { it.id == "other" })
         writer.denied = false
         rows.put(other)
-        assertTrue(SaveRuns.keep(other, writer, rows))
+        SaveRuns.keep(other, writer, rows)
         assertTrue("up-x" in writer.aborted)
         assertFalse(rows.list().any { it.id == "other" })
         run.cancel()
@@ -408,11 +429,12 @@ class SaveRunTest {
         // What AccountStore.wipe does through SaveRunJournal.endAccount(), on this journal's own session.
         session.end()
         rows.file.delete()
-        // A result landing after the account was wiped writes no row back.
-        run.file(byteArrayOf(1), "a", null, own)
+        // A result handed in after the account was wiped, the sign-out not having reached the run: refused, nothing uploaded,
+        // no row written back.
+        assertEquals(SaveRunStopped.Reason.SIGNED_OUT, assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a", null, own) }.reason)
+        assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }
+        assertTrue(writer.uploads.isEmpty())
         assertFalse(rows.file.exists())
-        run.abandon()
-        assertEquals(SaveRunStopped.Reason.SIGNED_OUT, assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "b", null, own) }.reason)
         // The real sign-out ends every journal on the account's session.
         val accountJournal = journal(SaveRunJournal.account)
         SaveRunJournal.endAccount()
@@ -480,15 +502,146 @@ class SaveRunTest {
         pool.shutdown()
     }
 
+    /*
+     * A completion that named another item than the one written (ResultLanded): never handed to the tool as an exception that
+     * means success. The run stops: a new version, landed, is kept and said so; a new file goes with the rest.
+     */
     @Test
-    fun aResultThatLandedButCouldNotBeFinishedHereIsKeptNotFailed() {
+    fun aCompletionNamingAnotherItemStopsTheRunKeepingAVersionAndRemovingAFile() {
         val doc = opened("doc", parent = "f", version = "v1")
-        val writer = FakeWriter().apply { answers.add { throw ResultLanded("doc", IllegalStateException("row")) } }
+        val writer = FakeWriter().apply {
+            answers.add { n -> open -= "up-$n"; finished += "up-$n"; throw ResultLanded("doc", IllegalStateException("another item")) }
+        }
         val run = SaveRun.start(writer, listOf(doc), emptyList(), journal())
-        assertThrows(ResultLanded::class.java) { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
-        val stopped = run.cancel()
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        assertEquals(SaveRunStopped.Reason.FAILED, stopped.reason)
         assertEquals(1, stopped.keptVersions)
         assertTrue(writer.trashed.isEmpty())
+
+        val files = FakeWriter().apply {
+            answers.add { n -> open -= "up-$n"; finished += "up-$n"; live += "node-$n"; throw ResultLanded("node-$n", IllegalStateException("another item")) }
+        }
+        val rows = journal()
+        val next = SaveRun.start(files, listOf(opened("f")), emptyList(), rows)
+        assertEquals(SaveCleanup.DELETED, assertThrows(SaveRunStopped::class.java) { next.file(byteArrayOf(1), "a", null, own) }.cleanup)
+        assertEquals(setOf("node-1"), files.purged)
+        assertTrue(rows.list().isEmpty())
+    }
+
+    /* The server still completing a version when the abort's tries ran out: it may land, so nothing says it didn't. */
+    @Test
+    fun aCompletionSlowerThanTheAbortsTriesKeepsTheRowAndSaysTheVersionMayHaveBeenSaved() {
+        val doc = opened("doc", parent = "f", version = "v1")
+        val landing = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply {
+            completing += "up-1"
+            this.landing = { landing.countDown(); go.await(5, TimeUnit.SECONDS) }
+        }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), rows)
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<VersionSaved> { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        assertTrue(landing.await(5, TimeUnit.SECONDS))
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertEquals(0, stopped.keptVersions)
+        assertEquals(1, stopped.uncertainVersions)
+        assertEquals("Cancelled. A new version may have been saved. Nothing else was saved.", stopped.message)
+        assertEquals(listOf(listOf("up-1")), rows.list().map { it.uploadIds })
+        go.countDown()
+        runCatching { saving.get(5, TimeUnit.SECONDS) }
+        pool.shutdown()
+    }
+
+    /* A disk that won't take the row: the run never starts, or stops before anything is sent; one refusal is written again. */
+    @Test
+    fun aRowTheDiskRefusesStopsTheRunBeforeAnythingIsSentAndOneRefusalIsWrittenAgain() {
+        val refusing = journal().apply { fault = { throw java.io.IOException("full") } }
+        assertEquals(SaveRuns.UNRECORDED, assertThrows(SaveRunStopped::class.java) { SaveRun.start(FakeWriter(), listOf(opened("f")), emptyList(), refusing) }.message)
+
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        rows.fault = { throw java.io.IOException("full") }
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a", null, own) }
+        assertEquals(SaveRunStopped.Reason.FAILED, stopped.reason)
+        assertTrue(stopped.message!!.contains("couldn’t keep a record"))
+        // Begun, then refused before a part was sent: never landed, its reservation aborted.
+        assertTrue(writer.live.isEmpty())
+        assertTrue("up-1" in writer.aborted)
+
+        // One refused write (a moment's failure) is written once more: the run goes on.
+        val once = journal()
+        val flaky = SaveRun.start(FakeWriter(), listOf(opened("f")), emptyList(), once)
+        var refusals = 1
+        once.fault = { if (refusals-- > 0) throw java.io.IOException("busy") }
+        flaky.file(byteArrayOf(1), "a", null, own)
+        assertEquals(listOf("node-1"), once.list().single().nodeIds)
+        flaky.finish()
+    }
+
+    /* A begin still on its way at the cancel: the empty row went, the file lands, can't be removed, and a row names it. */
+    @Test
+    fun aLateFileThatCannotBeRemovedAfterTheRowWentGetsARowOfItsOwn() {
+        val beginning = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.beginning = { beginning.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(beginning.await(5, TimeUnit.SECONDS))
+        assertEquals(SaveCleanup.NOTHING, run.cancel().cleanup)
+        assertTrue(rows.list().isEmpty())
+        writer.refuse += "node-1"
+        go.countDown()
+        runCatching { saving.get(5, TimeUnit.SECONDS) }
+        assertEquals(listOf(listOf("node-1")), rows.list().map { it.nodeIds })
+        assertEquals(run.id, rows.list().single().id)
+        pool.shutdown()
+    }
+
+    /* A sign-out while a run starts: abandonAll can't reach it yet, so it never starts and writes no row. */
+    @Test
+    fun aSignOutWhileARunStartsLeavesNoRunAndNoRow() {
+        val session = SaveRunJournal.Epoch()
+        val rows = journal(session)
+        val writer = FakeWriter().apply { roomHook = { session.end() } }
+        assertEquals(SaveRunStopped.Reason.SIGNED_OUT, assertThrows(SaveRunStopped::class.java) { SaveRun.start(writer, listOf(opened("f")), emptyList(), rows) }.reason)
+        assertTrue(rows.list().isEmpty())
+    }
+
+    /* A refresh after a key-change pause: one the change still holds up waits again; any other failure stops the run. */
+    @Test
+    fun aRefreshTheKeyChangeHoldsUpWaitsAndAnyOtherFailureStopsTheRun() {
+        val writer = FakeWriter().apply {
+            answers.add { throw ApiError(409, "Finishing a key change…", "rotating") }
+            // The ledger hasn't learned the new keys yet: the open through it says so (FamilyUploads.waits).
+            refreshAnswers.add { throw FamilyFailure("This item was wrapped under an older folder key.") }
+        }
+        val run = SaveRun.start(writer, listOf(opened("fam")), emptyList(), journal(), pause = {})
+        run.file(byteArrayOf(1), "a", null, own)
+        assertEquals(2, writer.refreshes)
+
+        val broken = FakeWriter().apply {
+            answers.add { throw ApiError(409, "Finishing a key change…", "rotating") }
+            refreshAnswers.add { throw ApiError(500, "Something went wrong.") }
+        }
+        val rows = journal()
+        val failing = SaveRun.start(broken, listOf(opened("fam")), emptyList(), rows, pause = {})
+        assertEquals(SaveRunStopped.Reason.FAILED, assertThrows(SaveRunStopped::class.java) { failing.file(byteArrayOf(1), "a", null, own) }.reason)
+        // Stopped, not left open: its row went with the clean-up, and later work is refused.
+        assertTrue(rows.list().isEmpty())
+        assertThrows(SaveRunStopped::class.java) { failing.file(byteArrayOf(1), "b", null, own) }
+
+        val folderBroken = FakeWriter().apply {
+            folderAnswers.add { throw ApiError(409, "Finishing a key change…", "rotating") }
+            refreshAnswers.add { throw ApiError(500, "Something went wrong.") }
+        }
+        val folders = SaveRun.start(folderBroken, listOf(opened("fam")), emptyList(), journal(), pause = {})
+        assertThrows(SaveRunStopped::class.java) { folders.folder("Archive", own) }
+        assertThrows(SaveRunStopped::class.java) { folders.file(byteArrayOf(1), "b", null, own) }
     }
 
     /* Real statements: a result of a verified source and one nobody could check is re-sealed (never refused, never vouched for). */
@@ -611,6 +764,44 @@ class SaveResultTest {
         val writer = VaultSaveWriter(vault) { throw IllegalStateException("not asked") }
         assertEquals(SaveAbortFate.FINISHED, writer.abortUpload("up", server.workspace))
         assertTrue(replies.isEmpty())
+        // Still finishing after every try: no answer, never finished (its node is published only once it completes).
+        replies.addAll(List(5) { "completing" })
+        assertEquals(SaveAbortFate.UNKNOWN, writer.abortUpload("up", server.workspace, 0L))
+        // A self-hosted server from before `data.upload` says which in words.
+        val words = ArrayDeque(listOf(DriveApi.STILL_FINISHING, DriveApi.ALREADY_FINISHED, "Something else."))
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "abort" && words.isNotEmpty())
+                409 to JSONObject().put("code", "conflict").put("message", words.removeFirst())
+            else null
+        }
+        assertEquals(SaveAbortFate.FINISHED, writer.abortUpload("up", server.workspace, 0L))
+        assertEquals(SaveAbortFate.UNKNOWN, writer.abortUpload("up", server.workspace, 0L))
+    }
+
+    /*
+     * The run's row refused at begin: no part and no completion are sent, the reservation is aborted, and one whose abort got
+     * no answer is left idle, for settleAll to settle (apps/android/AGENTS.md, failed records). Fails if a failed begin note
+     * leaves the reservation marked active, skipped until the process restarts.
+     */
+    @Test
+    fun aBeginWhoseRowCannotBeWrittenSendsNothingAndLeavesItsReservationToSettle() {
+        val parts = java.util.concurrent.atomic.AtomicInteger()
+        server.beforeAnswer = { method, path -> if (method == "PUT" && path.startsWith("/store/")) parts.incrementAndGet() }
+        var aborts = 0
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "abort" && aborts++ == 0) 503 to JSONObject().put("message", "unavailable") else null
+        }
+        val begun = ArrayList<String>()
+        assertThrows(SaveUnrecorded::class.java) {
+            vault.uploadResult("tool output".toByteArray(), "out.txt", null, server.root, null, null, copy = null,
+                onBegun = { begun += it.uploadId; throw SaveUnrecorded(java.io.IOException("full")) })
+        }
+        server.beforeAnswer = null
+        assertEquals(0, parts.get())
+        assertTrue(server.requests.none { it.contains("/complete") })
+        val settled = ArrayList<String>()
+        Reservations.settleAll(context) { id, ws -> settled += id; vault.api.abortUpload(id, ws) }
+        assertEquals(begun, settled)
     }
 
     /* A new file's 409 that is not the completion's `conflicted` ("This upload was cancelled") is no key change. */

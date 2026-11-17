@@ -295,6 +295,9 @@ A cancel, a refusal, a 402, a watchdog or a closed tab:
 4. deletes forever everything the run already published: the new folder for an extraction or Save as images, each new file otherwise. Deleted forever rather than moved to Trash, so the quota comes back at once and nothing half-made lingers. Where the person may not delete forever (to be checked for an editor in someone else's folder), the results go to Trash (checked: the server deletes forever only for a member of the workspace, so an editor's results go to the owner's Trash);
     - **New versions are not all or nothing.** A new version that already landed is kept, never rolled back (it may already be someone's current file, and earlier versions are untouched). The run says so: "The new version saved before that was kept", never "Nothing was saved".
     - A clean-up that cannot finish (no answer, an item refused, a delete forever left busy) keeps the run's row for the next open, which offers to delete what was made or keep it. One refused because the folder is no longer the person's (the share ended, the family was left) drops the row.
+    - An upload the server is still completing after about ten seconds of asking is no answer, never taken as finished: the server publishes its node only once the store completes it, so it may still land. Its row stays, and the run says a new version among them may have been saved.
+    - "Keep" at the next open always drops the row. Uploads it could not abort are left to the server's expiry.
+    - The row is written before anything it names is published. A write the device refuses is tried once more, and a second refusal stops the run.
 5. removes the run's journal row.
 
 After a closed tab, steps 3 and 4 happen on the next open from the run's journal row, and the 24-hour upload expiry covers what is left.

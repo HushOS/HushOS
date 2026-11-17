@@ -39,6 +39,13 @@ actor FakeWriter: SaveRunWriter {
     /* What each upload does once begun, in order (default: land). */
     var answers: [@Sendable (Int) throws -> Void] = []
     var listing: (@Sendable () async -> Void)?
+    /* Runs before the begin's ids reach the run (a begin still on its way). */
+    var beginning: (@Sendable () async -> Void)?
+    /* What each folder refresh does, in order (default: the folder at the next key epoch). */
+    var refreshAnswers: [@Sendable () throws -> Void] = []
+    /* Uploads the server is still completing: an abort is answered `unknown` (Vault.abortUpload after its tries). */
+    var completing = Set<String>()
+    var roomHook: (@Sendable () async -> Void)?
     private var count = 0
 
     init(room: SaveRoom = .own(1 << 40)) { roomIs = room }
@@ -56,7 +63,14 @@ actor FakeWriter: SaveRunWriter {
     func answer(_ next: @escaping @Sendable (Int) throws -> Void) { answers.append(next) }
 
     func gate(_ target: Opened) async -> SaveGate { refusal.map { .refused($0) } ?? .writable }
-    func room(_ workspaceId: String) async throws -> SaveRoom { roomIs }
+    func room(_ workspaceId: String) async throws -> SaveRoom {
+        await roomHook?()
+        return roomIs
+    }
+    func set(beginning: @escaping @Sendable () async -> Void) { self.beginning = beginning }
+    func set(room: @escaping @Sendable () async -> Void) { roomHook = room }
+    func refreshAnswer(_ next: @escaping @Sendable () throws -> Void) { refreshAnswers.append(next) }
+    func completing(_ uploadId: String) { completing.insert(uploadId) }
     func names(in folder: Opened) async throws -> [String] {
         await listing?()
         return names
@@ -69,14 +83,22 @@ actor FakeWriter: SaveRunWriter {
         return opened("made-\(name)", parent: folder.id)
     }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
-                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) -> Void) async throws -> Opened {
+                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void) async throws -> Opened {
         count += 1
         let n = count
         uploads.append((name, folder.id, replacing?.id, replacing?.node.keyEpoch, startedFrom, signing))
         folderEpochs.append(folder.node.keyEpoch)
         let nodeId = replacing?.id ?? "node-\(n)"
         open.insert("up-\(n)")
-        onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(n)", nodeId: nodeId))
+        await beginning?()
+        do {
+            try onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(n)", nodeId: nodeId))
+        } catch {
+            // As the vault does: nothing is sent, the reservation goes.
+            open.remove("up-\(n)")
+            aborted.append("up-\(n)")
+            throw error
+        }
         if !answers.isEmpty { try answers.removeFirst()(n) }
         await landing?()
         finish("up-\(n)")
@@ -85,6 +107,7 @@ actor FakeWriter: SaveRunWriter {
     }
     func refreshFolder(_ folder: Opened) async throws -> Opened {
         refreshes += 1
+        if !refreshAnswers.isEmpty { try refreshAnswers.removeFirst()() }
         return opened(folder.id, parent: folder.node.parentId, keyEpoch: folder.node.keyEpoch + 1)
     }
     func folderAnswer(_ next: @escaping @Sendable () throws -> Void) { folderAnswers.append(next) }
@@ -98,6 +121,7 @@ actor FakeWriter: SaveRunWriter {
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
         if offline { return .unknown }
         if denied { return .denied }
+        if completing.contains(uploadId) { return .unknown }
         aborted.append(uploadId)
         if finished.contains(uploadId) { return .finished }
         return open.remove(uploadId) != nil ? .aborted : .gone
@@ -365,18 +389,22 @@ let own = SaveSources.ownWriting
         // This launch's own row is not interrupted; another launch's is.
         #expect(SaveRuns.interrupted(rows).isEmpty)
         let other = SaveRunRow(id: "other", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: ["up-x"], at: Date(), launch: "an-earlier-launch")
-        rows.put(other)
+        try rows.put(other)
         #expect(SaveRuns.interrupted(rows).map(\.id) == ["other"])
         await writer.set(offline: true)
         #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .left)
-        #expect(await !SaveRuns.keep(other, writer: writer, journal: rows))
+        #expect(rows.list().contains { $0.id == "other" })
+        // Keep with no answer (offline, an older server): the row goes all the same; the server lets an open upload expire.
+        await SaveRuns.keep(other, writer: writer, journal: rows)
+        #expect(!rows.list().contains { $0.id == "other" })
         await writer.set(offline: false)
+        try rows.put(other)
         await writer.set(denied: true)
         #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .noAccess)
         #expect(!rows.list().contains { $0.id == "other" })
         await writer.set(denied: false)
-        rows.put(other)
-        #expect(await SaveRuns.keep(other, writer: writer, journal: rows))
+        try rows.put(other)
+        await SaveRuns.keep(other, writer: writer, journal: rows)
         #expect(await writer.aborted == ["up-x"])
         #expect(!rows.list().contains { $0.id == "other" })
         _ = await run.cancel()
@@ -391,11 +419,17 @@ let own = SaveSources.ownWriting
         // What AccountStore.wipe does through SaveRunJournal.endAccount(), on this journal's own session.
         session.end()
         try? FileManager.default.removeItem(at: file)
-        // A result landing after the account was wiped writes no row back.
-        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        // A result handed in after the account was wiped, the sign-out not having reached the run: refused,
+        // nothing uploaded, no row written back.
+        do {
+            _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+            Issue.record("a result went up after the account's session ended")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .signedOut)
+        }
+        await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+        #expect(await writer.uploads.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: file.path))
-        await run.abandon()
-        await #expect(throws: SaveRunStopped.self) { _ = try await run.file(Data([1]), name: "b", mime: nil, sources: own) }
         // The real sign-out ends every journal on the account's session.
         let accountJournal = journal(SaveRunJournal.account)
         SaveRunJournal.endAccount()
@@ -459,6 +493,135 @@ let own = SaveSources.ownWriting
         }
         #expect(await writer.trashed.isEmpty)
         #expect(await writer.aborted.isEmpty)
+    }
+
+    /* The server still completing a version when the abort's tries ran out: it may land, so nothing says it didn't. */
+    @Test func aCompletionSlowerThanTheAbortsTriesKeepsTheRowAndSaysTheVersionMayHaveBeenSaved() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(landing: { await gate.wait() })
+        await writer.completing("up-1")
+        let rows = journal()
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [], journal: rows)
+        let saving = Task { try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.keptVersions == 0)
+        #expect(stopped.uncertainVersions == 1)
+        #expect(stopped.message == "Cancelled. A new version may have been saved. Nothing else was saved.")
+        #expect(rows.list().map(\.uploadIds) == [["up-1"]])
+        await gate.open()
+        _ = try? await saving.value
+    }
+
+    /* A disk that won't take the row: the run never starts, or stops before anything is sent; one refusal is written again. */
+    @Test func aRowTheDiskRefusesStopsTheRunBeforeAnythingIsSentAndOneRefusalIsWrittenAgain() async throws {
+        struct Full: Error {}
+        let refusing = journal()
+        refusing.fault = { throw Full() }
+        do {
+            _ = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: refusing)
+            Issue.record("started without a row")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.message == SaveRuns.unrecorded)
+        }
+
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        rows.fault = { throw Full() }
+        do {
+            _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+            Issue.record("a result went up that no row names")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .failed)
+            #expect(stopped.message.contains("couldn’t keep a record"))
+        }
+        // Begun, then refused before a part was sent: never landed, its reservation aborted.
+        #expect(await writer.live.isEmpty)
+        #expect(await writer.aborted.contains("up-1"))
+
+        // One refused write (a moment's failure) is written once more: the run goes on.
+        let once = journal()
+        let flaky = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: once)
+        let refusals = Locked(1)
+        once.fault = {
+            if refusals.value > 0 {
+                refusals.value -= 1
+                throw Full()
+            }
+        }
+        _ = try await flaky.file(Data([1]), name: "a", mime: nil, sources: own)
+        #expect(once.list().first?.nodeIds == ["node-1"])
+        try await flaky.finish()
+    }
+
+    /* A begin still on its way at the cancel: the empty row went, the file lands, can't be removed, and a row names it. */
+    @Test func aLateFileThatCannotBeRemovedAfterTheRowWentGetsARowOfItsOwn() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(beginning: { await gate.wait() })
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .nothing)
+        #expect(rows.list().isEmpty)
+        await writer.refuse("node-1")
+        await gate.open()
+        _ = try? await saving.value
+        #expect(rows.list().map(\.nodeIds) == [["node-1"]])
+        #expect(rows.list().first?.id == run.id)
+    }
+
+    /* A sign-out while a run starts: abandonAll can't reach it yet, so it never starts and writes no row. */
+    @Test func aSignOutWhileARunStartsLeavesNoRunAndNoRow() async throws {
+        let session = SaveRunJournal.Epoch()
+        let rows = journal(session)
+        let writer = FakeWriter()
+        await writer.set(room: { session.end() })
+        do {
+            _ = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+            Issue.record("a run started after a sign-out")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .signedOut)
+        }
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A refresh after a key-change pause: one the change still holds up waits again; any other failure stops the run. */
+    @Test func aRefreshTheKeyChangeHoldsUpWaitsAndAnyOtherFailureStopsTheRun() async throws {
+        let writer = FakeWriter()
+        await writer.answer { _ in throw DriveAPIError.rotating("Finishing a key change…") }
+        await writer.refreshAnswer { throw DriveAPIError.rotating("Finishing a key change…") }
+        let run = try await SaveRun.start(writer: writer, targets: [opened("fam")], results: [], journal: journal(), pause: { _ in })
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        #expect(await writer.refreshes == 2)
+
+        let broken = FakeWriter()
+        await broken.answer { _ in throw DriveAPIError.rotating("Finishing a key change…") }
+        await broken.refreshAnswer { throw DriveAPIError.server(500, "Something went wrong.") }
+        let rows = journal()
+        let failing = try await SaveRun.start(writer: broken, targets: [opened("fam")], results: [], journal: rows, pause: { _ in })
+        do {
+            _ = try await failing.file(Data([1]), name: "a", mime: nil, sources: own)
+            Issue.record("a refresh failure went on")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .failed)
+        }
+        // Stopped, not left open: its row went with the clean-up, and later work is refused.
+        #expect(rows.list().isEmpty)
+        await #expect(throws: SaveRunStopped.self) { _ = try await failing.file(Data([1]), name: "b", mime: nil, sources: own) }
+
+        let folderBroken = FakeWriter()
+        await folderBroken.folderAnswer { throw DriveAPIError.rotating("Finishing a key change…") }
+        await folderBroken.refreshAnswer { throw DriveAPIError.server(500, "Something went wrong.") }
+        let folders = try await SaveRun.start(writer: folderBroken, targets: [opened("fam")], results: [], journal: journal(), pause: { _ in })
+        await #expect(throws: SaveRunStopped.self) { _ = try await folders.folder("Archive", sources: own) }
+        await #expect(throws: SaveRunStopped.self) { _ = try await folders.file(Data([1]), name: "b", mime: nil, sources: own) }
     }
 
     @Test func aResultOfSeveralSourcesIsSignedAsTheirWeakestUncheckedResealed() throws {
@@ -650,6 +813,58 @@ extension OnFakeDrive {
             #expect(await vault.abortUpload("up", in: server.workspace) == .finished)
             server.abortReplies = [(409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]])]
             #expect(await vault.abortUpload("up", in: server.workspace) == .gone)
+            // Still finishing after every try: no answer, never finished (its node is published only once it completes).
+            server.abortReplies = Array(repeating: (409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]]), count: 5)
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .unknown)
+            // A self-hosted server from before `data.upload` says which in words.
+            server.abortReplies = [(409, ["code": "conflict", "message": "This upload is finishing and cannot be cancelled."]),
+                                   (409, ["code": "conflict", "message": "This upload already finished."])]
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .finished)
+            server.abortReplies = [(409, ["code": "conflict", "message": "Something else."])]
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .unknown)
+        }
+
+        /* The run's row refused at begin: no part, no completion, the reservation aborted. */
+        @Test func aBeginWhoseRowCannotBeWrittenSendsNothingAndAbortsItsReservation() async throws {
+            struct Full: Error {}
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let parts = Locked(0)
+            server.onPart = { _ in parts.value += 1 }
+            await #expect(throws: Full.self) {
+                _ = try await vault.uploadResult(Data([1, 2, 3]), name: "new.txt", mime: nil, in: b.id, replacing: nil, startedFrom: nil,
+                                                 signing: (.own, .own), onBegun: { _ in throw Full() })
+            }
+            #expect(parts.value == 0)
+            #expect(server.completed.isEmpty)
+            #expect(server.aborted.count == 1)
+        }
+
+        /* The next free name comes from the server: a file another device just made, the catalogue not yet told, is taken. */
+        @Test func theNextFreeNameSeesAFileTheCatalogueHasNotHeardOf() async throws {
+            let feed = try FeedServer()
+            let server = feed.drive
+            FakeDrive.current = server
+            FeedServer.current = feed
+            let vault = Vault(api: DriveAPI(session: server.session, configuration: FeedServer.configuration), session: server.session)
+            await vault.adopt(workspace: WorkspaceView(workspaceId: server.workspace, changeSeq: nil, grant: nil, root: server.nodes[server.root]),
+                              key: server.workspaceKey)
+            await vault.adopt(identity: server.identity)
+            await vault.adopt(signers: try server.ownerTrusts())
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent("mirror-\(UUID().uuidString).sqlite")
+            await vault.useMirror(try #require(Mirror(url: file)), page: 2)
+            #expect(await vault.buildCatalogue())
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            // Another device saves "report.pdf" into B.
+            let other = Vault(api: DriveAPI(session: server.session, configuration: FeedServer.configuration), session: server.session)
+            await other.adopt(workspace: WorkspaceView(workspaceId: server.workspace, changeSeq: nil, grant: nil, root: server.nodes[server.root]),
+                              key: server.workspaceKey)
+            await other.adopt(identity: server.identity)
+            await other.adopt(signers: try server.ownerTrusts())
+            _ = try await other.uploadResult(Data([1]), name: "report.pdf", mime: nil, in: server.b, replacing: nil, startedFrom: nil, signing: (.own, .own))
+            #expect(await vault.catalogueChildren(of: server.b)?.contains { $0.name == "report.pdf" } == false)
+            #expect(try await vault.names(in: b).contains("report.pdf"))
         }
 
         /*

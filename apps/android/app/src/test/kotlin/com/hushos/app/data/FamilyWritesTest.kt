@@ -120,6 +120,22 @@ class FamilyWritesTest {
     }
 
     /*
+     * Another member changes the family folder's keys while a save waits: before the save looks its folder up again, the
+     * phone syncs the family, so its ledger opens the folder at the new keys (as iOS's recheck does). Fails if the retry
+     * opens the folder through a ledger that never learned the change.
+     */
+    @Test
+    fun aSaveRetryLearnsAnotherMembersKeyChangeBeforeItLooksTheFolderUpAgain() {
+        val phone = opened()
+        val top = phone.vault.nodes.row(family.workspaceId, family.rootId) ?: throw AssertionError("the top folder wasn't opened")
+        family.replaceKeys()
+        val writer = VaultSaveWriter(phone.vault) { throw IllegalStateException("not asked") }
+        val fresh = writer.refreshFolder(top)
+        assertEquals(100L, fresh.node.keyEpoch.toLong())
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, fresh.id))
+    }
+
+    /*
      * The write barrier: while the family's guard is owed, nothing is written into its folder, whether the guard was
      * owed before the write began or became owed while it was on its way (a sync meanwhile that couldn't store it).
      * Fails if a family write passes without the guard kept, at its entry or at its final gate.

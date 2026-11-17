@@ -196,11 +196,19 @@ export function createIndexedDbRunJournal(name = 'hushos-drive'): RunJournal {
             const db = await open();
             return db.getAll('runs');
         },
+        // A refused write lets its connection go: the run writes once more, on a fresh one.
         async put(row) {
-            const db = await open();
-            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
-            await tx.store.put(row);
-            await tx.done;
+            const opening = open();
+            try {
+                const tx = (await opening).transaction('runs', 'readwrite', {
+                    durability: 'strict',
+                });
+                await tx.store.put(row);
+                await tx.done;
+            } catch (error) {
+                open.forget(opening);
+                throw error;
+            }
         },
         async remove(id) {
             const db = await open();

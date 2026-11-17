@@ -166,6 +166,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
         const val ALREADY_FINISHED = "This upload already finished."
         /* The most a cut-off-able JSON answer (an object's address) may be: a few hundred bytes in practice. */
         const val CUT_BODY_MAX = 64 * 1024
+        /* An older server's refusal of an abort while it completes the upload (packages/drive/src/server.ts abortUpload). */
+        const val STILL_FINISHING = "This upload is finishing and cannot be cancelled."
     }
 
     private val origin = session.origin
@@ -564,6 +566,9 @@ class DriveApi(val session: Shared.Session) : RootApi {
         when {
             error.status == 409 && error.data?.optString("upload") == "completed" -> SaveAbortFate.FINISHED
             error.status == 409 && error.data?.optString("upload") == "completing" -> SaveAbortFate.FINISHING
+            // A self-hosted server from before `data.upload` says which only in words.
+            error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> SaveAbortFate.FINISHED
+            error.status == 409 && error.data?.has("upload") != true && error.message == STILL_FINISHING -> SaveAbortFate.FINISHING
             error.status == 401 || error.status == 403 -> SaveAbortFate.DENIED
             error.status == 404 -> SaveAbortFate.GONE
             else -> SaveAbortFate.UNKNOWN

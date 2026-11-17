@@ -362,6 +362,10 @@ public final class DriveAPI: Sendable {
      */
     public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, finishing, denied, unknown }
 
+    /* An older server's abort refusals (packages/drive/src/server.ts abortUpload), before it named them in `data.upload`. */
+    static let abortFinishing = "This upload is finishing and cannot be cancelled."
+    static let abortFinished = "This upload already finished."
+
     public func abortUploadFate(uploadId: String, workspaceId: String) async -> AbortFate {
         guard let request = try? mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]),
               let (status, data) = try? await send(request) else { return .unknown }
@@ -371,9 +375,17 @@ public final class DriveAPI: Sendable {
         case 401, 403: return .denied
         case 409:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            switch (body?["data"] as? [String: Any])?["upload"] as? String {
-            case "completing": return .finishing
-            case "completed": return .finished
+            if let upload = (body?["data"] as? [String: Any])?["upload"] as? String {
+                switch upload {
+                case "completing": return .finishing
+                case "completed": return .finished
+                default: return .unknown
+                }
+            }
+            // A self-hosted server from before `data.upload` says which only in words.
+            switch body?["message"] as? String {
+            case Self.abortFinishing: return .finishing
+            case Self.abortFinished: return .finished
             default: return .unknown
             }
         default: return .unknown

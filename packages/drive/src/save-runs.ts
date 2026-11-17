@@ -108,8 +108,10 @@ export type Cleanup = 'deleted' | 'trashed' | 'nothing' | 'left' | 'no-access';
 export type StopReason = 'cancelled' | 'no-room' | 'failed' | 'locked' | 'signed-out';
 
 /*
- * Why a run stopped after it started, what its clean-up did, and how many new
- * versions had already landed and were kept (a run never rolls a version back).
+ * Why a run stopped after it started, what its clean-up did, how many new
+ * versions had already landed and were kept (a run never rolls a version back),
+ * and how many may have: their abort had no answer (offline, or the server
+ * still finishing them), so they may land yet.
  */
 export class RunStopped extends Error {
     constructor(
@@ -117,6 +119,7 @@ export class RunStopped extends Error {
         message: string,
         readonly cleanup: Cleanup,
         readonly keptVersions = 0,
+        readonly uncertainVersions = 0,
     ) {
         super(message);
         this.name = 'RunStopped';
@@ -138,27 +141,42 @@ const OPENINGS: Record<Exclude<StopReason, 'failed'>, string> = {
     'signed-out': 'You signed out before this was saved.',
 };
 
-/* What a stopped run says: never "nothing was saved" once a new version landed. */
+/*
+ * What a stopped run says: never "nothing was saved" once a new version
+ * landed, or while one may still land.
+ */
 export function stoppedWords(
     reason: StopReason,
-    options: { shared?: boolean; failure?: string | null; keptVersions?: number } = {},
+    options: {
+        shared?: boolean;
+        failure?: string | null;
+        keptVersions?: number;
+        uncertainVersions?: number;
+    } = {},
 ) {
     const kept = options.keptVersions ?? 0;
+    const uncertain = options.uncertainVersions ?? 0;
     const opening =
         reason === 'failed'
             ? (options.failure ?? 'This couldn’t be saved.').replace(/\s*$/, '')
             : reason === 'no-room' && options.shared
               ? 'There isn’t enough room in this shared folder for this.'
               : OPENINGS[reason];
-    if (!kept)
+    if (!kept && !uncertain)
         return reason === 'failed' && !options.failure
             ? RUN_FAILED
             : `${opening} Nothing was saved.`;
-    const versions =
-        kept === 1
-            ? 'The new version saved before that was kept.'
-            : `The ${kept} new versions saved before that were kept.`;
-    return `${opening} ${versions} Nothing else was saved.`;
+    const versions = !kept
+        ? ''
+        : kept === 1
+          ? ' The new version saved before that was kept.'
+          : ` The ${kept} new versions saved before that were kept.`;
+    const maybe = !uncertain
+        ? ''
+        : uncertain === 1
+          ? ` ${kept ? 'Another' : 'A'} new version may have been saved.`
+          : ` ${uncertain} ${kept ? 'other ' : ''}new versions may have been saved.`;
+    return `${opening}${versions}${maybe} Nothing else was saved.`;
 }
 
 type TransferEvent = Parameters<NonNullable<TransferManagerOptions['onEvent']>>[0];
@@ -219,8 +237,9 @@ export type ItemFate = 'done' | 'gone' | 'refused' | 'denied';
  * What an abort's answer means for a clean-up (the server's abortUpload names a
  * finishing upload and a finished one in `data.upload`): an upload still
  * finishing is asked about again, every `pauseMs` up to `tries` times (about
- * ten seconds), and one that is still finishing then is taken as finished: it
- * lands (a new version kept and said so, a new file removed with the rest).
+ * ten seconds). One still finishing then is `unknown`, never finished: the
+ * server publishes its node only once the object store has completed it, so
+ * it may still land, and the row that names it stays for the next open.
  */
 export async function askAbort(
     abort: () => Promise<unknown>,
@@ -236,7 +255,7 @@ export async function askAbort(
         } catch (error) {
             const fate = abortFateOf(error);
             if (fate !== 'finishing') return fate;
-            if (asked >= tries) return 'finished';
+            if (asked >= tries) return 'unknown';
             await pause(options.pauseMs ?? 2_000);
         }
     }
@@ -440,22 +459,34 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
         const refused = deps.refuseWrite(target);
         if (refused && !deps.waitsForKeyChange(target)) throw new SaveRefused('read-only', refused);
     }
+    // A sign-out while it starts (abandonRuns cannot reach a run not yet live): it never
+    // starts, writes nothing into the journal the sign-out cleared, and lets its hold go.
+    const current = () => deps.current?.() ?? true;
+    const signedOut = () => new RunStopped('signed-out', stoppedWords('signed-out'), 'nothing');
+    if (!current()) throw signedOut();
     const needed = runEstimate(plan.results);
     const room = await deps.room(workspaceId);
+    if (!current()) throw signedOut();
     if (room.kind !== 'shared' && room.free !== null && needed > room.free)
         throw new SaveRefused('no-room', NO_ROOM, { needed, free: Math.max(0, room.free) });
     const now = deps.now ?? (() => Date.now());
     const id = deps.newId?.() ?? crypto.randomUUID();
     // Held before the row exists: no other tab ever finds the row without its hold.
     const release = await deps.hold?.(id);
-    const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now(), beat: now() };
     try {
+        if (!current()) throw signedOut();
+        const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now(), beat: now() };
         await deps.runs.put(row);
+        // Signed out while the row was written: it goes too (only this row, wherever it landed).
+        if (!current()) {
+            await deps.runs.remove(row.id).catch(() => {});
+            throw signedOut();
+        }
+        return createRun(deps, row, plan, room.kind === 'shared', release);
     } catch (error) {
         release?.();
         throw error;
     }
-    return createRun(deps, row, plan, room.kind === 'shared', release);
 }
 
 type Pending = {
@@ -500,20 +531,31 @@ function createRun(
     // Rows written one after another, each the run as it is then.
     let writing = Promise.resolve();
     /*
-     * A write the journal refused (storage full): the run can no longer promise the next open a
-     * row naming what it made, so it stops and cleans up, and nothing more is published.
+     * A write the journal refused twice (storage full): the run can no longer promise the next
+     * open a row naming what it made, so it stops and cleans up, and nothing more is published.
      */
     let unrecorded: unknown = null;
+    const snapshot = () => ({
+        ...row,
+        nodeIds: [...row.nodeIds],
+        uploadIds: [...row.uploadIds],
+        beat: now(),
+    });
+    const writable = () => current() && !sealed;
     const persist = () => {
-        if (!current() || sealed) return writing;
-        const snapshot = {
-            ...row,
-            nodeIds: [...row.nodeIds],
-            uploadIds: [...row.uploadIds],
-            beat: now(),
-        };
+        if (!writable()) return writing;
+        const taken = snapshot();
         writing = writing
-            .then(() => (current() && !sealed ? deps.runs.put(snapshot) : undefined))
+            .then(async () => {
+                if (!writable()) return;
+                try {
+                    await deps.runs.put(taken);
+                } catch {
+                    // Once more, as the run is now (rows are whole), on a fresh connection: WebKit
+                    // closes IndexedDB connections on its own, which one refused write is not.
+                    if (writable()) await deps.runs.put(snapshot());
+                }
+            })
             .catch((error: unknown) => {
                 unrecorded ??= error;
                 void stop('failed', undefined, UNRECORDED);
@@ -528,8 +570,12 @@ function createRun(
     const beat = setInterval(() => void persist(), deps.beatMs ?? BEAT_MS);
     const unsubscribe = deps.events(onEvent);
 
-    /* New work only while the run is open: one handed in during a stop is refused with it. */
+    /*
+     * New work only while the run is open: one handed in during a stop is refused with it, and
+     * one handed in after its session ended abandons it (a sign-out that did not reach it).
+     */
     async function open() {
+        if (!current() && !stopping) run.abandon();
         if (stopping) throw await stopping;
         if (finished) throw new Error('This save run has finished.');
     }
@@ -731,9 +777,11 @@ function createRun(
                     shared,
                     failure: reason === 'failed' ? (failure ?? item?.error ?? null) : null,
                     keptVersions,
+                    uncertainVersions: result.uncertainVersions,
                 }),
                 result.cleanup,
                 keptVersions,
+                result.uncertainVersions,
             );
             stopped = done;
             for (const output of pending.values()) output.reject(done);
@@ -759,11 +807,14 @@ function createRun(
             const given = claim(taken, name);
             await open();
             const made = await deps.makeFolder(into, given, signAs);
+            if (!current() && !stopping) run.abandon();
             if (stopping) {
+                const done = await stopping;
+                // Signed out meanwhile: nothing is asked of the server or written for that account.
+                if (abandoned) throw done;
                 // Stopped while it was being made: it goes the way the rest of the run went, and
                 // if it cannot, a row names it for the next open: added to the row the stop kept
                 // (its clean-up left things too), or a row of its own when the stop's went.
-                const done = await stopping;
                 const fate = await discard(deps, row.workspaceId, [made.id]).catch(
                     (): Cleanup => 'left',
                 );
@@ -876,15 +927,19 @@ async function cleanUp(
         versionUploads?: Set<string>;
         current?: () => boolean;
     } = {},
-): Promise<{ cleanup: Cleanup; keptVersions: number }> {
+): Promise<{ cleanup: Cleanup; keptVersions: number; uncertainVersions: number }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
     let denied = false;
     let keptVersions = 0;
+    let uncertainVersions = 0;
     for (const uploadId of row.uploadIds) {
         const fate = await deps.abortUpload(row.workspaceId, uploadId);
-        if (fate === 'unknown') unsettled = true;
-        else if (fate === 'denied') denied = true;
+        if (fate === 'unknown') {
+            unsettled = true;
+            // No answer: it may still land, and a new version is never said not to have.
+            if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
+        } else if (fate === 'denied') denied = true;
         else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
     let cleanup = await discard(deps, row.workspaceId, row.nodeIds).catch((): Cleanup => 'left');
@@ -896,7 +951,7 @@ async function cleanUp(
         await options.written?.();
         if (options.current?.() ?? true) await deps.runs.remove(row.id).catch(() => {});
     }
-    return { cleanup, keptVersions };
+    return { cleanup, keptVersions, uncertainVersions };
 }
 
 /* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
@@ -946,16 +1001,17 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
 }
 
 /*
- * "Keep what was made": an interrupted run's files and folders stay, its row
- * goes. Its open uploads are still aborted (they are not files, only reserved
- * room); without an answer for one, the row stays.
+ * "Keep what was made": an interrupted run's files and folders stay, and its
+ * row always goes. Its open uploads are still asked to abort (they are not
+ * files, only reserved room); one with no answer is left to the server, which
+ * lets an open upload go once it expires, and one still finishing lands and
+ * is kept, as asked.
  */
 export async function keepInterrupted(
     deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'>,
     row: RunRow,
-): Promise<'kept' | 'left'> {
-    for (const uploadId of row.uploadIds)
-        if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') return 'left';
+): Promise<'kept'> {
+    for (const uploadId of row.uploadIds) await deps.abortUpload(row.workspaceId, uploadId);
     await deps.runs.remove(row.id).catch(() => {});
     return 'kept';
 }

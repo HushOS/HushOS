@@ -580,7 +580,7 @@ describe('an abort’s answer', () => {
     const refusal = (status: number, data?: unknown) =>
         new DriveApiError('refused', status === 409 ? 'conflict' : 'not-found', status, data);
 
-    test('a finishing upload is asked about again, and taken as finished if it still is after the tries', async () => {
+    test('a finishing upload is asked about again, and is no answer (never finished) if it still is after the tries', async () => {
         const pauses: number[] = [];
         const answers = [
             refusal(409, { upload: 'completing' }),
@@ -600,7 +600,7 @@ describe('an abort’s answer', () => {
                 tries: 3,
                 pause: async () => {},
             }),
-        ).toBe('finished');
+        ).toBe('unknown');
     });
 
     test('finished, gone, denied and no answer each say what they are; an unnamed 409 is no answer', async () => {
@@ -861,6 +861,54 @@ describe('a save run', () => {
         expect(stopped.cleanup).toBe('nothing');
     });
 
+    test('a completion slower than the abort’s tries keeps the row and says the version may have been saved', async () => {
+        const w = world();
+        // The object store is still completing both: the server answers "completing" every time.
+        const completing = new Set(['up-v', 'up-f']);
+        w.deps.abortUpload = (_ws, uploadId) =>
+            askAbort(
+                async () => {
+                    if (completing.has(uploadId))
+                        throw new DriveApiError('refused', 'conflict', 409, {
+                            upload: 'completing',
+                        });
+                },
+                { pause: async () => {} },
+            );
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc, folder('f')], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        const [version, file] = w.ids();
+        w.begin(version!, 'up-v', 'doc');
+        w.begin(file!, 'up-f', 'node-f');
+        await tick();
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.keptVersions).toBe(0);
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).toBe(
+            'Cancelled. A new version may have been saved. Nothing else was saved.',
+        );
+        // The row still names both: the file that lands later is the next open's to remove.
+        expect(w.runs.rows.get(run.id)).toMatchObject({
+            nodeIds: ['node-f'],
+            uploadIds: ['up-v', 'up-f'],
+        });
+        // It lands; the next open's clean-up hears "completed" and removes the file.
+        completing.clear();
+        w.server.finished.add('up-f');
+        w.server.live.add('node-f');
+        w.deps.abortUpload = async () => 'finished';
+        const [left] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        expect(await cleanUpInterrupted(w.deps, left!)).toBe('deleted');
+        expect(w.server.purged.has('node-f')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
     test('a cancel stops open uploads and deletes forever what was published; the row goes last', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
@@ -1091,13 +1139,15 @@ describe('a save run', () => {
             beat: 1,
         };
         await w.runs.put(left);
-        w.server.offline = true;
-        expect(await keepInterrupted(w.deps, left)).toBe('left');
-        expect(w.runs.rows.has('r')).toBe(true);
-        w.server.offline = false;
         expect(await keepInterrupted(w.deps, left)).toBe('kept');
         expect(w.server.live.has('node-a')).toBe(true);
         expect(w.server.aborted).toEqual(['up-b']);
+        expect(w.runs.rows.size).toBe(0);
+        // With no answer to the abort (offline, an older server), the row goes all the same:
+        // an open upload expires on the server, and Keep never leaves a row it can't clear.
+        await w.runs.put({ ...left, id: 'r2' });
+        w.server.offline = true;
+        expect(await keepInterrupted(w.deps, { ...left, id: 'r2' })).toBe('kept');
         expect(w.runs.rows.size).toBe(0);
     });
 
@@ -1189,6 +1239,94 @@ describe('a save run', () => {
         expect(stopped.message).toMatch(/couldn’t keep a record/);
         // Its upload was aborted on the server all the same.
         expect(w.server.aborted).toContain('up-a');
+    });
+
+    test('one refused write (a connection the browser closed) is written again; the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        const produced = w.queued.get(a!)!.input.produced!;
+        const put = w.runs.put.bind(w.runs);
+        let refusals = 1;
+        w.runs.put = (row) =>
+            refusals-- > 0
+                ? Promise.reject(new DOMException('closed', 'InvalidStateError'))
+                : put(row);
+        w.begin(a!, 'up-a', 'node-a');
+        await produced.beforeComplete!();
+        expect(w.runs.rows.get(run.id)).toMatchObject({
+            nodeIds: ['node-a'],
+            uploadIds: ['up-a'],
+        });
+        w.land(a!, 'node-a', 'up-a');
+        await saved;
+        await run.finish();
+        expect(w.server.aborted).toEqual([]);
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a sign-out while a run starts: it never starts, writes no row and lets its hold go', async () => {
+        for (const during of ['room', 'hold', 'row'] as const) {
+            const w = world();
+            const held = new Set<string>();
+            const room = w.deps.room;
+            w.deps.room = async (ws) => {
+                if (during === 'room') w.signOut();
+                return room(ws);
+            };
+            w.deps.hold = async (id) => {
+                held.add(id);
+                if (during === 'hold') w.signOut();
+                return () => held.delete(id);
+            };
+            const put = w.runs.put.bind(w.runs);
+            w.runs.put = async (row) => {
+                // The sign-out cleared the journal just before this row went in: it lands in the next one.
+                if (during === 'row') {
+                    w.signOut();
+                    w.runs.rows.clear();
+                }
+                await put(row);
+            };
+            await expect(
+                startRun(w.deps, { targets: [folder('f')], results: [] }),
+                during,
+            ).rejects.toMatchObject({ reason: 'signed-out' });
+            expect(w.runs.rows.size, during).toBe(0);
+            expect(held.size, during).toBe(0);
+            expect(resultsWaiting()).toBe(false);
+        }
+    });
+
+    test('a run whose session ended without reaching it takes no more work and makes no folder', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.signOut();
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'signed-out' });
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toMatchObject({ reason: 'signed-out' });
+        expect(w.madeFolders).toEqual([]);
+        expect(w.ids()).toEqual([]);
+        expect(w.server.aborted).toEqual([]);
+    });
+
+    test('a folder that lands after a sign-out is neither removed nor written down for that account', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = async (parent, name, signAs) => {
+            const made = await make(parent, name, signAs);
+            w.signOut();
+            w.runs.rows.clear();
+            return made;
+        };
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'signed-out' });
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('made-1')).toBe(true);
+        expect([...w.server.trash, ...w.server.purged]).toEqual([]);
     });
 
     test('the next open lists a closed tab’s run, not a live one, and cleans it up from its ids alone', async () => {

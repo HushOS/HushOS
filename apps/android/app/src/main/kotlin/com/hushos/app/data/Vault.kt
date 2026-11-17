@@ -2215,8 +2215,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
             if (!settled) throw Unreachable()
             throw error
         }
-        onBegun(BegunIds(ws, begun.uploadId, nodeId))
         try {
+            // A result's run writes these ids down first: if it can't, nothing is sent, the reservation is aborted now (the
+            // network's to settle when that gets no answer), and it is marked idle below, so settleAll never skips it.
+            try {
+                onBegun(BegunIds(ws, begun.uploadId, nodeId))
+            } catch (error: Exception) {
+                runCatching { abortReserved(begun.uploadId, ws) }
+                madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+                throw error
+            }
             return uploadReserved(plain, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
                 family, job, moveOf != null, progress, result)
         } finally {
@@ -2283,12 +2291,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // A move's completion deleted its source with it: whatever fails after it (its row not kept, the family let go of
         // meanwhile) is a move that happened, never one to report as failed.
         if (result) {
-            // A tool's result: whatever fails after its completion is a save that landed, never a race or a failure
-            // (ResultLanded names the node, so its run keeps it and counts it).
-            try {
-                return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, null, mime, size, modified, keepName = true)
+            // A tool's result: whatever fails after its completion is a save that landed, never a race or a failure. It is
+            // answered as landed, the node the completion named with the metadata it was sealed with (as iOS answers one it
+            // can't file), so its run keeps it, counts it, and removes it with the rest when the run is stopping. Only a
+            // completion naming another item than the one written is no answer to file (checkWritten): ResultLanded.
+            return try {
+                finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, null, mime, size, modified, keepName = true)
             } catch (error: Exception) {
-                throw ResultLanded(node.id, error)
+                if (node.workspaceId != ws || node.id != nodeId) throw ResultLanded(nodeId, error)
+                Opened(node, metadata)
             }
         }
         if (job.isEmpty() && !moved) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
@@ -2381,7 +2392,10 @@ class SaveStale(val currentVersionId: String?) : Exception("Someone else saved a
 /* An upload refused only because a key change reached its file or folder while it went up: looked up again and sealed afresh. */
 class SaveRekeyed : Exception("This file’s keys changed while it was saving.")
 
-/* A tool's result that landed, whose row couldn't be finished here: its run keeps it (a version kept, a file to remove). */
+/*
+ * A tool's result whose completion named another item than the one written: it may have landed, but there is nothing here
+ * to file. Its run stops and cleans up from its row (a new file removed, a new version kept by its abort's answer).
+ */
 class ResultLanded(val nodeId: String, cause: Throwable) : Exception("Saved. It will show once the folder refreshes.", cause)
 
 /*

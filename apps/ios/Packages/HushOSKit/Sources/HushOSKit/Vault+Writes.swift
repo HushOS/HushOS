@@ -891,14 +891,20 @@ extension Vault {
     private func upload(
         source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
-        moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) -> Void = { _ in },
+        moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) throws -> Void = { _ in },
         progress: @Sendable (Double) -> Void
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
                                         thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf,
                                         expected: expected, keepName: keepName)
-            onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
+            // A result's run writes these ids down first: if it can't, nothing is sent and the reservation goes.
+            do {
+                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
+            } catch {
+                await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+                throw error
+            }
             var urls = begun.urls
             let handle = try PlainReader(source)
             defer { handle.close() }
@@ -970,7 +976,7 @@ extension Vault {
     public func uploadResult(
         _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
-        onBegun: @escaping @Sendable (BegunIds) -> Void = { _ in }, progress: @Sendable (Double) -> Void = { _ in }
+        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         if let replacing, replacing.node.currentVersion?.id != startedFrom {
             throw SaveStale(currentVersionId: replacing.node.currentVersion?.id)
@@ -980,7 +986,7 @@ extension Vault {
             return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
                                     thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
                                     expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
-                                    onBegun: { ids in begun.ids = ids; onBegun(ids) }, progress: progress)
+                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, progress: progress)
         } catch {
             let raced: Bool
             switch error {
