@@ -503,9 +503,10 @@ Design: `docs/identity-pq-design.md`.
     - Look-only readers therefore see another device's change, a server rollback included, up to 10 s late; a fresh read refuses a rollback at once.
     - Tests: `SettingsReuseTest`.
 - At launch `loadRoot` loads the trust set beside the workspace, and the family pass runs on its own: Home's loading state never waits for it.
-    - `refreshTrust` joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined.
+    - `refreshTrust(join = true)`, only from `loadRoot` and `onForeground`, joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined. Every other ask follows an act (a check, Continue, a key replacement, Try again) and loads afresh.
     - A non-forced `refreshFamilies` waits for a pass already running (then finds nothing due) rather than run a second; never from inside a pass (`InFamilyPass`).
-    - A pass asks route 25 once: `FamilySync.pass()` holds the answer in a coroutine context element (a thread-local that follows the pass's coroutine), so only its own syncs see it.
+    - A pass asks route 25 once: `FamilySync.pass()` holds the answer in a coroutine context element (a thread-local that follows the pass's coroutine), so only its own syncs see it, and it ends with the pass's coroutine.
+    - A chain call that lands (`sendKept`'s `finish(CallEnd.Landed)`) moves `FamilySync.landings`; a listing asked for before it is asked for again.
 
 ### Pins and shares
 

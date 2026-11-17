@@ -74,6 +74,25 @@ extension OnFakeDrive {
             #expect(server.count("/api/drive/spaces") == 2)
         }
 
+        /* A task the pass started that syncs after the pass returned asks for the folders itself. */
+        @Test func aTaskStartedUnderAPassThatSyncsAfterItEndsAsksForTheFoldersItself() async throws {
+            let (family, server, phone, _) = try await setUp()
+            defer { phone.done() }
+            let sync = phone.sync, summary = family.summary
+            var later: Task<Void, Never>?
+            server.clearRequests()
+            await FamilySync.inPass {
+                _ = await sync.sync(summary)
+                // A plain task (a walk, say) inherits the pass's task-local; it syncs once the pass is over.
+                later = Task {
+                    try? await Task.sleep(for: .milliseconds(300))
+                    _ = await sync.sync(summary)
+                }
+            }
+            await later?.value
+            #expect(server.count("/api/drive/spaces") == 2)
+        }
+
         /*
          * A guard write (the guard keeping a pin another device saved, as a new phone's trust load
          * does) drops the copy: settings another device saved since are read next.

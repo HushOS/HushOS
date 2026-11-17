@@ -1134,7 +1134,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         io { it.identityKeys() }
         // Who may have written what (the trust set) loads beside the workspace: neither needs the other, and the
         // catalogue's first draw is judged against it, so it is in hand before the rows are.
-        val trust = launch { refreshTrust() }
+        val trust = launch { refreshTrust(join = true) }
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
         trust.join()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
@@ -1271,7 +1271,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         sync(quiet = true)
         refreshKeptFolders(withShares = true)
         // Someone checked on another device counts here too once the app is back.
-        refreshTrust()
+        refreshTrust(join = true)
         // And a family changed elsewhere (a removal), at most once a minute.
         families.refreshFamilies()
     }
@@ -1869,12 +1869,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * shows Couldn't check with a retry, never no mark; only a lost network keeps a set already loaded. Only the latest
      * load lands (TrustLoads), and only while its vault is still the one signed in.
      */
-    suspend fun refreshTrust() {
+    suspend fun refreshTrust(join: Boolean = false) {
         val vault = vault ?: return
-        // A load already under way for the same vault, started since the last guard write or settings save, answers this
-        // ask too (the app's start asks from two places at once). One started before such a write is not joined.
+        // `join`, only for the launch-time asks (loadRoot and coming to the front, which ask from two places at once): a
+        // load already under way for the same vault, started since the last guard write or settings save, answers it.
+        // Every other ask follows an act (a check, a Continue, this account's own key replacement, Try again), which may
+        // have changed what trust rests on without moving that generation, so it always loads afresh.
         val generation = vault.memory.generation.get()
-        trustRun?.let { (run, owner, at) ->
+        if (join) trustRun?.let { (run, owner, at) ->
             if (run.isActive && owner === vault && at == generation) return run.join()
         }
         val run = viewModelScope.launch { loadTrust(vault) }

@@ -606,6 +606,13 @@ describe('admissions', () => {
         },
     );
 
+    test('creating a family reads the settings now, never a copy held from before', async () => {
+        const h = harness();
+        h.settingsLog.copyError = new Error('A held copy was read.');
+        const { outcome } = await createFamily(h.ctx, 'Lindqvist');
+        expect(outcome.status).toBe('landed');
+    });
+
     test('a kept admission is judged against the pin as it is now, never a copy a sync was handed', async () => {
         const store = createMemoryGroupStore();
         const first = harness({ store });

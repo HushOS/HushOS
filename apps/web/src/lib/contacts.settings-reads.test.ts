@@ -1,4 +1,5 @@
 // @vitest-environment node
+import 'fake-indexeddb/auto';
 import type { Settings, SettingsEnvelope } from '@hushos/crypto';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { account } from './groups/worker-testkit';
@@ -278,5 +279,23 @@ describe('fresh reads still check everything', () => {
         // Nothing of the failed read is held: the next one opens the identity and the settings.
         expect(named(await readSettingsForFamilies(USER))).toEqual(['first']);
         expect(opens()).toBe(1);
+    });
+});
+
+describe('the reuse window', () => {
+    test('ends on either clock: a device that slept, or a clock set back, reads again', async () => {
+        const w = await world();
+        expect(named(await readSettingsForFamilies(USER))).toEqual([]);
+        await w.elsewhere(withName('while asleep'));
+        // performance.now() stood still while the device slept; the wall clock moved on.
+        const wall = Date.now();
+        const slept = vi.spyOn(Date, 'now').mockImplementation(() => wall + 60_000);
+        expect(named(await readSettingsForFamilies(USER))).toEqual(['while asleep']);
+        slept.mockRestore();
+        await w.elsewhere(withName('clock set back'));
+        // The wall clock now reads before the copy was taken.
+        const back = vi.spyOn(Date, 'now').mockImplementation(() => wall - 60_000);
+        expect(named(await readSettingsForFamilies(USER))).toEqual(['clock set back']);
+        back.mockRestore();
     });
 });

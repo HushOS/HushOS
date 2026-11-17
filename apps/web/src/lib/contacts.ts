@@ -360,7 +360,9 @@ let settingsRead:
     | {
           userId: string;
           generation: number;
+          /* When it was read, on both clocks: performance.now() may stand still while the device sleeps. */
           at: number;
+          wall: number;
           /* The settings key envelope the server served with it, for a reader that may create one. */
           served: SettingsKeyEnvelope | null;
           promise: Promise<LoadedSettings>;
@@ -370,6 +372,9 @@ let settingsRead:
 let settingsRequest:
     | { generation: number; promise: ReturnType<typeof authClient.settings> }
     | undefined;
+
+/* Within the window on one clock: a negative step (a clock set back) reads again too. */
+const withinReuse = (elapsed: number) => elapsed >= 0 && elapsed < SETTINGS_REUSE_MS;
 
 /* What a settings read was based on is gone: the next reader fetches, checks and opens them again. */
 export function forgetSettingsRead() {
@@ -402,7 +407,8 @@ async function readSettings(
         !fresh &&
         held?.userId === userId &&
         held.generation === settingsGeneration &&
-        performance.now() - held.at < SETTINGS_REUSE_MS
+        withinReuse(performance.now() - held.at) &&
+        withinReuse(Date.now() - held.wall)
     ) {
         const loaded = await held.promise;
         requireUnlocked(userId);
@@ -418,6 +424,7 @@ async function readSettings(
         userId,
         generation: settingsGeneration,
         at: performance.now(),
+        wall: Date.now(),
         served: null as SettingsKeyEnvelope | null,
         promise: undefined as unknown as Promise<LoadedSettings>,
     };

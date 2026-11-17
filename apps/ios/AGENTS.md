@@ -484,7 +484,11 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - The copy is dropped by any save or guard write from the vault (`forgetSettingsCopy`, from `updateSettings` and `commitGuard`), a sign-out (`GuardGeneration`), a failed read, and the window; a copy older than the marks another process raised is read again.
     - Look-only readers therefore see another device's change, a server rollback included, up to 10 s late; a fresh read refuses a rollback at once.
     - Tests: `SettingsReuseTests`.
-- A family pass (`Families.refreshFamilies`) asks route 25 once: `FamilySync.inPass` holds the answer in a task-local, so only the pass's own syncs see it, and it ends with the pass, cancelled or not.
+- A family pass (`Families.refreshFamilies`) asks route 25 once: `FamilySync.inPass` holds the answer in a task-local.
+    - Plain `Task { }`s inherit task-locals, so the listing is ended when `inPass` returns (cancelled or not); a task that outlives the pass then asks for itself.
+    - A task created under a pass for work of its own (a walk in `startWalks`, a release adopted in `applyReleases`) runs `FamilySync.outsidePass`, so it never reads the pass's listing even while the pass still runs.
+    - A chain call that lands (`sendKept`'s `drop(.landed)`) moves `FamilySync.landings`; a listing asked for before it is asked for again.
+    - Tests: `SettingsReuseTests` (one listing per pass, none for a detached sync or a task that syncs after the pass).
 - Requests made together share one answer:
     - `loadWorkspace` (`loadingWorkspace`): the first list and the live sync at launch.
     - `sharedByMeAnswer(join:)`: the upgrade pass joins the sharing listing's `/shares/mine` when nothing is owed; the listing always asks afresh.

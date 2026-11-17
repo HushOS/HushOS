@@ -235,27 +235,44 @@ public actor FamilySync: FamilyJudge {
      */
     final class PassSpaces: @unchecked Sendable {
         private let lock = NSLock()
-        private var held: [SpaceList.Entry]?
-        var spaces: [SpaceList.Entry]? {
-            get { lock.withLock { held } }
-            set { lock.withLock { held = newValue } }
+        private var held: (spaces: [SpaceList.Entry], landings: UInt64)?
+        private var over = false
+        /* The listing, while the pass runs and no call has landed since it was asked for (`landings` then). */
+        func spaces(landings: UInt64) -> [SpaceList.Entry]? {
+            lock.withLock { over ? nil : held.flatMap { $0.landings == landings ? $0.spaces : nil } }
         }
+        func keep(_ spaces: [SpaceList.Entry], landings: UInt64) { lock.withLock { if !over { held = (spaces, landings) } } }
+        /* The pass returned: a task it started that outlives it (a walk) asks for itself. */
+        func end() { lock.withLock { over = true; held = nil } }
     }
     @TaskLocal static var pass: PassSpaces?
 
     /* `work` runs on the caller's actor (the app's refreshFamilies is the main actor's). */
     public static func inPass<T>(isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T) async rethrows -> T {
-        try await $pass.withValue(PassSpaces(), operation: work, isolation: isolation)
+        let pass = PassSpaces()
+        defer { pass.end() }
+        return try await $pass.withValue(pass, operation: work, isolation: isolation)
     }
 
-    /* Route 25, as the pass this sync runs in has it (asked at most once in it), else asked now. */
+    /*
+     * `work` with no pass, on the caller's actor: for a task created under a pass whose work is its own (a walk, a
+     * release adopted), which would otherwise inherit the pass's listing.
+     */
+    public static func outsidePass<T>(isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T) async rethrows -> T {
+        try await $pass.withValue(nil, operation: work, isolation: isolation)
+    }
+
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it, and again after a call lands), else asked now. */
     private func passSpaces() async throws -> [SpaceList.Entry] {
         guard let current = Self.pass else { return try await api.spaces() }
-        if let spaces = current.spaces { return spaces }
+        let at = landings
+        if let spaces = current.spaces(landings: at) { return spaces }
         let spaces = try await api.spaces()
-        current.spaces = spaces
+        current.keep(spaces, landings: at)
         return spaces
     }
+    /* Chain calls this sync saw land: each makes a pass's folder listing from before it stale. */
+    var landings: UInt64 = 0
     /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */
     private var acceptedFamilies: Set<String> = []
 

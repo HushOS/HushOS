@@ -185,10 +185,19 @@ class FamilySync(
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
 
-    /* Route 25, as the pass this sync runs in has it (asked at most once in it), else asked now. */
+    /* Chain calls this sync saw land: each makes a pass's folder listing from before it stale. */
+    @Volatile private var landings = 0L
+    internal fun chainLanded() { landings++ }
+
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it, and again after a call lands), else asked now. */
     private fun spaces(): Map<String, List<SpaceArea>> {
         val current = passSpaces.get() ?: return api.spaces()
-        return current.spaces ?: api.spaces().also { current.spaces = it }
+        val at = landings
+        current.spaces?.let { if (current.landingsAt == at) return it }
+        return api.spaces().also {
+            current.spaces = it
+            current.landingsAt = at
+        }
     }
 
 
@@ -910,6 +919,8 @@ class FamilySync(
          */
         class PassSpaces {
             @Volatile var spaces: Map<String, List<SpaceArea>>? = null
+            /* `FamilySync.landings` when it was asked for: a call that lands since makes it stale. */
+            @Volatile var landingsAt = -1L
         }
         private val passSpaces = ThreadLocal<PassSpaces?>()
 

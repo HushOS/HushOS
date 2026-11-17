@@ -485,6 +485,8 @@ internal fun FamilySync.sendKept(summary: GroupSummary, kept: FamilyOutbox.Kept,
     // A rotating call rebuilt (its folders gathered again) is kept over the old entry, under the same outbox id.
     var current = kept
     fun finish(end: CallEnd): CallEnd {
+        // A call that landed changed the family: a pass's folder listing from before it is asked for again.
+        if (end == CallEnd.Landed) chainLanded()
         told(on, end)
         // Documents a landed rotation carried on empty: kept to be said (FamilySync.takeCleared) before its notes go with the entry.
         if (end == CallEnd.Landed) outbox.keepUnsaid(userId, groupId, outbox.cleared(userId, groupId, current.outboxId).map(::clearedWords))

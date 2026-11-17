@@ -146,7 +146,7 @@ async function aliceFamily() {
         persist: async () => true,
     });
     ctx.settings = {
-        read: () => readSettingsForFamilies(ALICE),
+        read: (options) => readSettingsForFamilies(ALICE, options),
         write: (version, settings) => compareAndSetSettings(ALICE, version, settings),
     };
     const { groupId, outcome } = await createFamily(ctx, 'Lindqvist');
@@ -236,6 +236,33 @@ describe('checking each other in a family', () => {
         // This device's guard moved with it, and the member list says Verified.
         expect(await contactGuardEntry(ALICE, BOB)).toMatchObject({ verified: true });
         expect((await memberStandings(ALICE, await f.view())).get(BOB)).toBe('verified');
+    });
+
+    test('They match reads the settings now, never a copy held from before', async () => {
+        const f = await aliceFamily();
+        await f.letBobIn();
+        await bobsWords(f);
+        const shown = (await familyCheckCode(f.ctx, f.groupId, BOB)) as {
+            rosterVersion: number;
+            code: string[];
+        };
+        // A copy one read left for the readers that only look, which does not open (as an unopened one
+        // throws), until a fresh read replaces it.
+        const inner = f.ctx.settings;
+        let stale = true;
+        f.ctx.settings = {
+            read: async (options) => {
+                if (options?.fresh) stale = false;
+                else if (stale) throw new Error('A held copy was read.');
+                return inner.read(options);
+            },
+            write: (version, settings) => inner.write(version, settings),
+        };
+        expect(
+            await familyCheckMatch(f.queryClient, ALICE, f.ctx, f.groupId, bob, shown),
+        ).toMatchObject({
+            checked: true,
+        });
     });
 
     test('over a pin taken on the family’s word, They match makes it this person’s own check: Verified, and the manager role goes ahead', async () => {

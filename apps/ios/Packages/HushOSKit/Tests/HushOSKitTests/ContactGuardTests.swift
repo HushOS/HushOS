@@ -994,6 +994,53 @@ extension OnFakeDrive {
             #expect(ResealPending.isSet(for: "the-next-signing-key"))
         }
 
+        /*
+         * Owed after a key replacement, the re-seal clears its reminder at the end, so it reads the
+         * ledger now, not the copy a looking reader holds: a share another device recorded since that
+         * read is sealed again before the reminder goes. Fails if the owed pass takes the copy (the
+         * share is skipped and the reminder cleared anyway, never to be repaired).
+         */
+        @Test func anOwedReSealReadsTheLedgerNowBeforeItClearsTheReminder() async throws {
+            defer { done() }
+            let identity = try makeIdentity(maya)
+            let server = server(maya: identity.envelope)
+            let phone = await phone(server)
+            _ = try await phone.vault.addContact(email: "maya@example.com")
+            let workspace = UUID().uuidString.lowercased()
+            let nodeId = UUID().uuidString.lowercased()
+            let node = try JSONDecoder().decode(NodeView.self, from: JSONSerialization.data(withJSONObject: [
+                "id": nodeId, "workspaceId": workspace, "kind": "file", "keyEpoch": 3, "parentKeyEpoch": 1, "keyEnvelope": "k",
+                "metadataVersion": 1, "metadataEnvelope": "m",
+            ]))
+            _ = try await phone.vault.adopt(node, nodeKey: try randomBytes(length: 32),
+                                            metadata: NodeMetadata(name: "plan.md", mime: nil, size: 3, modified: nil, attributes: [:]), in: workspace)
+            // A looking reader holds the settings from before the share was recorded.
+            _ = try await phone.vault.contacts()
+            // Another device shares it with Maya (suite 4 already) and records it in the ledger.
+            var document = try server.document(root: root)
+            document["sharing"] = ["shares": [nodeId: [maya]], "links": [String: Any]()]
+            try server.replace(document, root: root)
+            let served = identity.envelope
+            server.sharesMine = [[
+                "id": "share-1", "role": "viewer", "keyEpoch": 3, "createdAt": "2026-10-30T00:00:00Z", "suite": 4,
+                "grantee": ["id": maya, "name": "Maya Lind", "email": "maya@example.com"],
+                "node": try JSONSerialization.jsonObject(with: JSONEncoder().encode(node)),
+                "granteeIdentity": [
+                    "keyVersion": served.keyVersion, "identityVersion": Int(served.version), "encryptionPublicKey": served.encryptionPublicKey,
+                    "signingPublicKey": served.signingPublicKey, "mlDsaPublicKey": served.mlDsa!.publicKey, "kemPublicKey": served.kem!.publicKey,
+                    "keysSignature": served.keysSignature!,
+                ],
+            ]]
+            ResealPending.clear()
+            defer { ResealPending.clear() }
+            let signing = try await phone.vault.ownSigningKey()
+            ResealPending.set(for: signing)
+            let outcome = try await phone.vault.upgradeShares()
+            #expect(outcome.rotated == 1)
+            #expect(server.resealed["share-1"] != nil)
+            #expect(!ResealPending.isSet(for: signing))
+        }
+
         @Test func sharingWithSomeoneWhosePinTheCheckMovedSaysTrustMoved() async throws {
             defer { done() }
             let identity = try makeIdentity(maya)
@@ -1506,4 +1553,9 @@ final class ContactServerProtocol: URLProtocol {
     }
 
     override func stopLoading() {}
+}
+
+extension Vault {
+    /* Tests: this account's signing key, as the re-seal reminder is kept by. */
+    func ownSigningKey() async throws -> String { try await identityKeys().signingPublicKey }
 }

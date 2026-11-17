@@ -127,6 +127,11 @@ export function harness(
          * that does not ask `fresh` is handed it, whatever is stored now.
          */
         copy: null as GroupSettings | null,
+        /*
+         * A copy that does not open (an unopened one throws so): while set, a read that does not ask
+         * `fresh` throws it, until a fresh read replaces the copy.
+         */
+        copyError: null as Error | null,
     };
     const held = new Set<string>();
     const sleeps: number[] = [];
@@ -300,6 +305,8 @@ export function harness(
     const settings: SettingsAccess = {
         read: async (options) => {
             settingsLog.reads++;
+            if (options?.fresh) settingsLog.copyError = null;
+            else if (settingsLog.copyError) throw settingsLog.copyError;
             if (settingsLog.copy && !options?.fresh)
                 return {
                     settings: structuredClone(settingsLog.copy),
