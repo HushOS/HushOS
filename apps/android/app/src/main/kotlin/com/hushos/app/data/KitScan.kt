@@ -5,6 +5,8 @@ import com.google.zxing.BinaryBitmap
 import com.google.zxing.DecodeHintType
 import com.google.zxing.MultiFormatReader
 import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.ResultPoint
+import com.google.zxing.ResultPointCallback
 import com.google.zxing.common.BitMatrix
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.multi.qrcode.detector.MultiFinderPatternFinder
@@ -21,17 +23,33 @@ import com.google.zxing.qrcode.detector.FinderPatternInfo
  * code in seventy to ninety (version 8 at level H) it takes a run of data modules for the
  * bottom-left finder in some poses, so the code can take many frames to read. A frame the usual
  * reader cannot read, or that holds a code the caller did not ask for, is read again set by set:
- * every plausible set of three finders, the first text the caller accepts winning. The sets are
- * capped: their number grows with the cube of the finders in view, and a sheet of QR labels
- * would otherwise hold the camera's thread for seconds.
+ * every plausible set of three finders, the first text the caller accepts winning. Both the
+ * finders and the sets are capped: sets grow with the cube of the finders in view, and a sheet
+ * of labels, or a screen tiled with finder squares, would otherwise hold the camera's thread for
+ * seconds or run it out of memory. ZXing orders the sets largest finders first, so past the cap
+ * it is the biggest code in view that is read.
  */
 object KitScan {
     private val hints = mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE), DecodeHintType.TRY_HARDER to true)
     private val reader = MultiFormatReader().apply { setHints(hints) }
     private val decoder = Decoder()
 
-    /* Sets of three finders tried after the usual reader: six codes in view make 41. */
+    /* Sets of three finders tried after the usual reader: six codes in view make about 40. */
     internal const val MOST_SETS = 64
+
+    /* Finder squares looked for before the second read gives up: twelve codes in view make 37. */
+    internal const val MOST_FINDERS = 64
+
+    private class TooManyFinders : RuntimeException()
+
+    /* Counts the finder squares the search turns up and stops it past the cap, before any set is made. */
+    private class Counting : ResultPointCallback {
+        private var seen = 0
+
+        override fun foundPossibleResultPoint(point: ResultPoint) {
+            if (++seen > MOST_FINDERS) throw TooManyFinders()
+        }
+    }
 
     /* ZXing's detector, for one given set of finders. */
     private class OneSet(matrix: BitMatrix) : Detector(matrix) {
@@ -61,7 +79,7 @@ object KitScan {
             return null
         }
         val sets = try {
-            MultiFinderPatternFinder(matrix, null).findMulti(hints)
+            MultiFinderPatternFinder(matrix, Counting()).findMulti(hints)
         } catch (error: Exception) {
             return null
         }
