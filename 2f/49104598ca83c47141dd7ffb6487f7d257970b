@@ -1,0 +1,59 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_f11be1e83e6ea2 1651
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_97659c3bf984db 627-628
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_50202fb95633d9::t_a09d1300fd9992 260-261,267,344-349,517,532,543-548,562,578-580,584,589-590,601,1086,1271-1272,1302-1303
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_99554a89082a4e 61-62,184,199,966-986,1387-1405
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_ee21670c153b8e 847
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c60e24772e04af::t_f8bc341f43e5ba 25-29,38,154,369-370,382-385
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_2a04a9826bc087 55-62,412-413,516,518-521,726,732,735,745-750,766-768,785-786,790,797-801,810-813,836,1411,1416,1618-1621,1654-1655
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_c60e24772e04af::t_5ea302b81eff89 311-312
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyQueueTests.swift
+  s_c60e24772e04af::t_b9d811e8c8c701 220
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunEngineTests.swift
+  s_c60e24772e04af::t_f77469608d9785 183-198
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_d4bc4a66be9e32 23-25,189,205,1059-1078
+apps/web/src/lib/api/shared.server.ts
+  s_c60e24772e04af::t_a6250a3e1c4728 199-200
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_01bbcd6abd6a38 16,169-172,181,191-193,204-210
+docs/file-tools-design.md
+  s_c60e24772e04af::t_d55d8b20a1a518 312
+packages/drive/src/protocol.ts
+  s_c60e24772e04af::t_3c10bafbe22d24 130-134
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_185fccd11c3656 37,40-41,452-453,509,519-520,1692-1730
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_b83e0e849f7675 179,191-193,268,275,309,343-352,1239-1243,1255,1286-1293,1304-1306,1334-1341,1414-1415,1421-1424,1434-1437
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2f49104598ca83c47141dd7ffb6487f7d257970b",
+  "prompts": {},
+  "sessions": {
+    "s_50202fb95633d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1eb80-c8c9-74f3-bb35-809d12d8a1cc",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
