@@ -1,0 +1,23 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_c4e2230ae314fd 283
+apps/android/app/src/test/kotlin/com/hushos/app/ui/BrandQrTest.kt
+  s_c60e24772e04af::t_6228ce02024f16 36,38
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/BrandQRTests.swift
+  s_c60e24772e04af::t_357940724e27ff 15,17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1485a8ce774537d7b5bd26096d791d5c29c2b019",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
