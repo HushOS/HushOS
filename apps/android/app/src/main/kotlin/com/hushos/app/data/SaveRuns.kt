@@ -80,6 +80,11 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
 
     /* Tests only: runs before each write with the rows it would write, and a throw refuses it as a full disk would. */
     @Volatile internal var fault: ((List<SaveRunRow>) -> Unit)? = null
+    /* Renames the staging file over the journal in one atomic step (tests replace it to make it fail). */
+    @Volatile internal var replace: (File, File) -> Unit = { from, to ->
+        java.nio.file.Files.move(from.toPath(), to.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+    }
+
     /* Tests only: runs once a write's staging file is on disk, before it is renamed over the journal. */
     @Volatile internal var staged: (() -> Unit)? = null
 
@@ -166,10 +171,9 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
                 out.fd.sync()
             }
             staged?.invoke()
-            if (!staging.renameTo(file)) {
-                file.delete()
-                if (!staging.renameTo(file)) throw java.io.IOException("The save record couldn’t be written.")
-            }
+            // One atomic replace: the journal is the old rows or the new ones, never neither. A replace that fails leaves the
+            // old journal as it was.
+            replace(staging, file)
         } catch (error: Exception) {
             // A write that failed leaves no staging file behind.
             staging.delete()
@@ -1233,7 +1237,17 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         return SaveAbortFate.UNKNOWN
     }
 
-    override fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> {
+    /*
+     * A write like any other (apps/android/AGENTS.md, family folders): in its own `writing` scope, deciding at its entry
+     * whether it writes as a family's (familyTarget), so the final gate lets a family folder's clean-up through, and refuses
+     * it (the clean-up left for later) while the folder may not be written.
+     */
+    override fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> = writing {
+        vault.familyTarget(workspaceId)
+        trashNow(ids, workspaceId)
+    }
+
+    private fun trashNow(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> {
         val fates = HashMap<String, SaveItemFate>()
         for (batch in ids.chunked(MAX_TRASH_BATCH)) {
             val answers = try {
@@ -1255,7 +1269,13 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         return fates
     }
 
-    override fun purge(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> = ids.associateWith { id ->
+    /* As trash: a write in its own scope, through the family's gate. */
+    override fun purge(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> = writing {
+        vault.familyTarget(workspaceId)
+        purgeNow(ids, workspaceId)
+    }
+
+    private fun purgeNow(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> = ids.associateWith { id ->
         try {
             vault.api.purge(id, workspaceId)
             SaveItemFate.DONE

@@ -1682,6 +1682,57 @@ describe('a save run', () => {
         expect(w.server.live.has('node-a')).toBe(true);
     });
 
+    test('Keep after a sign-out asks nothing more and changes nothing in that account’s journal', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'kept',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-x'],
+            uploadIds: ['up-1', 'up-2'],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(row);
+        const asked: string[] = [];
+        const abort = w.deps.abortUpload;
+        // Signed out while the first abort was on its way.
+        w.deps.abortUpload = async (ws, id) => {
+            asked.push(id);
+            const fate = await abort(ws, id);
+            session = false;
+            return fate;
+        };
+        const changes: string[] = [];
+        const runs = {
+            ...w.runs,
+            remove: async (id: string) => void changes.push(`remove ${id}`),
+            put: async (r: RunRow) => void changes.push(`put ${r.id}`),
+        };
+        expect(await keepInterrupted({ ...w.deps, runs }, row)).toBe('signed-out');
+        expect(asked).toEqual(['up-1']);
+        expect(changes).toEqual([]);
+        // Signed out before the journal change, its retries included: nothing is written.
+        session = true;
+        let refusals = 0;
+        const refusing = {
+            ...w.runs,
+            remove: async () => {
+                refusals += 1;
+                session = false;
+                throw new Error('refused');
+            },
+            put: async (r: RunRow) => void changes.push(`put ${r.id}`),
+        };
+        w.deps.abortUpload = abort;
+        expect(
+            await keepInterrupted({ ...w.deps, runs: refusing }, { ...row, uploadIds: [] }),
+        ).toBe('signed-out');
+        expect(refusals).toBe(1);
+        expect(changes).toEqual([]);
+    });
+
     test('a sign-out while an interrupted clean-up trashes sends no delete forever, nor any other request', async () => {
         const w = world();
         let session = true;

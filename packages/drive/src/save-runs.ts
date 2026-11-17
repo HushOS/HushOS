@@ -1317,9 +1317,10 @@ async function cleanUp(
  * the next open drops it). False when neither was written: the row stays as
  * it was, and the caller says so rather than call it retired.
  */
-async function retire(runs: RunJournal, row: RunRow) {
+async function retire(runs: RunJournal, row: RunRow, stillOn: () => boolean = () => true) {
     for (let tries = 0; tries < 2; tries++)
         try {
+            if (!stillOn()) return false;
             // One delete: a transaction of its own.
             await runs.remove(row.id);
             return true;
@@ -1329,6 +1330,7 @@ async function retire(runs: RunJournal, row: RunRow) {
     const done = { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds], done: true };
     for (let tries = 0; tries < 2; tries++)
         try {
+            if (!stillOn()) return false;
             await runs.put(done);
             return true;
         } catch {
@@ -1569,10 +1571,17 @@ async function settleUploads(
  * is kept, as asked.
  */
 export async function keepInterrupted(
-    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'>,
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
     row: RunRow,
-): Promise<'kept' | 'not-recorded'> {
-    for (const uploadId of row.uploadIds) await deps.abortUpload(row.workspaceId, uploadId);
+): Promise<'kept' | 'not-recorded' | 'signed-out'> {
+    // Signed out meanwhile: nothing more asked of the server or changed in that account's journal.
+    const stillOn = () => signedIn(deps);
+    for (const uploadId of row.uploadIds) {
+        if (!stillOn()) return 'signed-out';
+        await deps.abortUpload(row.workspaceId, uploadId);
+    }
+    if (!stillOn()) return 'signed-out';
     // The journal refusing to let it go: still offered, and Keep may be asked again.
-    return (await retire(deps.runs, row)) ? 'kept' : 'not-recorded';
+    if (await retire(deps.runs, row, stillOn)) return 'kept';
+    return stillOn() ? 'not-recorded' : 'signed-out';
 }

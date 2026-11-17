@@ -1568,7 +1568,19 @@ extension Vault: SaveRunWriter {
         return .unknown
     }
 
+    /*
+     * A write like any other (apps/ios/AGENTS.md, writes in family folders): in its own `writing` scope, deciding at its
+     * entry whether it writes as a family's (familyTarget), so the final gate lets a family folder's clean-up through, and
+     * refuses it (the clean-up left for later) while the folder may not be written.
+     */
     public func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        try await writing {
+            _ = try familyTarget(workspaceId)
+            return try await trashNow(ids, in: workspaceId)
+        }
+    }
+
+    private func trashNow(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
         var fates: [String: SaveItemFate] = [:]
         for start in stride(from: 0, to: ids.count, by: TrashBatch.maxBatch) {
             let batch = Array(ids[start ..< min(ids.count, start + TrashBatch.maxBatch)])
@@ -1590,7 +1602,15 @@ extension Vault: SaveRunWriter {
         return fates
     }
 
+    /* As trash: a write in its own scope, through the family's gate. */
     public func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        try await writing {
+            _ = try familyTarget(workspaceId)
+            return try await purgeNow(ids, in: workspaceId)
+        }
+    }
+
+    private func purgeNow(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
             do {

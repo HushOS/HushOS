@@ -48,6 +48,39 @@ extension OnFakeDrive {
         }
 
         /*
+         * A save run into the family's top folder, end to end through the real vault: a folder, a file in it, and a new
+         * version of the family's file, each through the family's write gate. Then a cancel: the folder and the file go
+         * to the Trash and are deleted forever, through the gate too; the version is kept. Fails if the clean-up's trash
+         * or purge is sent outside a write the gate knows (refused before it leaves, the results left behind).
+         */
+        @Test func aSaveRunIntoAFamilyFolderSavesThroughTheGateAndACancelRemovesWhatItMade() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            let listing = try await vault.listChildren(of: family.rootId, in: family.workspaceId)
+            let top = try await vault.open(listing.folder, replacing: true)
+            let recipes = try #require(try await vault.children(of: family.rootId).first { $0.id == family.fileId })
+            let rows = SaveRunJournal(url: FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json"),
+                                      epoch: SaveRunJournal.Epoch())
+            let run = try await SaveRun.start(writer: vault, targets: [top, recipes], results: [], journal: rows, pause: { _ in })
+            let out = try await run.folder("Out", in: top, sources: .ownWriting)
+            let made = try await run.file(Data("made".utf8), name: "made.txt", mime: "text/plain", sources: .ownWriting, in: out)
+            let saved = try await run.version(Data("newer recipes".utf8), of: recipes, in: top, startedFrom: recipes.node.currentVersion?.id,
+                                              sources: .ownWriting)
+            guard case .saved = saved else { Issue.record("the version wasn't saved: \(saved)"); return }
+            #expect(server.node(out.id) != nil && server.node(made.id) != nil)
+            let stopped = await run.cancel()
+            #expect(stopped.cleanup == .deleted)
+            #expect(server.node(out.id) == nil)
+            #expect(server.node(made.id) == nil)
+            #expect(server.node(family.fileId) != nil)
+            #expect(rows.list().isEmpty)
+        }
+
+        /*
          * The first acceptance on this phone hands back a guard that can't be stored, so the family is
          * refused before any of its folders was opened. Its folders are still held for the barrier: a
          * write into one waits for the guard with the storage words, never sent as a personal folder's.

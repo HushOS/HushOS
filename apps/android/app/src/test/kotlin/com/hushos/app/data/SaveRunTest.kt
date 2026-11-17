@@ -990,6 +990,18 @@ class SaveRunTest {
         assertTrue(rows.list().isEmpty())
     }
 
+    /* A replace that fails (the rename refused) leaves the old journal as it was, never deleted: its rows are still there. */
+    @Test
+    fun aRefusedReplaceLeavesTheOldJournalIntact() {
+        val rows = journal()
+        val kept = SaveRunRow("kept", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch")
+        rows.put(kept)
+        rows.replace = { _, _ -> throw java.io.IOException("rename refused") }
+        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch")) }
+        assertEquals(listOf(kept), SaveRunJournal(rows.file, SaveRunJournal.Epoch()).list())
+        assertFalse(File(rows.file.parentFile, SaveRunJournal.STAGING).exists())
+    }
+
     /* finish waits for a folder still being made: the row stays until its creation settles. */
     @Test
     fun finishWaitsForAFolderStillBeingMade() {
