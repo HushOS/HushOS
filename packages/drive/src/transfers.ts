@@ -180,6 +180,12 @@ export type Produced = {
      * them, so a closed tab's next open can abort the upload and delete a node it published.
      */
     onBegun?: (ids: { workspaceId: string; uploadId: string; nodeId: string }) => void;
+    /*
+     * A new file a key change moved under is attached as a node of its own: its id, before the
+     * attach is sent, so a lost answer or a closed tab still leaves the run's row naming the node
+     * that may be published. Awaited; a rejection stops the attach (the run is stopping).
+     */
+    onAttach?: (ids: { workspaceId: string; nodeId: string }) => Promise<void> | void;
 };
 
 /* A produced new version whose file moved on to `currentVersionId` (UploadItem.stale). */
@@ -1450,9 +1456,19 @@ export function createTransferManager(options: TransferManagerOptions) {
         emit();
     }
 
-    /* The file is done the moment its version is current, thumbnail and all. */
-    async function published(u: Internal, result: { node: NodeView | null }) {
+    /*
+     * The file is done the moment its version is current, thumbnail and all. Nothing is said of
+     * an upload cancelled or restarted meanwhile (`generation`): a cancel answers for it.
+     */
+    async function published(
+        u: Internal,
+        result: { node: NodeView | null },
+        generation = u.generation,
+    ) {
+        if (u.generation !== generation || u.item.status === 'cancelled') return;
         await journalForget(u);
+        // A cancel bumps the generation: one that came while the rows were forgotten wins.
+        if (u.generation !== generation) return;
         set(u, { status: 'done', node: result.node, finishedAt: now(), loaded: u.item.total });
         options.onEvent?.({ type: 'done', item: u.item });
         if (result.node) options.onPublished?.(result.node, u.item.parentId);
@@ -1557,6 +1573,9 @@ export function createTransferManager(options: TransferManagerOptions) {
         const ready = await untilWritable(u, generation, looked, () => lookup(entry));
         if (!ready) throw new Error('Cancelled.');
         const { parent, replaces } = ready;
+        // A produced version whose file is no longer in its folder (moved, trashed, deleted) is
+        // stale: it never lands beside where the file was as a new file.
+        if (u.produced && u.replaces && !replaces) throw new StaleVersionError(null);
         u.parent = parent;
         if (!u.prepared) {
             const reopened = await rpc('driveUploadReopen', reopenInput(entry));
@@ -1632,6 +1651,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             versionId: u.versionId,
             signAs: u.signAs.version,
         });
+        if (u.generation !== generation) throw new Error('Cancelled.');
+        await u.produced?.onAttach?.({ workspaceId, nodeId });
+        if (u.generation !== generation) throw new Error('Cancelled.');
         const result = await api.attachUpload(workspaceId, u.uploadId, {
             mode: 'sibling',
             node: {

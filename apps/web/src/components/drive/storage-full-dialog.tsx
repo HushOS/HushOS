@@ -47,8 +47,12 @@ export function StorageFullDialog() {
     const [working, setWorking] = useState<'trash' | 'versions' | null>(null);
     const queryClient = useQueryClient();
     const state = useTransfers();
+    // A tool's results are its run's to report (lib/save-runs.ts): in someone else's share this
+    // dialog would show the person's own figures, and a run cancels what it refused, so there is
+    // nothing here to send again.
     const refused = state.uploads.filter(
-        (item) => item.status === 'failed' && item.errorCode === OVER_QUOTA,
+        (item) =>
+            item.status === 'failed' && item.errorCode === OVER_QUOTA && item.origin !== 'result',
     );
     const needed = refused.reduce((sum, item) => sum + item.total, 0);
 
@@ -67,6 +71,7 @@ export function StorageFullDialog() {
         () =>
             onTransferEvent((event) => {
                 if (event.type !== 'failed' || event.item.errorCode !== OVER_QUOTA) return;
+                if (event.item.origin === 'result') return;
                 // The figures shown must be the server's now, not the sidebar's cached copy.
                 void queryClient.invalidateQueries({ queryKey: storageQueryOptions.queryKey });
                 setOpen(true);

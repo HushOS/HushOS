@@ -21,7 +21,8 @@ import { cachedConnection } from './connection';
 export type JournalPart = { digest: string; etag?: string; bytes?: number };
 
 /* Where an upload's bytes came from: a file the person holds, or a copy of something shared. */
-export type UploadOrigin = 'file' | 'copy';
+/* `result`: what a tool or an editor produced (the save path), never journaled. */
+export type UploadOrigin = 'file' | 'copy' | 'result';
 
 /* The statements an upload's new metadata and version are signed with (see signatureFormFor). */
 export type UploadSignatures = {
@@ -144,6 +145,11 @@ export type RunRow = {
     nodeIds: string[];
     uploadIds: string[];
     at: number;
+    /*
+     * When the run last said it is alive (every half minute while it runs): without Web Locks,
+     * how another tab tells a live run from an interrupted one.
+     */
+    beat: number;
 };
 
 export interface RunJournal {

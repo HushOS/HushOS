@@ -340,6 +340,12 @@ final class FakeDrive: @unchecked Sendable {
     /* Each part's body as PUT to the store, by "<upload id>/<part number>"; and the uploads aborted. */
     var stored: [String: Data] = [:]
     var aborted: [String] = []
+    /* Runs as a part's PUT arrives, with its body (a test looking at the device's disk mid-upload). */
+    var onPart: ((Data) -> Void)?
+    /* Runs as a completion arrives, before it is answered (another device saving first). */
+    var beforeComplete: (() -> Void)?
+    /* A completion refused only because a key change re-keyed the file meanwhile (its version unchanged). */
+    var rekeyAtComplete = false
     private let lock = NSLock()
     private var target: UInt64 = 0
     /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
@@ -560,6 +566,17 @@ final class FakeDrive: @unchecked Sendable {
             guard let begun = uploads[rest[1]], let wire = begun["node"] as? [String: Any], let nodeId = wire["id"] as? String,
                   let versionId = begun["versionId"] as? String, let objectId = begun["objectId"] as? String else { return (404, ["message": "No upload"]) }
             if completed.contains(rest[1]) { return (409, ["message": "This upload is ready."]) }
+            beforeComplete?()
+            // As packages/db finishCompleting: a new version whose file moved on, or was re-keyed, is `conflicted`.
+            if wire["existing"] as? Bool == true {
+                let expected = wire["expectedVersionId"] as? String
+                let current = nodes[nodeId]?.currentVersion?.id
+                if expected != current || rekeyAtComplete {
+                    rekeyAtComplete = false
+                    return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
+                                  "data": ["conflicted": true, "currentVersionId": current as Any? ?? NSNull()]])
+                }
+            }
             completed.append(rest[1])
             var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
                                       contentSuite: (begun["contentSuite"] as? NSNumber)?.uint32Value ?? 0, chunkCount: (begun["chunkCount"] as? Int) ?? 1,
@@ -601,6 +618,7 @@ final class FakeDrive: @unchecked Sendable {
         let parts = (request.url?.path ?? "").split(separator: "/").map(String.init) // api, drive, nodes, <id>, …
         if parts.first == "store", request.httpMethod == "PUT" {
             if parts.count == 3 { stored["\(parts[1])/\(parts[2])"] = body ?? Data() }
+            onPart?(body ?? Data())
             return (200, [:])
         }
         if let answer = try answerCreate(request, parts: parts, body: body) { return answer }

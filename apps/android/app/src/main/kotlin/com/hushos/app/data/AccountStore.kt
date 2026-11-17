@@ -50,6 +50,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         PaddingDrains.shared.cancelAll()
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
+        // The save path's runs write no row again (their file goes with ACCOUNT_FILES below).
+        SaveRunJournal.endAccount()
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
         // What this process held of the account's saves (numbers given, bounds last read) goes with them.
         WriteBacks.forgetHere()

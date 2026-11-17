@@ -5,10 +5,12 @@ import {
     paddedLength,
 } from '@hushos/crypto/drive';
 import type { SignatureForm } from '@hushos/crypto/signatures';
+import { wholeGibUp } from '@hushos/db/pool-count';
 import type { NodeView } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
 import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } from './transfers';
+import { sourcesSignatureForms, type ResultSource } from './trust';
 
 /*
  * The save path (docs/file-tools-design.md, section 2, "The save path: two
@@ -23,25 +25,36 @@ import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } 
  * queues) and whether the results fit (their padded ciphertext against the
  * workspace's free space, where that is the person's to know). Results upload
  * from memory and are never journaled, so they never resume; the run keeps
- * one row of ids (RunRow) so that a cancel, a refusal, a 402, a failure or a
- * closed tab leaves nothing: open uploads aborted, what was published deleted
- * forever, or moved to the Trash where the person may not delete forever.
+ * one row of ids (RunRow) so that a cancel, a refusal, a 402, a failure, a
+ * lock or a closed tab leaves no new file behind: open uploads aborted, what
+ * was published deleted forever, or moved to the Trash where the person may
+ * not delete forever. A new version that already landed is kept (never rolled
+ * back), and the run says so rather than "nothing was saved".
+ *
+ * Each result is signed by its own sources (sourcesSignatureForms: the weakest
+ * of them), or as the person's own writing when the caller says so with
+ * OWN_WRITING. A tool never picks a signature.
  */
 
 /*
- * One result's room, an upper bound on its padded ciphertext whatever its
- * thumbnail turns out to be: the Padmé bucket of its bytes with a full 64 KiB
- * thumbnail trailer and its tag, plus a 16-byte tag per chunk of that bucket.
- * Never less than what begin reserves for it (ciphertextSize in
- * @hushos/crypto/drive), at most a chunk tag more than the largest of those.
+ * One result's room, an upper bound on what begin reserves for it: the Padmé
+ * bucket of its bytes, with a full 64 KiB thumbnail trailer and its tag when
+ * it may carry a thumbnail, plus a 16-byte tag per chunk of that bucket. Never
+ * less than ciphertextSize (@hushos/crypto/drive) for any thumbnail up to the
+ * allowance (none, without one), at most a chunk tag more than the largest.
  */
-export function resultEstimate(plaintextSize: number) {
-    const padded = paddedLength(plaintextSize + THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES);
+export function resultEstimate(plaintextSize: number, thumbnail = true) {
+    const trailer = thumbnail ? THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES : 0;
+    const padded = paddedLength(plaintextSize + trailer);
     return padded + CHUNK_TAG_BYTES * chunkCount(padded);
 }
 
-/* A result's bytes when they are known before producing it, or the sources' it is made from (conversion, compress). */
-export type PlannedResult = { size: number } | { sourcesSize: number };
+/*
+ * A result's bytes when they are known before producing it, or the sources'
+ * it is made from (conversion, compress). `thumbnail` false: it carries none
+ * (a zip, a text file), so no thumbnail allowance is set aside for it.
+ */
+export type PlannedResult = ({ size: number } | { sourcesSize: number }) & { thumbnail?: boolean };
 
 /* A result whose size is not known until made is taken as its sources' total plus 1%, rounded up. */
 export function unknownResultSize(sourcesSize: number) {
@@ -54,8 +67,19 @@ export function runEstimate(results: readonly PlannedResult[]) {
     for (const result of results)
         total += resultEstimate(
             'size' in result ? result.size : unknownResultSize(result.sourcesSize),
+            result.thumbnail !== false,
         );
     return total;
+}
+
+/* What a result is signed with when it is the person's own writing, not made from anything they hold. */
+export const OWN_WRITING = 'own-writing' as const;
+export type ResultSources = typeof OWN_WRITING | readonly ResultSource[];
+
+/* The statements a result is signed with: its sources' weakest, or ordinary for the person's own writing. */
+export function resultSignatures(sources: ResultSources): UploadSignatures {
+    if (sources === OWN_WRITING) return { metadata: 'ordinary', version: 'ordinary' };
+    return sourcesSignatureForms(sources);
 }
 
 /* Why a run did not start: nothing was made. */
@@ -72,17 +96,28 @@ export class SaveRefused extends Error {
 }
 
 /*
- * Why a run stopped after it started, and what its clean-up did with what it
- * had made: deleted forever, moved to the Trash (an editor in someone else's
- * folder may not delete forever), or nothing was published to remove. `left`
- * when the clean-up itself failed: the run's row stays for the next open.
+ * What a clean-up did with what the run made: deleted forever, moved to the
+ * Trash (an editor in someone else's folder may not delete forever), nothing
+ * was published to remove, or `no-access`: the folder is no longer this
+ * person's to clean up (the share ended, the family was left), so there is
+ * nothing more they can do and the row goes. `left` when the clean-up could
+ * not finish (no network, an item refused): the run's row stays for the next
+ * open.
  */
-export type Cleanup = 'deleted' | 'trashed' | 'nothing' | 'left';
+export type Cleanup = 'deleted' | 'trashed' | 'nothing' | 'left' | 'no-access';
+
+export type StopReason = 'cancelled' | 'no-room' | 'failed' | 'locked' | 'signed-out';
+
+/*
+ * Why a run stopped after it started, what its clean-up did, and how many new
+ * versions had already landed and were kept (a run never rolls a version back).
+ */
 export class RunStopped extends Error {
     constructor(
-        readonly reason: 'cancelled' | 'no-room' | 'failed',
+        readonly reason: StopReason,
         message: string,
         readonly cleanup: Cleanup,
+        readonly keptVersions = 0,
     ) {
         super(message);
         this.name = 'RunStopped';
@@ -95,7 +130,91 @@ export const NO_ROOM_SHARED =
 export const RUN_CANCELLED = 'Cancelled. Nothing was saved.';
 export const RUN_FAILED = 'This couldn’t be saved, so nothing was kept.';
 
+const OPENINGS: Record<Exclude<StopReason, 'failed'>, string> = {
+    cancelled: 'Cancelled.',
+    'no-room': 'There isn’t enough room for this.',
+    locked: 'This device locked before this was saved.',
+    'signed-out': 'You signed out before this was saved.',
+};
+
+/* What a stopped run says: never "nothing was saved" once a new version landed. */
+export function stoppedWords(
+    reason: StopReason,
+    options: { shared?: boolean; failure?: string | null; keptVersions?: number } = {},
+) {
+    const kept = options.keptVersions ?? 0;
+    const opening =
+        reason === 'failed'
+            ? (options.failure ?? 'This couldn’t be saved.').replace(/\s*$/, '')
+            : reason === 'no-room' && options.shared
+              ? 'There isn’t enough room in this shared folder for this.'
+              : OPENINGS[reason];
+    if (!kept)
+        return reason === 'failed' && !options.failure
+            ? RUN_FAILED
+            : `${opening} Nothing was saved.`;
+    const versions =
+        kept === 1
+            ? 'The new version saved before that was kept.'
+            : `The ${kept} new versions saved before that were kept.`;
+    return `${opening} ${versions} Nothing else was saved.`;
+}
+
 type TransferEvent = Parameters<NonNullable<TransferManagerOptions['onEvent']>>[0];
+
+/*
+ * Whose space a destination is: the person's own Drive or their family's, with
+ * its free bytes as the server checks them (null when not known now), or
+ * someone else's share, whose owner's free space is never revealed: there the
+ * server's 402 is the only check, and the run ends "no room" and cleans up.
+ */
+export type Room = { kind: 'own' | 'family'; free: number | null } | { kind: 'shared' };
+
+/*
+ * Whose space a workspace is, and its free bytes as the server checks an
+ * upload begin (packages/db/src/pool.ts poolFigures). On the account's own
+ * allowance, `availableBytes` exactly. In a family's pool the figures shown
+ * count every part in whole GiB, the person's own files included, while the
+ * server counts their own part to the byte: the GiB-rounding of their own
+ * bytes is given back (their uploads in flight are taken as none; a 402 at
+ * begin stays the backstop). A family folder is counted in whole GiB on both
+ * sides. Someone else's share: never known.
+ */
+export function roomOf(
+    storage: {
+        workspaceId: string;
+        availableBytes: string;
+        pool: { groupId: string } | null;
+        own?: { usedBytes: string } | null;
+    } | null,
+    workspaceId: string,
+    family: string | null,
+): Room {
+    const own = storage !== null && workspaceId === storage.workspaceId;
+    if (!own && family === null) return { kind: 'shared' };
+    if (!storage) return { kind: own ? 'own' : 'family', free: null };
+    const available = BigInt(storage.availableBytes);
+    if (own) {
+        if (!storage.pool) return { kind: 'own', free: Number(available) };
+        // Without the person's own usage the rounding can't be given back: the shown figure,
+        // which never says more is free than the server would take.
+        if (!storage.own) return { kind: 'own', free: Number(available) };
+        const used = BigInt(storage.own.usedBytes);
+        return { kind: 'own', free: Number(available + wholeGibUp(used) - used) };
+    }
+    // A family folder of a family whose pool these figures are not: not known here.
+    return { kind: 'family', free: storage.pool?.groupId === family ? Number(available) : null };
+}
+
+/* The server's answer to aborting an upload; `unknown` when there was none (offline, a 5xx). */
+export type AbortFate = 'aborted' | 'gone' | 'finished' | 'denied' | 'unknown';
+/*
+ * The server's answer for one item of a batch: `done` (in the Trash, or deleted
+ * forever), `gone` (not found: nothing to remove), `refused` (anything else, a
+ * purge left `busy` after its retries included), `denied` (the whole request
+ * refused because the workspace is no longer this person's: 403 or 404).
+ */
+export type ItemFate = 'done' | 'gone' | 'refused' | 'denied';
 
 export type SaveRunDeps = {
     transfers: Pick<TransferManager, 'enqueue' | 'cancel'>;
@@ -104,50 +223,60 @@ export type SaveRunDeps = {
     runs: RunJournal;
     refuseWrite: (target: DriveNode) => string | null;
     waitsForKeyChange: (target: DriveNode) => boolean;
-    /*
-     * The free bytes of a workspace (allowance minus used minus reserved), or
-     * null when they are not this person's to know: someone else's share,
-     * whose owner's free space is never revealed. There the server's 402 is
-     * the only check, and the run ends "no room" and cleans up.
-     */
-    freeSpace: (workspaceId: string) => Promise<number | null>;
+    room: (workspaceId: string) => Promise<Room>;
     /* The names in a folder now. */
     namesIn: (folder: DriveNode) => Promise<Iterable<string>>;
     /* The next free name among `taken` ("name (2).ext"), matching whatever the case. */
     nextName: (name: string, taken: Set<string>) => string;
     /* A new folder, signed as `signAs`; waits out a family folder's key change, refuses otherwise. */
     makeFolder: (parent: DriveNode, name: string, signAs: SignatureForm) => Promise<DriveNode>;
-    abortUpload: (workspaceId: string, uploadId: string) => Promise<void>;
-    /* To the Trash, then (where `mayPurge`) deleted forever; both answer per item and refuse nothing whole. */
-    trash: (workspaceId: string, nodeIds: string[]) => Promise<void>;
-    purge: (workspaceId: string, nodeIds: string[]) => Promise<void>;
+    /* Never throws: what the server said, or `unknown`. */
+    abortUpload: (workspaceId: string, uploadId: string) => Promise<AbortFate>;
+    /*
+     * To the Trash, then (where `mayPurge`) deleted forever: each item's fate.
+     * Throws only when the request as a whole got no answer.
+     */
+    trash: (workspaceId: string, nodeIds: string[]) => Promise<Map<string, ItemFate>>;
+    purge: (workspaceId: string, nodeIds: string[]) => Promise<Map<string, ItemFate>>;
     /*
      * Whether the person may delete forever in a workspace: the server lets
      * only a member (their own, their family's folders), never an editor
      * through a share, whose results go to the owner's Trash instead.
      */
-    mayPurge: (workspaceId: string) => boolean;
-    /* Marks a run live for as long as it runs (Web Locks on the web), so no tab takes it for interrupted. */
+    mayPurge: (workspaceId: string) => Promise<boolean>;
+    /*
+     * Marks a run live for as long as it runs (Web Locks on the web), so no tab
+     * takes it for interrupted; taken before its row is written. Without it,
+     * the row's heartbeat says whether it runs.
+     */
     hold?: (runId: string) => () => void;
     isLive?: (runId: string) => Promise<boolean>;
     /* The session generation the caller's work began in (the transfer manager's enqueue `from`). */
     from?: { generation: number };
+    /* Whether the run's session is still this browser's: after a sign-out nothing is written. */
+    current?: () => boolean;
     newId?: () => string;
     now?: () => number;
+    /* How often a live run's row says it is alive (BEAT_MS). */
+    beatMs?: number;
 };
 
-/* Where a run's results came from: sources whose signatures it takes (sourcesSignatureForms), or the person's own work. */
+/* A live run's heartbeat, and how old one may be before another tab takes the run for interrupted. */
+export const BEAT_MS = 30_000;
+export const STALE_BEAT_MS = 4 * BEAT_MS;
+
 export type RunPlan = {
     /* Where the run writes: folders new files go into, files new versions go onto; one workspace. */
     targets: DriveNode[];
     results: PlannedResult[];
-    signAs: UploadSignatures;
 };
 
 export type ProducedFile = {
     name: string;
     bytes: Uint8Array | Uint8Array[];
     mime: string | null;
+    /* What it was made from (its signature is theirs, the weakest), or OWN_WRITING. */
+    sources: ResultSources;
     thumbnail?: Uint8Array | null;
     modified?: number;
     /* The folder it goes into: the run's first target unless the run made one for it. */
@@ -161,6 +290,8 @@ export type ProducedVersion = {
     /* The version the work started from: a different one current at saving is `stale`. */
     startedFrom: string | null;
     bytes: Uint8Array | Uint8Array[];
+    /* What it was made from (its signature is theirs, the weakest), or OWN_WRITING. */
+    sources: ResultSources;
     mime?: string | null;
     thumbnail?: Uint8Array | null;
     modified?: number;
@@ -173,35 +304,65 @@ export type VersionSaved =
 
 export type SaveRun = {
     readonly id: string;
-    readonly signAs: UploadSignatures;
     /* A new folder for results under the next free name in `into` (the run's first target by default). */
-    folder(name: string, into?: DriveNode): Promise<DriveNode>;
+    folder(name: string, options: { into?: DriveNode; sources: ResultSources }): Promise<DriveNode>;
     /* A new file under the next free name in its folder; never replaces anything. */
     file(result: ProducedFile): Promise<NodeView | null>;
     /* A new version of `file`, unless someone else saved since the work started (`stale`). */
     version(result: ProducedVersion): Promise<VersionSaved>;
-    /* Every result is in: the run's row goes. Throws while any is still on its way. */
+    /* Every result is in: the run's row goes. Throws while any is still on its way, or once stopped. */
     finish(): Promise<void>;
-    /* Stops the run and removes what it made; what was removed, and how. */
-    cancel(): Promise<Cleanup>;
+    /* Stops the run and removes the new files and folders it made; how it stopped. */
+    cancel(): Promise<RunStopped>;
     /* Results queued and not yet in. */
     waiting(): number;
 };
 
+type LiveRun = SaveRun & { abandon(): void };
+
 /* Runs live in this page: a result still waiting to upload asks before the page unloads. */
-const liveRuns = new Set<SaveRun>();
+const liveRuns = new Set<LiveRun>();
 export function resultsWaiting() {
     for (const run of liveRuns) if (run.waiting() > 0) return true;
     return false;
 }
 
-function toParts(bytes: Uint8Array | Uint8Array[]) {
-    return Array.isArray(bytes) ? bytes : [bytes];
+/*
+ * A sign-out (here or in another tab): every run in this page stops at once.
+ * Its pending results are rejected and their bytes let go; nothing is written
+ * to the journal (the sign-out deletes it) and nothing is asked of the server
+ * (the uploads were already dropped and released by the queue).
+ */
+export function abandonRuns() {
+    // A Set may lose the entry being visited: each run removes itself as it ends.
+    for (const run of liveRuns) run.abandon();
+}
+
+/*
+ * Buffers already handed to a run: a result's bytes move to the crypto worker
+ * whole (transferred, never copied), so a part that is a view into a larger
+ * buffer, or into one another result already took, is copied first. Two
+ * results cut from one buffer would otherwise leave the second with nothing.
+ */
+const handedBuffers = new WeakSet<ArrayBufferLike>();
+function ownedParts(bytes: Uint8Array | Uint8Array[]) {
+    const parts = Array.isArray(bytes) ? bytes : [bytes];
+    return parts.map((part) => {
+        const whole =
+            part.buffer instanceof ArrayBuffer &&
+            part.byteOffset === 0 &&
+            part.byteLength === part.buffer.byteLength &&
+            !handedBuffers.has(part.buffer);
+        const owned = whole ? part : part.slice();
+        handedBuffers.add(owned.buffer);
+        return owned;
+    });
 }
 
 /*
  * Starts a run: the write gate and the room check, both before anything is
- * made, then the run's row. Throws SaveRefused when it may not start.
+ * made, then the run's row (after its hold, so no other tab ever sees the
+ * row without it). Throws SaveRefused when it may not start.
  */
 export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRun> {
     const [first] = plan.targets;
@@ -216,19 +377,20 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
         if (refused && !deps.waitsForKeyChange(target)) throw new SaveRefused('read-only', refused);
     }
     const needed = runEstimate(plan.results);
-    const free = await deps.freeSpace(workspaceId);
-    if (free !== null && needed > free)
-        throw new SaveRefused('no-room', NO_ROOM, { needed, free: Math.max(0, free) });
+    const room = await deps.room(workspaceId);
+    if (room.kind !== 'shared' && room.free !== null && needed > room.free)
+        throw new SaveRefused('no-room', NO_ROOM, { needed, free: Math.max(0, room.free) });
     const now = deps.now ?? (() => Date.now());
-    const row: RunRow = {
-        id: deps.newId?.() ?? crypto.randomUUID(),
-        workspaceId,
-        nodeIds: [],
-        uploadIds: [],
-        at: now(),
-    };
-    await deps.runs.put(row);
-    return createRun(deps, row, plan, free === null);
+    const id = deps.newId?.() ?? crypto.randomUUID();
+    const release = deps.hold?.(id);
+    const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now(), beat: now() };
+    try {
+        await deps.runs.put(row);
+    } catch (error) {
+        release?.();
+        throw error;
+    }
+    return createRun(deps, row, plan, room.kind === 'shared', release);
 }
 
 type Pending = {
@@ -241,8 +403,17 @@ type Pending = {
     reject: (error: unknown) => void;
 };
 
-function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolean): SaveRun {
+function createRun(
+    deps: SaveRunDeps,
+    row: RunRow,
+    plan: RunPlan,
+    shared: boolean,
+    release: (() => void) | undefined,
+): LiveRun {
+    const now = deps.now ?? (() => Date.now());
     const pending = new Map<string, Pending>();
+    /* Uploads of new versions: one the server finished is a version kept, not a file to delete. */
+    const versionUploads = new Set<string>();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
     /*
@@ -250,18 +421,40 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
      * folder, shared by every result asking for it at once.
      */
     const claimed = new Map<string, Promise<Set<string>>>();
+    /* Results planned with a thumbnail: no more may carry one than were set room aside for. */
+    let thumbnails = plan.results.filter((result) => result.thumbnail !== false).length;
+    let keptVersions = 0;
     let stopped: RunStopped | null = null;
-    let stopping: Promise<Cleanup> | null = null;
+    let stopping: Promise<RunStopped> | null = null;
     let finished = false;
-    const release = deps.hold?.(row.id);
+    let abandoned = false;
+    /* Set by the clean-up just before it removes the row: no write may land after that. */
+    let sealed = false;
+    /* Writes the journal only while this run's session is the browser's. */
+    const current = () => !abandoned && (deps.current?.() ?? true);
     // Rows written one after another, each the run as it is then.
     let writing = Promise.resolve();
     const persist = () => {
-        const snapshot = { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds] };
-        writing = writing.then(() => deps.runs.put(snapshot)).catch(() => {});
+        if (!current() || sealed) return writing;
+        const snapshot = {
+            ...row,
+            nodeIds: [...row.nodeIds],
+            uploadIds: [...row.uploadIds],
+            beat: now(),
+        };
+        writing = writing
+            .then(() => (current() && !sealed ? deps.runs.put(snapshot) : undefined))
+            .catch(() => {});
         return writing;
     };
+    const beat = setInterval(() => void persist(), deps.beatMs ?? BEAT_MS);
     const unsubscribe = deps.events(onEvent);
+
+    /* New work only while the run is open: one handed in during a stop is refused with it. */
+    async function open() {
+        if (stopping) throw await stopping;
+        if (finished) throw new Error('This save run has finished.');
+    }
 
     function namesTaken(folder: DriveNode) {
         let taken = claimed.get(folder.id);
@@ -279,10 +472,6 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
         const given = deps.nextName(name, taken);
         taken.add(given);
         return given;
-    }
-    function check() {
-        if (stopped) throw stopped;
-        if (finished) throw new Error('This save run has finished.');
     }
 
     function onEvent(event: TransferEvent) {
@@ -307,9 +496,13 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
                 );
             case 'lost':
                 return void stop('failed', event.item);
+            case 'locked':
+                // The worker is gone and its keys with it: the run stops and cleans up rather than
+                // hold the result's plaintext in this page until someone unlocks.
+                return void stop('locked');
             case 'cancelled':
                 // Cancelled from the transfers panel: a run is all or nothing.
-                if (!stopping) void stop('cancelled', event.item);
+                if (!stopping) void stop('cancelled');
                 return;
         }
     }
@@ -321,11 +514,12 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
     function settled(item: UploadItem, output: Pending) {
         pending.delete(item.id);
         row.uploadIds = row.uploadIds.filter((id) => id !== output.uploadId);
+        if (output.kind === 'version') keptVersions += 1;
         // A new file a key change moved under is attached as a node of its own: that one is kept.
         const landed = item.node?.id ?? null;
         if (output.tracked && landed && landed !== output.nodeId) {
             row.nodeIds = row.nodeIds.filter((id) => id !== output.nodeId);
-            row.nodeIds.push(landed);
+            if (!row.nodeIds.includes(landed)) row.nodeIds.push(landed);
         }
         void persist();
         output.resolve(
@@ -339,9 +533,9 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
         kind: Pending['kind'],
         file: MemoryFile,
         parent: DriveNode,
+        sources: ResultSources,
         extra: { replaces?: DriveNode; startedFrom?: string | null },
     ) {
-        check();
         const output: Pending = {
             kind,
             tracked: kind === 'file' && !madeFolders.has(parent.id),
@@ -361,11 +555,12 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
                     parent,
                     name: file.name,
                     replaces: extra.replaces,
-                    origin: 'copy',
-                    signAs: plan.signAs,
+                    origin: 'result',
+                    signAs: resultSignatures(sources),
                     produced: {
                         ...(extra.replaces ? { startedFrom: extra.startedFrom ?? null } : {}),
                         onBegun: ({ uploadId, nodeId }) => {
+                            if (stopped || !current()) return;
                             // A restart begins again with fresh ids: the last begin is the one held.
                             if (output.uploadId)
                                 row.uploadIds = row.uploadIds.filter(
@@ -374,12 +569,23 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
                             if (output.tracked && output.nodeId)
                                 row.nodeIds = row.nodeIds.filter((held) => held !== output.nodeId);
                             output.uploadId = uploadId;
+                            if (kind === 'version') versionUploads.add(uploadId);
                             row.uploadIds.push(uploadId);
                             if (output.tracked) {
                                 output.nodeId = nodeId;
                                 row.nodeIds.push(nodeId);
                             }
                             void persist();
+                        },
+                        onAttach: async ({ nodeId }) => {
+                            // Stopping: the attach is not sent, so no node lands after the clean-up.
+                            if (stopping || !current())
+                                throw new Error('This save run is stopping.');
+                            if (!output.tracked) return;
+                            // Both kept until it lands: the begun node never published, the new one may.
+                            if (!row.nodeIds.includes(nodeId)) row.nodeIds.push(nodeId);
+                            output.nodeId = nodeId;
+                            await persist();
                         },
                     },
                 },
@@ -390,66 +596,95 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
         return settledPromise;
     }
 
+    function takeThumbnail(thumbnail: Uint8Array | null | undefined) {
+        if (!thumbnail?.byteLength) return null;
+        if (thumbnails <= 0)
+            throw new Error('This result was planned without a thumbnail, so none was set aside.');
+        thumbnails -= 1;
+        return thumbnail;
+    }
+
     function memoryFile(
         name: string,
         bytes: Uint8Array | Uint8Array[],
         mime: string | null | undefined,
-        thumbnail: Uint8Array | null | undefined,
+        thumbnail: Uint8Array | null,
         modified: number | undefined,
     ): MemoryFile {
-        const parts = toParts(bytes);
+        const parts = ownedParts(bytes);
         return {
             kind: 'memory',
             name,
             size: parts.reduce((total, part) => total + part.byteLength, 0),
             type: mime ?? '',
-            lastModified: modified ?? (deps.now ?? Date.now)(),
+            lastModified: modified ?? now(),
             parts,
-            thumbnail: thumbnail ?? null,
+            thumbnail,
         };
     }
 
-    function stop(reason: RunStopped['reason'], item?: UploadItem): Promise<Cleanup> {
+    function stop(reason: StopReason, item?: UploadItem): Promise<RunStopped> {
         if (stopping) return stopping;
-        const message =
-            reason === 'cancelled'
-                ? RUN_CANCELLED
-                : reason === 'no-room'
-                  ? shared
-                      ? NO_ROOM_SHARED
-                      : NO_ROOM
-                  : (item?.error ?? RUN_FAILED);
-        // Set before any of it runs: the cancels it sends are heard here, and must not stop it twice.
-        stopping = Promise.resolve().then(async () => {
+        // Set before any of it runs: a result handed in from here on is refused (open), and the
+        // cancels the clean-up sends are heard here without stopping it twice.
+        stopping = (async () => {
+            await Promise.resolve();
             const open = [...pending.keys()];
-            const cleanup = await cleanUp(deps, row, open, () => writing);
-            stopped = new RunStopped(reason, message, cleanup);
-            for (const output of pending.values()) output.reject(stopped);
+            const result = await cleanUp(deps, row, open, {
+                seal: () => {
+                    sealed = true;
+                },
+                written: () => writing,
+                versionUploads,
+                current,
+            });
+            keptVersions += result.keptVersions;
+            const done = new RunStopped(
+                reason,
+                stoppedWords(reason, {
+                    shared,
+                    failure: reason === 'failed' ? (item?.error ?? null) : null,
+                    keptVersions,
+                }),
+                result.cleanup,
+                keptVersions,
+            );
+            stopped = done;
+            for (const output of pending.values()) output.reject(done);
             pending.clear();
             end();
-            return cleanup;
-        });
+            return done;
+        })();
         return stopping;
     }
     function end() {
+        clearInterval(beat);
         unsubscribe();
         release?.();
         liveRuns.delete(run);
     }
 
-    const run: SaveRun = {
+    const run: LiveRun = {
         id: row.id,
-        signAs: plan.signAs,
-        async folder(name, into = plan.targets[0]!) {
-            check();
+        async folder(name, { into = plan.targets[0]!, sources }) {
+            await open();
+            const signAs = resultSignatures(sources).metadata;
             const taken = await namesTaken(into);
             const given = claim(taken, name);
-            const made = await deps.makeFolder(into, given, plan.signAs.metadata);
+            await open();
+            const made = await deps.makeFolder(into, given, signAs);
             if (stopping) {
-                // Stopped while it was being made: it goes the way the rest of the run went.
-                await stopping;
-                await discard(deps, row.workspaceId, [made.id]).catch(() => {});
-                throw stopped;
+                // Stopped while it was being made: it goes the way the rest of the run went, and
+                // if it cannot, a row names it for the next open.
+                const done = await stopping;
+                const fate = await discard(deps, row.workspaceId, [made.id]).catch(
+                    (): Cleanup => 'left',
+                );
+                if (fate === 'left' && current())
+                    await deps.runs
+                        .put({ ...row, nodeIds: [made.id], uploadIds: [], beat: now() })
+                        .catch(() => {});
+                throw done;
             }
             madeFolders.add(made.id);
             claimed.set(made.id, Promise.resolve(new Set()));
@@ -460,48 +695,64 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
             return made;
         },
         async file(result) {
-            check();
+            await open();
             const into = result.into ?? plan.targets[0]!;
+            const thumbnail = takeThumbnail(result.thumbnail);
             const name = claim(await namesTaken(into), result.name);
-            const file = memoryFile(
-                name,
-                result.bytes,
-                result.mime,
-                result.thumbnail,
-                result.modified,
-            );
-            return (await enqueue('file', file, into, {})) as NodeView | null;
+            const file = memoryFile(name, result.bytes, result.mime, thumbnail, result.modified);
+            // Checked again with nothing awaited before the enqueue: a stop that began while the
+            // folder was listed refuses this result, which then never reaches the queue.
+            await open();
+            return (await enqueue('file', file, into, result.sources, {})) as NodeView | null;
         },
         async version(result) {
-            check();
+            await open();
             if (result.folder.id !== result.file.parentId)
                 throw new Error('A new version is saved from the folder its file is in.');
+            const thumbnail = takeThumbnail(result.thumbnail);
             const file = memoryFile(
                 result.file.name,
                 result.bytes,
                 result.mime ?? result.file.metadata?.mime,
-                result.thumbnail,
+                thumbnail,
                 result.modified,
             );
-            return (await enqueue('version', file, result.folder, {
+            return (await enqueue('version', file, result.folder, result.sources, {
                 replaces: result.file,
                 startedFrom: result.startedFrom,
             })) as VersionSaved;
         },
         async finish() {
-            if (stopped) throw stopped;
+            if (stopping) throw await stopping;
             if (pending.size) throw new Error('This save run still has results on their way.');
             finished = true;
+            sealed = true;
             await writing;
-            await deps.runs.remove(row.id).catch(() => {});
+            if (current()) await deps.runs.remove(row.id).catch(() => {});
             end();
         },
-        cancel() {
-            if (finished) return Promise.resolve<Cleanup>('nothing');
+        async cancel() {
+            if (finished)
+                return new RunStopped('cancelled', RUN_CANCELLED, 'nothing', keptVersions);
             return stop('cancelled');
         },
         waiting() {
             return pending.size;
+        },
+        abandon() {
+            if (stopped) return;
+            abandoned = true;
+            const done = new RunStopped(
+                'signed-out',
+                stoppedWords('signed-out', { keptVersions }),
+                'left',
+                keptVersions,
+            );
+            stopped = done;
+            stopping ??= Promise.resolve(done);
+            for (const output of pending.values()) output.reject(done);
+            pending.clear();
+            end();
         },
     };
     liveRuns.add(run);
@@ -510,65 +761,103 @@ function createRun(deps: SaveRunDeps, row: RunRow, plan: RunPlan, shared: boolea
 
 /*
  * Removes what a run made and then its row: its uploads still in this page
- * cancelled (the queue aborts them on the server), any others the row names
- * aborted, its published files and folders to the Trash and, where the person
- * may, deleted forever. A clean-up that fails keeps the row for the next open.
+ * cancelled (the queue aborts them on the server), every upload the row names
+ * aborted (an answer is needed: none, and the row stays), its published files
+ * and folders to the Trash and, where the person may, deleted forever. An
+ * upload the server had already finished is a new file to remove, or a new
+ * version kept. A clean-up that cannot finish keeps the row for the next open;
+ * one refused because the space is no longer this person's drops it.
  */
 async function cleanUp(
     deps: SaveRunDeps,
     row: RunRow,
     live: string[],
-    written: () => Promise<void> = async () => {},
-): Promise<Cleanup> {
+    options: {
+        seal?: () => void;
+        written?: () => Promise<void>;
+        versionUploads?: Set<string>;
+        current?: () => boolean;
+    } = {},
+): Promise<{ cleanup: Cleanup; keptVersions: number }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
-    if (!live.length)
-        await Promise.allSettled(
-            row.uploadIds.map((uploadId) => deps.abortUpload(row.workspaceId, uploadId)),
-        );
-    let cleanup: Cleanup;
-    try {
-        cleanup = await discard(deps, row.workspaceId, row.nodeIds);
-    } catch {
-        return 'left';
+    let unsettled = false;
+    let denied = false;
+    let keptVersions = 0;
+    for (const uploadId of row.uploadIds) {
+        const fate = await deps.abortUpload(row.workspaceId, uploadId);
+        if (fate === 'unknown') unsettled = true;
+        else if (fate === 'denied') denied = true;
+        else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
-    // After the last row the run wrote, so none lands after this one goes.
-    await written();
-    await deps.runs.remove(row.id).catch(() => {});
-    return cleanup;
+    let cleanup = await discard(deps, row.workspaceId, row.nodeIds).catch((): Cleanup => 'left');
+    if (unsettled) cleanup = 'left';
+    else if (denied && (cleanup === 'nothing' || cleanup === 'no-access')) cleanup = 'no-access';
+    if (cleanup !== 'left') {
+        // After the last row the run wrote, so none lands after this one goes.
+        options.seal?.();
+        await options.written?.();
+        if (options.current?.() ?? true) await deps.runs.remove(row.id).catch(() => {});
+    }
+    return { cleanup, keptVersions };
 }
 
-/* Published results to the Trash, then deleted forever where the person may. */
+/* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
 async function discard(
     deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge'>,
     workspaceId: string,
     nodeIds: string[],
 ): Promise<Cleanup> {
     if (!nodeIds.length) return 'nothing';
-    await deps.trash(workspaceId, nodeIds);
-    if (!deps.mayPurge(workspaceId)) return 'trashed';
-    await deps.purge(workspaceId, nodeIds);
+    const trashed = await deps.trash(workspaceId, nodeIds);
+    const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
+    if (fates.every((fate) => fate === 'denied')) return 'no-access';
+    if (fates.some((fate) => fate === 'refused' || fate === 'denied')) return 'left';
+    const inTrash = nodeIds.filter((id) => trashed.get(id) === 'done');
+    if (!inTrash.length) return 'nothing';
+    if (!(await deps.mayPurge(workspaceId))) return 'trashed';
+    const purged = await deps.purge(workspaceId, inTrash);
+    if (inTrash.some((id) => !['done', 'gone'].includes(purged.get(id) ?? 'refused')))
+        return 'left';
     return 'deleted';
 }
 
 /*
  * Runs a closed tab (or a crash) left behind, for the next open to offer
  * "… was interrupted. Delete what was made?": rows of runs not running in
- * this page or held by another tab. Ids only; the app names the folder from
- * its own metadata.
+ * this page or held by another tab (or, without Web Locks, whose heartbeat
+ * stopped). Ids only; the app names the folder from its own metadata.
  */
-export async function interruptedRuns(deps: Pick<SaveRunDeps, 'runs' | 'isLive'>) {
+export async function interruptedRuns(deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'>) {
+    const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
     const rows = await deps.runs.list();
     const left: RunRow[] = [];
     for (const row of rows) {
         if (live.has(row.id)) continue;
-        if (deps.isLive && (await deps.isLive(row.id))) continue;
+        if (deps.isLive) {
+            if (await deps.isLive(row.id)) continue;
+        } else if (now() - (row.beat ?? row.at) < STALE_BEAT_MS) continue;
         left.push(row);
     }
     return left;
 }
 
-/* Cleans up an interrupted run as a cancel would have (cleanUp). */
-export function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
-    return cleanUp(deps, row, []);
+/* Deletes what an interrupted run made, as a cancel would have (cleanUp). */
+export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
+    return (await cleanUp(deps, row, [])).cleanup;
+}
+
+/*
+ * "Keep what was made": an interrupted run's files and folders stay, its row
+ * goes. Its open uploads are still aborted (they are not files, only reserved
+ * room); without an answer for one, the row stays.
+ */
+export async function keepInterrupted(
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'>,
+    row: RunRow,
+): Promise<'kept' | 'left'> {
+    for (const uploadId of row.uploadIds)
+        if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') return 'left';
+    await deps.runs.remove(row.id).catch(() => {});
+    return 'kept';
 }

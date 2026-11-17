@@ -1,4 +1,5 @@
 import type { DriveNode } from '@hushos/drive/client';
+import { DriveApiError } from '@hushos/drive/api';
 import {
     createIndexedDbRunJournal,
     createMemoryRunJournal,
@@ -7,9 +8,14 @@ import {
 } from '@hushos/drive/journal';
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import {
+    abandonRuns,
     cleanUpInterrupted,
     interruptedRuns,
+    keepInterrupted,
+    roomOf,
     startRun,
+    type AbortFate,
+    type ItemFate,
     type RunPlan,
     type SaveRunDeps,
 } from '@hushos/drive/save-runs';
@@ -26,16 +32,24 @@ import {
 import { driveApi } from '@/lib/drive-api';
 import { storageQueryOptions } from '@/lib/queries';
 import { onTransferEvent, transfers } from '@/lib/transfers';
+import { purgeBatch } from '@/lib/trash-batch';
 import { untilWritable } from '@/lib/uploads';
 
 /*
  * The save path on the web (packages/drive/src/save-runs.ts): File tools and
  * editing start a run here and save their results through it. No interface of
- * its own yet: the first tool brings the "interrupted" prompt, and a refusal
- * for room in the person's own space opens the storage-full dialog from there.
+ * its own yet: the first tool brings the "interrupted" prompt (delete or keep
+ * what was made), shows a run's RunStopped, and opens the storage-full dialog
+ * for a refusal for room in the person's own space (SaveRefused with `room`).
  */
 
-export { SaveRefused, RunStopped, type SaveRun, type VersionSaved } from '@hushos/drive/save-runs';
+export {
+    OWN_WRITING,
+    RunStopped,
+    SaveRefused,
+    type SaveRun,
+    type VersionSaved,
+} from '@hushos/drive/save-runs';
 
 let runJournal: RunJournal | undefined;
 function runs() {
@@ -46,20 +60,21 @@ function runs() {
 
 // A Web Lock's name, not storage: nothing is kept under it.
 const LOCK_PREFIX = 'drive-save-run:';
+const locks = () => (typeof navigator === 'undefined' ? undefined : navigator.locks);
 
 /* Holds a Web Lock named for the run while it runs: another tab's next open never takes it for interrupted. */
 function hold(runId: string) {
-    if (typeof navigator === 'undefined' || !navigator.locks) return () => {};
     let release = () => {};
     const held = new Promise<void>((resolve) => {
         release = resolve;
     });
-    void navigator.locks.request(`${LOCK_PREFIX}${runId}`, () => held).catch(() => {});
+    void locks()
+        ?.request(`${LOCK_PREFIX}${runId}`, () => held)
+        .catch(() => {});
     return release;
 }
 async function isLive(runId: string) {
-    if (typeof navigator === 'undefined' || !navigator.locks) return false;
-    const state = await navigator.locks.query();
+    const state = await locks()!.query();
     return (state.held ?? []).some((lock) => lock.name === `${LOCK_PREFIX}${runId}`);
 }
 
@@ -68,36 +83,25 @@ function storageNow(queryClient: QueryClient) {
     return queryClient.fetchQuery({ ...storageQueryOptions, staleTime: 0 });
 }
 
-function inBatches(ids: string[], send: (batch: string[]) => Promise<unknown>) {
-    return (async () => {
-        for (let at = 0; at < ids.length; at += MAX_TRASH_BATCH)
-            await send(ids.slice(at, at + MAX_TRASH_BATCH));
-    })();
-}
+/* The whole request refused because the workspace is no longer this person's to write. */
+const denied = (error: unknown) =>
+    error instanceof DriveApiError && (error.status === 403 || error.status === 404);
 
 function deps(queryClient: QueryClient): SaveRunDeps {
-    const ownWorkspace = () =>
-        queryClient.getQueryData(storageQueryOptions.queryKey)?.workspaceId ?? null;
+    const from = { generation: deviceSession.generation() };
+    const ownWorkspace = async () =>
+        (
+            queryClient.getQueryData(storageQueryOptions.queryKey) ??
+            (await storageNow(queryClient).catch(() => null))
+        )?.workspaceId ?? null;
     return {
         transfers,
         events: onTransferEvent,
         runs: runs(),
         refuseWrite,
         waitsForKeyChange,
-        /*
-         * Known for the person's own Drive, and for a family folder whose family's pool their
-         * figures are (docs/families-shared-pool.md: a pool's figures are whole GiB, available
-         * rounded down, so the check errs towards refusing). Never for someone else's share.
-         */
-        freeSpace: async (workspaceId) => {
-            const storage = await storageNow(queryClient);
-            if (!storage) return null;
-            const family = groupOfSpace(workspaceId);
-            const ours =
-                workspaceId === storage.workspaceId ||
-                (family !== null && storage.pool?.groupId === family);
-            return ours ? Number(storage.availableBytes) : null;
-        },
+        room: async (workspaceId) =>
+            roomOf(await storageNow(queryClient), workspaceId, groupOfSpace(workspaceId)),
         namesIn: async (folder) =>
             (
                 await queryClient.fetchQuery({
@@ -117,42 +121,113 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             );
             return made!;
         },
-        abortUpload: async (workspaceId, uploadId) => {
-            await driveApi.abortUpload(workspaceId, uploadId);
+        abortUpload: async (workspaceId, uploadId): Promise<AbortFate> => {
+            try {
+                await driveApi.abortUpload(workspaceId, uploadId);
+                return 'aborted';
+            } catch (error) {
+                if (!(error instanceof DriveApiError)) return 'unknown';
+                if (error.status === 404) return 'gone';
+                if (error.status === 401 || error.status === 403) return 'denied';
+                if (error.status === 409) {
+                    const upload = (error.data as { upload?: string } | undefined)?.upload;
+                    // Finishing: it may still land, so the row stays to ask again.
+                    return upload === 'completing' ? 'unknown' : 'finished';
+                }
+                return 'unknown';
+            }
         },
-        trash: (workspaceId, ids) =>
-            inBatches(ids, (batch) => clientFor(workspaceId).trashMany(workspaceId, batch)),
-        purge: (workspaceId, ids) =>
-            inBatches(ids, (batch) => clientFor(workspaceId).purgeMany(workspaceId, batch)),
+        trash: async (workspaceId, ids) => {
+            const fates = new Map<string, ItemFate>();
+            for (let at = 0; at < ids.length; at += MAX_TRASH_BATCH) {
+                const batch = ids.slice(at, at + MAX_TRASH_BATCH);
+                let answer;
+                try {
+                    answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
+                } catch (error) {
+                    if (!denied(error)) throw error;
+                    for (const id of batch) fates.set(id, 'denied');
+                    continue;
+                }
+                for (const item of answer.results)
+                    fates.set(
+                        item.id,
+                        item.status === 'trashed' || item.status === 'covered'
+                            ? 'done'
+                            : item.reason === 'trashed'
+                              ? 'done'
+                              : item.reason === 'not-found'
+                                ? 'gone'
+                                : 'refused',
+                    );
+            }
+            return fates;
+        },
+        // Delete forever as the Trash page does it (lib/trash-batch.ts purgeBatch): a request the
+        // workspace was too busy for is sent again, and items left `busy` too, while that helps.
+        purge: async (workspaceId, ids) => {
+            const refusedWhole = new Set<string>();
+            const { gone } = await purgeBatch(
+                ids.map((id) => ({ id, workspaceId }) as DriveNode),
+                {
+                    trash: () => Promise.reject(new Error('not used')),
+                    restore: () => Promise.reject(new Error('not used')),
+                    purge: async (ws, nodeIds) => {
+                        try {
+                            return await clientFor(ws).purgeMany(ws, nodeIds);
+                        } catch (error) {
+                            if (denied(error)) for (const id of nodeIds) refusedWhole.add(id);
+                            throw error;
+                        }
+                    },
+                    ancestorsOf: () => [],
+                },
+            );
+            const out = new Set(gone);
+            return new Map(
+                ids.map((id): [string, ItemFate] => [
+                    id,
+                    out.has(id) ? 'done' : refusedWhole.has(id) ? 'denied' : 'refused',
+                ]),
+            );
+        },
         // The server deletes forever only for a member: the person's own Drive, a family's folder.
-        mayPurge: (workspaceId) =>
-            workspaceId === ownWorkspace() || groupOfSpace(workspaceId) !== null,
-        hold,
-        isLive,
-        from: { generation: deviceSession.generation() },
+        mayPurge: async (workspaceId) =>
+            groupOfSpace(workspaceId) !== null || workspaceId === (await ownWorkspace()),
+        hold: locks() ? hold : undefined,
+        isLive: locks() ? isLive : undefined,
+        from,
+        current: () => deviceSession.open() && deviceSession.generation() === from.generation,
     };
 }
 
 /*
  * Starts a run that writes into `plan.targets` (folders for new files, files
- * for new versions), signed as `plan.signAs`: sourcesSignatureForms of its
- * sources (@hushos/drive/trust), or ordinary for the person's own writing.
- * Throws SaveRefused before anything is made.
+ * for new versions). Each result says what it was made from (`sources`, or
+ * OWN_WRITING), and is signed as the weakest of them. Throws SaveRefused
+ * before anything is made.
  */
 export async function startSaveRun(queryClient: QueryClient, plan: RunPlan) {
     return startRun(deps(queryClient), plan);
 }
 
-/* Runs a closed tab left behind (ids only), for the next open to offer to delete what they made. */
+/* Runs a closed tab left behind (ids only), for the next open to offer to delete or keep what they made. */
 export function interruptedSaveRuns() {
-    return interruptedRuns({ runs: runs(), isLive });
+    return interruptedRuns({ runs: runs(), isLive: locks() ? isLive : undefined });
 }
 
 /* Deletes what an interrupted run made (to the Trash where the person may not delete forever). */
 export async function cleanUpSaveRun(queryClient: QueryClient, row: RunRow) {
-    await storageNow(queryClient);
     return cleanUpInterrupted(deps(queryClient), row);
 }
+
+/* Keeps what an interrupted run made: its row goes, its open uploads are aborted. */
+export async function keepSaveRun(queryClient: QueryClient, row: RunRow) {
+    return keepInterrupted(deps(queryClient), row);
+}
+
+/* A sign-out, here or in another tab: every run stops at once, writing nothing (packages/drive abandonRuns). */
+export { abandonRuns };
 
 /* What a run would name a result in `folder`, shown and editable before saving. */
 export async function suggestedName(queryClient: QueryClient, folder: DriveNode, name: string) {

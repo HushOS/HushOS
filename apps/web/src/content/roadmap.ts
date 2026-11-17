@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-16';
+export const updated = '2026-11-17';
 
 export const sections: RoadmapSection[] = [
     {
@@ -283,16 +283,9 @@ export const sections: RoadmapSection[] = [
                 title: 'Sign in with a passkey',
                 body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
             },
-        ],
-    },
-    {
-        status: 'next',
-        title: 'Next',
-        summary: 'What we plan to build once the work above is done.',
-        items: [
             {
                 id: 'editing',
-                status: 'next',
+                status: 'now',
                 area: 'Drive',
                 title: 'Editing in the browser',
                 body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
@@ -300,7 +293,7 @@ export const sections: RoadmapSection[] = [
             },
             {
                 id: 'file-tools',
-                status: 'next',
+                status: 'now',
                 area: 'Drive',
                 title: 'File tools',
                 body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device.',
@@ -309,6 +302,12 @@ export const sections: RoadmapSection[] = [
                 ],
             },
         ],
+    },
+    {
+        status: 'next',
+        title: 'Next',
+        summary: 'What we plan to build once the work above is done.',
+        items: [],
     },
     {
         status: 'later',

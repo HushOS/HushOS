@@ -1799,14 +1799,19 @@ export async function abortUpload(userId: string, workspaceId: string, uploadId:
     switch (result.status) {
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
+        // `data.upload` says which, for a client cleaning up after itself (the save path): a
+        // finishing upload is asked about again, a finished one is a file (or version) that landed.
         case 'completing':
             throw new DriveError(
                 'conflict',
                 'This upload is finishing and cannot be cancelled.',
                 409,
+                { upload: 'completing' },
             );
         case 'completed':
-            throw new DriveError('conflict', 'This upload already finished.', 409);
+            throw new DriveError('conflict', 'This upload already finished.', 409, {
+                upload: 'completed',
+            });
         case 'ok':
             if (!result.alreadyAborted)
                 await primaryStore()

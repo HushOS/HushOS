@@ -974,22 +974,25 @@ extension Vault {
                                     expected: replacing == nil ? nil : .some(startedFrom),
                                     onBegun: { ids in begun.ids = ids; onBegun(ids) }, progress: progress)
         } catch {
-            guard let replacing else { throw error }
             let raced: Bool
             switch error {
-            case DriveAPIError.stale: raced = true
+            case DriveAPIError.stale: raced = replacing != nil
             case DriveAPIError.conflicted: raced = true
             default: raced = false
             }
             guard raced else { throw error }
             // Its reservation goes: a conflicted completion keeps it on the server until it expires.
             if let ids = begun.ids { await api.abortUpload(uploadId: ids.uploadId, workspaceId: ids.workspaceId) }
-            // As the server holds the file now: someone else's version current is stale; the same version is
-            // only the file's key having moved, an error as it was.
-            try? await lookAgain(parentId, in: replacing.node.workspaceId)
-            let current = opened[replacing.ref]?.node.currentVersion?.id
+            // A new file refused only because a key change reached its folder while it went up: sealed afresh.
+            guard let replacing else { throw SaveRekeyed() }
+            // As the server holds the file now: gone from its folder, or someone else's version current, is
+            // stale (never a new file where it was); the same version is only its key having moved, sealed
+            // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
+            let listed = try await children(of: parentId, in: replacing.node.workspaceId)
+            guard let fresh = listed.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil) }
+            let current = fresh.node.currentVersion?.id
             if current != startedFrom { throw SaveStale(currentVersionId: current) }
-            throw error
+            throw SaveRekeyed()
         }
     }
 

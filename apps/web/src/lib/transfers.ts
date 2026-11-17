@@ -1,6 +1,6 @@
 import type { DriveClient, DriveNode } from '@hushos/drive/client';
 import { createIndexedDbJournal, type JournalEntry, type QueuedEntry } from '@hushos/drive/journal';
-import { resultsWaiting } from '@hushos/drive/save-runs';
+import { abandonRuns, resultsWaiting } from '@hushos/drive/save-runs';
 import {
     createTransferManager,
     type TransferManagerOptions,
@@ -143,7 +143,11 @@ export const transfers = createTransferManager({
 
 // Another tab is signing out: uploads here stop, writing nothing to the journal it deletes, and
 // release what they reserved on the server before that tab ends the session.
-onSignedOutElsewhere(() => transfers.releaseAll());
+// A tool's runs stop with them, their results let go and nothing written to the journal.
+onSignedOutElsewhere(() => {
+    abandonRuns();
+    return transfers.releaseAll();
+});
 
 /*
  * A move's copy is in place (lib/move-across.ts): the server deleted the source

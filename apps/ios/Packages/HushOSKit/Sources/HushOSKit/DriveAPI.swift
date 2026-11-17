@@ -355,6 +355,27 @@ public final class DriveAPI: Sendable {
         _ = try? await perform(try mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]), as: UploadAborted.self)
     }
 
+    /*
+     * The server's answer to an abort, for a clean-up that must know (the save path): aborted, gone (no
+     * such upload), finished (it landed), denied (not this person's any more), or unknown (no answer, or
+     * one still finishing, which may yet land).
+     */
+    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, denied, unknown }
+
+    public func abortUploadFate(uploadId: String, workspaceId: String) async -> AbortFate {
+        guard let request = try? mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]),
+              let (status, data) = try? await send(request) else { return .unknown }
+        switch status {
+        case 200 ..< 300: return .aborted
+        case 404: return .gone
+        case 401, 403: return .denied
+        case 409:
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return (body?["data"] as? [String: Any])?["upload"] as? String == "completing" ? .unknown : .finished
+        default: return .unknown
+        }
+    }
+
     /* PUTs one encrypted part to its presigned URL; the ETag is what completion needs. */
     public func putPart(_ url: URL, data: Data) async throws -> String {
         var request = URLRequest(url: url)

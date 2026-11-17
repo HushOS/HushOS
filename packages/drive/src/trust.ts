@@ -78,20 +78,43 @@ function weakestForm(forms: SignatureForm[]): SignatureForm {
 }
 
 /*
+ * A source a result was made from: a file, or a folder with what was read from
+ * inside it (`within`), since a result made from a folder carries its contents'
+ * marks as well as the folder's own name record.
+ */
+export type ResultSource = {
+    node: { kind: 'folder' | 'file'; integrity: NodeIntegrity | null };
+    source: 'link' | 'drive';
+    /* For a folder: the files and folders inside it the result was made from (empty: none). */
+    within?: readonly ResultSource[];
+};
+
+/*
  * What a result made from several sources is signed with (docs/file-tools-design.md,
  * "Signatures by source"): each record as the weakest of its sources' (copySignatureForms),
  * so a zip holding one Unverified file is Unverified, and one holding a file saved from a link
- * is saved from a link. A tool never launders a mark. Nothing to take it from is refused: a
- * result's signature is never chosen by default.
+ * is saved from a link. A folder counts with everything read from inside it. A tool never
+ * launders a mark. Nothing to take it from is refused: a result's signature is never chosen by
+ * default, and a folder that does not say what was read from it is refused too.
  */
-export function sourcesSignatureForms(
-    sources: readonly {
-        node: { kind: 'folder' | 'file'; integrity: NodeIntegrity | null };
-        source: 'link' | 'drive';
-    }[],
-): { metadata: SignatureForm; version: SignatureForm } {
+export function sourcesSignatureForms(sources: readonly ResultSource[]): {
+    metadata: SignatureForm;
+    version: SignatureForm;
+} {
     if (!sources.length) throw new Error('A result is signed by its sources, and there are none.');
-    const forms = sources.map(({ node, source }) => copySignatureForms(node, source));
+    const forms: { metadata: SignatureForm; version: SignatureForm }[] = [];
+    const visit = (each: readonly ResultSource[]) => {
+        for (const { node, source, within } of each) {
+            forms.push(copySignatureForms(node, source));
+            if (node.kind !== 'folder') continue;
+            if (!within)
+                throw new Error(
+                    'A folder source must say what the result was made from inside it.',
+                );
+            visit(within);
+        }
+    };
+    visit(sources);
     return {
         metadata: weakestForm(forms.map((form) => form.metadata)),
         version: weakestForm(forms.map((form) => form.version)),

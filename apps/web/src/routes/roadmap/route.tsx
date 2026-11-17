@@ -226,7 +226,8 @@ const timeline = ORDER.map((status) => {
         )
         .map(({ item }) => item);
     return { ...section, items };
-});
+    // A section with nothing in it (Next, once everything planned has started) isn't drawn.
+}).filter((section) => section.items.length > 0);
 
 function RoadmapPage() {
     return (

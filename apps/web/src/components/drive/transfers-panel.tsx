@@ -303,7 +303,10 @@ function AttachFile({ item }: { item: UploadItem }) {
 }
 
 function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
-    const overQuota = item.status === 'failed' && item.errorCode === OVER_QUOTA;
+    // A tool's result refused for room stops its whole run, which says so itself: no "Make room"
+    // that would promise to send again what the run cancelled.
+    const overQuota =
+        item.status === 'failed' && item.errorCode === OVER_QUOTA && item.origin !== 'result';
     // Waiting out a key change: nothing moves, so no bar, and the reason is read whole.
     const waiting = waitsForKeyChange(item);
     return (

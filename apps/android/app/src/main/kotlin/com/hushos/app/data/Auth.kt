@@ -111,7 +111,9 @@ data class AccountDevice(
  * the pool or without billing, it is null or absent. A pool this build can't
  * read is no pool: the figures still show under today's words.
  */
-data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val availableBytes: Long, val pool: StoragePool? = null) {
+data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val availableBytes: Long, val pool: StoragePool? = null,
+                            /* While `pool` is set: what the account's own files take, exact (the save path gives back their GiB rounding). */
+                            val ownUsedBytes: Long? = null) {
     /*
      * What an upload can still take, as the server checks it. Never quota less used: in a pool
      * the server leaves other members' uploads in flight out of `usedBytes` (they would give
@@ -123,6 +125,7 @@ data class StorageAllowance(val quotaBytes: Long, val usedBytes: Long, val avail
         fun from(json: JSONObject) = StorageAllowance(
             json.getString("quotaBytes").toLong(), json.getString("usedBytes").toLong(), json.getString("availableBytes").toLong(),
             json.optJSONObject("pool")?.let(StoragePool::from),
+            json.optJSONObject("own")?.optString("usedBytes")?.toLongOrNull(),
         )
     }
 }

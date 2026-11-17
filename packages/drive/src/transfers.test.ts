@@ -144,6 +144,8 @@ function harness(
         encryptHold?: (index: number) => Promise<void> | undefined;
         /* The worker's cancel of an upload, held until it resolves (a worker that hangs). */
         cancelHold?: () => Promise<void>;
+        /* A completion held until it resolves: the server finishing it while the device does something else. */
+        completeHold?: () => Promise<void>;
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -392,6 +394,7 @@ function harness(
             };
         },
         completeUpload: async (_ws: string, id: string, parts: { partNumber: number }[]) => {
+            await options.completeHold?.();
             const expected = server.uploads.get(id)?.expectedVersionId;
             if (
                 options.serverVersion &&
@@ -2584,20 +2587,115 @@ describe('produced results', () => {
         expect((h.server.attached[0]!.input as { mode: string }).mode).toBe('sibling');
     });
 
-    test('is never journaled, queued or begun, and tells its run the ids begin made', async () => {
+    test('is never journaled, from queued to done, and tells its run the ids begin made', async () => {
         const begun: { uploadId: string; nodeId: string }[] = [];
-        const h = harness({ encryptHold: () => new Promise(() => {}) });
-        h.manager.enqueue([
+        const journal = createMemoryJournal();
+        const writes: string[] = [];
+        for (const method of ['put', 'update', 'remove', 'putQueued', 'removeQueued'] as const) {
+            const original = journal[method].bind(journal) as (...args: unknown[]) => Promise<void>;
+            (journal as unknown as Record<string, unknown>)[method] = (...args: unknown[]) => {
+                writes.push(method);
+                return original(...args);
+            };
+        }
+        const h = harness({ journal });
+        const [id] = h.manager.enqueue([
             {
-                file: memory('out.txt'),
+                file: memory('out.txt', 2 * CHUNK + 5),
                 parent: node('root', null),
                 produced: { onBegun: ({ uploadId, nodeId }) => begun.push({ uploadId, nodeId }) },
             },
         ]);
-        await settle(1_000);
-        expect(h.server.begins).toHaveLength(1);
-        expect(h.journal.queued.size).toBe(0);
-        expect(h.journal.entries.size).toBe(0);
+        await settle(5_000);
+        // Through every part and the completion, not one row: nothing to resume, nothing named.
+        expect(h.item(id!).status).toBe('done');
+        expect(h.calls.filter((call) => call === 'driveUploadSend').length).toBeGreaterThanOrEqual(
+            3,
+        );
+        expect(writes).toEqual([]);
         expect(begun).toEqual([{ uploadId: 'up-1', nodeId: h.server.begins[0]!.node.id }]);
+    });
+
+    test('a produced version whose file left its folder is stale, never attached as a new file there', async () => {
+        const h = harness({
+            conflict: true,
+            // The folder as listed now: the file is no longer in it.
+            openNodes: async () => ({ parent: node('root', null) }),
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v-winner'),
+                produced: { startedFrom: 'v-winner' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).errorCode).toBe('stale');
+        expect(h.item(id!).stale).toEqual({ currentVersionId: null });
+        expect(h.server.attached).toEqual([]);
+        expect(h.createdMetadata).toEqual([]);
+    });
+
+    test('a completion the server finishes after the upload was cancelled publishes nothing here', async () => {
+        let finish = () => {};
+        const held = new Promise<void>((resolve) => {
+            finish = resolve;
+        });
+        const events: string[] = [];
+        const h = harness({
+            completeHold: () => held,
+            onEvent: (event) => events.push(event.type),
+        });
+        const [id] = h.manager.enqueue([
+            { file: memory('out.txt'), parent: node('root', null), produced: {} },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('completing');
+        await h.manager.cancel(id!);
+        finish();
+        await settle(2_000);
+        expect(h.item(id!).status).toBe('cancelled');
+        expect(events).not.toContain('done');
+        expect(h.published).toEqual([]);
+    });
+
+    test('a produced new file’s sibling is announced before its attach is sent; a refusal stops the attach', async () => {
+        const announced: string[] = [];
+        const h = harness({ conflict: true });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('out.txt'),
+                parent: node('root', null),
+                produced: {
+                    onAttach: ({ nodeId }) => {
+                        // Not yet attached when the run hears of it.
+                        expect(h.server.attached).toEqual([]);
+                        announced.push(nodeId);
+                    },
+                },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(announced).toEqual([
+            (h.server.attached[0]!.input as { node: { id: string } }).node.id,
+        ]);
+
+        const refused = harness({ conflict: true });
+        const [other] = refused.manager.enqueue([
+            {
+                file: memory('out.txt'),
+                parent: node('root', null),
+                produced: {
+                    onAttach: () => {
+                        throw new Error('This save run is stopping.');
+                    },
+                },
+            },
+        ]);
+        await settle(5_000);
+        expect(refused.server.attached).toEqual([]);
+        expect(refused.item(other!).status).toBe('failed');
     });
 });

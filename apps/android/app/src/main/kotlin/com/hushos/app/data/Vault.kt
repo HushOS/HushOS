@@ -1705,13 +1705,15 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior.
      * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false): Opened = writing {
+    /* `result`: a folder a tool makes for its results (SaveRuns.kt), signed by their sources, into a family folder too. */
+    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false,
+                     result: Boolean = false): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
         // A family folder takes a new folder through its ledger, and a moved folder's copy (moveAcross); a plain copy into one
         // isn't offered.
-        val family = if (copy != null && !moving) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        val family = if (copy != null && !moving && !result) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val made = IdField.NODE.mint(ws)
@@ -2073,15 +2075,21 @@ class Vault(internal val context: Context, val api: DriveApi) {
         try {
             return writing {
                 uploadInside(Plain.InMemory(bytes, modified), name, mime, parentId, replacing, thumbnail, copy, emptyMap(), "", null, progress,
-                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun)
+                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, result = true)
             }
         } catch (error: ApiError) {
-            // Begin refused `stale`, or completion `conflict` (aborted there, its room released): as the server holds the file now,
-            // someone else's version current is stale; the same version is only the file's key having moved, the error as it was.
-            if (replacing == null || error.status != 409 || (error.code != "stale" && error.code != "conflict")) throw error
-            val current = runCatching { servedNode(parentId, replacing.node.workspaceId, replacing.id) }.getOrNull() ?: throw error
+            // Begin refused `stale`, or completion `conflict` (aborted there, its room released). A new file refused so was only
+            // its folder's key moving: sealed afresh (SaveRekeyed). For a new version, as the server holds the file now: gone from
+            // its folder, or someone else's version current, is stale (never a new file where it was); the same version is only
+            // its key having moved, sealed afresh. A family's key-change refusal (KeyChangeConflict) is waited out by the run.
+            if (error is KeyChangeConflict || error.status != 409 || (error.code != "stale" && error.code != "conflict")) throw error
+            if (replacing == null) {
+                if (error.code == "conflict") throw SaveRekeyed()
+                throw error
+            }
+            val current = servedNode(parentId, replacing.node.workspaceId, replacing.id) ?: throw SaveStale(null)
             if (current.currentVersion?.id != startedFrom) throw SaveStale(current.currentVersion?.id)
-            throw error
+            throw SaveRekeyed()
         }
     }
 
@@ -2105,12 +2113,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     private fun uploadInside(plain: Plain, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
                              attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit,
-                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}): Opened {
+                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}, result: Boolean = false): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
         // one isn't offered.
-        val family = if (copy != null && moveOf == null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        // A tool's result (`result`) goes into a family folder signed by its sources, as on the web and iOS.
+        val family = if (copy != null && moveOf == null && !result) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
         // family folder as its member list judges it.
@@ -2352,8 +2361,11 @@ internal sealed interface Plain {
     }
 }
 
-/* A new version found someone else's version current: nothing was published (Save on top, Save as a copy, Open theirs). */
+/* A new version found someone else's version current (or its file gone): nothing was published (Save on top, Save as a copy, Open theirs). */
 class SaveStale(val currentVersionId: String?) : Exception("Someone else saved a newer version of this file, so this one wasn’t saved.")
+
+/* An upload refused only because a key change reached its file or folder while it went up: looked up again and sealed afresh. */
+class SaveRekeyed : Exception("This file’s keys changed while it was saving.")
 
 /*
  * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the server deletes it in the

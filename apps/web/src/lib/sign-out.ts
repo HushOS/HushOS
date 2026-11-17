@@ -74,6 +74,8 @@ async function clearDrive() {
     const results = await Promise.allSettled(
         [
             // Uploads stop; their journal goes with the databases below, never opened to be emptied.
+            // A tool's runs stop first, writing nothing (packages/drive/src/save-runs.ts).
+            import('@hushos/drive/save-runs').then(({ abandonRuns }) => abandonRuns()),
             import('@/lib/transfers').then(({ transfers }) => transfers.invalidate()),
             // The sealed stash and the key for it, whatever the uploads left.
             import('@/lib/stash').then(({ forgetStash }) => forgetStash()),
@@ -107,6 +109,10 @@ export async function signOut() {
     } catch (error) {
         console.error('Uploads could not be shut here.', error);
     }
+    // A tool's runs stop at once: their results are let go, and nothing more is written for them.
+    await import('@hushos/drive/save-runs')
+        .then(({ abandonRuns }) => abandonRuns())
+        .catch((error: unknown) => console.error('Saves could not be stopped here.', error));
     // While this tab is still unlocked: no family key-change retry may sync now, since a sync
     // opens the families' store (hushos-groups) that forgetDevice is deleting, and could hold
     // up its deletion or make it again.

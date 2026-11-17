@@ -118,6 +118,8 @@ public struct AccountStore: Sendable {
         let files = FileManager.default
         // First: every download of the session, family or personal, stops writing before its folder goes.
         TemporaryCopies.endAccount(copies)
+        // The save path's rows (ids only, in this process's own storage), and no run writes one again.
+        SaveRunJournal.endAccount()
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
         RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
         // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
