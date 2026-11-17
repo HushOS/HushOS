@@ -1,0 +1,43 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_1492ca2bd6265a 646
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_f3044c82ad88a5 167-168,195-199,203,206-221,277-289
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_ef761d7844e3ce 374-376,384-385,393
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ToolRunsTest.kt
+  s_c60e24772e04af::t_24560093ccbc18 341-344,348-349,351-364,370-372,396-453
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_85fcf18d338143 684
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ToolRuns.swift
+  s_c60e24772e04af::t_254eae1e51bed5 417-429,449-452
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ToolRunsTests.swift
+  s_c60e24772e04af::t_e1b2d48d7dd47e 426-451,540-541,568
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_f3c043b066671f 38-41,46-51
+apps/web/src/lib/tools/ranges.test.ts
+  s_c60e24772e04af::t_c511f672f3209c 244-252
+apps/web/src/lib/tools/ranges.ts
+  s_c60e24772e04af::t_cc8eb3355951b4 19-23,25,29-35
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_05f2bdcc15a423 10,364-372,386-411,468-499
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_5d55505e10d925 11-12,76-82,225-230,232-248,295-299,338-340,343,359-360,363,377-378,437-438,480-483,485-486,491,514-515,532,534-535,549
+docs/file-tools-design.md
+  s_c60e24772e04af::t_6e107a7aa687ef 150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "16935388c580563504ceed0e2c31abbceb73bebe",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
