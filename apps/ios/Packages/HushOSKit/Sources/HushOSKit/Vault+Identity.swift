@@ -232,13 +232,16 @@ extension Vault {
         let requested = ResealTo.requests
         // The keys this pass seals under, read first: a key replacement begun while it runs is left for its own pass.
         let keys = try await identityKeys()
-        // The sharing listing's request when one is on its way (both ask as Drive opens): this pass re-seals only what
-        // was there already, and a share it misses is found on the next.
-        let reply = try await sharedByMeAnswer(join: true)
-        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(for: keys.signingPublicKey); return outcome }
-        let settings = try await settingsToLook()
-        let ledger = settings.ledger
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
+        // Owed work (a key replacement's re-seal, whose marker this pass clears, or re-seals to followed keys, which it
+        // acknowledges) is judged over what is shared and recorded now, so a share another device made since an
+        // earlier read is never skipped by a pass that then says it is done. Otherwise the sharing listing's request,
+        // when one is on its way, and the settings a looking reader holds will do: a share missed is found next time.
+        let owed = pending || !requested.isEmpty
+        let reply = try await sharedByMeAnswer(join: !owed)
+        if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(for: keys.signingPublicKey); return outcome }
+        let settings = owed ? try await loadSettings() : try await settingsToLook()
+        let ledger = settings.ledger
         var looked: [String: Contact] = [:]
         var sealed: [String: (publicKey: Data, kem: Data)] = [:]
         var unfinished = false

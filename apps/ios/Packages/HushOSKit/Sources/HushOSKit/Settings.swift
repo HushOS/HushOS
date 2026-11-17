@@ -495,7 +495,7 @@ extension Vault {
      * fresh read (loadSettings) checked against the marks, and Settings is a value, so each reader has its own. Never
      * reused: a read in the guard's turn (trust, an act on a contact, a family's verdicts), a save's base
      * (updateSettings), a rotation, a push's names: those call loadSettings and read now. The copy is dropped by any
-     * save from this vault and any guard write in this process, and after `settingsReuse`; a copy older than the marks
+     * save and any guard write from this vault (forgetSettingsCopy), and after `settingsReuse`; a copy older than the marks
      * every process of this phone raises (the Files app's, a share's) is read again. A save over a copy another device
      * moved past is refused by the server's compare-and-set, and the retry reads afresh.
      */
@@ -510,10 +510,16 @@ extension Vault {
         return try await loadSettings()
     }
 
+    /* A save or a guard write: the next looking reader reads the settings again. */
+    func forgetSettingsCopy() {
+        settingsWrites &+= 1
+        settingsCopy = nil
+    }
+
     /* Tests: the clock the reuse window is measured on. */
     func useSettingsClock(_ now: @escaping @Sendable () -> ContinuousClock.Instant) { settingsNow = now }
 
-    /* What moves on whenever a copy must not be reused: this vault's saves, and the guard's writes in this process. */
+    /* What moves on whenever a copy must not be reused: this vault's saves and guard writes, and a sign-out. */
     func settingsCopyGeneration() -> SettingsCopy.Generation {
         SettingsCopy.Generation(writes: settingsWrites, guardWrites: contactGuard.generation.value)
     }
@@ -563,7 +569,7 @@ extension Vault {
         var attempt = 0
         while true {
             // Landed, refused or unknown: whatever copy there was is not reused after this attempt.
-            defer { settingsWrites &+= 1; settingsCopy = nil }
+            defer { forgetSettingsCopy() }
             var settings = try await loadSettings()
             try change(&settings)
             // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).

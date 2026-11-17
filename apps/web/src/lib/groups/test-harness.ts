@@ -122,6 +122,11 @@ export function harness(
         reads: 0,
         writes: [] as GroupSettings[],
         failWrite: null as Error | null,
+        /*
+         * A copy one read left for the readers that only look (lib/contacts.ts): while set, a read
+         * that does not ask `fresh` is handed it, whatever is stored now.
+         */
+        copy: null as GroupSettings | null,
     };
     const held = new Set<string>();
     const sleeps: number[] = [];
@@ -293,8 +298,13 @@ export function harness(
     }) as GroupContext['rpc'];
 
     const settings: SettingsAccess = {
-        read: async () => {
+        read: async (options) => {
             settingsLog.reads++;
+            if (settingsLog.copy && !options?.fresh)
+                return {
+                    settings: structuredClone(settingsLog.copy),
+                    version: settingsDoc.version,
+                };
             return { settings: structuredClone(settingsDoc.doc), version: settingsDoc.version };
         },
         write: async (version, doc) => {

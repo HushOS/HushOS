@@ -1,5 +1,6 @@
 package com.hushos.app.data
 
+import kotlinx.coroutines.asContextElement
 import com.hushos.core.AcceptedRosters
 import com.hushos.core.AreaBlock
 import com.hushos.core.CoreException
@@ -180,31 +181,13 @@ class FamilySync(
     /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
     private val settledUnlisted: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
 
-    /*
-     * One family pass (FamiliesModel.refreshFamilies: route 2, then every family listed): route 25 answers for every family
-     * of the account at once, so a pass asks for it once rather than once per family. Outside a pass each sync asks.
-     */
-    private class Pass {
-        @Volatile var spaces: Map<String, List<SpaceArea>>? = null
-    }
-    @Volatile private var pass: Pass? = null
-
-    suspend fun <T> inPass(block: suspend () -> T): T {
-        val opened = Pass()
-        pass = opened
-        try {
-            return block()
-        } finally {
-            if (pass === opened) pass = null
-        }
-    }
-
-    /* Route 25, as this pass has it (asked at most once in it). */
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it), else asked now. */
     private fun spaces(): Map<String, List<SpaceArea>> {
-        val current = pass ?: return api.spaces()
+        val current = passSpaces.get() ?: return api.spaces()
         return current.spaces ?: api.spaces().also { current.spaces = it }
     }
 
@@ -919,6 +902,19 @@ class FamilySync(
     }
 
     companion object {
+        /*
+         * One family pass (FamiliesModel.refreshFamilies: route 2, then every family listed): route 25 answers for every
+         * family of the account at once, so the pass asks for it once rather than once per family. The answer belongs to
+         * the pass's own coroutine (`pass()`, a context element that follows it onto the threads it runs on): no other
+         * sync sees it, an act's own sync after it lands included, and it is gone when the pass ends however it ends.
+         */
+        class PassSpaces {
+            @Volatile var spaces: Map<String, List<SpaceArea>>? = null
+        }
+        private val passSpaces = ThreadLocal<PassSpaces?>()
+
+        fun pass(): kotlin.coroutines.CoroutineContext = passSpaces.asContextElement(PassSpaces())
+
         /* What a member check says instead of its words when the family isn't accepted as shown (null: the words show). */
         fun checkProblem(state: FamilyState): String? = when (state) {
             is FamilyState.Accepted -> null

@@ -495,6 +495,17 @@ Design: `docs/identity-pq-design.md`.
     - `reset` names the current vault under the provider's `vaultLock` (one Vault per session). A request still holding a dropped vault loads for itself, never shared or kept.
     - Tests: `TrustLoadsTest`, `SharedLoadTest`.
 - A followed pin always keeps its own signing key among the previous ones (`previousKeysAfter`).
+- One settings read for the readers that only look:
+    - `loadSettings`/`settingsServed` always read now; `Vault.settingsToLook` hands back the last fresh read for up to `SETTINGS_REUSE_MS` (10 s), as the web's `lib/contacts.ts` does.
+    - Look-only readers use it: a family sync's acceptance and settle (`familyPin(groupId, look = true)`), `vouched`, `checkedFamilyWith`, `contacts()`.
+    - Everything else reads now: every family act before it sends, every read in the `GuardTurn`, `updateSettings`'s base, rotation, the re-seal pass, a push's names.
+    - The copy is dropped when `TrustMemory.generation` moves (every guard commit; every save, before its PUT and again after it), on a failed read, and after the window; a copy older than the marks another vault raised is read again.
+    - Look-only readers therefore see another device's change, a server rollback included, up to 10 s late; a fresh read refuses a rollback at once.
+    - Tests: `SettingsReuseTest`.
+- At launch `loadRoot` loads the trust set beside the workspace, and the family pass runs on its own: Home's loading state never waits for it.
+    - `refreshTrust` joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined.
+    - A non-forced `refreshFamilies` waits for a pass already running (then finds nothing due) rather than run a second; never from inside a pass (`InFamilyPass`).
+    - A pass asks route 25 once: `FamilySync.pass()` holds the answer in a coroutine context element (a thread-local that follows the pass's coroutine), so only its own syncs see it.
 
 ### Pins and shares
 

@@ -335,7 +335,13 @@ export type DriveClientOptions = {
  * ever sealed again, and a stop leaves the ledger before it reaches the server.
  */
 export type SharingLedger = {
-    read(): Promise<{ shares: Record<string, string[]>; links: Record<string, string> }>;
+    /*
+     * `fresh`: read now, never a copy an earlier read left for the readers that only look. A rotation and a
+     * re-seal after a key replacement (whose marker is cleared at the end) ask it.
+     */
+    read(options?: {
+        fresh?: boolean;
+    }): Promise<{ shares: Record<string, string[]>; links: Record<string, string> }>;
     addShare(nodeId: string, granteeUserId: string): Promise<void>;
     removeShare(nodeId: string, granteeUserId: string): Promise<void>;
     addLink(linkId: string, nodeId: string): Promise<void>;
@@ -1440,7 +1446,17 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // (owed again later), never as refused, which would mark its grantee done.
         const ownWorkspace = workspace?.workspaceId;
         if (!ownWorkspace) return { resealed: 0, refused: 0 };
-        const [mine, ledger] = await Promise.all([sharedByMe(true), options.ledger.read()]);
+        // Owed work (after this account replaced its keys every share is sealed again and the reminder cleared at
+        // the end; grantees whose pin followed a succession are acknowledged) is judged over what is shared and
+        // recorded now, so a share another device made since an earlier read is never skipped by a pass that then
+        // says it is done. Otherwise what was just read will do: a share missed is found next time.
+        const all = input.all || ((await options.resealAll?.()) ?? false);
+        const waiting = new Set((await options.resealPending?.()) ?? []);
+        const now = all || waiting.size > 0;
+        const [mine, ledger] = await Promise.all([
+            sharedByMe(!now),
+            options.ledger.read(now ? { fresh: true } : undefined),
+        ]);
         // Each grantee the owner shared with, checked against their pin once: a pin that
         // follows a succession here asks for what was shared to be sealed to the new keys.
         const trusted = new Map<string, Promise<TrustedGrantee>>();
@@ -1456,8 +1472,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         for (const share of mine.shares)
             if (ledger.shares[share.node.id]?.includes(share.grantee.id))
                 await trust(share).catch(() => {});
-        const waiting = new Set((await options.resealPending?.()) ?? []);
-        const all = input.all || ((await options.resealAll?.()) ?? false);
         let failed = 0;
         // Grantees whose pin asked for this, and whether every share to them went through.
         const owed = new Map<string, boolean>();
@@ -1746,7 +1760,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (kind === 'folder') await listFolder(rootId);
         else if (rootParentId) await listFolder(rootParentId);
         // What may be sealed again: the owner's ledger, never the server's list alone.
-        const ledger = (await options.ledger?.read()) ?? { shares: {}, links: {} };
+        // What the owner recorded as it stands now: a rotation seals again only what the ledger holds.
+        const ledger = (await options.ledger?.read({ fresh: true })) ?? { shares: {}, links: {} };
         // Who this person trusts: every record is checked before it is signed again, and
         // without the trust set the rotation stops here and is retried, never run unchecked.
         const signers = await trustedSigners();

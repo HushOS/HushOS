@@ -73,8 +73,9 @@ class FamilySyncTest {
 
     /*
      * One family sync reads the settings once (the pin it accepts against, the pin it settles over, whether this person
-     * vouched for the family), and a pass asks route 25 once however many families it syncs. Fails if a step of the sync
-     * fetches the settings again, or a pass asks for the folders per family.
+     * vouched for the family), and a pass asks route 25 once however many families it syncs, for its own syncs only. Fails
+     * if a step of the sync fetches the settings again, a pass asks for the folders per family, or another sync is handed
+     * the pass's answer.
      */
     @Test
     fun aSyncReadsTheSettingsOnceAndAPassAsksForTheFoldersOnce() {
@@ -89,13 +90,17 @@ class FamilySyncTest {
         accepted(phone)
         assertEquals(1, server.settingsGets.get() - reads)
         family.asked.clear()
-        kotlinx.coroutines.runBlocking {
-            phone.sync.inPass {
-                phone.sync.sync(family.summary)
-                phone.sync.sync(family.summary)
-            }
+        kotlinx.coroutines.runBlocking(FamilySync.pass()) {
+            phone.sync.sync(family.summary)
+            // On another thread, as the app's syncs run on IO: still this pass.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { phone.sync.sync(family.summary) }
+            assertEquals(1, family.asked.count { it == "GET /drive/spaces" })
+            // A sync that isn't the pass's own (an act's, after it lands) asks for itself, never the pass's answer.
+            val other = Thread { phone.sync.sync(family.summary) }
+            other.start()
+            other.join()
+            assertEquals(2, family.asked.count { it == "GET /drive/spaces" })
         }
-        assertEquals(1, family.asked.count { it == "GET /drive/spaces" })
         family.asked.clear()
         phone.sync.sync(family.summary)
         phone.sync.sync(family.summary)

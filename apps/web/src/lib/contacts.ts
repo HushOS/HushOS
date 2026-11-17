@@ -372,7 +372,7 @@ let settingsRequest:
     | undefined;
 
 /* What a settings read was based on is gone: the next reader fetches, checks and opens them again. */
-function forgetSettingsRead() {
+export function forgetSettingsRead() {
     settingsGeneration++;
     settingsRead = undefined;
     settingsRequest = undefined;
@@ -555,8 +555,8 @@ export const FAMILY_SETTINGS_NEEDED =
     'Add someone in Contacts first. That sets up where HushOS keeps your family checks on this account.';
 
 /* The settings as families read them (lib/groups/client.ts): refused, plainly, when none opened. */
-export async function readSettingsForFamilies(userId: string) {
-    const loaded = await readSettings(userId, true);
+export async function readSettingsForFamilies(userId: string, { fresh = false } = {}) {
+    const loaded = await readSettings(userId, true, fresh);
     if (loaded.unopened) throw new Error(FAMILY_SETTINGS_NEEDED);
     return loaded;
 }
@@ -2178,10 +2178,10 @@ export function sharingLedger(userId: () => string | null): SharingLedger {
         }).then(() => undefined);
     };
     return {
-        async read() {
+        async read({ fresh = false } = {}) {
             const id = userId();
             if (!id) return { shares: {}, links: {} };
-            const { settings } = await loadSettings(id);
+            const { settings } = await (fresh ? loadSettingsNow(id) : loadSettings(id));
             return settings.sharing ?? { shares: {}, links: {} };
         },
         addShare: (nodeId, granteeUserId) =>

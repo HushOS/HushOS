@@ -49,7 +49,7 @@ async function acceptJoining(
     served: ServedChain,
     joinsRecord: string,
 ) {
-    await ctx.settings.read();
+    await ctx.settings.read({ fresh: true });
     const began = ctx.session?.();
     for (;;) {
         const record = (await ctx.store.chain(ctx.userId, groupId))?.envelope ?? null;
@@ -134,7 +134,7 @@ async function letGoOfUnkept(ctx: GroupContext, groupId: string) {
 
 /* The first-use join (groupJoinFirstUse), then its commit. */
 async function joinOnFirstUse(ctx: GroupContext, groupId: string): Promise<JoinOutcome> {
-    await ctx.settings.read();
+    await ctx.settings.read({ fresh: true });
     return ctx.lock(groupId, async (): Promise<JoinOutcome> => {
         const before = await finishedBefore(ctx, groupId);
         if (before) return before;
@@ -178,7 +178,7 @@ async function completeJoin(
     groupId: string,
     joinsRecord: string,
 ): Promise<JoinOutcome> {
-    await ctx.settings.read();
+    await ctx.settings.read({ fresh: true });
     return ctx.lock(groupId, async (): Promise<JoinOutcome> => {
         const before = await finishedBefore(ctx, groupId);
         if (before) return before;

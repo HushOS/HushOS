@@ -229,28 +229,31 @@ public actor FamilySync: FamilyJudge {
     private var forked: Set<String> = []
     /*
      * One family pass (the app's refreshFamilies: route 2, then every family listed): route 25 answers for every family of
-     * the account at once, so a pass asks for it once rather than once per family. Outside a pass each sync asks.
+     * the account at once, so the pass asks for it once rather than once per family. The answer belongs to the pass's own
+     * task (`inPass`, a task-local the work it starts inherits): no other sync sees it, an act's own sync after it lands
+     * included, and it is gone when the pass ends however it ends (a cancel too).
      */
-    private var pass: (id: UInt64, spaces: [SpaceList.Entry]?)?
-    private var passes: UInt64 = 0
+    final class PassSpaces: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: [SpaceList.Entry]?
+        var spaces: [SpaceList.Entry]? {
+            get { lock.withLock { held } }
+            set { lock.withLock { held = newValue } }
+        }
+    }
+    @TaskLocal static var pass: PassSpaces?
 
-    /* Opens a pass; `endPass` with the id it returns closes it (a later pass is never closed by an earlier one's end). */
-    public func beginPass() -> UInt64 {
-        passes &+= 1
-        pass = (passes, nil)
-        return passes
+    /* `work` runs on the caller's actor (the app's refreshFamilies is the main actor's). */
+    public static func inPass<T>(isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T) async rethrows -> T {
+        try await $pass.withValue(PassSpaces(), operation: work, isolation: isolation)
     }
 
-    public func endPass(_ id: UInt64) {
-        if pass?.id == id { pass = nil }
-    }
-
-    /* Route 25, as this pass has it (asked at most once in it). */
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it), else asked now. */
     private func passSpaces() async throws -> [SpaceList.Entry] {
-        guard let current = pass else { return try await api.spaces() }
+        guard let current = Self.pass else { return try await api.spaces() }
         if let spaces = current.spaces { return spaces }
         let spaces = try await api.spaces()
-        if pass?.id == current.id { pass?.spaces = spaces }
+        current.spaces = spaces
         return spaces
     }
     /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */

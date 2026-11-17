@@ -59,25 +59,36 @@ extension OnFakeDrive {
             guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted again"); return }
             #expect(server.count("/api/auth/settings") == 1)
             server.clearRequests()
-            let pass = await phone.sync.beginPass()
-            _ = await phone.sync.sync(family.summary)
-            _ = await phone.sync.sync(family.summary)
-            await phone.sync.endPass(pass)
-            #expect(server.count("/api/drive/spaces") == 1)
+            await FamilySync.inPass {
+                _ = await phone.sync.sync(family.summary)
+                _ = await phone.sync.sync(family.summary)
+                #expect(server.count("/api/drive/spaces") == 1)
+                // A sync that isn't the pass's own (an act's, after it lands) asks for itself, never the pass's answer.
+                let sync = phone.sync, summary = family.summary
+                _ = await Task.detached { await sync.sync(summary) }.value
+                #expect(server.count("/api/drive/spaces") == 2)
+            }
             server.clearRequests()
             _ = await phone.sync.sync(family.summary)
             _ = await phone.sync.sync(family.summary)
             #expect(server.count("/api/drive/spaces") == 2)
         }
 
-        /* A guard write in this process (ContactGuardStore.commit moves the generation) drops the copy. */
+        /*
+         * A guard write (the guard keeping a pin another device saved, as a new phone's trust load
+         * does) drops the copy: settings another device saved since are read next.
+         */
         @Test func aGuardWriteDropsTheCopy() async throws {
-            let (_, server, phone, _) = try await setUp()
+            let (family, server, phone, _) = try await setUp()
             defer { phone.done() }
             #expect(try await phone.vault.markerLooked() == "first")
+            let creator = ContactPin(userId: family.creator.userId, email: "sam@example.org", name: "Sam", keys: try firstSeen(family.creator.envelope),
+                                     pinnedAt: "2026-10-01T00:00:00Z", firstSeen: "added")
+            try server.editSettings { $0.setPin(creator) }
+            // The trust load reads now, then writes Sam's keys to the guard (a real commit).
+            _ = try await phone.vault.effectivePinCount()
+            #expect(try await phone.vault.contactGuard.entry(family.creator.userId) != nil)
             try server.editSettings { $0.setPin(Self.marker("after the guard moved")) }
-            #expect(try await phone.vault.markerLooked() == "first")
-            await phone.vault.contactGuard.generation.bump()
             #expect(try await phone.vault.markerLooked() == "after the guard moved")
         }
 
@@ -127,5 +138,6 @@ extension Vault {
     func markerLooked() async throws -> String? { try await settingsToLook().contacts["marker"]?.name }
     func markerNow() async throws -> String? { try await loadSettings().contacts["marker"]?.name }
     func linksLooked() async throws -> [String: String] { try await settingsToLook().ledger.links }
+    func effectivePinCount() async throws -> Int { try await effectivePins().count }
     func saveLink(_ id: String, node: String) async throws { _ = try await updateSettings { $0.ledger.addLink(id, node: node) } }
 }

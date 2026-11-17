@@ -639,6 +639,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 return Settings(settings.json, next)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error
+            } finally {
+                // Landed, refused or unknown: a read that ran while the save was out (and took the generation from
+                // before it) is not reused after it either.
+                memory.generation.incrementAndGet()
             }
         }
     }

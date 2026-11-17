@@ -53,7 +53,7 @@ vi.mock('@/lib/auth-client', () => ({ authClient: { ...auth, store } }));
 vi.mock('@/lib/drive-api', () => ({ onStaleIdentity: () => {} }));
 vi.mock('@/lib/own-identity', () => ({ openOwnIdentity: () => identity.open() }));
 
-const { compareAndSetSettings, readSettingsForFamilies, readSettingsForWrite } =
+const { compareAndSetSettings, readSettingsForFamilies, readSettingsForWrite, sharingLedger } =
     await import('./contacts');
 const { rememberSettingsSeen } = await import('./rollback-marks');
 
@@ -155,6 +155,31 @@ describe('one read for the readers that only look', () => {
         ]);
         expect(fetches()).toBe(1);
         expect(all.map(named)).toEqual([['first'], ['first'], ['first']]);
+    });
+});
+
+describe('readers that act read now, even while a copy is held', () => {
+    test('a family act (a join, a creation, an admission sent, a check) reads what another device saved', async () => {
+        const w = await world();
+        expect(named(await readSettingsForFamilies(USER))).toEqual([]);
+        await w.elsewhere(withName('other-device'));
+        expect(named(await readSettingsForFamilies(USER))).toEqual([]);
+        expect(named(await readSettingsForFamilies(USER, { fresh: true }))).toEqual([
+            'other-device',
+        ]);
+    });
+
+    test('the sharing ledger a rotation seals over is the one stored now', async () => {
+        const w = await world();
+        const ledger = sharingLedger(() => USER);
+        expect(await ledger.read()).toEqual({ shares: {}, links: {} });
+        await w.elsewhere({
+            version: 2,
+            contacts: {},
+            sharing: { shares: { n1: ['b'] }, links: {} },
+        });
+        expect(await ledger.read()).toEqual({ shares: {}, links: {} });
+        expect(await ledger.read({ fresh: true })).toEqual({ shares: { n1: ['b'] }, links: {} });
     });
 });
 

@@ -925,10 +925,10 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             model.familyWork(listed.any { it.state == "active" } || unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped })
             // Every removal found so far, by this pass or by the background work through the same vault.
             applyRemovals(s)
-            // One pass: route 25 asked once for every family listed.
-            s.owner.families.inPass {
+            // One pass: route 25 asked once for every family listed, in this coroutine only (FamilySync.pass).
+            withContext(FamilySync.pass()) {
                 for (summary in listed) {
-                    if (!gate.current(s)) return@inPass
+                    if (!gate.current(s)) return@withContext
                     refreshFamily(summary, session = s)
                 }
             }

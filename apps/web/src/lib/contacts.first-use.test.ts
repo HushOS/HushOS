@@ -1340,3 +1340,160 @@ describe('the guard at rest', () => {
         });
     });
 });
+
+/*
+ * One settings read serves the readers that only look for a short while (lib/contacts.ts). What
+ * judges or moves trust never takes that copy: a save builds on the settings as stored, an act
+ * under the lock reads them once it holds it, and a guard write or a save drops the copy. Each
+ * test holds a copy first, as opening the app does, then lets another device move the settings
+ * within the window.
+ */
+describe('a held settings copy never decides an act', () => {
+    const MARK = 'b2b2b2b2-0000-4000-8000-0000000000b2';
+    const marked = (
+        settings: Awaited<ReturnType<typeof contacts.readSettingsForWrite>>['settings'],
+    ) => ({
+        ...settings,
+        familyChecks: {
+            ...settings.familyChecks,
+            [MARK]: {
+                rosterVersion: 1,
+                with: MARK,
+                code: [],
+                checkedAt: '2026-11-18T00:00:00.000Z',
+            },
+        },
+    });
+    /* The copy a looking reader is handed, as the open leaves it. */
+    const hold = () => contacts.contactPins(ME);
+    const seesMark = () => contacts.familyCheckedOnAccount(ME, MARK);
+    beforeEach(() => contacts.forgetSettingsRead());
+
+    test('a save over a copy another device has moved past lands in one try, on the stored settings', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await hold();
+        await w.replace(marked(await w.stored()));
+        const puts = auth.saveSettings.mock.calls.length;
+        await contacts.saveSettings(
+            undefined,
+            ME,
+            (settings) => ({ ...settings, mine: true }) as never,
+        );
+        expect(auth.saveSettings.mock.calls.length).toBe(puts + 1);
+        expect((await w.stored()).familyChecks?.[MARK]).toBeDefined();
+    });
+
+    test('a save whose answer is lost leaves no copy: what it may have saved is read next', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await hold();
+        w.server.loseNextAnswer = true;
+        await expect(contacts.saveSettings(undefined, ME, marked)).rejects.toThrow(
+            'Failed to fetch',
+        );
+        expect(await seesMark()).toBe(true);
+    });
+
+    test('a guard write drops the copy: settings another device saved since are read next', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        // A new device: the guard keeps the settings pin first (a guard write), then another device saves.
+        await deleteContactGuard(w.guardName);
+        await trustedSigners(ME);
+        expect(await w.real.entry(ME, MAYA)).not.toBeNull();
+        await w.replace(marked(await w.stored()));
+        expect(await seesMark()).toBe(true);
+    });
+
+    test('Continue reads the settings under the lock: a removal another device made is not refused as a move', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await startOver(w);
+        await hold();
+        await w.replace({
+            ...(await w.stored()),
+            contacts: {},
+            removedContacts: { [MAYA]: new Date().toISOString() },
+        });
+        await expect(continueWith(query, ME, change)).resolves.toBeDefined();
+    });
+
+    test('They match reads the settings under the lock: a removal another device made is not refused as a move', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const lookup = await lookupContact(query, ME, MAYA_EMAIL);
+        await hold();
+        await w.replace({
+            ...(await w.stored()),
+            contacts: {},
+            removedContacts: { [MAYA]: new Date().toISOString() },
+        });
+        await expect(pinContact(query, ME, lookup)).resolves.toBeDefined();
+        expect(await pinTrust((await w.stored()).contacts[MAYA]!)).toBe('verified');
+    });
+
+    test('a family check reads the settings under the lock: a removal another device made is not refused as a move', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        const decidedOver = await w.real.entry(ME, MAYA);
+        const verified = await pinOfServed(
+            {
+                ...w.maya,
+                mlDsaPublicKey: w.maya.mlDsaPublicKey!,
+                kemPublicKey: w.maya.kemPublicKey!,
+            },
+            'verified',
+        );
+        await hold();
+        await w.replace({
+            ...(await w.stored()),
+            contacts: {},
+            removedContacts: { [MAYA]: new Date().toISOString() },
+        });
+        await expect(
+            contacts.saveFamilyCheck(undefined, ME, {
+                groupId: MARK,
+                member: { userId: MAYA, email: MAYA_EMAIL, name: 'Maya Lindqvist' },
+                check: {
+                    rosterVersion: 1,
+                    with: MAYA,
+                    code: [],
+                    checkedAt: '2026-11-18T00:00:00.000Z',
+                },
+                keys: verified,
+                decidedOver,
+            }),
+        ).resolves.toEqual({ verified: true });
+    });
+
+    test('a guard entry is settled against the settings under the lock: an act whose base another device moved past is dropped', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await startOver(w);
+        w.server.holdNextSave = true;
+        await expect(continueWith(query, ME, change)).rejects.toThrow('timed out');
+        await hold();
+        // Another device saves at the act's base: the timed-out save can never land now.
+        await w.replace({ ...(await w.stored()) });
+        await contacts.contactGuardEntry(ME, MAYA);
+        expect(await w.real.pending(ME, MAYA)).toBeNull();
+        expect(w.server.land!()).toBe(false);
+    });
+
+    test('Check again reads the pin now: an address another device updated is looked up, not the old one', async () => {
+        const w = await world();
+        await addContact(query, ME, MAYA_EMAIL);
+        await hold();
+        // Maya's address moved; another device updated her pin. The old address is someone else's now.
+        const moved = 'maya.lindqvist@example.com';
+        const pin = (await w.stored()).contacts[MAYA]!;
+        await w.replace({ ...(await w.stored()), contacts: { [MAYA]: { ...pin, email: moved } } });
+        w.server.served.set(moved, w.maya);
+        w.server.served.set(
+            MAYA_EMAIL,
+            await person('a1a1a1a1-0000-4000-8000-0000000000c3', MAYA_EMAIL, 'Someone Else'),
+        );
+        expect(await contacts.followServedKeys(ME, { id: MAYA })).toBe('same');
+    });
+});
