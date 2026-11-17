@@ -338,17 +338,38 @@ class ToolRunsTest {
         val asked = Collections.synchronizedList(ArrayList<String>())
         /* When set, only the range starting here stalls. */
         @Volatile var stallAt: Int? = null
+        /* When set, the answer for this address (by number) trickles: a byte a tenth of a second for ten seconds. */
+        @Volatile var trickleAddress: Int? = null
+        /* Which store requests are refused as expired, by address number and the range's start. */
+        @Volatile var refuse: (Int, Int) -> Boolean = { n, _ -> n == 1 }
 
         init {
             server.createContext("/api/drive/versions/") { exchange ->
-                val body = """{"url":"$origin/store/o?n=${addresses.incrementAndGet()}","urlExpiresAt":null}""".toByteArray()
+                val n = addresses.incrementAndGet()
+                val body = """{"url":"$origin/store/o?n=$n","urlExpiresAt":null}""".toByteArray()
                 exchange.responseHeaders.add("Content-Type", "application/json")
+                if (n == trickleAddress) {
+                    val padded = body + ByteArray(100) { ' '.code.toByte() }
+                    exchange.sendResponseHeaders(200, padded.size.toLong())
+                    runCatching {
+                        exchange.responseBody.use { out ->
+                            for (byte in padded) {
+                                out.write(byte.toInt())
+                                out.flush()
+                                Thread.sleep(100)
+                            }
+                        }
+                    }
+                    return@createContext
+                }
                 exchange.sendResponseHeaders(200, body.size.toLong())
                 exchange.responseBody.use { it.write(body) }
             }
             server.createContext("/store/o") { exchange ->
                 // The first address has expired by the time it is used.
-                if (exchange.requestURI.query == "n=1") {
+                val n = exchange.requestURI.query.removePrefix("n=").toInt()
+                val from = exchange.requestHeaders.getFirst("Range")?.removePrefix("bytes=")?.substringBefore("-")?.toIntOrNull() ?: 0
+                if (refuse(n, from)) {
                     refused.incrementAndGet()
                     exchange.sendResponseHeaders(403, -1)
                     exchange.close()
@@ -370,6 +391,64 @@ class ToolRunsTest {
         }
 
         override fun close() = server.stop(0)
+    }
+
+    @Test fun anAddressThatTricklesIsCutOffWhenTheRunEnds() {
+        val (content, stored, _) = sealed(1000)
+        Server(stored).use { server ->
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            // The reader's first address, then a renewal, each answered a byte at a time.
+            for (trickling in listOf(1, 2)) {
+                server.addresses.set(0)
+                server.trickleAddress = trickling
+                val control = RunControl(toolWatchdogMillis(), null)
+                val ended = CountDownLatch(1)
+                Thread {
+                    runCatching { toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control).readAt(0uL, 10uL) }
+                    ended.countDown()
+                }.start()
+                eventually { server.addresses.get() == trickling }
+                Thread.sleep(200)
+                val cancelled = System.nanoTime()
+                control.cancel()
+                assertTrue("address $trickling held the run", ended.await(3, TimeUnit.SECONDS))
+                assertTrue((System.nanoTime() - cancelled) / 1_000_000 < 2_000)
+            }
+        }
+    }
+
+    @Test fun aDrainsAddressRenewalIsCutOffByItsDeadline() {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        val size = chunk - 100
+        val plain = ByteArray(size.toInt()) { it.toByte() }
+        val content = Content("11111111-1111-4111-8111-111111111111", "66666666-6666-4666-8666-666666666666", 3u,
+            randomBytes(32u), randomBytes(16u), size.toULong(), 2000u)
+        val layout = contentLayout(3u, size.toULong(), 2000u)
+        val tail = chunkEncrypt(content, 0uL, plain)
+        val stored = tail + ByteArray((layout.ciphertextSize - tail.size.toULong()).toInt())
+        Server(stored).use { server ->
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            val drains = PaddingDrains(maxBytes = 1L shl 30, maxMillis = 300, maxWaiting = 4)
+            val control = RunControl(toolWatchdogMillis(), null)
+            val reader = toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control, drains = drains)
+            // The tail stalls on the second address; the padding finds that address expired, and the
+            // renewal for it trickles.
+            server.refuse = { n, from -> n == 1 || (n == 2 && from != 0) }
+            server.trickleAddress = 3
+            server.stallAt = 0
+            val stall = CountDownLatch(1)
+            server.stall = stall
+            val reading = Thread { runCatching { reader.readAt((size - 10).toULong(), 10uL) } }
+            reading.start()
+            eventually { server.stalled.get() == 1 }
+            control.cancel()
+            reading.join(5_000)
+            stall.countDown()
+            eventually { server.addresses.get() == 3 }
+            val renewing = System.nanoTime()
+            eventually { drains.idle }
+            assertTrue("the renewal outlived the drain's deadline", (System.nanoTime() - renewing) / 1_000_000 < 2_000)
+        }
     }
 
     @Test fun toolReaderOfReadsRangesAndRenewsAnExpiredAddress() {

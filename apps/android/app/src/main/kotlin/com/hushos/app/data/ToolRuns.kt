@@ -371,7 +371,9 @@ fun toolReaderOf(
     // The account's drains as the reader is made (before any request): what it owes after a
     // sign-out is not drained.
     val born = drains.generation
-    val url = AtomicReference(api.versionUrl(versionId, workspaceId))
+    // Every address request too is cut off when the run ends: one that trickles would hold the slot.
+    val address = { api.versionUrl(versionId, workspaceId) { call, request -> Cutoff.whileRunning(control, call, request) } }
+    val url = AtomicReference(address())
     // Padding owed when the run ended: once each, an expired address renewed once, in the background.
     val drainOnce: (ByteRange, (RangeCall) -> Unit) -> Unit = { range, watch ->
         val fetch = { api.range(url.get(), range) { call, request -> watch(call); request() } }
@@ -379,7 +381,8 @@ fun toolReaderOf(
             fetch()
         } catch (error: ApiError) {
             if (error.status != 403) throw error
-            url.set(api.versionUrl(versionId, workspaceId))
+            // Under the drain's deadline and the sign-out's cut-off, as its ranges are.
+            url.set(api.versionUrl(versionId, workspaceId) { call, request -> watch(call); request() })
             fetch()
         }
     }
@@ -387,7 +390,7 @@ fun toolReaderOf(
         Resumable.run(
             online = online,
             sleep = { millis -> sleepWhileRunning(control, millis) },
-            onExpired = { url.set(api.versionUrl(versionId, workspaceId)) },
+            onExpired = { url.set(address()) },
         ) {
             control.check()
             api.range(url.get(), range) { call, request -> Cutoff.whileRunning(control, call, request) }

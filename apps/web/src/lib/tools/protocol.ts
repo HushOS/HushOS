@@ -35,11 +35,20 @@ export const OUTPUT_NAME_MAX = 1_024;
 export const OUTPUT_MIME_MAX = 255;
 /*
  * What one result costs the budget at least, so empty ones are not free: a name and the
- * record around it are memory too. 8,192 results fill the budget, whatever their size.
+ * record around it are memory too. 8,192 results fill the default budget, whatever their
+ * size, so at most 8,192 wait unreleased across the tab: the save path must release each
+ * result as it uploads it (or drops it), not once the run is done, or a run of more small
+ * results than that waits for room forever.
  */
 export const OUTPUT_MIN_CHARGE = 64 * 1024;
 /* A run's results the save path has not released, at most (the extraction entry cap). */
 export const OUTPUTS_UNRELEASED_MAX = 10_000;
+/*
+ * A run's results in all, by count and by bytes, unless the run sets its own: section 3's
+ * extraction caps, held by the page, so a worker taken over can't produce past them.
+ */
+export const RUN_OUTPUTS_MAX = 10_000;
+export const RUN_TOTAL_BYTES_MAX = 4 * 1024 * 1024 * 1024;
 
 /* From the page, on the worker itself. */
 export type ToWorker =

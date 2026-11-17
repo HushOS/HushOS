@@ -7,6 +7,7 @@ import {
     OUTPUT_MIN_CHARGE,
     OUTPUTS_UNRELEASED_MAX,
     RESULT_MAX_BYTES,
+    RUN_OUTPUTS_MAX,
     TOOL_FAILED,
     type RangeAnswer,
     type ToPage,
@@ -360,7 +361,15 @@ describe('a worker that does not pace itself fails its run', () => {
         // With room to spare, the count still stops the run at the cap, without the watchdog firing.
         const roomy = new PlaintextBudget(Number.MAX_SAFE_INTEGER);
         const held: ToolOutput[] = [];
-        const capped = run({ budget: roomy, onOutput: (o) => void held.push(o) }, 'Capped');
+        const capped = run(
+            // A total cap past the unreleased one, so only the latter is tested here.
+            {
+                budget: roomy,
+                maxOutputs: OUTPUTS_UNRELEASED_MAX + 2,
+                onOutput: (o) => void held.push(o),
+            },
+            'Capped',
+        );
         for (let id = 0; id < OUTPUTS_UNRELEASED_MAX; id++) capped.worker.send(output(id, 0));
         expect(held).toHaveLength(OUTPUTS_UNRELEASED_MAX);
         expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX - 1);
@@ -372,6 +381,32 @@ describe('a worker that does not pace itself fails its run', () => {
         expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX);
         held[6]!.release();
         expect(capped.worker.accepted()).toHaveLength(OUTPUTS_UNRELEASED_MAX + 1);
+    });
+
+    test('more results, or more bytes, than the run may produce in all', async () => {
+        const counted = run({ maxOutputs: 2 });
+        counted.worker.send(output(0, 1));
+        counted.worker.send(output(1, 1));
+        expect(counted.worker.accepted()).toEqual([0, 1]);
+        const third = output(2, 1);
+        counted.worker.send(third);
+        await expect(counted.handle.result).rejects.toThrow(TOOL_FAILED);
+        expect((third as { bytes: ArrayBuffer }).bytes.byteLength).toBe(0);
+
+        // Released as they go, still counted: bytes in all, not bytes held.
+        const sized = run({ maxTotalBytes: 10 });
+        sized.worker.send(output(0, 6));
+        sized.worker.send(output(1, 4));
+        expect(sized.worker.accepted()).toEqual([0, 1]);
+        sized.worker.send(output(2, 1));
+        await expect(sized.handle.result).rejects.toThrow(TOOL_FAILED);
+
+        // Without a cap of its own, a run gets section 3's.
+        const plain = run({ budget: new PlaintextBudget(Number.MAX_SAFE_INTEGER) });
+        for (let id = 0; id < RUN_OUTPUTS_MAX; id++) plain.worker.send(output(id, 0));
+        expect(plain.worker.accepted()).toHaveLength(RUN_OUTPUTS_MAX);
+        plain.worker.send(output(RUN_OUTPUTS_MAX, 0));
+        await expect(plain.handle.result).rejects.toThrow(TOOL_FAILED);
     });
 
     test('more reads in flight than the page allows', async () => {
@@ -428,6 +463,38 @@ describe('ending a run', () => {
         port.postMessage({ type: 'read', id: 9, offset: 0, length: 1 });
         await ports();
         expect(answers).toEqual([]);
+    });
+
+    test('a run that ended, done or cancelled, holds none of its input through its handle', async () => {
+        const refs: WeakRef<ArrayBuffer>[] = [];
+        const taken: ToolOutput[] = [];
+        // Made where the test keeps no reference: only the run could hold the bytes.
+        const start = () => {
+            const bytes = new Uint8Array(16 * 1024 * 1024);
+            refs.push(new WeakRef(bytes.buffer));
+            return run({ sources: [memoryReader(bytes)], onOutput: (o) => void taken.push(o) });
+        };
+        // And a reader with no close() at all: the run itself lets go of it.
+        const unclosable = (() => {
+            const bytes = new Uint8Array(16 * 1024 * 1024);
+            refs.push(new WeakRef(bytes.buffer));
+            const reader: RangeReader = { size: bytes.byteLength, read: async () => bytes };
+            return run({ sources: [reader] });
+        })();
+        unclosable.handle.cancel();
+        const cancelled = start();
+        cancelled.handle.cancel();
+        await expect(cancelled.handle.result).rejects.toThrow(ToolCancelled);
+        // Done with a result the save path still holds: its release() keeps the run's scope.
+        const done = start();
+        done.worker.send(output(0, 8));
+        done.worker.send({ type: 'done', result: null });
+        await done.handle.result;
+        expect(await collected(refs)).toBe(true);
+        expect(cancelled.handle.getState().status).toBe('cancelled');
+        expect(unclosable.handle.getState().status).toBe('cancelled');
+        expect(done.handle.getState().status).toBe('done');
+        taken[0]!.release();
     });
 
     test('every run closes its sources, and a read that lands after the end is not copied', async () => {

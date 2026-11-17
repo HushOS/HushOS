@@ -423,6 +423,32 @@ import Testing
         }
     }
 
+    @Test func anAddressThatNeverComesEndsWhenTheRunDoes() async throws {
+        let (content, object, _) = try Self.sealed(1000)
+        // The reader's first address, then a renewal (the first address has expired).
+        for stalling in [1, 2] {
+            let api = Self.stubbedAPI(object)
+            StoreStub.state.stallAddress = stalling
+            let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+            let ended = Log()
+            Task.detached {
+                do {
+                    let reader = try await ToolReaders.reader(
+                        api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control
+                    )
+                    _ = try reader.readAt(offset: 0, length: 10)
+                } catch {}
+                ended.add("ended")
+            }
+            try await eventually { StoreStub.state.addresses == stalling }
+            try await Task.sleep(for: .milliseconds(200))
+            let cancelled = ContinuousClock.now
+            control.cancel()
+            try await eventually { ended.items == ["ended"] }
+            #expect(ContinuousClock.now - cancelled < .seconds(2), "address \(stalling) held the run")
+        }
+    }
+
     @Test func aRangeForACallerAlreadyCancelledEndsEveryTime() async throws {
         let (_, object, _) = try Self.sealed(1000)
         let api = Self.stubbedAPI(object)
@@ -511,6 +537,8 @@ final class StoreStubState: @unchecked Sendable {
     var stalled = 0
     /* Ranges every request asked for, stalled or not, in order. */
     var asked: [String] = []
+    /* When set, the answer for this address (by number) never comes. */
+    var stallAddress: Int?
     var stopped = 0
 }
 
@@ -537,6 +565,7 @@ final class StoreStub: URLProtocol {
         let state = Self.state
         if url.host == "drive.test" {
             Self.lock.lock(); state.addresses += 1; let n = state.addresses; Self.lock.unlock()
+            if n == state.stallAddress { return }
             answer(200, Data("{\"url\":\"https://store.test/o?n=\(n)\",\"urlExpiresAt\":null}".utf8), headers: ["Content-Type": "application/json"])
             return
         }

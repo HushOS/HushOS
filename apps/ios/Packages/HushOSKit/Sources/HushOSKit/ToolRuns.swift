@@ -414,6 +414,19 @@ private actor ObjectAddress {
     func refresh() async throws { url = try await renew() }
 }
 
+/* `work`, cancelled as soon as `control`'s run ends (checked every twentieth of a second) or its caller is. */
+func whileRunning<T: Sendable>(_ control: RunControl, _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    let task = Task { try await work() }
+    let watch = Task {
+        while !Task.isCancelled {
+            if control.isEnded() { task.cancel(); return }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+    defer { watch.cancel() }
+    return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+}
+
 public enum ToolReaders {
     /*
      * A reader over `opened` for a run under `control`: each chunk's range fetched through `api`,
@@ -433,7 +446,10 @@ public enum ToolReaders {
             }
             return url
         }
-        let address = ObjectAddress(try await fresh(), renew: fresh)
+        // The first address is asked for in the caller's task: cancelled with it, and when the run
+        // ends. Renewals run inside a range's fetch, which the run's end (or a drain's deadline or
+        // a sign-out) cancels already.
+        let address = ObjectAddress(try await whileRunning(control, fresh), renew: fresh)
         // Padding owed when the run ended: once each, an expired address renewed once, in the background.
         let drainOnce: @Sendable (ByteRange) async throws -> Void = { range in
             do {

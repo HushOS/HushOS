@@ -8,6 +8,8 @@ import {
     OUTPUT_NAME_MAX,
     OUTPUTS_UNRELEASED_MAX,
     RESULT_MAX_BYTES,
+    RUN_OUTPUTS_MAX,
+    RUN_TOTAL_BYTES_MAX,
     TOOL_FAILED,
     TOOL_WATCHDOG_MS,
     type ToPage,
@@ -71,6 +73,13 @@ export type ToolRunOptions<I> = {
     /* The tab's budget unless a test brings its own. */
     budget?: PlaintextBudget;
     watchdogMs?: number;
+    /*
+     * The most results the run may produce, and their bytes in all (RUN_OUTPUTS_MAX and
+     * RUN_TOTAL_BYTES_MAX unless the run sets its own): the page fails the run past either,
+     * whatever the worker says.
+     */
+    maxOutputs?: number;
+    maxTotalBytes?: number;
     /* The person's words for each refusal code the tool may send; any other failure is TOOL_FAILED. */
     refusals?: Record<string, string>;
 };
@@ -213,7 +222,30 @@ function drop(buffer: ArrayBuffer) {
 }
 
 export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
+    /*
+     * What the run needs, copied out: no function below may reach `options`, and what is heavy
+     * (the sources, which may hold a whole decrypted file, the input, the WebAssembly and files)
+     * is let go when the run ends, so a handle kept after that holds none of it.
+     */
+    const { label, refusals } = options;
     const budget = options.budget ?? toolBudget;
+    const watchdogMs = options.watchdogMs ?? TOOL_WATCHDOG_MS;
+    const maxOutputs = options.maxOutputs ?? RUN_OUTPUTS_MAX;
+    const maxTotalBytes = options.maxTotalBytes ?? RUN_TOTAL_BYTES_MAX;
+    let sources: RangeReader[] = options.sources;
+    let launch: {
+        worker: () => Worker;
+        input: I;
+        modules: Record<string, WebAssembly.Module>;
+        files: Record<string, ArrayBuffer>;
+        onOutput: ((output: ToolOutput) => void) | undefined;
+    } | null = {
+        worker: options.worker,
+        input: options.input,
+        modules: options.modules ?? {},
+        files: options.files ?? {},
+        onOutput: options.onOutput,
+    };
     const listeners = new Set<(state: ToolRunState) => void>();
     let state: ToolRunState = { status: 'running', done: 0, total: null };
     const urls = new Set<string>();
@@ -260,7 +292,11 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         } catch {
             // Terminating and closing ports do not throw; nothing here may keep the run from settling.
         }
-        for (const source of options.sources)
+        teardown = null;
+        launch = null;
+        const closing = sources;
+        sources = [];
+        for (const source of closing)
             void Promise.resolve()
                 .then(() => source.close?.())
                 .catch(() => {});
@@ -299,11 +335,12 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         started = true;
         set({ status: 'running', done: 0, total: null });
         // A listener told it is running may have cancelled it (or every run): nothing is started.
-        if (ended) return;
-        const watchdog = createWatchdog(options.watchdogMs ?? TOOL_WATCHDOG_MS, failed);
+        if (ended || !launch) return;
+        const { input, modules, files } = launch;
+        const watchdog = createWatchdog(watchdogMs, failed);
         let worker: Worker;
         try {
-            worker = options.worker();
+            worker = launch.worker();
         } catch {
             // Refused before it started (a policy, a browser without module workers).
             watchdog.stop();
@@ -319,9 +356,11 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
             // in a loop is stopped by Chromium up to two seconds later (e2e/tools-harness.spec.ts).
             worker.terminate();
             for (const stop of stops) stop();
+            // A result still held keeps this scope: the stops (and through them the sources) go.
+            stops.length = 0;
         };
         const allowance = readAllowance();
-        const ports = options.sources.map((reader) => {
+        const ports = sources.map((reader) => {
             const channel = new MessageChannel();
             stops.push(
                 serveRanges(channel.port1, reader, {
@@ -335,6 +374,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
 
         // The output the worker waits on the page to accept; it may send no other meanwhile.
         let awaiting: number | null = null;
+        // What the run has produced in all, released or not.
+        let producedBytes = 0;
         let nextId = 0;
         // Set while the run holds OUTPUTS_UNRELEASED_MAX results: a release lets the next in.
         let belowCap: (() => void) | null = null;
@@ -393,7 +434,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 },
             };
             try {
-                if (options.onOutput) options.onOutput(output);
+                const onOutput = launch?.onOutput;
+                if (onOutput) onOutput(output);
                 else output.release();
             } catch {
                 failed();
@@ -435,13 +477,18 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                         (mime !== null &&
                             (typeof mime !== 'string' || mime.length > OUTPUT_MIME_MAX)) ||
                         !(bytes instanceof ArrayBuffer) ||
-                        bytes.byteLength > RESULT_MAX_BYTES
+                        bytes.byteLength > RESULT_MAX_BYTES ||
+                        // Past the run's caps: ids count from 0, so nextId results came before.
+                        nextId + 1 > maxOutputs ||
+                        producedBytes + bytes.byteLength > maxTotalBytes
                     ) {
-                        // Not pacing itself, an id seen before, or more than one upload can hold.
+                        // Not pacing itself, an id seen before, more than one upload can hold, or
+                        // more than the run may produce.
                         if (bytes instanceof ArrayBuffer) drop(bytes);
                         failed();
                         return;
                     }
+                    producedBytes += bytes.byteLength;
                     take(nextId, name, mime, bytes);
                     return;
                 }
@@ -464,8 +511,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 case 'fail': {
                     const code = typeof msg.code === 'string' ? msg.code : null;
                     const words =
-                        code !== null && options.refusals && Object.hasOwn(options.refusals, code)
-                            ? options.refusals[code]!
+                        code !== null && refusals && Object.hasOwn(refusals, code)
+                            ? refusals[code]!
                             : TOOL_FAILED;
                     finish({ ok: false, error: new Error(words) });
                     return;
@@ -482,10 +529,10 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         worker.onmessageerror = failed;
         const start: ToWorker = {
             type: 'start',
-            input: options.input,
+            input,
             sources: ports,
-            modules: options.modules ?? {},
-            files: options.files ?? {},
+            modules,
+            files,
         };
         try {
             worker.postMessage(
@@ -499,7 +546,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     }
 
     const entry: Queued = {
-        label: options.label,
+        label,
         begin,
         behind: (label) => set({ status: 'waiting', behind: label }),
         fail: failed,

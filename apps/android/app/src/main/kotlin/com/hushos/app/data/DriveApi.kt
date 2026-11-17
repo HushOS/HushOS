@@ -164,6 +164,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
     companion object {
         /* The server's 409 for an abort of an upload that completed (packages/drive/src/server.ts abortUpload). */
         const val ALREADY_FINISHED = "This upload already finished."
+        /* The most a cut-off-able JSON answer (an object's address) may be: a few hundred bytes in practice. */
+        const val CUT_BODY_MAX = 64 * 1024
     }
 
     private val origin = session.origin
@@ -190,13 +192,33 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return connection
     }
 
-    private fun finish(connection: HttpURLConnection): JSONObject {
+    /*
+     * With a `call`, the body is read in pieces, stopping at the first read after a cut and past
+     * `CUT_BODY_MAX` bytes, so a server that trickles its answer can't hold the caller.
+     */
+    private fun finish(connection: HttpURLConnection, call: RangeCall? = null): JSONObject {
         val status: Int
         val text: String
         try {
+            if (call?.isCut == true) throw Unreachable()
             status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            text = when {
+                stream == null -> ""
+                call == null -> stream.bufferedReader().use { it.readText() }
+                else -> stream.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (call.isCut) throw Unreachable()
+                        if (read < 0) break
+                        if (out.size() + read > CUT_BODY_MAX) throw ApiError(status, "The answer was too long.")
+                        out.write(buffer, 0, read)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                }
+            }
         } catch (error: java.io.IOException) {
             throw Unreachable()
         }
@@ -252,8 +274,19 @@ class DriveApi(val session: Shared.Session) : RootApi {
                 it.getJSONArray("children").objects().map(NodeView::from), if (it.isNull("nextCursor")) null else it.getString("nextCursor"))
         }
 
-    fun versionUrl(versionId: String, workspaceId: String): String =
-        get("/versions/$versionId/url" + q("workspaceId" to workspaceId)).getString("url")
+    /*
+     * A version's presigned address. `guard` gets the request as a `RangeCall`, as `range`'s does, so
+     * a tool run, the drain deadline or a sign-out can cut off an answer that never finishes.
+     */
+    fun versionUrl(
+        versionId: String,
+        workspaceId: String,
+        guard: (RangeCall, () -> JSONObject) -> JSONObject = { _, request -> request() },
+    ): String {
+        val connection = open("/versions/$versionId/url" + q("workspaceId" to workspaceId), "GET")
+        val call = RangeCall(connection)
+        return guard(call) { finish(connection, call) }.getString("url")
+    }
 
     fun versions(nodeId: String, workspaceId: String): List<VersionListView> =
         get("/nodes/$nodeId/versions" + q("workspaceId" to workspaceId)).getJSONArray("versions").objects().map {

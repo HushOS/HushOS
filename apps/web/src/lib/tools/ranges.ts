@@ -16,13 +16,23 @@ export type RangeReader = Pick<FileReader, 'size' | 'read'> & {
     close?: () => void | Promise<void>;
 };
 
-/* A reader over bytes already in memory: a small file read whole, a result fed to the next tool. */
+/*
+ * A reader over bytes already in memory: a small file read whole, a result fed to the next tool.
+ * Closing it lets go of them (the caller's own reference is untouched, never detached), and any
+ * later read fails, so a run kept after it ends holds no decrypted input through its reader.
+ */
 export function memoryReader(bytes: Uint8Array): RangeReader {
+    let held: Uint8Array | null = bytes;
     return {
         size: bytes.byteLength,
         async read(offset, length) {
-            const start = Math.min(Math.max(0, offset), bytes.byteLength);
-            return bytes.subarray(start, Math.min(bytes.byteLength, start + Math.max(0, length)));
+            const source = held;
+            if (!source) throw new Error('The source was closed.');
+            const start = Math.min(Math.max(0, offset), source.byteLength);
+            return source.subarray(start, Math.min(source.byteLength, start + Math.max(0, length)));
+        },
+        close() {
+            held = null;
         },
     };
 }

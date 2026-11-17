@@ -241,6 +241,15 @@ describe('the range port', () => {
         expect(await refused.finished).toEqual({ type: 'fail', code: 'password' });
     });
 
+    test('a closed memory reader lets go of its bytes, never the caller’s, and reads nothing more', async () => {
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        const reader = memoryReader(bytes);
+        expect(await reader.read(1, 2)).toEqual(new Uint8Array([2, 3]));
+        await reader.close?.();
+        await expect(reader.read(0, 4)).rejects.toThrow();
+        expect(bytes).toEqual(new Uint8Array([1, 2, 3, 4]));
+    });
+
     test('a read in flight keeps nothing else its request carried', async () => {
         setFlagsFromString('--expose-gc');
         const gc = runInNewContext('gc') as () => void;
