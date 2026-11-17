@@ -97,6 +97,60 @@ import Testing
         #expect(kept.reads > 0)
     }
 
+    @Test func aCancelledCallKeepsItsTurnUntilItsThreadEnds() async throws {
+        // A read the core can't interrupt holds its session's lock past the cancel: the next call waits for the turn, not on its watchdog.
+        final class Slow: LocalSource, @unchecked Sendable {
+            let bytes: Data
+            let lock = NSLock()
+            var slow = false
+            init(_ bytes: Data) { self.bytes = bytes }
+            func size() -> UInt64 { UInt64(bytes.count) }
+            func readAt(offset: UInt64, length: UInt64) throws -> Data {
+                if lock.withLock({ slow }) { Thread.sleep(forTimeInterval: 1.2) }
+                return bytes.subdata(in: Int(offset) ..< Int(offset + length))
+            }
+        }
+        let kept = Slow(try Data(contentsOf: Self.fixtures.appendingPathComponent("basic.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .milliseconds(600), poll: .milliseconds(50), registered: false)
+        let readme = try #require(archive.entries.first { $0.path == "docs/readme.txt" })
+        kept.lock.withLock { kept.slow = true }
+        let first = Task { try await archive.preview(readme, limit: 1024) }
+        while archive.running == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(100))
+        let started = ContinuousClock.now
+        first.cancel()
+        await #expect(throws: ArchiveFailure.self) { try await first.value }
+        // The caller hears at once.
+        #expect(ContinuousClock.now - started < .milliseconds(500))
+        kept.lock.withLock { kept.slow = false }
+        // Asked at once: its 600 ms watchdog starts only once the first call's thread let go.
+        let text = String(decoding: try await archive.preview(readme, limit: 1024), as: UTF8.self)
+        #expect(text.contains("Read me. This entry is deflated."))
+        archive.close()
+    }
+
+    @Test func aStoreRefusalOfTheSessionIsSaidAsItselfWithItsSession() async throws {
+        let (content, _) = try Self.sealed("basic.zip")
+        let source = ArchiveSource(drainLater: { _ in }) { _ in throw DriveAPIError.notAuthenticated(session: "session-1") }
+        do {
+            _ = try await OpenArchive.open(source: source, content: content, watchdog: .seconds(30), registered: false)
+            Issue.record("opened without the store")
+        } catch {
+            // Not the core's failure in words: the 401, with the session it was for, for the app's session check.
+            #expect(endsSession(error))
+            #expect(refusedSession(error) == "session-1")
+        }
+        // Any other failure of the store is still the archive's own.
+        let failing = ArchiveSource(drainLater: { _ in }) { _ in throw DriveAPIError.server(500, "Down") }
+        do {
+            _ = try await OpenArchive.open(source: failing, content: content, watchdog: .seconds(30), registered: false)
+            Issue.record("opened without the store")
+        } catch {
+            #expect(!endsSession(error))
+            #expect(error is ArchiveFailure)
+        }
+    }
+
     @Test func closingCancelsTheArchivesCallsAtOnce() async throws {
         let kept = Kept(try Data(contentsOf: Self.fixtures.appendingPathComponent("basic.zip")))
         let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), poll: .milliseconds(50), registered: false)

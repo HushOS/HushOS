@@ -815,6 +815,42 @@ describe('download manager', () => {
         await reader.close();
     });
 
+    test('an uncapped reader charges each chunk it fetches, not the bytes a read asked for', async () => {
+        const size = 6 * CHUNK - 100;
+        const h = harness({});
+        const charged: number[] = [];
+        const reader = h.manager.openReader(file('ch', size), 4, {
+            tool: true,
+            uncapped: true,
+            onFetch: (bytes) => {
+                if (charged.length === 12) throw new Error('Past the allowance.');
+                charged.push(bytes);
+            },
+        });
+        // One-byte reads cycling over chunks 0 to 4, past a cache of four: every read a fetch.
+        let error: unknown = null;
+        for (let read = 0; read < 20 && !error; read++) {
+            reader.read((read % 5) * CHUNK, 1).catch((e: unknown) => (error = e));
+            await settle(100);
+        }
+        expect(charged).toEqual(Array(12).fill(CHUNK));
+        expect(String(error)).toMatch(/Past the allowance/);
+        // Refused, nothing was fetched for it: the fetches are the ones charged.
+        const fetched = [...h.attempts.values()].reduce((sum, n) => sum + n, 0);
+        expect(fetched).toBe(12);
+        // The file's last chunk is charged its own size.
+        const tail = h.manager.openReader(file('ct', size), 4, {
+            tool: true,
+            uncapped: true,
+            onFetch: (bytes) => charged.push(bytes),
+        });
+        void tail.read(size - 1, 1);
+        await settle(100);
+        expect(charged.at(-1)).toBe(CHUNK - 100);
+        await reader.close();
+        await tail.close();
+    });
+
     test('a version whose envelope promises another chunk count than the listing is refused', async () => {
         // The listing said no thumbnail (one chunk); the envelope opened says a trailer (two).
         const size = CHUNK - 10;

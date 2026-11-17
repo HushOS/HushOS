@@ -170,6 +170,11 @@ private final class CallOutcome<T: Sendable>: @unchecked Sendable {
 
 /* The key the call's thread keeps its control under, for the source to find. */
 private let controlKey = "com.hushos.archive.control"
+/*
+ * A 401 met by a read on the call's thread: the core only carries a reason across, so the session
+ * it was for (its tag) is kept here, and the call throws it in place of the core's failure.
+ */
+private let refusedKey = "com.hushos.archive.refused"
 
 /*
  * The object store for an open archive. The core calls `fetch` on the thread of whichever call is
@@ -202,7 +207,9 @@ final class ArchiveSource: ObjectSource, @unchecked Sendable {
         }
         switch box.result! {
         case .success(let data): return data
-        case .failure(let error): throw FetchError.Failed(reason: error.localizedDescription)
+        case .failure(let error):
+            if endsSession(error) { Thread.current.threadDictionary[refusedKey] = error }
+            throw FetchError.Failed(reason: error.localizedDescription)
         }
     }
 
@@ -509,9 +516,14 @@ public final class OpenArchive: @unchecked Sendable {
     private func turn<T: Sendable>(scope: ArchiveWords.Scope, _ work: @escaping @Sendable (RunControl) throws -> T) async throws -> T {
         try stands()
         do { try await turns.take() } catch { throw ArchiveFailure(code: nil, message: "Cancelled.") }
-        defer { Task { await turns.give() } }
         let value: T
-        do { value = try await Self.call(watchdog: watchdog, poll: poll, scope: scope, on: calls, registered: registered, work) } catch {
+        // The turn goes back when the call's thread ends, not when the caller hears: a cancel or a
+        // watchdog answers at once, while the core may still hold its session's lock, and the next
+        // call's watchdog must not run while it waits for that lock.
+        let turns = self.turns
+        do {
+            value = try await Self.call(watchdog: watchdog, poll: poll, scope: scope, on: calls, registered: registered, threadEnded: { Task { await turns.give() } }, work)
+        } catch {
             // Failed because the family went: said as that.
             try stands()
             throw error
@@ -535,13 +547,16 @@ public final class OpenArchive: @unchecked Sendable {
      * run slot: the watchdog polled every `poll`, a cancel from the task, the archive's close or a
      * sign-out ending it at once, `finish()` when the thread returns.
      */
-    static func call<T: Sendable>(watchdog: Duration, poll: Duration, scope: ArchiveWords.Scope = .archive, on calls: ArchiveCalls? = nil, registered: Bool = true, _ work: @escaping @Sendable (RunControl) throws -> T) async throws -> T {
+    static func call<T: Sendable>(watchdog: Duration, poll: Duration, scope: ArchiveWords.Scope = .archive, on calls: ArchiveCalls? = nil, registered: Bool = true, threadEnded: (@Sendable () -> Void)? = nil, _ work: @escaping @Sendable (RunControl) throws -> T) async throws -> T {
         let millis = UInt64(watchdog.components.seconds) * 1000 + UInt64(watchdog.components.attoseconds / 1_000_000_000_000_000)
         let control = RunControl(watchdogMillis: millis, clock: nil)
         let id = UUID()
         let outcome = CallOutcome<T>()
         // On an archive closed already (or closing) nothing starts: no thread, no read.
-        if let calls, !calls.add(id, control) { throw ArchiveFailure.closed }
+        if let calls, !calls.add(id, control) {
+            threadEnded?()
+            throw ArchiveFailure.closed
+        }
         if registered { ArchiveSessions.track(call: id, control) }
         let result = await withTaskCancellationHandler {
             if Task.isCancelled { control.cancel() }
@@ -555,14 +570,20 @@ public final class OpenArchive: @unchecked Sendable {
             watcher.resume()
             let thread = Thread {
                 Thread.current.threadDictionary[controlKey] = control
-                let result = Result { try work(control) }.mapError { ArchiveFailure.from($0, control: control, scope: scope) as Error }
+                let result = Result { try work(control) }.mapError { error -> Error in
+                    // A 401 is said as itself, its session's tag kept, for the app's session check.
+                    if let refused = Thread.current.threadDictionary[refusedKey] as? Error { return refused }
+                    return ArchiveFailure.from(error, control: control, scope: scope)
+                }
                 Thread.current.threadDictionary[controlKey] = nil
+                Thread.current.threadDictionary[refusedKey] = nil
                 // The call's reader lets go of its chunks and its key now, before anyone is told.
                 control.finish()
                 outcome.finish(result)
                 watcher.cancel()
                 ArchiveSessions.untrack(call: id)
                 calls?.remove(id)
+                threadEnded?()
             }
             thread.stackSize = 8 << 20
             thread.start()

@@ -124,7 +124,7 @@ struct ArchiveScreen: View {
                     open = try await OpenArchive.openKept(kept)
                 } else { return }
             } catch {
-                if !Task.isCancelled { failure = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic) }
+                if !Task.isCancelled { failure = failureWords(error, store: store) }
                 return
             }
             // The tree off the main thread (a 50,000-entry list takes a moment), and the archive closed if the viewer is left
@@ -306,7 +306,7 @@ struct ArchiveScreen: View {
                         opened = entry
                         passwordFor = entry.index
                     } else {
-                        progress.error = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
+                        progress.error = failureWords(error, store: store)
                     }
                 }
             }
@@ -334,6 +334,16 @@ struct ArchiveScreen: View {
         .padding(.leading, Alpine.Space.s4)
         .background(Alpine.surface)
     }
+}
+
+/*
+ * What a failed archive call says. A 401 under the store's reads goes to the store first, which
+ * ends the session only if it is the one in use (a late one from a session gone is stale), as
+ * DriveStore.fetch does.
+ */
+@MainActor private func failureWords(_ error: Error, store: DriveStore) -> String {
+    if endsSession(error) { store.report(error) }
+    return (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
 }
 
 /* An entry downloading into a folder the person picked. */
@@ -418,6 +428,7 @@ private struct ArchiveRowView: View {
 
 /* One entry open: its size and date with Download, then its password, its refusal, the large-file card, or the entry itself. */
 private struct ArchiveEntryPane: View {
+    @Environment(DriveStore.self) private var store
     let entry: ArchiveEntry
     let archive: OpenArchive
     @Binding var unlocked: Bool
@@ -514,7 +525,7 @@ private struct ArchiveEntryPane: View {
                             unlocked = false
                             doubted = code == "password-unproven"
                         } else {
-                            failure = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
+                            failure = failureWords(error, store: store)
                         }
                     }
                 }
@@ -627,6 +638,7 @@ private struct InMemoryPDF: UIViewRepresentable {
 
 /* The password, typed here and held only by the open archive in the core. */
 private struct ArchivePasswordCard: View {
+    @Environment(DriveStore.self) private var store
     let name: String
     let archive: OpenArchive
     /* The entry the password is asked for: tried on it first, so a password that opens only some of the archive's entries opens the one picked. */
@@ -674,7 +686,7 @@ private struct ArchivePasswordCard: View {
             do {
                 if try await archive.unlock(typed, entry: entry) { onUnlocked() } else { wrong = true }
             } catch {
-                self.error = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
+                self.error = failureWords(error, store: store)
             }
             busy = false
         }

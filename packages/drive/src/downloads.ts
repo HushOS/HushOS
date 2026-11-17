@@ -572,9 +572,11 @@ export function createDownloadManager(options: DownloadManagerOptions) {
          * `tool`: a tool's reader (the tail kept, its padding fetched beside it and always to the
          * end, at most four times the object fetched). `uncapped` drops that last limit, for a
          * reader a person drives one action at a time (an archive open in the viewer), whose
-         * reads have no end a tool's would.
+         * reads have no end a tool's would. `onFetch` hears each chunk of the file about to be
+         * fetched and decrypted, with its plaintext size, and refuses it by throwing: a caller
+         * then charges what is fetched, not the bytes a read asked for (one byte can fetch 8 MiB).
          */
-        options: { tool?: boolean; uncapped?: boolean } = {},
+        options: { tool?: boolean; uncapped?: boolean; onFetch?: (bytes: number) => void } = {},
     ): FileReader {
         // Per chunk, the most fetched so far: a chunk fetched again after eviction counts once.
         const fetched = new Map<number, number>();
@@ -624,6 +626,13 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 return Promise.reject(
                     new Error('This file was read more times than a tool needs.'),
                 );
+            try {
+                options.onFetch?.(
+                    Math.max(0, Math.min(CHUNK_SIZE, source.plaintextSize - index * CHUNK_SIZE)),
+                );
+            } catch (error) {
+                return Promise.reject(error);
+            }
             return source.open().then(() => source.fetchChunk(index));
         }
         /* Every padding chunk asked for, one failing or not; the first failure fails every later read. */

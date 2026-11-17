@@ -161,6 +161,39 @@ class ArchiveSessionsTest {
         sessions.closeAll()
     }
 
+    @Test fun aStoreRefusalOfTheSessionIsSaidAsItselfWithItsSession() = runBlocking {
+        // The API answers 401 for the version's address: the session ended under the archive's reads.
+        val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/") { exchange ->
+            exchange.sendResponseHeaders(401, -1)
+            exchange.close()
+        }
+        server.start()
+        try {
+            val (content, _) = sealed(File(fixtures, "basic.zip").readBytes())
+            val session = com.hushos.app.data.Shared.Session("http://127.0.0.1:${server.address.port}", "token", "user")
+            val current = com.hushos.app.data.CallControl()
+            val source = com.hushos.app.data.archiveSourceOf(com.hushos.app.data.DriveApi(session), "version", "workspace", current)
+            try {
+                ArchiveSessions().open(source, content, current, signedIn = session)
+                fail("opened without the store")
+            } catch (error: com.hushos.app.data.ArchiveSessionRefused) {
+                // Not the core's failure in words: the 401, with the session it was read under, for the app's session check.
+                assertEquals(session, error.session)
+            }
+        } finally {
+            server.stop(0)
+        }
+        // Any other failure of the store is still the archive's own.
+        val (content, _) = sealed(File(fixtures, "basic.zip").readBytes())
+        try {
+            ArchiveSessions().open(StoreSource { _, _ -> throw java.io.IOException("Down") }, content)
+            fail("opened without the store")
+        } catch (error: Exception) {
+            assertFalse(error is com.hushos.app.data.ArchiveSessionRefused)
+        }
+    }
+
     @Test fun aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() = runBlocking {
         // A family's file: its folder let go of (a removal, a fork) while a download streams it.
         val words = java.util.concurrent.atomic.AtomicReference<String?>(null)

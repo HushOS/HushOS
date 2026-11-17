@@ -81,13 +81,25 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
     }
     // A tool's reader without its lifetime cap: the archive's tail (its directory) kept, and the
     // padding after it fetched beside it and always to the end, so a quick refusal doesn't show
-    // the store where the file ends. The worker's reads are bounded per action by the session.
-    const reader = downloads.openReader(node, 4, { tool: true, uncapped: true });
+    // the store where the file ends. Each chunk it fetches is charged to the session's actions
+    // (`meter`); until the session meters it, nothing is fetched.
+    let charge: ((bytes: number) => void) | null = null;
+    const reader = downloads.openReader(node, 4, {
+        tool: true,
+        uncapped: true,
+        onFetch: (bytes) => {
+            if (!charge) throw new Error('The archive’s reads aren’t counted yet.');
+            charge(bytes);
+        },
+    });
     return {
         size: reader.size,
         fresh: true,
         read: (offset, length) => reader.read(offset, length),
         close: () => reader.close(),
+        meter: (counting) => {
+            charge = counting;
+        },
     };
 }
 

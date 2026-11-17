@@ -54,7 +54,15 @@ class ArchiveBrowse(
     private val build: suspend (List<ArchiveEntry>, ArchiveFolders) -> ArchiveTree = { entries, folders ->
         withContext(Dispatchers.Default) { ArchiveTree(entries, folders) }
     },
+    /* A 401 under the archive's reads, with the session it was read under: the app's session check. */
+    private val refused: (com.hushos.app.data.Shared.Session?) -> Unit = {},
 ) {
+    /* What a failed call says; a 401 goes to the session check first, as the drive's reads do. */
+    fun failed(error: Throwable, entry: Boolean = false): String {
+        if (error is com.hushos.app.data.ArchiveSessionRefused) refused(error.session)
+        return archiveFailure(error, entry)
+    }
+
     /* The id it was opened for: the app's state names it, and a later resolution never changes it. */
     val id = subject.id
     var subject by mutableStateOf(subject)
@@ -119,7 +127,7 @@ class ArchiveBrowse(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
-                failure = archiveFailure(error)
+                failure = failed(error)
             } finally {
                 // Opened but never handed over (Back while the tree was building, a close, a failure):
                 // closed here, or nothing would close it before a sign-out.
@@ -189,7 +197,7 @@ class ArchiveBrowse(
             opened = record.entry
             return
         }
-        record.error.value = archiveFailure(error, entry = true)
+        record.error.value = failed(error, entry = true)
     }
 
     /* A picked file the download won't fill: gone, not left empty where the person put it. */

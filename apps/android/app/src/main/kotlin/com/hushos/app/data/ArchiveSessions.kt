@@ -54,9 +54,12 @@ class ArchiveSessions {
         pollMillis: Long = 1_000,
         clock: ToolClock? = null,
         stands: (() -> String?)? = null,
+        /* The session the store's reads go under: a 401 names it (ArchiveSessionRefused). */
+        signedIn: Shared.Session? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, current, watchdogMillis, pollMillis, clock)
         archive.stands = stands
+        archive.signedIn = signedIn
         add(archive)
         try {
             // The content (which carries the key) is the core's from here; nothing in Kotlin keeps it.
@@ -122,9 +125,23 @@ class FileLocalSource(private val file: java.io.File) : LocalSource {
  */
 class CallControl {
     private val local = ThreadLocal<RunControl?>()
+    /* A 401 a read met on the call's thread: the core carries only a reason across, so it is kept here. */
+    private val refused = ThreadLocal<NotAuthenticated?>()
     fun get(): RunControl? = local.get()
-    internal fun set(control: RunControl?) = if (control == null) local.remove() else local.set(control)
+    internal fun set(control: RunControl?) {
+        if (control == null) local.remove() else local.set(control)
+        refused.remove()
+    }
+    internal fun refuse(error: NotAuthenticated) = refused.set(error)
+    internal fun refusedHere(): Boolean = refused.get() != null
 }
+
+/*
+ * A 401 under an archive's reads, said as itself rather than as the core's failure, with the
+ * session the archive reads under: the app ends that session only if it is still the one in use
+ * (a late answer for a session gone ends nothing).
+ */
+class ArchiveSessionRefused(val session: Shared.Session?) : Exception("Your session ended. Sign in again.")
 
 class OpenArchive internal constructor(
     private val owner: ArchiveSessions,
@@ -142,6 +159,8 @@ class OpenArchive internal constructor(
      * starts and before it hands anything back, and the archive closes at the first words.
      */
     @Volatile internal var stands: (() -> String?)? = null
+    /* The session the store's reads go under, named by a 401 (ArchiveSessionRefused). */
+    @Volatile internal var signedIn: Shared.Session? = null
     private val turn = Mutex()
     /* The call going now, by what ends it: what close calls. */
     private val calls = ConcurrentHashMap.newKeySet<() -> Unit>()
@@ -184,6 +203,7 @@ class OpenArchive internal constructor(
         val parent = opened()
         val child = OpenArchive(owner, current, watchdogMillis, pollMillis, clock)
         child.stands = stands
+        child.signedIn = signedIn
         // Known before it exists, so a close or a sign-out meanwhile reaches it; made under
         // NonCancellable, so a cancel while the core makes it can't drop the session unclosed.
         owner.add(child)
@@ -266,6 +286,8 @@ class OpenArchive internal constructor(
                     result = runCatching { work(control) }.recoverCatching { error ->
                         when {
                             control.isCancelled() -> throw CancellationException("Cancelled.")
+                            // A 401: said as itself, with the session, for the app's session check.
+                            current.refusedHere() -> throw ArchiveSessionRefused(signedIn)
                             control.timedOut() -> throw ToolFailed()
                             else -> throw error
                         }
@@ -336,14 +358,20 @@ fun archiveSourceOf(
     }
     return StoreSource({ ranges -> drains.enqueue(ranges, born, metered(), drainOnce) }) { range, _ ->
         val control = control()
-        if (url.get() == null) url.set(address(control))
-        Resumable.run(
-            online = online,
-            sleep = { millis -> sleepWhileRunning(control, millis) },
-            onExpired = { url.set(address(control)) },
-        ) {
-            control.check()
-            api.range(url.get()!!, range) { call, request -> Cutoff.whileRunning(control, call, request) }
+        try {
+            if (url.get() == null) url.set(address(control))
+            Resumable.run(
+                online = online,
+                sleep = { millis -> sleepWhileRunning(control, millis) },
+                onExpired = { url.set(address(control)) },
+            ) {
+                control.check()
+                api.range(url.get()!!, range) { call, request -> Cutoff.whileRunning(control, call, request) }
+            }
+        } catch (error: NotAuthenticated) {
+            // Kept for the call, which throws it as itself once the core gives up.
+            current.refuse(error)
+            throw error
         }
     }
 }
@@ -364,5 +392,5 @@ suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveS
         online = { Resumable.online(context) },
         metered = { context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false },
     )
-    return sessions.open(source, opened.content, current, stands = stands)
+    return sessions.open(source, opened.content, current, stands = stands, signedIn = api.session)
 }

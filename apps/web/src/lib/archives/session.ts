@@ -1,4 +1,5 @@
 import type { DownloadSink, FileReader } from '@hushos/drive/downloads';
+import { CHUNK_SIZE } from '@hushos/crypto/drive';
 import { trackToolRun } from '@/lib/tools/active';
 import { TOOL_FAILED, TOOL_WATCHDOG_MS } from '@/lib/tools/protocol';
 import { readAllowance, serveRanges, type RangeReader } from '@/lib/tools/ranges';
@@ -196,9 +197,25 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     const stopped = new Set<number>();
     let active = 0;
     let watchdog: Watchdog | null = null;
-    // What the worker may still be served, in bytes: each action adds to it.
+    /*
+     * What the worker may still be served, in bytes: each action adds to it. A reader that fetches
+     * by chunk (`meter`) is charged each chunk it fetches, whatever a read asked for, so a worker
+     * cycling one-byte reads across chunks pays 8 MiB a read; its actions are granted three
+     * chunks more (a local header in the chunk before, an entry across a boundary, the tail).
+     * Any other reader (the archive in memory) is charged the bytes each read asks for.
+     */
     let allowed = 0;
-    const grant = (bytes: number) => (allowed += Math.min(4 * bytes + MiB, 4 * reader.size + MiB));
+    const metered = typeof reader.meter === 'function';
+    const slack = metered ? 3 * CHUNK_SIZE : MiB;
+    const grant = (bytes: number) =>
+        (allowed += Math.min(4 * bytes + slack, 4 * reader.size + slack));
+    reader.meter?.((bytes) => {
+        if (bytes > allowed) {
+            broken();
+            throw new Error('The worker read more than it was allowed.');
+        }
+        allowed -= bytes;
+    });
 
     function end(error: Error) {
         if (ended) return;
@@ -233,11 +250,13 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         size: reader.size,
         fresh: reader.fresh,
         read(offset, length) {
-            if (length > allowed) {
-                broken();
-                return Promise.reject(new Error('The worker read more than it was allowed.'));
+            if (!metered) {
+                if (length > allowed) {
+                    broken();
+                    return Promise.reject(new Error('The worker read more than it was allowed.'));
+                }
+                allowed -= length;
             }
-            allowed -= length;
             return reader.read(offset, length);
         },
     };

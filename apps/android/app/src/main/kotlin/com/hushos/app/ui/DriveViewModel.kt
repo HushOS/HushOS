@@ -2528,7 +2528,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private fun showArchive(subject: ArchiveSubject, open: suspend (resolved: (ArchiveSubject) -> Unit) -> com.hushos.app.data.OpenArchive): Boolean {
         archiveBrowse?.close()
         // Held here, not by the screen: a rotation keeps the session, its password, the folder and the downloads.
-        archiveBrowse = ArchiveBrowse(subject, viewModelScope, open)
+        archiveBrowse = ArchiveBrowse(subject, viewModelScope, open, refused = ::archiveRefused)
         _state.update { it.copy(archive = subject) }
         return true
     }
@@ -2565,6 +2565,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* The archive open now, for the screen; none once it is closed. */
     var archiveBrowse: ArchiveBrowse? = null
         private set
+
+    /*
+     * A 401 under an archive's reads: the session ends only if the one it was read under is still
+     * the one in use (a late answer after a sign-out and a sign-in ends nothing), as twoStep does.
+     */
+    fun archiveRefused(session: Shared.Session?) {
+        if (session == null || com.hushos.app.data.Auth.stillSignedIn(Shared.session(context), session)) sessionLost()
+    }
 
     /* The archive's directory, read under this session's vault; the caller closes it when its screen goes. */
     suspend fun openArchive(item: Opened): com.hushos.app.data.OpenArchive {

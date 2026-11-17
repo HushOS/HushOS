@@ -107,6 +107,7 @@ internal fun archiveFailure(error: Throwable, entry: Boolean = false): String = 
     // The read underneath (the network, the kept copy, a close) in its own words.
     is ArchiveException.Failed -> error.reason.ifBlank { toolFailedMessage() }
     is ToolFailed -> error.message ?: toolFailedMessage()
+    is com.hushos.app.data.ArchiveSessionRefused -> error.message ?: toolFailedMessage()
     // A family's file whose family folder was let go of meanwhile: the family's words.
     is com.hushos.app.data.FamilyFailure -> error.message ?: toolFailedMessage()
     else -> toolFailedMessage()
@@ -181,6 +182,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                                 onPasswordLost = browse::passwordLost,
                                 onDownload = { download(entry) },
                                 onDownloadArchive = { sending = true },
+                                failed = browse::failed,
                             )
                             else EntryList(tree.rows(path.lastOrNull() ?: 0), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = { browse.opened = it }, onDownload = ::download)
                         }
@@ -354,6 +356,7 @@ private fun EntryPane(
     onPasswordLost: (Boolean) -> Unit,
     onDownload: () -> Unit,
     onDownloadArchive: () -> Unit,
+    failed: (Throwable, Boolean) -> String,
 ) {
     val note = if (doubted) ArchiveWords.PASSWORD_UNPROVEN else null
     val alpine = Alpine.colors
@@ -380,14 +383,14 @@ private fun EntryPane(
                 entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 // An archive inside is never previewed; downloading a locked one asks for its password first.
-                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index, note) {
+                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index, note, failed) {
                     attempt++
                     askFor = false
                     onUnlocked()
                     onDownload()
                 }
                 entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) askFor = true else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
-                locked -> PasswordCard(archive, name, entry.index, note) { attempt++; onUnlocked() }
+                locked -> PasswordCard(archive, name, entry.index, note, failed) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 // The large-file card: past the ceiling only Download; past the threshold, what opening costs and Continue.
@@ -398,14 +401,14 @@ private fun EntryPane(
                         Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) }
                     }
                 }
-                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), attempt, onWrongPassword, onPasswordLost, onDownload)
+                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), attempt, onWrongPassword, onPasswordLost, onDownload, failed)
             }
         }
     }
 }
 
 @Composable
-private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: (Boolean) -> Unit, onDownload: () -> Unit) {
+private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: (Boolean) -> Unit, onDownload: () -> Unit, failed: (Throwable, Boolean) -> String) {
     val alpine = Alpine.colors
     var shown by remember(entry.index, attempt) { mutableStateOf<Shown>(Shown.Loading) }
     LaunchedEffect(entry.index, attempt) {
@@ -422,7 +425,7 @@ private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String
             if (error is ArchiveException.Refused && (error.code == "password-unproven" || error.code == "password")) {
                 onPasswordLost(error.code == "password-unproven")
             }
-            Shown.Failed(archiveFailure(error, entry = true))
+            Shown.Failed(failed(error, true))
         }
     }
     when (val now = shown) {
@@ -581,7 +584,7 @@ private fun PdfView(document: PdfDocumentHolder, onDownload: () -> Unit) {
 
 /* `index`: the item the password is asked for, tried on first, so a password that opens only some of the archive's items opens the one picked. */
 @Composable
-private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: String?, onUnlocked: () -> Unit) {
+private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: String?, failed: (Throwable, Boolean) -> String, onUnlocked: () -> Unit) {
     // Kept in memory only (remember, never saved state), and gone with the card.
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -598,7 +601,7 @@ private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: 
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Throwable) {
-                error = archiveFailure(failure)
+                error = failed(failure, false)
             } finally {
                 busy = false
             }

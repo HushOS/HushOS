@@ -161,3 +161,56 @@ describe('leaving an entry while it previews', () => {
         expect(terminated).toBe(true);
     });
 });
+
+describe('a worker cycling one-byte reads across chunks', () => {
+    it('is charged each 8 MiB chunk fetched, and stopped once its actions’ allowance is spent', async () => {
+        const { openArchive } = await import('./session');
+        const CHUNK = 8 * 1024 * 1024;
+        // The download engine's reader as the session sees it: four chunks cached, each other one fetched.
+        const cache: number[] = [];
+        let fetched = 0;
+        let charge: ((bytes: number) => void) | null = null;
+        const reader = {
+            size: 6 * CHUNK,
+            meter: (counting: (bytes: number) => void) => void (charge = counting),
+            async read(offset: number, length: number) {
+                const index = Math.floor(offset / CHUNK);
+                if (!cache.includes(index)) {
+                    charge!(CHUNK);
+                    fetched++;
+                    cache.push(index);
+                    if (cache.length > 4) cache.shift();
+                }
+                return new Uint8Array(length);
+            },
+        };
+        let port: MessagePort | null = null;
+        let terminated = false;
+        const fake = {
+            onmessage: null as ((event: MessageEvent) => void) | null,
+            onerror: null,
+            onmessageerror: null,
+            postMessage: (message: { type: string; port?: MessagePort }) => {
+                if (message.type === 'open') port = message.port!;
+            },
+            terminate: () => void (terminated = true),
+        };
+        const session = openArchive(reader, () => fake as unknown as Worker);
+        session.listing.catch(() => {});
+        await Promise.resolve();
+        await Promise.resolve();
+        // Opening grants the directory's reads (16 MiB and change, four times, and three chunks).
+        const answers: string[] = [];
+        port!.onmessage = (event) => answers.push((event.data as { type: string }).type);
+        for (let id = 1; id <= 60 && !terminated; id++) {
+            port!.postMessage({ type: 'read', id, offset: (id % 5) * CHUNK, length: 1 });
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        expect(terminated).toBe(true);
+        // The allowance the open granted, in whole chunks, and not one fetch past it.
+        const granted = 4 * (16 * 1024 * 1024 + 128 * 1024) + 3 * CHUNK;
+        expect(fetched).toBe(Math.floor(granted / CHUNK));
+        expect(answers.length).toBeLessThan(60);
+    });
+});
