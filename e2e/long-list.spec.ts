@@ -165,6 +165,10 @@ async function reset(p: Page) {
     await expect(p.locator('[data-node-id][aria-selected=true]')).toHaveCount(0);
 }
 
+// The tests share one folder and change it (drags, the Trash, arrivals), so a retry must start
+// the whole file again from a fresh folder rather than rerun one test on a changed one.
+test.describe.configure({ mode: 'serial' });
+
 test.beforeAll(async ({ browser }) => {
     test.setTimeout(300_000);
     page = await newPage(browser);
