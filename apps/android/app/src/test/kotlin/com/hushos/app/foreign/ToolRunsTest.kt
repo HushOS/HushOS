@@ -338,7 +338,8 @@ class ToolRunsTest {
         val asked = Collections.synchronizedList(ArrayList<String>())
         /* When set, only the range starting here stalls. */
         @Volatile var stallAt: Int? = null
-        /* When set, the answer for this address (by number) trickles: a byte a tenth of a second for ten seconds. */
+        /* When set, the answer for this address (by number) trickles: a byte a tenth of a second for ten seconds,
+         * with `Connection: close` (see Trickle for why). */
         @Volatile var trickleAddress: Int? = null
         /* Which store requests are refused as expired, by address number and the range's start. */
         @Volatile var refuse: (Int, Int) -> Boolean = { n, _ -> n == 1 }
@@ -350,6 +351,7 @@ class ToolRunsTest {
                 exchange.responseHeaders.add("Content-Type", "application/json")
                 if (n == trickleAddress) {
                     val padded = body + ByteArray(100) { ' '.code.toByte() }
+                    exchange.responseHeaders.add("Connection", "close")
                     exchange.sendResponseHeaders(200, padded.size.toLong())
                     runCatching {
                         exchange.responseBody.use { out ->
@@ -576,13 +578,18 @@ class ToolRunsTest {
         assertEquals("the current one stopped between ranges, the waiting one dropped", listOf("a0"), log.toList())
     }
 
-    /* A store that answers a range with its headers, then a byte a tenth of a second for ten seconds. */
+    /* A store that answers a range with its headers, then a byte a tenth of a second for ten seconds.
+     * Trickled answers say `Connection: close` so that a cut on this JVM closes the socket, as Android's
+     * HttpURLConnection (OkHttp underneath) always does. On a kept-alive answer with up to 512 KB left, the
+     * JDK's disconnect() instead hands the stream to its Keep-Alive-SocketCleaner, which drains the trickle
+     * while holding the stream's lock, and the run's own close() then waits seconds behind it. */
     private class Trickle : AutoCloseable {
         val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val url = "http://127.0.0.1:${server.address.port}/o"
         val cut = AtomicInteger()
         init {
             server.createContext("/o") { exchange ->
+                exchange.responseHeaders.add("Connection", "close")
                 exchange.sendResponseHeaders(206, 100)
                 try {
                     exchange.responseBody.use { body ->
