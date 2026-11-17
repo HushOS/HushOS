@@ -13,7 +13,32 @@ import UniformTypeIdentifiers
 @MainActor
 final class DriveStore {
     private(set) var vault: Vault
-    var folders: [String: [Opened]] = [:]
+    var folders: [String: [Opened]] = [:] {
+        didSet { foldersRevision &+= 1 }
+    }
+    /* Bumped by any change to `folders`: what a folder's sorted rows were sorted from. */
+    @ObservationIgnored private var foldersRevision = 0
+    /* Each folder's rows as last sorted, with the order and the revision they were sorted at. */
+    @ObservationIgnored private var sorted: [String: (revision: Int, key: SortKey, ascending: Bool, items: [Opened])] = [:]
+
+    /*
+     * A folder's rows in a list's order, or nil before it is listed. Sorted once per change of the
+     * rows or the order: a folder screen reads its rows several times each time it draws, and
+     * sorting a few thousand names by the locale's rules takes tens of milliseconds every time.
+     */
+    func sortedChildren(of folderId: String, by key: SortKey, ascending: Bool) -> [Opened]? {
+        // Read through the observed property, so a screen showing these rows follows their changes.
+        guard let rows = folders[folderId] else {
+            sorted[folderId] = nil
+            return nil
+        }
+        if let held = sorted[folderId], held.revision == foldersRevision, held.key == key, held.ascending == ascending {
+            return held.items
+        }
+        let items = key.sort(rows, ascending: ascending)
+        sorted[folderId] = (foldersRevision, key, ascending, items)
+        return items
+    }
     /* Bumped whenever the offline list changes, so views showing it refresh. */
     var offlineVersion = 0
     /* Bumped when the catalogue changes what lists show. */

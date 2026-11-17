@@ -255,8 +255,11 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val here = folderId?.let { state.folders[it] } ?: emptyList()
     val loaded = folderId != null && state.folders.containsKey(folderId)
     val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    // Sorted once per change of the folder's rows or the order, not on every recomposition (a pick,
+    // a menu): a few thousand names take milliseconds to sort.
+    val sorted = remember(here, sortKey, sortAscending) { sortItems(here, sortKey, sortAscending) }
     // "Search in {folder}" looks through everything below this folder, not the whole drive.
-    val unfiltered = if (words.isEmpty()) sortItems(here, sortKey, sortAscending)
+    val unfiltered = if (words.isEmpty()) sorted
         else model.searchable().filter { item -> folderId != null && item.id != folderId && words.all { item.name.lowercase().contains(it) } && isBelow(model, item, folderId) }
             .sortedWith(compareBy<Opened> { !it.isFolder }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     val items = tagFilter?.let { id -> unfiltered.filter { it.id in state.tags.nodesWith(id) } } ?: unfiltered
