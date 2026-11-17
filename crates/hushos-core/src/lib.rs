@@ -53,8 +53,8 @@ mod two_step;
 
 pub use account::*;
 pub use archive::{
-    zip_entry_asks_first, zip_entry_preview_limits, ArchiveEntry, ArchiveError, EntrySink, PreviewLimits,
-    ZipArchiveSession,
+    zip_entry_asks_first, zip_entry_preview_limits, ArchiveEntry, ArchiveError, EntrySink, LocalSource,
+    PreviewLimits, ZipArchiveSession,
 };
 pub use area_ledger::*;
 pub use area_open::*;

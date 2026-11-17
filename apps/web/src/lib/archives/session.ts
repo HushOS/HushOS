@@ -4,7 +4,8 @@ import { TOOL_FAILED, TOOL_WATCHDOG_MS } from '@/lib/tools/protocol';
 import { readAllowance, serveRanges, type RangeReader } from '@/lib/tools/ranges';
 import { createWatchdog, type Watchdog } from '@/lib/tools/watchdog';
 import { CHUNK_BYTES, type FromArchive, type ToArchive, type WireEntry } from './protocol';
-import { refusalWords } from './words';
+import { LIST_DEPTH_MAX, LIST_PARTS_MAX } from './zip-format';
+import { entryRefusalWords, refusalWords } from './words';
 
 /*
  * A zip open in the viewer, from the page (docs/file-tools-design.md, section 1 (a)): one archive
@@ -23,10 +24,13 @@ import { refusalWords } from './words';
 export type ArchiveEntry = WireEntry;
 export type Listing = { entries: ArchiveEntry[]; hidden: number };
 
-/* A refusal the archive or an entry met, already in words; `code` says which. */
+/* A refusal the archive or one of its items met, already in words; `code` says which. */
 export class ArchiveRefusal extends Error {
-    constructor(readonly code: string) {
-        super(refusalWords[code] ?? TOOL_FAILED);
+    constructor(
+        readonly code: string,
+        scope: 'archive' | 'entry' = 'archive',
+    ) {
+        super((scope === 'entry' ? entryRefusalWords : refusalWords)[code] ?? TOOL_FAILED);
         this.name = 'ArchiveRefusal';
     }
 }
@@ -47,6 +51,7 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
     if (!Array.isArray(entries) || entries.length > MAX_ENTRIES) return null;
     if (!whole(msg?.hidden, entries.length)) return null;
     let text = 0;
+    let partsTotal = 0;
     const seen = new Set<number>();
     const out: ArchiveEntry[] = [];
     for (const raw of entries) {
@@ -55,8 +60,15 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
         const { index, path, parts, size, packed, dos, mtime, lock, support } = item;
         if (!whole(index, MAX_ENTRIES - 1) || seen.has(index)) return null;
         seen.add(index);
-        if (typeof path !== 'string' || !Array.isArray(parts) || parts.length > 65_536) return null;
-        text += path.length;
+        // The listing's caps, held here too: a worker can't hand the page a tree to choke on.
+        if (typeof path !== 'string' || !Array.isArray(parts) || parts.length > LIST_DEPTH_MAX)
+            return null;
+        partsTotal += parts.length;
+        if (partsTotal > LIST_PARTS_MAX) return null;
+        const saveName: unknown = item.saveName;
+        if (typeof saveName !== 'string' || saveName.length === 0 || saveName.length > 255)
+            return null;
+        text += path.length + saveName.length;
         const copied: string[] = [];
         for (const part of parts) {
             if (typeof part !== 'string' || part.length === 0) return null;
@@ -86,6 +98,7 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
             nested: flag('nested'),
             hidden: flag('hidden'),
             stored: flag('stored'),
+            saveName,
         });
     }
     return { entries: out, hidden: msg!.hidden as number };
@@ -117,7 +130,8 @@ function spanReader(archive: RangeReader, offset: number, size: number): FileRea
             const start = Math.min(Math.max(0, at), size);
             const end = Math.min(size, start + Math.max(0, length));
             if (end <= start) return new Uint8Array(0);
-            return archive.read(offset + start, end - start);
+            // A copy: the archive may be bytes the viewer remembers, and a renderer may move what it gets.
+            return (await archive.read(offset + start, end - start)).slice();
         },
         async close() {
             open = false;
@@ -199,6 +213,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         onAbuse: broken,
     });
 
+    let listed = false;
     let listingResolve: (listing: Listing) => void = () => {};
     let listingReject: (error: Error) => void = () => {};
     const listing = new Promise<Listing>((resolve, reject) => {
@@ -233,6 +248,9 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         }
         switch (msg?.type) {
             case 'listing': {
+                // Exactly one, first: a second listing (or one after a failure) is a worker off its script.
+                if (listed) return broken();
+                listed = true;
                 const read = readListing(msg, reader.size);
                 idle();
                 if (!read) return broken();
@@ -276,6 +294,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             case 'fail': {
                 const code = typeof msg.code === 'string' ? msg.code : 'damaged';
                 if (msg.id === null) {
+                    if (listed) return broken();
+                    listed = true;
                     idle();
                     // The listing's own refusal: the session is over, in its words.
                     return end(new ArchiveRefusal(code));
@@ -284,7 +304,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 if (!waiter) return broken();
                 pending.delete(msg.id as number);
                 idle();
-                waiter.reject(new ArchiveRefusal(code));
+                waiter.reject(new ArchiveRefusal(code, 'entry'));
                 return;
             }
             default:
@@ -321,11 +341,16 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         size: reader.size,
 
         /* Whether `password` opens the archive's locked entries; kept in the worker if it does. */
-        async unlock(password: string) {
+        async unlock(password: string, entry: ArchiveEntry | null = null) {
             await listing;
-            // The worker decrypts at most 16 MiB of one entry to be sure.
-            grant(16 * MiB);
-            const asked = ask((id) => ({ type: 'unlock', id, password }));
+            // The worker decrypts at most 16 MiB of an entry to be sure, trying the next on damage.
+            grant(16 * MiB + (entry?.packed ?? 0));
+            const asked = ask((id) => ({
+                type: 'unlock',
+                id,
+                password,
+                index: entry?.index ?? null,
+            }));
             const answer = await asked.answer;
             return answer.type === 'unlocked' && answer.ok;
         },
@@ -334,7 +359,10 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
          * A reader over the entry for the viewer: its inflated bytes, checked to the end (never past
          * `limit`), or, stored, a range of the archive at any size.
          */
-        async preview(entry: ArchiveEntry, limit: number): Promise<FileReader> {
+        async preview(
+            entry: ArchiveEntry,
+            limit: number,
+        ): Promise<{ reader: FileReader; checked: boolean }> {
             await listing;
             grant(entry.packed + 65_536 + 512);
             const asked = ask((id) => ({ type: 'preview', id, index: entry.index, limit }));
@@ -342,10 +370,16 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             if (answer.type === 'bytes') {
                 if (answer.bytes.byteLength !== entry.size || entry.size > limit)
                     throw new Error(TOOL_FAILED);
-                return bytesReader(new Uint8Array(answer.bytes));
+                return { reader: bytesReader(new Uint8Array(answer.bytes)), checked: true };
             }
-            if (answer.type === 'span' && entry.stored && answer.size === entry.size)
-                return spanReader(reader, answer.offset, answer.size);
+            // Only a stored entry past the limit is read by range, and that one isn't checked.
+            if (
+                answer.type === 'span' &&
+                entry.stored &&
+                entry.size > limit &&
+                answer.size === entry.size
+            )
+                return { reader: spanReader(reader, answer.offset, answer.size), checked: false };
             throw new Error(TOOL_FAILED);
         },
 

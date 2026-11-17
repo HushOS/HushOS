@@ -12,7 +12,8 @@
 export type ToArchive =
     /* Once, first: the archive's size and the port its ranges are read over. */
     | { type: 'open'; size: number; port: MessagePort }
-    | { type: 'unlock'; id: number; password: string }
+    /* `index`: the entry whose password this is, tried first. */
+    | { type: 'unlock'; id: number; password: string; index: number | null }
     /* The entry inflated whole, at most `limit` bytes; or, for a stored one, where it is. */
     | { type: 'preview'; id: number; index: number; limit: number }
     | { type: 'download'; id: number; index: number }
@@ -36,6 +37,7 @@ export type WireEntry = {
     nested: boolean;
     hidden: boolean;
     stored: boolean;
+    saveName: string;
 };
 
 export type FromArchive =

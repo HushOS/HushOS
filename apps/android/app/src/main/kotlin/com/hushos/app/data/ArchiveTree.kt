@@ -5,10 +5,11 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 
 /*
- * The archive's list as folders (the web's treeOf in components/drive/archive-view.tsx): every
- * folder by its path ("" is the top), folders implied by a deeper path included, with how many
- * items each folder holds; Mac resource entries left out. Rows sort folders first, then by name,
- * numbers in order ("2" before "10").
+ * The archive's list as folders (the web's treeOf in components/drive/archive-view.tsx): a tree
+ * whose nodes hold only their own children, folders implied by a deeper path included, so memory
+ * grows with the entries' parts, never with every prefix of every path (the core caps a path at
+ * 256 parts). Mac resource entries are left out. Rows sort folders first, then by name, numbers in
+ * order ("2" before "10"), once per folder and kept.
  */
 class ArchiveTree(entries: List<ArchiveEntry>) {
     sealed interface Row {
@@ -18,56 +19,68 @@ class ArchiveTree(entries: List<ArchiveEntry>) {
     }
 
     private class Node {
-        val folders = LinkedHashMap<String, Int>()
+        val folders = LinkedHashMap<String, Node>()
         val files = ArrayList<ArchiveEntry>()
+        /* The rows, sorted the first time they are asked for. */
+        var rows: List<Row>? = null
     }
 
-    private val nodes = HashMap<String, Node>()
+    private val top = Node()
 
     init {
-        fun node(key: String) = nodes.getOrPut(key) { Node() }
-        node("")
         for (entry in entries) {
             if (entry.hidden) continue
             val parts = entry.parts
             val depth = if (entry.directory) parts.size else parts.size - 1
-            for (i in 0 until depth) {
-                node(parts.subList(0, i).joinToString("/")).folders.putIfAbsent(parts[i], 0)
-                node(parts.subList(0, i + 1).joinToString("/"))
-            }
-            if (!entry.directory && parts.isNotEmpty()) node(parts.dropLast(1).joinToString("/")).files.add(entry)
-        }
-        for ((key, value) in nodes) for (name in value.folders.keys.toList()) {
-            val child = nodes[if (key.isEmpty()) name else "$key/$name"]!!
-            value.folders[name] = child.folders.size + child.files.size
+            var node = top
+            for (i in 0 until depth) node = node.folders.getOrPut(parts[i]) { Node() }
+            if (!entry.directory && parts.isNotEmpty()) node.files.add(entry)
         }
     }
 
     /* The rows of the folder at `path` (its parts), empty for one the archive doesn't hold. */
     fun rows(path: List<String>): List<Row> {
-        val node = nodes[path.joinToString("/")] ?: return emptyList()
-        val collator = java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY }
+        var node: Node = top
+        for (part in path) node = node.folders[part] ?: return emptyList()
+        node.rows?.let { return it }
         val byName = Comparator<String> { a, b -> numberAware(a, b, collator) }
-        val folders = node.folders.entries.sortedWith(compareBy(byName) { it.key }).map { Row.Folder(it.key, it.value) }
+        val folders = node.folders.entries.sortedWith(compareBy(byName) { it.key })
+            .map { Row.Folder(it.key, it.value.folders.size + it.value.files.size) }
         val files = node.files.sortedWith(compareBy(byName) { it.parts.last() }).map { Row.File(it.parts.last(), it) }
-        return folders + files
+        return (folders + files).also { node.rows = it }
     }
 
+    private val collator = java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY }
+
     companion object {
-        /* Runs of digits compare as numbers, the rest by the collator, as the web's Intl.Collator({ numeric: true }) does. */
+        /*
+         * Runs of digits compare as numbers, the rest by the collator, as the web's
+         * Intl.Collator({ numeric: true }) does. Scanned in place: no pattern or list per comparison.
+         */
         fun numberAware(a: String, b: String, collator: java.text.Collator): Int {
-            val split = Regex("(\\d+)|(\\D+)")
-            val left = split.findAll(a).map { it.value }.toList()
-            val right = split.findAll(b).map { it.value }.toList()
-            for (i in 0 until minOf(left.size, right.size)) {
-                val x = left[i]
-                val y = right[i]
-                val result = if (x[0].isDigit() && y[0].isDigit()) {
-                    x.trimStart('0').length.compareTo(y.trimStart('0').length).takeIf { it != 0 } ?: x.trimStart('0').compareTo(y.trimStart('0'))
-                } else collator.compare(x, y)
+            var i = 0
+            var j = 0
+            while (i < a.length && j < b.length) {
+                val digitsA = a[i].isDigit()
+                val digitsB = b[j].isDigit()
+                var endA = i
+                while (endA < a.length && a[endA].isDigit() == digitsA) endA++
+                var endB = j
+                while (endB < b.length && b[endB].isDigit() == digitsB) endB++
+                val result = if (digitsA && digitsB) {
+                    var x = i
+                    while (x < endA - 1 && a[x] == '0') x++
+                    var y = j
+                    while (y < endB - 1 && b[y] == '0') y++
+                    val lengths = (endA - x).compareTo(endB - y)
+                    if (lengths != 0) lengths else a.substring(x, endA).compareTo(b.substring(y, endB))
+                } else collator.compare(a.substring(i, endA), b.substring(j, endB))
                 if (result != 0) return result
+                i = endA
+                j = endB
             }
-            return left.size.compareTo(right.size)
+            // The one with runs left after the other is done sorts after it.
+            return if (i >= a.length && j >= b.length) 0 else if (i >= a.length) -1 else 1
         }
 
         /* When the entry last changed: its Unix time when the archive kept one, else its MS-DOS date and time on this phone's clock. */

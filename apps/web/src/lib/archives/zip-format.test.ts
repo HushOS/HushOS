@@ -380,7 +380,7 @@ describe('the inflate counter on real streams', () => {
         const over = await inflateThrough(packed, data.length - 1, false);
         expect(over.outcome).toBe('size');
         expect(over.counter.produced).toBeLessThanOrEqual(data.length);
-        expect((await inflateThrough(packed, data.length + 1, false)).outcome).toBe('size');
+        expect((await inflateThrough(packed, data.length + 1, false)).outcome).toBe('short');
     });
 });
 

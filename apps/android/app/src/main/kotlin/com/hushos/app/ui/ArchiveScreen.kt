@@ -48,6 +48,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -87,7 +88,7 @@ import com.hushos.core.zipEntryPreviewLimits
 import com.hushos.tokens.AlpineSpace
 import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -100,93 +101,49 @@ import kotlin.coroutines.cancellation.CancellationException
  * file the person picked. The web's archive view and iOS's ArchiveView say and do the same.
  */
 
-/* The person's words for what a call met. */
-internal fun archiveFailure(error: Throwable): String = when (error) {
-    is ArchiveException.Refused -> ArchiveWords.refusal(error.code)
+/* The person's words for what a call met; `entry` for an item's own call. */
+internal fun archiveFailure(error: Throwable, entry: Boolean = false): String = when (error) {
+    is ArchiveException.Refused -> ArchiveWords.refusal(error.code, entry)
+    // The read underneath (the network, the kept copy, a close) in its own words.
+    is ArchiveException.Failed -> error.reason.ifBlank { toolFailedMessage() }
     is ToolFailed -> error.message ?: toolFailedMessage()
     else -> toolFailedMessage()
 }
 
 @Composable
-fun ArchiveScreen(model: DriveViewModel, item: Opened, close: () -> Unit) {
+fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Unit) {
     val alpine = Alpine.colors
     val context = LocalContext.current
-    var archive by remember(item.id) { mutableStateOf<OpenArchive?>(null) }
-    var failure by remember(item.id) { mutableStateOf<String?>(null) }
-    var attempt by remember(item.id) { mutableStateOf(0) }
-    var path by remember(item.id) { mutableStateOf(listOf<String>()) }
-    var opened by remember(item.id) { mutableStateOf<ArchiveEntry?>(null) }
-    var unlocked by remember(item.id) { mutableStateOf(false) }
-    var asking by remember(item.id) { mutableStateOf<ArchiveEntry?>(null) }
-    val downloads = remember(item.id) { mutableStateListOf<EntryDownload>() }
-    val scope = rememberCoroutineScope()
+    val state by model.state.collectAsState()
+    val item = browse.item
+    val current = browse.archive
+    val tree = browse.tree
+    var sending by remember(item.id) { mutableStateOf(false) }
 
-    LaunchedEffect(item.id, attempt) {
-        failure = null
-        archive = try {
-            model.openArchive(item)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Throwable) {
-            failure = archiveFailure(error)
-            null
-        }
-    }
-    // The screen going (Back, a sign-out) closes the archive: its password goes with it.
-    DisposableEffect(item.id) { onDispose { archive?.close() } }
-    val current = archive
-    DisposableEffect(current) { onDispose { current?.close() } }
-    val tree = remember(current) { current?.let { ArchiveTree(it.entries) } }
-
-    // Downloads stream into the file the person picks (SAF): no copy of the entry is made anywhere else.
-    var waitingFor by remember { mutableStateOf<ArchiveEntry?>(null) }
+    // Downloads stream into the file the person picks (SAF): no copy of the entry is made anywhere
+    // else. The entry waited for lives in the model, so a rotation while the dialog is up loses nothing.
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        val entry = waitingFor ?: return@rememberLauncherForActivityResult
-        waitingFor = null
-        val open = current ?: return@rememberLauncherForActivityResult
+        val entry = browse.waitingFor
+        browse.waitingFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        val record = EntryDownload(entry)
-        downloads.add(record)
-        record.job = scope.launch {
-            val resolver = context.contentResolver
-            val result = runCatching {
-                withContext(Dispatchers.IO) {
-                    resolver.openOutputStream(uri, "w")!!.use { out ->
-                        open.download(entry.index, object : EntrySink {
-                            override fun write(chunk: ByteArray) {
-                                try {
-                                    out.write(chunk)
-                                } catch (error: Exception) {
-                                    throw FetchException.Failed(error.message ?: "The file couldn't be written.")
-                                }
-                                record.written.value += chunk.size
-                            }
-                        })
-                    }
-                }
-            }
-            result.exceptionOrNull()?.let { error ->
-                // Nothing half-written is left where the person put it.
-                runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
-                if (error is CancellationException) { downloads.remove(record); throw error }
-                record.error.value = archiveFailure(error)
-            } ?: run {
-                downloads.remove(record)
-                model.notify(ArchiveWords.DOWNLOADED)
-            }
-        }
+        if (entry == null) { browse.discard(context.contentResolver, uri); return@rememberLauncherForActivityResult }
+        browse.startDownload(entry, context.contentResolver, uri) { model.notify(ArchiveWords.DOWNLOADED) }
+    }
+    fun pick(entry: ArchiveEntry) {
+        browse.waitingFor = entry
+        // Under the name made safe by the core: no bidi override can make "…exe" read as "…txt".
+        picker.launch(entry.saveName)
     }
     fun download(entry: ArchiveEntry) {
-        if (entry.lock != "none" && !unlocked) { opened = entry; return }
-        if (zipEntryAsksFirst(entry.size, entry.packed)) { asking = entry; return }
-        waitingFor = entry
-        picker.launch(entry.parts.last())
+        if (entry.lock != "none" && !browse.unlocked) { browse.opened = entry; return }
+        if (zipEntryAsksFirst(entry.size, entry.packed)) { browse.asking = entry; return }
+        pick(entry)
     }
 
     fun back() {
         when {
-            opened != null -> opened = null
-            path.isNotEmpty() -> path = path.dropLast(1)
+            browse.opened != null -> browse.opened = null
+            browse.path.isNotEmpty() -> browse.path = browse.path.dropLast(1)
             else -> close()
         }
     }
@@ -195,43 +152,50 @@ fun ArchiveScreen(model: DriveViewModel, item: Opened, close: () -> Unit) {
         BackHandler(onBack = ::back)
         Scaffold(containerColor = alpine.ground, topBar = { DestinationBar(item.name, onBack = ::back) }) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
+                val failure = browse.failure
                 when {
                     failure != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         EmptyState(ArchiveWords.CANT_SHOW, failure) {
-                            Button(onClick = { attempt++ }) { Text(ArchiveWords.TRY_AGAIN) }
+                            Button(onClick = browse::load) { Text(ArchiveWords.TRY_AGAIN) }
                         }
                     }
                     current == null || tree == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
                         CircularProgressIndicator(color = alpine.primary, modifier = Modifier.padding(top = 48.dp))
                     }
                     else -> {
-                        Crumbs(item.name, path, opened) { to -> opened = null; path = to }
-                        HorizontalDivider(color = alpine.rule)
-                        Box(Modifier.weight(1f)) {
-                            val entry = opened
-                            if (entry != null) EntryPane(current, entry, unlocked, onUnlocked = { unlocked = true }, onDownload = { download(entry) })
-                            else EntryList(tree.rows(path), unlocked, current.hidden, onFolder = { path = path + it }, onOpen = { opened = it }, onDownload = ::download)
+                        val path = browse.path
+                        val entry = browse.opened
+                        // At the top the bar already names the archive: the trail shows only inside it.
+                        if (path.isNotEmpty() || entry != null) {
+                            Crumbs(item.name, path, entry) { to -> browse.opened = null; browse.path = to }
+                            HorizontalDivider(color = alpine.rule)
                         }
-                        for (record in downloads) DownloadBar(record) { record.job?.cancel(); downloads.remove(record) }
+                        Box(Modifier.weight(1f)) {
+                            if (entry != null) EntryPane(
+                                current, entry, browse.unlocked, reprompt = entry.index in browse.reprompt,
+                                onUnlocked = { browse.unlocked = true; browse.reprompt.remove(entry.index) },
+                                onWrongPassword = { if (entry.index !in browse.reprompt) browse.reprompt.add(entry.index) },
+                                onDownload = { download(entry) },
+                                onDownloadArchive = { sending = true },
+                            )
+                            else EntryList(tree.rows(path), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = { browse.opened = it }, onDownload = ::download)
+                        }
+                        for (record in browse.downloads) DownloadBar(record) { browse.stop(record) }
                     }
                 }
             }
         }
-        asking?.let { entry ->
+        browse.asking?.let { entry ->
             AlertDialog(
-                onDismissRequest = { asking = null },
+                onDismissRequest = { browse.asking = null },
                 title = { Text(ArchiveWords.asksFirst(entry.size.toLong(), entry.packed.toLong())) },
-                confirmButton = { TextButton(onClick = { asking = null; waitingFor = entry; picker.launch(entry.parts.last()) }) { Text(ArchiveWords.DOWNLOAD) } },
-                dismissButton = { TextButton(onClick = { asking = null }) { Text(ArchiveWords.CANCEL) } },
+                confirmButton = { TextButton(onClick = { browse.asking = null; pick(entry) }) { Text(ArchiveWords.DOWNLOAD) } },
+                dismissButton = { TextButton(onClick = { browse.asking = null }) { Text(ArchiveWords.CANCEL) } },
             )
         }
+        // The archive itself, for an item HushOS can't open: the drive's own Send a copy.
+        if (sending) SendCopy(model, state, listOf(item)) { sending = false }
     }
-}
-
-class EntryDownload(val entry: ArchiveEntry) {
-    val written = mutableStateOf(0L)
-    val error = mutableStateOf<String?>(null)
-    var job: Job? = null
 }
 
 @Composable
@@ -365,22 +329,27 @@ private fun deviceMemory(context: android.content.Context): Long {
     return info.totalMem
 }
 
-private sealed interface Shown {
-    data object Loading : Shown
-    data class Failed(val message: String) : Shown
-    data class Bytes(val bytes: ByteArray) : Shown
-}
-
 @Composable
-private fun EntryPane(archive: OpenArchive, entry: ArchiveEntry, unlocked: Boolean, onUnlocked: () -> Unit, onDownload: () -> Unit) {
+private fun EntryPane(
+    archive: OpenArchive,
+    entry: ArchiveEntry,
+    unlocked: Boolean,
+    reprompt: Boolean,
+    onUnlocked: () -> Unit,
+    onWrongPassword: () -> Unit,
+    onDownload: () -> Unit,
+    onDownloadArchive: () -> Unit,
+) {
     val alpine = Alpine.colors
     val context = LocalContext.current
     val name = entry.parts.last()
     val kind = remember(name) { ArchiveTree.previewKind(name) }
     val limits = remember(kind) { zipEntryPreviewLimits(kind, deviceMemory(context).toULong()) }
     var continued by remember(entry.index) { mutableStateOf(false) }
+    // Each password typed for this item opens it afresh.
+    var attempt by remember(entry.index) { mutableStateOf(0) }
     val size = entry.size.toLong()
-    val locked = entry.lock != "none" && !unlocked
+    val locked = (entry.lock != "none" && !unlocked) || reprompt
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
             Text(listOfNotNull(formatBytes(size), whenText(ArchiveTree.modifiedMillis(entry))).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.weight(1f))
@@ -389,10 +358,11 @@ private fun EntryPane(archive: OpenArchive, entry: ArchiveEntry, unlocked: Boole
         HorizontalDivider(color = alpine.rule)
         Box(Modifier.weight(1f)) {
             when {
-                locked -> PasswordCard(archive, name, onUnlocked)
-                entry.support == "method" -> Notice(name, ArchiveWords.METHOD)
-                entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION)
+                // What can't be read at all says so first: a password would change nothing.
+                entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
+                entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
+                locked -> PasswordCard(archive, name, if (reprompt) entry.index else null) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 // The large-file card: past the ceiling only Download; past the threshold, what opening costs and Continue.
@@ -403,123 +373,180 @@ private fun EntryPane(archive: OpenArchive, entry: ArchiveEntry, unlocked: Boole
                         Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) }
                     }
                 }
-                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), onDownload)
+                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), attempt, onWrongPassword, onDownload)
             }
         }
     }
 }
 
 @Composable
-private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, onDownload: () -> Unit) {
+private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onDownload: () -> Unit) {
     val alpine = Alpine.colors
-    var shown by remember(entry.index) { mutableStateOf<Shown>(Shown.Loading) }
-    LaunchedEffect(entry.index) {
+    var shown by remember(entry.index, attempt) { mutableStateOf<Shown>(Shown.Loading) }
+    LaunchedEffect(entry.index, attempt) {
         shown = try {
-            Shown.Bytes(archive.preview(entry.index, limit))
+            val bytes = archive.preview(entry.index, limit)
+            // Decoded off the main thread: an image or a PDF's first pages, the text cut into blocks.
+            withContext(Dispatchers.Default) { decode(kind, entry.parts.last(), bytes) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            Shown.Failed(archiveFailure(error))
+            // The item has a password of its own: asked for again, for this item.
+            if (error is ArchiveException.Refused && error.code == "wrong-password") onWrongPassword()
+            Shown.Failed(archiveFailure(error, entry = true))
         }
     }
     when (val now = shown) {
         Shown.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) { CircularProgressIndicator(color = alpine.primary, modifier = Modifier.padding(top = 48.dp)) }
         is Shown.Failed -> Notice(ArchiveWords.CANT_SHOW, now.message) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
-        is Shown.Bytes -> when (kind) {
-            "image" -> ImageBytes(now.bytes, onDownload)
-            "pdf" -> PdfBytes(now.bytes, onDownload)
-            else -> TextBytes(entry.parts.last(), now.bytes)
+        is Shown.Picture -> PictureView(now.image)
+        is Shown.Pdf -> PdfView(now.document, onDownload)
+        is Shown.Markdown -> LazyColumn(Modifier.fillMaxSize().readableWidth(720.dp), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            itemsIndexed(now.blocks) { _, block -> SelectionContainer { MarkdownBlockView(block) } }
         }
-    }
-}
-
-/* A picture decoded from the bytes, no larger than the screen needs. */
-@Composable
-private fun ImageBytes(bytes: ByteArray, onDownload: () -> Unit) {
-    val decoded = remember(bytes) {
-        runCatching {
-            ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
-                val longest = maxOf(info.size.width, info.size.height)
-                if (longest > 4096) {
-                    val scale = 4096f / longest
-                    decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+        is Shown.Text -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+            items(now.pieces.size) { index ->
+                SelectionContainer {
+                    Text(now.pieces[index], style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), color = alpine.ink, modifier = Modifier.horizontalScroll(rememberScrollState()))
                 }
-                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            }.asImageBitmap()
-        }.getOrNull()
-    }
-    if (decoded == null) { Notice(ArchiveWords.CANT_SHOW, ArchiveWords.ELSEWHERE) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }; return }
-    Box(Modifier.fillMaxSize().padding(AlpineSpace.S4), contentAlignment = Alignment.Center) {
-        Image(decoded, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-    }
-}
-
-/* Text and Markdown from the bytes: Markdown drawn as a document up to its limit, anything else as text in blocks. */
-@Composable
-private fun TextBytes(name: String, bytes: ByteArray) {
-    val alpine = Alpine.colors
-    val text = remember(bytes) { bytes.decodeToString().removePrefix("﻿") }
-    val markdown = remember(name) { MarkdownDocument.handles(name, null) } && bytes.size <= MarkdownDocument.LIMIT
-    val blocks = remember(text, markdown) { if (markdown) MarkdownDocument.parse(text) else null }
-    if (blocks != null) {
-        LazyColumn(Modifier.fillMaxSize().readableWidth(720.dp), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            itemsIndexed(blocks) { _, block -> SelectionContainer { MarkdownBlockView(block) } }
-        }
-        return
-    }
-    // In blocks of 200 lines: one Text the size of an 8 MB file would be laid out whole.
-    val pieces = remember(text) { text.lineSequence().chunked(200).map { it.joinToString("\n") }.toList() }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        items(pieces.size) { index ->
-            SelectionContainer {
-                Text(pieces[index], style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), color = alpine.ink, modifier = Modifier.horizontalScroll(rememberScrollState()))
             }
         }
+        is Shown.Undecodable -> Notice(ArchiveWords.CANT_SHOW, ArchiveWords.ELSEWHERE) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
+    }
+}
+
+/* The most of one block of text: 200 lines, and never more than this many characters. */
+internal const val TEXT_BLOCK_LINES = 200
+internal const val TEXT_BLOCK_CHARS = 16 * 1024
+
+/*
+ * Text in blocks bounded by lines and by size, so no one Text lays out a megabyte: a block ends at
+ * 200 lines or 16,384 characters, and a single longer line is cut across blocks.
+ */
+internal fun textBlocks(text: String): List<String> {
+    val blocks = ArrayList<String>()
+    val block = StringBuilder()
+    var lines = 0
+    fun flush() {
+        if (block.isNotEmpty() || lines > 0) blocks.add(block.toString())
+        block.setLength(0)
+        lines = 0
+    }
+    var at = 0
+    while (at <= text.length) {
+        val end = text.indexOf('\n', at).let { if (it < 0) text.length else it }
+        var line = at
+        while (end - line > TEXT_BLOCK_CHARS - block.length) {
+            val room = TEXT_BLOCK_CHARS - block.length
+            block.append(text, line, line + room)
+            line += room
+            flush()
+        }
+        if (lines > 0) block.append('\n')
+        block.append(text, line, end)
+        lines++
+        if (lines >= TEXT_BLOCK_LINES || block.length >= TEXT_BLOCK_CHARS) flush()
+        if (end == text.length) break
+        at = end + 1
+    }
+    flush()
+    return blocks
+}
+
+private sealed interface Shown {
+    data object Loading : Shown
+    data class Failed(val message: String) : Shown
+    data class Picture(val image: androidx.compose.ui.graphics.ImageBitmap) : Shown
+    data class Pdf(val document: PdfDocumentHolder) : Shown
+    data class Markdown(val blocks: List<com.hushos.app.data.MdBlock>) : Shown
+    data class Text(val pieces: List<String>) : Shown
+    data object Undecodable : Shown
+}
+
+/* What the bytes show as, worked out off the main thread. */
+private fun decode(kind: String, name: String, bytes: ByteArray): Shown = when (kind) {
+    "image" -> runCatching {
+        ImageDecoder.decodeBitmap(ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))) { decoder, info, _ ->
+            val longest = maxOf(info.size.width, info.size.height)
+            if (longest > 4096) {
+                val scale = 4096f / longest
+                decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+            }
+            decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+        }.asImageBitmap()
+    }.map { Shown.Picture(it) as Shown }.getOrDefault(Shown.Undecodable)
+    "pdf" -> PdfDocumentHolder.open(bytes)?.let { Shown.Pdf(it) } ?: Shown.Undecodable
+    else -> {
+        val text = bytes.decodeToString().removePrefix("\uFEFF")
+        if (MarkdownDocument.handles(name, null) && bytes.size <= MarkdownDocument.LIMIT) Shown.Markdown(MarkdownDocument.parse(text))
+        else Shown.Text(textBlocks(text))
+    }
+}
+
+@Composable
+private fun PictureView(image: androidx.compose.ui.graphics.ImageBitmap) {
+    Box(Modifier.fillMaxSize().padding(AlpineSpace.S4), contentAlignment = Alignment.Center) {
+        Image(image, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
     }
 }
 
 /*
  * A PDF from the bytes: PdfRenderer reads a seekable file descriptor, so the bytes go into an
- * anonymous memory file (memfd, Android 11 and later), never a file on storage. Pages are drawn as
- * they scroll into view, one bitmap each at the screen's width.
+ * anonymous memory file (memfd, Android 11 and later), never a file on storage. One renderer, used
+ * from one thread of its own, never the main one.
  */
-@Composable
-private fun PdfBytes(bytes: ByteArray, onDownload: () -> Unit) {
-    val renderer = remember(bytes) {
-        runCatching {
+internal class PdfDocumentHolder private constructor(private val renderer: PdfRenderer) {
+    val pages: Int = renderer.pageCount
+    private val thread = java.util.concurrent.Executors.newSingleThreadExecutor { Thread(it, "archive-pdf") }
+    val dispatcher = thread.asCoroutineDispatcher()
+
+    /* Page `index` drawn `width` pixels wide, on the renderer's thread. */
+    fun render(index: Int, width: Int): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+        renderer.openPage(index).use { open ->
+            val height = (width.toLong() * open.height / open.width.coerceAtLeast(1)).toInt().coerceIn(1, 8192)
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
+                bitmap.eraseColor(android.graphics.Color.WHITE)
+                open.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            }.asImageBitmap()
+        }
+    }.getOrNull()
+
+    fun close() {
+        thread.execute { runCatching { renderer.close() } }
+        thread.shutdown()
+    }
+
+    companion object {
+        fun open(bytes: ByteArray): PdfDocumentHolder? = runCatching {
             val fd = Os.memfd_create("archive-entry", 0)
             FileOutputStream(fd).let { out -> out.write(bytes); out.flush() }
             Os.lseek(fd, 0, OsConstants.SEEK_SET)
             val parcel = ParcelFileDescriptor.dup(fd)
             Os.close(fd)
-            PdfRenderer(parcel)
+            PdfDocumentHolder(PdfRenderer(parcel))
         }.getOrNull()
     }
-    DisposableEffect(renderer) { onDispose { renderer?.close() } }
-    if (renderer == null) { Notice(ArchiveWords.CANT_SHOW, ArchiveWords.ELSEWHERE) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }; return }
+}
+
+@Composable
+private fun PdfView(document: PdfDocumentHolder, onDownload: () -> Unit) {
+    DisposableEffect(document) { onDispose { document.close() } }
+    if (document.pages == 0) { Notice(ArchiveWords.CANT_SHOW, ArchiveWords.ELSEWHERE) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }; return }
     val width = with(androidx.compose.ui.platform.LocalDensity.current) { (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp - 32.dp).roundToPx() }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(renderer.pageCount) { index ->
-            val page = remember(index) {
-                synchronized(renderer) {
-                    runCatching {
-                        renderer.openPage(index).use { open ->
-                            val height = (width.toLong() * open.height / open.width.coerceAtLeast(1)).toInt().coerceIn(1, 8192)
-                            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { bitmap ->
-                                bitmap.eraseColor(android.graphics.Color.WHITE)
-                                open.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-                            }.asImageBitmap()
-                        }
-                    }.getOrNull()
-                }
-            }
-            page?.let { Image(it, contentDescription = "Page ${index + 1}", modifier = Modifier.fillMaxWidth()) }
+        items(document.pages) { index ->
+            // Drawn on the renderer's thread as the page scrolls into view.
+            var page by remember(index) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+            LaunchedEffect(index, width) { page = withContext(document.dispatcher) { document.render(index, width) } }
+            val shown = page
+            if (shown != null) Image(shown, contentDescription = "Page ${index + 1}", modifier = Modifier.fillMaxWidth())
+            else Box(Modifier.fillMaxWidth().heightIn(min = 240.dp))
         }
     }
 }
 
 @Composable
-private fun PasswordCard(archive: OpenArchive, name: String, onUnlocked: () -> Unit) {
+private fun PasswordCard(archive: OpenArchive, name: String, index: UInt?, onUnlocked: () -> Unit) {
     // Kept in memory only (remember, never saved state), and gone with the card.
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -531,7 +558,7 @@ private fun PasswordCard(archive: OpenArchive, name: String, onUnlocked: () -> U
         error = null
         scope.launch {
             try {
-                if (archive.unlock(password)) onUnlocked() else error = ArchiveWords.WRONG_PASSWORD
+                if (archive.unlock(password, index)) onUnlocked() else error = ArchiveWords.WRONG_PASSWORD
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (failure: Throwable) {

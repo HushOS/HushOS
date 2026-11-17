@@ -447,7 +447,14 @@ pub struct VersionReader {
     /* Everything about the version but its key, which is below, apart: wiped when the run ends. */
     content: Content,
     key: Mutex<Option<SecretBytes>>,
-    control: Option<Arc<RunControl>>,
+    /* The run it reads under: fixed for a tool's reader, re-armed each call for a session's. */
+    control: Mutex<Option<Arc<RunControl>>>,
+    /*
+     * A session's reader (an archive open in a phone's viewer) serves one call after another: it
+     * is not wiped when a call's run ends, so the file's last chunk and its padding are fetched
+     * once for the session; its owner wipes it when the session closes.
+     */
+    session: bool,
     chunk_bytes: u64,
     chunk_count: u64,
     file_chunks: u64,
@@ -482,7 +489,8 @@ impl VersionReader {
         let reader = Arc::new(VersionReader {
             source,
             key: Mutex::new(Some(key)),
-            control: control.clone(),
+            control: Mutex::new(control.clone()),
+            session: false,
             chunk_bytes: layout.chunk_bytes,
             chunk_count: layout.chunk_count,
             file_chunks,
@@ -502,8 +510,39 @@ impl VersionReader {
         Ok(reader)
     }
 
-    /* Its chunks and its key go: the run ended. Reads fail from here on. */
-    fn wipe(&self) {
+    /// A reader for a session of calls (an archive open in a phone's viewer): bound to no run
+    /// until [`rearm`](Self::rearm) gives it each call's control, and never wiped by a call's end,
+    /// so what it opened (the last chunk, two more) and the padding it fetched serve the next call
+    /// too. Its owner calls [`wipe`](Self::wipe) when the session closes.
+    pub(crate) fn open_session(source: Arc<dyn ObjectSource>, content: Content) -> CoreResult<Arc<Self>> {
+        let reader = Self::open(source, content, None)?;
+        // Only this function makes one, and only before the reader is shared.
+        let reader = Arc::try_unwrap(reader).map_err(|_| input(TOOL_FAILED))?;
+        Ok(Arc::new(VersionReader { session: true, ..reader }))
+    }
+
+    /// Another session reader over the same version, with chunks of its own: a second call (a
+    /// download) can then run beside the first. Fails once this one is wiped (its key gone).
+    pub(crate) fn sibling(&self) -> CoreResult<Arc<Self>> {
+        let key = lock(&self.key).clone().ok_or_else(|| input(CANCELLED))?;
+        let mut content = self.content.clone();
+        content.key = key;
+        Self::open_session(self.source.clone(), content)
+    }
+
+    /// The next call's run: its cancel and watchdog govern the reads from here, and the fetch
+    /// limit (four times the object) starts over for it.
+    pub(crate) fn rearm(&self, control: Arc<RunControl>) {
+        *lock(&self.control) = Some(control);
+        self.fetched.store(0, Ordering::SeqCst);
+    }
+
+    fn control(&self) -> Option<Arc<RunControl>> {
+        lock(&self.control).clone()
+    }
+
+    /* Its chunks and its key go: the run ended (or the session closed). Reads fail from here on. */
+    pub(crate) fn wipe(&self) {
         self.forget();
         lock(&self.key).take();
     }
@@ -521,11 +560,13 @@ impl VersionReader {
         state.tail = None;
     }
 
-    /* Fails, and lets go of every chunk, once the run has ended. */
+    /* Fails, and lets go of every chunk, once the run has ended (a session's reader keeps them for its next call). */
     fn check(&self) -> CoreResult<()> {
-        match &self.control {
+        match self.control() {
             Some(control) if control.is_ended() => {
-                self.forget();
+                if !self.session {
+                    self.forget();
+                }
                 control.check()
             }
             _ => Ok(()),
@@ -547,7 +588,8 @@ impl VersionReader {
             return Err(input(TOOL_FAILED));
         }
         let ciphertext = {
-            let _hold = self.control.as_ref().map(|control| control.hold());
+            let control = self.control();
+            let _hold = control.as_ref().map(|control| control.hold());
             self.source.fetch(range, drain).map_err(|FetchError::Failed { reason }| input(reason))?
         };
         if ciphertext.len() as u64 != length {
@@ -594,7 +636,7 @@ impl VersionReader {
                 }
             }
         }
-        if self.ended() {
+        if self.ended() && !self.session {
             self.forget();
         }
         if !later.is_empty() {
@@ -628,9 +670,11 @@ impl VersionReader {
      */
     fn keep(&self, cache: impl FnOnce(&mut ReaderState)) -> CoreResult<()> {
         let mut state = lock(&self.state);
-        if let Some(control) = self.control.as_ref().filter(|control| control.is_ended()) {
+        if let Some(control) = self.control().filter(|control| control.is_ended()) {
             drop(state);
-            self.forget();
+            if !self.session {
+                self.forget();
+            }
             return control.check();
         }
         cache(&mut state);
@@ -638,7 +682,7 @@ impl VersionReader {
     }
 
     fn ended(&self) -> bool {
-        self.control.as_ref().is_some_and(|control| control.is_ended())
+        self.control().is_some_and(|control| control.is_ended())
     }
 
     fn chunk(&self, index: u64) -> CoreResult<Plain> {
@@ -896,6 +940,40 @@ mod tests {
             later: Mutex::new(Vec::new()),
             hook: None,
         })
+    }
+
+    #[test]
+    fn a_session_reader_serves_call_after_call_and_fetches_its_tail_once() {
+        let size = 2 * CHUNK + 1000;
+        let content = content(size, 0);
+        let plain = plaintext(size);
+        let source = store(object(&content, &plain));
+        let reader = VersionReader::open_session(source.clone(), content).unwrap();
+        let first = RunControl::new(30_000, None);
+        reader.rearm(first.clone());
+        assert_eq!(reader.read_at(size - 10, 10).unwrap(), plain[(size - 10) as usize..].to_vec());
+        let after_tail = source.fetched.lock().unwrap().len();
+        // The call's run ends: a tool's reader would be wiped; a session's keeps what it opened.
+        first.finish();
+        assert!(reader.read_at(0, 1).is_err(), "a finished call reads no more");
+        let second = RunControl::new(30_000, None);
+        reader.rearm(second.clone());
+        assert_eq!(reader.read_at(size - 10, 10).unwrap(), plain[(size - 10) as usize..].to_vec());
+        assert_eq!(
+            source.fetched.lock().unwrap().len(),
+            after_tail,
+            "the tail and its padding are fetched once"
+        );
+        // A cancelled call fails its reads; the next call reads on.
+        second.cancel();
+        assert!(reader.read_at(0, 1).is_err());
+        reader.rearm(RunControl::new(30_000, None));
+        assert_eq!(reader.read_at(0, 4).unwrap(), plain[..4].to_vec());
+        // Closed: the chunks and the key go, and every later read fails.
+        reader.wipe();
+        reader.rearm(RunControl::new(30_000, None));
+        assert!(reader.read_at(size - 10, 10).is_err());
+        assert!(reader.read_at(0, 4).is_err());
     }
 
     fn store_with(object: Vec<u8>, hook: Hook) -> Arc<Store> {

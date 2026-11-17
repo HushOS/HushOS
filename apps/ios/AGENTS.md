@@ -712,15 +712,26 @@ See `docs/identity-pq-design.md`.
 ### Archives
 
 - A zip (by name, or `application/zip` / `application/x-zip-compressed`) opens in the viewer as its list (`App/ArchiveView.swift`, `ArchiveScreen`), never fetched whole: `Opener.open` skips the download for it and `FileViewer` shows `ArchiveScreen` in QuickLook's place. An earlier version of a zip still goes to QuickLook.
-- `HushOSKit/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and reads only the entries asked for, by range.
+- `HushOSKit/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and decodes only the entries asked for, by range, from its own listing.
+    - A zip kept on this phone (`Offline.localCopy`) opens from that copy (`ZipArchiveSession.openLocal` over `KeptCopy`, read by range into memory): it opens offline, and no other copy of its plaintext is made. Anything else reads the store.
     - Browsing is a viewer: no ToolRuns slot. Each call (open, unlock, preview, download) takes its turn first (`ArchiveTurns`, so waiting never counts against a watchdog), then runs on a thread of its own under a fresh `RunControl`, watchdog polled each second, cancelled with its task, `finish()`ed when the thread returns.
     - `ArchiveSource` fetches each range under the calling thread's control (kept in the thread's dictionary), padding owed to `PaddingDrains`.
-    - The password lives in the core's session only; `close()` (leaving the viewer) and `ArchiveSessions.closeAll()` (from `AccountStore.wipe`) wipe it and cancel calls in flight.
-- Entries preview from memory only: QuickLook reads only files, so it is not used for them. Images through `UIImage(data:)`, PDFs through PDFKit's `PDFDocument(data:)`, Markdown through `MarkdownView(data:)`, other text as text. Everything else says it has no preview and offers Download. Video, audio and Office entries have no in-memory route here.
+    - The password lives in the core's session only. `close()` (leaving the viewer) cancels the archive's own calls in flight first, then closes the core's session on `ArchiveSessions.closeQueue`, never the main thread; `ArchiveSessions.closeAll()` (from `AccountStore.wipe`) does the same for every archive. After a close every call fails ("The archive was closed.").
+    - A download runs on a sibling of the session (`ZipArchiveSession.sibling()`: the same listing and the password held, a reader of its own), outside the archive's turns, so previews never wait behind it. The sibling is closed when the download ends, when the archive closes and on sign-out, off the main thread.
+    - An entry whose own password isn't the one held is refused `wrong-password`: the pane asks again and `unlock(_:entry:)` tries that entry first.
+- `ArchiveTree` is a tree of nodes (memory grows with the entries' parts, never with every prefix; the core caps a path at 256 parts) whose rows are sorted once, when it is made.
+- The breadcrumb shows only inside a folder or an open entry; at the top the header names the archive.
+- Rows offer Download as drive rows offer their actions: a long-press menu, and a swipe from the leading edge.
+- The entry pane says first what can't be read at all (an unsupported method or encryption, an archive inside), then asks for a password, then the large-file card.
+- Entries preview from memory only: QuickLook reads only files, so it is not used for them.
+    - Images through ImageIO's `CGImageSourceCreateThumbnailAtIndex`, at most 4,096 pixels a side, turned upright (`ArchiveImages`): no full-size bitmap of a 100 MB picture.
+    - PDFs through PDFKit's `PDFDocument(data:)`, Markdown through `MarkdownView(data:)`.
+    - Other text in pieces of at most 200 lines and 16 KB (`ArchiveText`), laid out as they scroll in.
+    - Everything else (video, audio, Office, and unknown kinds at any size) says it has no preview and offers Download.
 - The large-file card per entry: `ArchiveEntries.limits` asks the core (`zipEntryPreviewLimits`, halved at 4 GB of memory or less); past the threshold Open anyway and Download, past the ceiling Download only. A stored entry is previewed under the same limits (the web reads stored entries by range at any size; this doesn't).
-- Download streams the entry into a folder the person picks (`fileImporter` for a folder, the next free name there), a MiB at a time, and deletes what it wrote if it fails or is stopped. No temp file. An entry over 4 GiB at more than 200:1 asks first (`zipEntryAsksFirst`).
-- Words are the web's (`ArchiveWords`, apps/web/src/lib/archives/words.ts; Android's data/ArchiveWords.kt).
-- Tests: `ArchiveSessionsTests` (the AES fixture's password kept only until close or sign-out, the bomb refused, a download byte for byte, a stalled call released by its cancel, the tree, the words, the card's stages, entry dates).
+- Download streams the entry into a folder the person picks (`fileImporter` for a folder, under the core's `saveName`, the next free name there), a MiB at a time, and deletes what it wrote if it fails or is stopped. No temp file. The picker's flag (`picking`) is kept apart from the entry waiting for it (`saving`): SwiftUI clears the flag before the importer's completion runs. Each running download has a row of its own; leaving the viewer cancels them. An entry over 4 GiB at more than 200:1 asks first (`zipEntryAsksFirst`).
+- Words are the web's (`ArchiveWords`, apps/web/src/lib/archives/words.ts; Android's data/ArchiveWords.kt). An entry's own refusal uses the entry scope ("damaged" says the item is).
+- Tests: `ArchiveSessionsTests` (the password kept only until close or sign-out, every call failing after close, close cancelling a call in flight at once, a kept copy opening through `openLocal`, an entry's own password tried first, the bomb and a bad stored CRC refused, a download byte for byte, a stalled call released by its cancel, the tree and a 256-part path, text pieces, the words in both scopes, the card's stages, entry dates).
 
 ## Files app (File Provider)
 

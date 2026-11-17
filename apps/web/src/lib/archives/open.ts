@@ -1,5 +1,6 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { nodeSize } from '@/lib/drive';
+import { downloads } from '@/lib/downloads';
 import {
     openReader,
     PREVIEW_LIMITS,
@@ -59,7 +60,10 @@ export async function archiveReader(node: DriveNode): Promise<RangeReader> {
             void reader.close();
         }
     }
-    const reader = openReader(node);
+    // A tool's reader without its lifetime cap: the archive's tail (its directory) kept, and the
+    // padding after it fetched beside it and always to the end, so a quick refusal doesn't show
+    // the store where the file ends. The worker's reads are bounded per action by the session.
+    const reader = downloads.openReader(node, 4, { tool: true, uncapped: true });
     return {
         size: reader.size,
         fresh: true,

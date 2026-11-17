@@ -27,6 +27,9 @@ public enum ArchiveWords {
     public static let stop = "Stop"
     public static let download = "Download"
     public static let cancel = "Cancel"
+    public static let folders = "Folders in the archive"
+    /* A stored entry larger than the viewer checks before showing: read by range, its checksum unchecked. */
+    public static let unverified = "This item is too large to check before it’s shown, so it may be damaged."
     /* The viewer's own words, as the web's viewerWords say them. */
     public static let noPreview = "This kind of file has no preview yet."
     public static let broken = "This file can’t be shown"
@@ -52,12 +55,24 @@ public enum ArchiveWords {
         "crc": "This item is damaged: its contents don’t match its checksum.",
         "auth": "This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown.",
         "size": "This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it.",
+        "short": "This item is damaged: it holds less than it says.",
+        "link": "This item is a link, which HushOS doesn’t open.",
+        "directory": "This is a folder in the archive, not a file.",
+        "too-large": "This item is too large to preview here. Download it to open it in another app.",
         "ratio": "This item expands far more than ordinary files do, which is how some zip bombs work. HushOS stopped reading it.",
         "nested": nested,
     ]
 
+    /* An item's own refusal: "damaged" says the item is, not the archive, which still lists. */
+    public static let entryRefusals: [String: String] = refusals.merging(
+        ["damaged": "This item is damaged, or isn’t something HushOS can read."]
+    ) { _, entry in entry }
+
+    /* Which refusal words: the archive's (opening it) or an item's (reading one entry). */
+    public enum Scope: Sendable { case archive, entry }
+
     /* A refusal's words, or the tools' own failure for any code without words. */
-    public static func refusal(_ code: String) -> String {
-        refusals[code] ?? toolFailedMessage()
+    public static func refusal(_ code: String, scope: Scope = .archive) -> String {
+        (scope == .entry ? entryRefusals : refusals)[code] ?? toolFailedMessage()
     }
 }

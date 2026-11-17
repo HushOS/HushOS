@@ -1,5 +1,6 @@
 import { readFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { inflateRawSync } from 'node:zlib';
 import { join } from 'node:path';
 import { S3Client } from 'bun';
 import { expect, test, type Page, type Request } from '@playwright/test';
@@ -11,14 +12,17 @@ import { grip, newPage, registerAccount, sha256 } from './helpers';
  * its list, a folder inside opens, a text entry previews, and an entry downloads to the exact
  * bytes; the 5 GiB ZIP64 fixture lists while the page fetches less than 32 MiB; the AES zip asks
  * for its password, refuses a wrong one and opens with the right one; a central directory of
- * 65 MiB is refused with its message. After all of it, the fixtures' canary (in deflated entries,
- * so only inflating them makes it) is in no stored object, and not in IndexedDB, Cache Storage or
- * the origin private file system.
+ * 65 MiB is refused with its message; a 20 MiB compressible entry downloads whole (WebKit's
+ * DecompressionStream hands back a write's whole output at once, which once broke the session).
+ * After all of it, the fixtures' canary is in no stored object, and not in IndexedDB, Cache
+ * Storage or the origin private file system. It sits in deflated entries, where only inflating
+ * makes it, and in a stored one, whose archive bytes hold it as they are.
  */
 
 test.describe.configure({ mode: 'serial' });
 
 let page: Page;
+let large: string;
 const started = Date.now();
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 const row = (p: Page, name: string) =>
@@ -39,16 +43,24 @@ test.beforeAll(async ({ browser }) => {
     test.setTimeout(300_000);
     page = await newPage(browser);
     await registerAccount(page);
-    const large = mkdtempSync(join(tmpdir(), 'hushos-archives-e2e-'));
+    large = mkdtempSync(join(tmpdir(), 'hushos-archives-e2e-'));
     const files = [
         join(FIXTURE_DIR, 'basic.zip'),
         join(FIXTURE_DIR, 'aes.zip'),
+        join(FIXTURE_DIR, 'deep.zip'),
         writeFixture('zip64-5g.zip', large),
         writeFixture('directory-65m.zip', large),
+        writeFixture('compressible.zip', large),
     ];
     await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(4, { timeout: 180_000 });
-    for (const name of ['basic.zip', 'aes.zip', 'zip64-5g.zip', 'directory-65m.zip'])
+    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 180_000 });
+    for (const name of [
+        'basic.zip',
+        'aes.zip',
+        'zip64-5g.zip',
+        'directory-65m.zip',
+        'compressible.zip',
+    ])
         await expect(row(page, name)).toBeVisible();
 });
 test.afterAll(async () => {
@@ -136,6 +148,34 @@ test('a central directory of 65 MiB is refused with its message', async () => {
     await close(page);
 });
 
+test('a 20 MiB compressible entry downloads whole, byte for byte', async () => {
+    // What it inflates to, from the fixture's own bytes: its one entry's raw deflate stream.
+    const zip = readFileSync(join(large, 'compressible.zip'));
+    const start = 30 + zip.readUInt16LE(26) + zip.readUInt16LE(28);
+    const expected = inflateRawSync(zip.subarray(start, start + zip.readUInt32LE(18)));
+    await open(page, 'compressible.zip');
+    const [download] = await Promise.all([
+        page.waitForEvent('download', { timeout: 120_000 }),
+        items(page).getByRole('button', { name: 'Download compressible.txt' }).click(),
+    ]);
+    const path = await download.path();
+    expect(sha256(readFileSync(path!))).toBe(sha256(new Uint8Array(expected)));
+    expect(readFileSync(path!).length).toBe(20 * 1024 * 1024);
+    await close(page);
+});
+
+test('a name of 32,768 parts lists flat and opens; one of 256 parts lists as folders', async () => {
+    await open(page, 'deep.zip');
+    // The deepest is one row at the top, named by its whole path.
+    const flat = items(page).getByRole('button', { name: /^a\/a\/a\// });
+    await expect(flat).toBeVisible({ timeout: 60_000 });
+    await expect(items(page).getByRole('button', { name: /^b\b/ })).toBeVisible();
+    await flat.click();
+    await expect(dialog(page)).toContainText('x', { timeout: 30_000 });
+    await expect(dialog(page)).not.toContainText('can’t be shown');
+    await close(page);
+});
+
 test('the canary is in no stored object, and not in IndexedDB, Cache Storage or the private file system', async () => {
     const found = await page.evaluate(async (canary) => {
         const hits: string[] = [];
@@ -208,7 +248,9 @@ test('the canary is in no stored object, and not in IndexedDB, Cache Storage or 
                 }
             }
         };
-        await walk(await navigator.storage.getDirectory(), '');
+        // WebKit in an automated, ephemeral profile has no private file system to open: nothing to scan there.
+        const root = await navigator.storage.getDirectory().catch(() => null);
+        if (root) await walk(root, '');
         return hits;
     }, CANARY);
     expect(found).toEqual([]);

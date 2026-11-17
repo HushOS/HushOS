@@ -1048,6 +1048,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun clearError() = _state.update { it.copy(error = null) }
 
     override fun onCleared() {
+        archiveBrowse?.close()
         runCatching { connectivity.unregisterNetworkCallback(network) }
         super.onCleared()
     }
@@ -2499,10 +2500,21 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* A zip opens as its list in the app (ArchiveScreen); false for anything else, which opens as before. */
     fun showArchive(item: Opened): Boolean {
         if (item.isFolder || !com.hushos.app.data.ArchiveTree.isZip(item.name, item.metadata.mime)) return false
+        archiveBrowse?.close()
+        // Held here, not by the screen: a rotation keeps the session, its password, the folder and the downloads.
+        archiveBrowse = ArchiveBrowse(item, viewModelScope) { openArchive(item) }
         _state.update { it.copy(archive = item) }
         return true
     }
-    fun closeArchive() = _state.update { it.copy(archive = null) }
+    fun closeArchive() {
+        archiveBrowse?.close()
+        archiveBrowse = null
+        _state.update { it.copy(archive = null) }
+    }
+
+    /* The archive open now, for the screen; none once it is closed. */
+    var archiveBrowse: ArchiveBrowse? = null
+        private set
 
     /* The archive's directory, read under this session's vault; the caller closes it when its screen goes. */
     suspend fun openArchive(item: Opened): com.hushos.app.data.OpenArchive {

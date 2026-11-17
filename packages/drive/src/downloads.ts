@@ -568,7 +568,13 @@ export function createDownloadManager(options: DownloadManagerOptions) {
     function openReader(
         node: DriveNode,
         cacheChunks = 4,
-        options: { tool?: boolean } = {},
+        /*
+         * `tool`: a tool's reader (the tail kept, its padding fetched beside it and always to the
+         * end, at most four times the object fetched). `uncapped` drops that last limit, for a
+         * reader a person drives one action at a time (an archive open in the viewer), whose
+         * reads have no end a tool's would.
+         */
+        options: { tool?: boolean; uncapped?: boolean } = {},
     ): FileReader {
         // Per chunk, the most fetched so far: a chunk fetched again after eviction counts once.
         const fetched = new Map<number, number>();
@@ -614,7 +620,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         let paddingFailed: unknown = null;
         let fetches = 0;
         function fetchOne(index: number) {
-            if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
+            if (options.tool && !options.uncapped && ++fetches > TOOL_FETCH_FACTOR * source.total)
                 return Promise.reject(
                     new Error('This file was read more times than a tool needs.'),
                 );

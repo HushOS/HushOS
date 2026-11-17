@@ -44,9 +44,10 @@ import Testing
         return (content, object)
     }
 
-    static func open(_ name: String) async throws -> OpenArchive {
+    /* Not registered with a sign-out unless the test is about one: another suite's sign-out runs beside these. */
+    static func open(_ name: String, registered: Bool = false) async throws -> OpenArchive {
         let (content, object) = try sealed(name)
-        return try await OpenArchive.open(source: Sealed(object), content: content, watchdog: .seconds(30))
+        return try await OpenArchive.open(source: Sealed(object), content: content, watchdog: .seconds(30), registered: registered)
     }
 
     func code(_ work: () async throws -> some Any) async -> String? {
@@ -64,17 +65,121 @@ import Testing
         let text = String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self)
         #expect(text.contains("AES-256, AE-2."))
         archive.close()
+        ArchiveSessions.closeQueue.sync {}
         #expect(!archive.unlocked)
-        #expect(await code { try await archive.preview(secret, limit: 1024) } == "password")
+        // Closed, nothing reads: not the entry the password opened, not the one that needed none.
+        await #expect(throws: ArchiveFailure(code: nil, message: "The archive was closed.")) { try await archive.preview(secret, limit: 1024) }
+        let plain = try #require(archive.entries.first { $0.path == "plain.txt" })
+        await #expect(throws: ArchiveFailure(code: nil, message: "The archive was closed.")) { try await archive.preview(plain, limit: 1024) }
+    }
+
+    /* A zip as a copy the phone keeps: bytes read by range, a read that can be made to hang. */
+    final class Kept: LocalSource, @unchecked Sendable {
+        let bytes: Data
+        var stall = false
+        var reads = 0
+        init(_ bytes: Data) { self.bytes = bytes }
+        func size() -> UInt64 { UInt64(bytes.count) }
+        func readAt(offset: UInt64, length: UInt64) throws -> Data {
+            reads += 1
+            if stall { Thread.sleep(forTimeInterval: 5) }
+            return bytes.subdata(in: Int(offset) ..< Int(offset + length))
+        }
+    }
+
+    @Test func aKeptCopyOpensWithoutTheStoreAndItsPasswordWorks() async throws {
+        let kept = Kept(try Data(contentsOf: Self.fixtures.appendingPathComponent("aes.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), registered: false)
+        #expect(archive.kept)
+        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+        #expect(try await archive.unlock("correct horse battery"))
+        #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("AES-256, AE-2."))
+        #expect(kept.reads > 0)
+    }
+
+    @Test func closingCancelsTheArchivesCallsAtOnce() async throws {
+        let kept = Kept(try Data(contentsOf: Self.fixtures.appendingPathComponent("basic.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), poll: .milliseconds(50), registered: false)
+        let readme = try #require(archive.entries.first { $0.path == "docs/readme.txt" })
+        kept.stall = true
+        let reading = Task { try await archive.preview(readme, limit: 1024) }
+        while archive.running == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        let started = ContinuousClock.now
+        archive.close()
+        await #expect(throws: ArchiveFailure.self) { try await reading.value }
+        #expect(ContinuousClock.now - started < .seconds(2))
+    }
+
+    @Test func aDownloadRunsOnASiblingWithTheParentsPasswordWhileTheParentPreviews() async throws {
+        // A kept copy whose reads the test can hold: the download's reader hangs, the parent's doesn't.
+        final class Gated: LocalSource, @unchecked Sendable {
+            let bytes: Data
+            let gate = DispatchSemaphore(value: 0)
+            var holdFrom = Int.max
+            var reads = 0
+            let lock = NSLock()
+            init(_ bytes: Data) { self.bytes = bytes }
+            func size() -> UInt64 { UInt64(bytes.count) }
+            func readAt(offset: UInt64, length: UInt64) throws -> Data {
+                let hold = lock.withLock { reads += 1; return reads >= holdFrom }
+                if hold { gate.wait() }
+                return bytes.subdata(in: Int(offset) ..< Int(offset + length))
+            }
+        }
+        let kept = Gated(try Data(contentsOf: Self.fixtures.appendingPathComponent("aes.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), registered: false)
+        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+        let other = try #require(archive.entries.first { $0.path == "secret-ae1.txt" })
+        #expect(try await archive.unlock("correct horse battery"))
+        // The next read (the sibling's, for the download) waits on the gate.
+        kept.lock.withLock { kept.holdFrom = kept.reads + 1 }
+        final class Collected: @unchecked Sendable { var data = Data() }
+        let collected = Collected()
+        let downloading = Task { try await archive.download(secret, into: ArchiveSink { collected.data.append($0) }) }
+        while archive.downloading == 0 || archive.running == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(100))
+        // The parent previews a locked entry with its own password while the sibling's download is held.
+        kept.lock.withLock { kept.holdFrom = .max }
+        let text = String(decoding: try await archive.preview(other, limit: 1024), as: UTF8.self)
+        #expect(text.contains("AES-256, AE-1."))
+        // Released, the sibling reads the locked entry with the password it took from the parent.
+        kept.gate.signal()
+        try await downloading.value
+        #expect(String(decoding: collected.data, as: UTF8.self).contains("AES-256, AE-2."))
+        ArchiveSessions.closeQueue.sync {}
+        #expect(archive.downloading == 0)
+    }
+
+    @Test func closingTheArchiveClosesASiblingMidDownload() async throws {
+        let kept = Kept(try Data(contentsOf: Self.fixtures.appendingPathComponent("basic.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), poll: .milliseconds(50), registered: false)
+        let readme = try #require(archive.entries.first { $0.path == "docs/readme.txt" })
+        kept.stall = true
+        let downloading = Task { try await archive.download(readme, into: ArchiveSink { _ in }) }
+        while archive.downloading == 0 || archive.running == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        let started = ContinuousClock.now
+        archive.close()
+        await #expect(throws: ArchiveFailure.self) { try await downloading.value }
+        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(archive.downloading == 0)
+    }
+
+    @Test func anEntrysOwnPasswordIsTriedOnThatEntryFirst() async throws {
+        let archive = try await Self.open("zipcrypto-empty.zip")
+        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+        #expect(try await archive.unlock("not it", entry: secret) == false)
+        #expect(try await archive.unlock("correct horse battery", entry: secret))
+        #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("ZipCrypto"))
     }
 
     @Test func signingOutWipesEveryOpenArchivesPassword() async throws {
-        let archive = try await Self.open("aes.zip")
+        let archive = try await Self.open("aes.zip", registered: true)
         #expect(try await archive.unlock("correct horse battery"))
         ArchiveSessions.closeAll()
+        ArchiveSessions.closeQueue.sync {}
         #expect(!archive.unlocked)
         let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
-        #expect(await code { try await archive.preview(secret, limit: 1024) } == "password")
+        #expect(await code { try await archive.preview(secret, limit: 1024) } == nil)
     }
 
     @Test func aBombIsRefusedInItsOwnWordsAndAPreviewIsHeldToItsLimit() async throws {
@@ -86,6 +191,13 @@ import Testing
         } catch let failure as ArchiveFailure {
             #expect(failure.code == "size")
             #expect(failure.message == ArchiveWords.refusals["size"])
+        }
+        let damaged = try await Self.open("stored-bad-crc.zip")
+        do {
+            _ = try await damaged.preview(try #require(damaged.entries.first), limit: 1 << 20)
+            Issue.record("a bad checksum was shown")
+        } catch let failure as ArchiveFailure {
+            #expect(failure.code == "crc")
         }
         let basic = try await Self.open("basic.zip")
         let readme = try #require(basic.entries.first { $0.path == "docs/readme.txt" })
@@ -104,7 +216,7 @@ import Testing
     @Test func aCallStalledOnTheStoreEndsAtOnceWhenItsTaskIsCancelled() async throws {
         let (content, object) = try Self.sealed("basic.zip")
         // An archive over a store that never answers: its first read is the directory's.
-        let stalled = Task { try await OpenArchive.open(source: Sealed(object, stall: true), content: content, watchdog: .seconds(30)) }
+        let stalled = Task { try await OpenArchive.open(source: Sealed(object, stall: true), content: content, watchdog: .seconds(30), registered: false) }
         try await Task.sleep(for: .milliseconds(200))
         let started = ContinuousClock.now
         stalled.cancel()
@@ -112,12 +224,36 @@ import Testing
         #expect(ContinuousClock.now - started < .seconds(2))
     }
 
+    @Test func textIsShownInPiecesBoundedByLinesAndBytes() {
+        let many = Data((0 ..< 450).map { "line \($0)" }.joined(separator: "\n").utf8)
+        let pieces = ArchiveText.pieces(many)
+        #expect(pieces.count == 3)
+        #expect(pieces.allSatisfy { $0.split(separator: "\n", omittingEmptySubsequences: false).count <= ArchiveText.lines })
+        #expect(pieces.joined(separator: "\n") == String(decoding: many, as: UTF8.self))
+        // One line of 100 KB, with no line end to cut at, is still cut, between characters.
+        let long = Data(String(repeating: "é", count: 50_000).utf8)
+        let cut = ArchiveText.pieces(long)
+        #expect(cut.allSatisfy { $0.utf8.count <= ArchiveText.bytes })
+        #expect(cut.joined(separator: "\n").replacingOccurrences(of: "\n", with: "") == String(decoding: long, as: UTF8.self))
+    }
+
+    @Test func aDeepPathCostsItsPartsNotItsPrefixes() {
+        // 256 parts deep (the core's cap): every folder on the way, one child each.
+        let parts = (0 ..< 255).map { "d\($0)" } + ["z"]
+        let deep = ArchiveEntry(index: 0, path: parts.joined(separator: "/"), parts: parts, directory: false, size: 1, packed: 1,
+                                dos: 0, mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false,
+                                stored: true, saveName: "z")
+        let tree = ArchiveTree([deep])
+        #expect(tree.rows(at: []) == [.folder(name: "d0", count: 1)])
+        #expect(tree.rows(at: Array(parts.dropLast())).map(\.name) == ["z"])
+    }
+
     @Test func theTreeListsFoldersFirstWithCountsAndLeavesMacFilesOut() {
         func entry(_ index: UInt32, _ path: String, directory: Bool = false, hidden: Bool = false) -> ArchiveEntry {
             ArchiveEntry(
                 index: index, path: path, parts: path.split(separator: "/").map(String.init), directory: directory,
                 size: 1, packed: 1, dos: 0, mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false,
-                hidden: hidden, stored: false
+                hidden: hidden, stored: false, saveName: path.split(separator: "/").last.map(String.init) ?? path
             )
         }
         let tree = ArchiveTree([
@@ -140,10 +276,15 @@ import Testing
     @Test func everyRefusalTheListShowsHasTheWebsWords() {
         // The codes archive.rs sends that reach the person (directory, link and too-large are drawn, never said).
         for code in ["damaged", "directory-too-large", "too-many-entries", "encrypted-directory", "split", "overlap", "local",
-                     "method", "encryption", "password", "wrong-password", "crc", "auth", "size", "ratio", "nested"] {
+                     "method", "encryption", "password", "wrong-password", "crc", "auth", "size", "short", "ratio", "nested",
+                     "link", "directory", "too-large"] {
             #expect(ArchiveWords.refusals[code] != nil, "\(code)")
         }
         #expect(ArchiveWords.refusal("something new") == toolFailedMessage())
+        // An item's damage is the item's, not the archive's, which still lists.
+        #expect(ArchiveWords.refusal("damaged", scope: .entry) == "This item is damaged, or isn’t something HushOS can read.")
+        #expect(ArchiveWords.refusal("damaged") == "This archive is damaged, or isn’t a zip archive HushOS can read.")
+        #expect(ArchiveWords.refusal("crc", scope: .entry) == ArchiveWords.refusal("crc"))
     }
 
     @Test func theCardOffersContinuePastTheThresholdAndOnlyDownloadPastTheCeiling() {
@@ -160,7 +301,7 @@ import Testing
     @Test func aZipEntrysDateIsItsUnixTimeOrItsDosDateAsLocalTime() {
         var entry = ArchiveEntry(index: 0, path: "a", parts: ["a"], directory: false, size: 0, packed: 0,
                                  dos: (UInt32((2026 - 1980) << 9 | 11 << 5 | 3) << 16) | UInt32(14 << 11 | 30 << 5),
-                                 mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false, stored: true)
+                                 mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false, stored: true, saveName: "a")
         let calendar = Calendar(identifier: .gregorian)
         let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: ArchiveEntries.date(entry, calendar: calendar)!)
         #expect([parts.year, parts.month, parts.day, parts.hour, parts.minute] == [2026, 11, 3, 14, 30])

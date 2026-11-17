@@ -46,6 +46,7 @@ function wire(opened: ZipArchive): WireEntry[] {
         nested: item.nested,
         hidden: item.hidden,
         stored: item.stored,
+        saveName: item.saveName,
     }));
 }
 
@@ -59,23 +60,27 @@ async function download(id: number, index: number) {
     const stop = new AbortController();
     const state = { stop, more: null as (() => void) | null };
     running.set(id, state);
-    let gathered: Uint8Array[] = [];
+    const gathered = new Uint8Array(CHUNK_BYTES);
     let size = 0;
-    // One chunk crosses at a time: the next waits until the page has written this one.
+    // One chunk crosses at a time, never more than CHUNK_BYTES: the next waits until the page has
+    // written this one. What an inflater hands back at once is cut, however large it came.
     const send = async () => {
         if (!size) return;
-        const bytes = new Uint8Array(size);
-        let at = 0;
-        for (const part of gathered) {
-            bytes.set(part, at);
-            at += part.length;
-        }
-        gathered = [];
+        const bytes = gathered.subarray(0, size).slice();
         size = 0;
         const taken = new Promise<void>((resolve) => (state.more = resolve));
         scope.postMessage({ type: 'chunk', id, bytes: bytes.buffer }, [bytes.buffer]);
         await taken;
         if (stop.signal.aborted) throw new ZipError('damaged');
+    };
+    const gather = async (chunk: Uint8Array) => {
+        for (let at = 0; at < chunk.length;) {
+            const take = Math.min(CHUNK_BYTES - size, chunk.length - at);
+            gathered.set(chunk.subarray(at, at + take), size);
+            size += take;
+            at += take;
+            if (size === CHUNK_BYTES) await send();
+        }
     };
     try {
         const opened = await ready();
@@ -83,9 +88,7 @@ async function download(id: number, index: number) {
             index,
             async (chunk) => {
                 moved = true;
-                gathered.push(chunk.slice());
-                size += chunk.length;
-                if (size >= CHUNK_BYTES) await send();
+                await gather(chunk);
             },
             stop.signal,
         );
@@ -126,7 +129,7 @@ scope.onmessage = (event) => {
         }
         case 'unlock':
             void ready()
-                .then((opened) => opened.unlock(msg.password))
+                .then((opened) => opened.unlock(msg.password, msg.index ?? undefined))
                 .then(
                     (ok) => scope.postMessage({ type: 'unlocked', id: msg.id, ok }),
                     (error: unknown) => fail(msg.id, error),
@@ -137,7 +140,9 @@ scope.onmessage = (event) => {
                 try {
                     const opened = await ready();
                     const listed = opened.listed.find((item) => item.index === msg.index);
-                    if (listed?.stored) {
+                    // A stored entry up to the limit is read whole, so its CRC is checked before it
+                    // shows; a larger one is read by range, unchecked, and the page says so.
+                    if (listed?.stored && listed.size > msg.limit) {
                         const { offset, size } = await opened.span(msg.index);
                         scope.postMessage({ type: 'span', id: msg.id, offset, size });
                         return;

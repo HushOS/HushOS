@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -19,6 +20,8 @@ type Expected = {
     hidden?: number;
     unlock?: { right: boolean; wrong: boolean };
     parts?: Record<string, string[]>;
+    partsLength?: Record<string, number>;
+    saveNames?: Record<string, string>;
     entries?: {
         path: string;
         directory?: boolean;
@@ -30,6 +33,7 @@ type Expected = {
         stored?: boolean;
         size?: number;
         asksFirst?: boolean;
+        downloadSha256?: string;
         check: string;
         download: string;
         withoutPassword?: string;
@@ -106,10 +110,20 @@ describe('every fixture, as expected.json says', () => {
                     expect(await outcome(() => archive.check(index, password)), label).toBe(
                         want.check,
                     );
+                    const hash = createHash('sha256');
                     expect(
-                        await outcome(() => archive.download(index, () => {}, undefined, password)),
+                        await outcome(() =>
+                            archive.download(
+                                index,
+                                (chunk) => void hash.update(chunk),
+                                undefined,
+                                password,
+                            ),
+                        ),
                         label,
                     ).toBe(want.download);
+                    if (want.downloadSha256)
+                        expect(hash.digest('hex'), label).toBe(want.downloadSha256);
                     if (want.withoutPassword)
                         expect(await outcome(() => archive.check(index, null)), label).toBe(
                             want.withoutPassword,
@@ -122,6 +136,15 @@ describe('every fixture, as expected.json says', () => {
                 for (const [path, parts] of Object.entries(expected.parts ?? {}))
                     expect(archive.listed.find((item) => item.path === path)?.parts, path).toEqual(
                         parts,
+                    );
+                for (const [path, length] of Object.entries(expected.partsLength ?? {}))
+                    expect(
+                        archive.listed.find((item) => item.path === path)?.parts.length,
+                        path.slice(0, 20),
+                    ).toBe(length);
+                for (const [path, name] of Object.entries(expected.saveNames ?? {}))
+                    expect(archive.listed.find((item) => item.path === path)?.saveName, path).toBe(
+                        name,
                     );
                 if (expected.unlock) {
                     expect(await (await open(name)).unlock(table.password)).toBe(
@@ -157,6 +180,8 @@ describe('reading', () => {
         expect(new TextDecoder().decode(await archive.preview(0, 1024))).toContain('AE-2');
         archive.close();
         expect(archive.unlocked).toBe(false);
-        expect(await outcome(() => archive.preview(0, 1024))).toBe('password');
+        // Closed, nothing reads any more: not the entry it opened, not one it didn't need.
+        expect(await outcome(() => archive.preview(0, 1024))).toBe('damaged');
+        expect(await outcome(() => archive.preview(2, 1024))).toBe('damaged');
     });
 });

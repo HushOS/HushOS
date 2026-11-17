@@ -81,6 +81,80 @@ class ArchiveSessionsTest {
         }
     }
 
+    @Test fun aKeptCopyOpensFromThePhoneWithoutTheStore() = runBlocking {
+        val plain = File(fixtures, "aes.zip").readBytes()
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        val kept = object : com.hushos.core.LocalSource {
+            override fun size() = plain.size.toULong()
+            override fun readAt(offset: ULong, length: ULong): ByteArray {
+                reads.incrementAndGet()
+                return plain.copyOfRange(offset.toInt(), (offset + length).toInt())
+            }
+        }
+        val archive = ArchiveSessions().openLocal(kept)
+        assertTrue(reads.get() > 0)
+        assertFalse(archive.unlock("not it"))
+        // Tried on its own item first, as when that item asked for its password.
+        assertTrue(archive.unlock("correct horse battery", 1u))
+        assertTrue(archive.preview(1u, 1024).decodeToString().contains("AE-1"))
+        archive.close()
+        try {
+            archive.preview(2u, 1024)
+            fail("read after close")
+        } catch (_: CancellationException) {
+        }
+    }
+
+    @Test fun aSiblingDownloadsALockedItemWithTheParentsPasswordWhileTheParentPreviews() = runBlocking {
+        val (content, stored) = sealed(File(fixtures, "aes.zip").readBytes())
+        val sessions = ArchiveSessions()
+        val archive = sessions.open(store(stored), content)
+        assertTrue(archive.unlock("correct horse battery"))
+        val sibling = archive.sibling()
+        // The sibling's download holds in its sink until the parent's preview has finished.
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val out = java.io.ByteArrayOutputStream()
+        val download = async(kotlinx.coroutines.Dispatchers.Default) {
+            sibling.download(1u, object : EntrySink {
+                override fun write(chunk: ByteArray) {
+                    entered.countDown()
+                    assertTrue(release.await(10, TimeUnit.SECONDS))
+                    out.write(chunk)
+                }
+            })
+        }
+        assertTrue(entered.await(10, TimeUnit.SECONDS))
+        // Previewing on the parent goes ahead while the sibling's call is still running.
+        assertTrue(archive.preview(0u, 1024).decodeToString().contains("AES-256, AE-2."))
+        assertEquals(1, sibling.live)
+        release.countDown()
+        download.await()
+        assertTrue(out.toString(Charsets.UTF_8).contains("AES-256, AE-1."))
+        // A sign-out reaches the sibling too.
+        assertEquals(2, sessions.count)
+        sessions.closeAll()
+        assertEquals(0, sessions.count)
+        try {
+            sibling.preview(1u, 1024)
+            fail("read on a sibling after the sign-out")
+        } catch (_: CancellationException) {
+        }
+    }
+
+    @Test fun aKeptCopyThatCantBeReadSaysSo() = runBlocking {
+        val kept = object : com.hushos.core.LocalSource {
+            override fun size() = 4096uL
+            override fun readAt(offset: ULong, length: ULong): ByteArray = throw com.hushos.core.FetchException.Failed("The kept copy couldn't be read.")
+        }
+        try {
+            ArchiveSessions().openLocal(kept)
+            fail("opened an unreadable copy")
+        } catch (error: ArchiveException.Failed) {
+            assertEquals("The kept copy couldn't be read.", error.reason)
+        }
+    }
+
     @Test fun aDownloadStreamsTheEntryAndNothingMore() = runBlocking {
         val (content, stored) = sealed(File(fixtures, "basic.zip").readBytes())
         val archive = ArchiveSessions().open(store(stored), content)
@@ -94,14 +168,19 @@ class ArchiveSessionsTest {
     }
 
     @Test fun aCancelledCallEndsAtOnceAndTheNextWaitsForItsThread() = runBlocking {
+        // Over a kept copy, which reads every range afresh (a version's reader keeps the chunks it
+        // read for the session, so a small archive would never reach the store again).
         val plain = File(fixtures, "basic.zip").readBytes()
-        val (content, stored) = sealed(plain)
         val hold = CountDownLatch(1)
         val waiting = CountDownLatch(1)
         val holding = java.util.concurrent.atomic.AtomicBoolean(false)
-        val archive = ArchiveSessions().open(store(stored) {
-            if (holding.get()) { waiting.countDown(); hold.await(10, TimeUnit.SECONDS) }
-        }, content)
+        val archive = ArchiveSessions().openLocal(object : com.hushos.core.LocalSource {
+            override fun size() = plain.size.toULong()
+            override fun readAt(offset: ULong, length: ULong): ByteArray {
+                if (holding.get()) { waiting.countDown(); hold.await(10, TimeUnit.SECONDS) }
+                return plain.copyOfRange(offset.toInt(), (offset + length).toInt())
+            }
+        })
         holding.set(true)
         val readme = archive.entries.indexOfFirst { it.path == "docs/readme.txt" }.toUInt()
         val first = async(kotlinx.coroutines.Dispatchers.Default) { runCatching { archive.preview(readme, 1024) } }

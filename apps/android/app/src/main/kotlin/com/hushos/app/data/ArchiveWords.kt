@@ -41,9 +41,13 @@ object ArchiveWords {
     fun tooLarge(size: Long) = "This file is ${formatBytes(size)}, too large to preview here."
     fun large(size: Long) = "This file is ${formatBytes(size)}."
 
-    /* Why an archive or an entry was refused, by the core's code; anything else is the tools' failure. */
-    fun refusal(code: String): String = when (code) {
-        "damaged" -> "This archive is damaged, or isn’t a zip archive HushOS can read."
+    /*
+     * Why an archive or one of its items was refused, by the core's code; anything else is the tools'
+     * failure. `entry`: an item's own refusal, where "damaged" says the item is, not the archive,
+     * which still lists (the web's entryRefusalWords).
+     */
+    fun refusal(code: String, entry: Boolean = false): String = when (code) {
+        "damaged" -> if (entry) "This item is damaged, or isn’t something HushOS can read." else "This archive is damaged, or isn’t a zip archive HushOS can read."
         "directory-too-large" -> "This archive’s list of contents is too large to open here. Download it to open it on your computer."
         "too-many-entries" -> "This archive has more than 100,000 items, too many to list here. Download it to open it on your computer."
         "encrypted-directory" -> ENCRYPTED_DIRECTORY
@@ -58,6 +62,10 @@ object ArchiveWords {
         "auth" -> "This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown."
         "size" -> "This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it."
         "ratio" -> "This item expands far more than ordinary files do, which is how some zip bombs work. HushOS stopped reading it."
+        "short" -> "This item is damaged: it holds less than it says."
+        "link" -> "This item is a link, which HushOS doesn’t open."
+        "directory" -> "This is a folder in the archive, not a file."
+        "too-large" -> "This item is too large to preview here. Download it to open it in another app."
         "nested" -> NESTED
         else -> toolFailedMessage()
     }

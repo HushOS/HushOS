@@ -162,11 +162,11 @@ function playgroundOutOfBuild(): Plugin {
 
 /*
  * zip.js runs in the archive's tools worker, whose policy loads nothing at run time
- * (docs/file-tools-design.md, "Content Security Policy"), and check-worker-code.ts fails the build
- * on any import a tools worker could make. zip.js can import a codec module by URL for a
- * compression method registered with `registerCodec`; HushOS registers none, so that one
- * `import()` is replaced by a refusal. If an upgrade moves it, the build stops here rather than
- * shipping a worker with a way to load code.
+ * (docs/file-tools-design.md, "Content Security Policy"); check-worker-code.ts fails the build if
+ * the built worker has any import at all. zip.js has one, to load a codec module by URL for a
+ * compression method registered with `registerCodec`. HushOS registers none, so that `import()`
+ * is replaced by a refusal. The match is on the exact text: if an upgrade changes it, this plugin
+ * stops the build, and if an upgrade adds an import elsewhere, check-worker-code.ts does.
  */
 function zipJsWithoutCodecImport(): Plugin {
     const file = /@zip\.js[\\/]zip\.js[\\/]lib[\\/]core[\\/]codec-registry\.js$/;

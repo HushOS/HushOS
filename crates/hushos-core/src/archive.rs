@@ -1,21 +1,23 @@
 //! Browsing zip archives in the phone apps (docs/file-tools-design.md, section 1 (a) and
 //! section 6): the list of what is inside, read from the central directory alone, and an entry's
-//! bytes, read through the `zip` crate. The web's twin is `apps/web/src/lib/archives/zip-format.ts`
+//! bytes, decoded here from the entry's own listing record. The web's twin is `apps/web/src/lib/archives/zip-format.ts`
 //! (the rules) with zip.js (the data); both are held to `e2e/fixtures/archives/expected.json`, so a
 //! change to one is a change to both.
 //!
 //! The directory parser is strict on purpose. Archives come from anyone, and two readers that see
 //! different files in one archive is an attack of its own, so anything ambiguous is refused rather
-//! than reconciled. The `zip` crate parses the directory a second time, once, when the first entry
-//! is opened; every entry it reads is first checked against this listing (offset, sizes, name).
+//! than reconciled. Nothing else parses the directory: each entry is decoded from its own listing
+//! record (its offset, method, flags, CRC and sizes), with flate2 for Deflate, the `deflate64`
+//! crate for Deflate64, and ZipCrypto and WinZip AES written out here, so no second reader can
+//! read an entry under a different record (the web gives zip.js a one-entry archive written from
+//! the same record, for the same reason).
 //!
 //! Every limit is enforced on the bytes as they are produced: an entry stops at the byte past its
 //! declared size, a preview at 200 times the compressed bytes read once 1 MiB has come out, and the
 //! CRC or the AES authentication code is checked at the end. A password the person typed is held
 //! by the open archive, in memory, and wiped when it is closed or dropped.
 
-use std::collections::{HashMap, HashSet};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use zeroize::Zeroizing;
@@ -33,7 +35,7 @@ const RATIO_FROM: u64 = MIB;
 const ASK_ABOVE: u64 = 4 * 1024 * MIB;
 /// An unlock decrypts the smallest locked entry in full when it is at most this large.
 const UNLOCK_CHECK_BYTES: u64 = 16 * MIB;
-/// Whether this build decodes Deflate64 (method 9): the `zip` crate's `deflate64` feature does, as zip.js does on the web.
+/// Whether this build decodes Deflate64 (method 9): the `deflate64` crate does, as zip.js does on the web.
 const DEFLATE64: bool = true;
 /// How much of a download is handed to the app at a time.
 const CHUNK_BYTES: usize = 1024 * 1024;
@@ -70,6 +72,7 @@ pub enum Refusal {
     Crc,
     Auth,
     Size,
+    Short,
     Ratio,
     Nested,
     Link,
@@ -94,6 +97,7 @@ impl Refusal {
             Refusal::Crc => "crc",
             Refusal::Auth => "auth",
             Refusal::Size => "size",
+            Refusal::Short => "short",
             Refusal::Ratio => "ratio",
             Refusal::Nested => "nested",
             Refusal::Link => "link",
@@ -348,8 +352,10 @@ pub(crate) struct Entry {
     pub dos: u32,
     pub mtime: Option<i64>,
     pub lock: Lock,
-    /* The real method inside WinZip AES. */
+    /* The real method inside WinZip AES, its key strength (1 to 3) and vendor version (1 or 2). */
     pub aes_method: Option<u16>,
+    pub aes_strength: u8,
+    pub aes_version: u16,
     pub link: bool,
 }
 
@@ -469,6 +475,8 @@ pub(crate) fn read_directory(bytes: &[u8], directory: &Directory) -> Result<Vec<
         }
         let mut lock = Lock::None;
         let mut aes_method = None;
+        let mut aes_strength = 0u8;
+        let mut aes_version = 0u16;
         if flags & 1 != 0 {
             if flags & 0x40 != 0 {
                 lock = Lock::Other;
@@ -481,6 +489,8 @@ pub(crate) fn read_directory(bytes: &[u8], directory: &Directory) -> Result<Vec<
                         if (version == 1 || version == 2) && (1..=3).contains(&strength) {
                             lock = Lock::Aes;
                             aes_method = Some(u16_at(field, 5) as u16);
+                            aes_strength = strength;
+                            aes_version = version as u16;
                         }
                     }
                 }
@@ -512,6 +522,8 @@ pub(crate) fn read_directory(bytes: &[u8], directory: &Directory) -> Result<Vec<
             mtime,
             lock,
             aes_method,
+            aes_strength,
+            aes_version,
             link: (host == 3 || host == 19) && kind == 0o120000,
         });
         at = next;
@@ -559,13 +571,19 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
     let mut size = u32_at(header, 22);
     let name_length = u16_at(header, 26) as usize;
     let extra_length = u16_at(header, 28) as usize;
+    // What the fixed part says first: the method, and the encryption and data-descriptor flags.
+    if method != entry.method as u64 || (flags & 9) != (entry.flags as u64 & 9) {
+        return refused(Refusal::Local);
+    }
+    // Then the whole span: a header whose name and extra field run past the next entry overlaps it.
+    let start = entry.offset + (LOCAL_LENGTH + name_length + extra_length) as u64;
+    if start + entry.packed + if flags & 8 != 0 { 12 } else { 0 } > entry.bound {
+        return refused(Refusal::Overlap);
+    }
     if header.len() < LOCAL_LENGTH + name_length + extra_length {
         return refused(Refusal::Damaged);
     }
     if header[LOCAL_LENGTH..LOCAL_LENGTH + name_length] != entry.raw[..] {
-        return refused(Refusal::Local);
-    }
-    if method != entry.method as u64 || (flags & 1) != (entry.flags as u64 & 1) {
         return refused(Refusal::Local);
     }
     let fields = extra_fields(&header[LOCAL_LENGTH + name_length..LOCAL_LENGTH + name_length + extra_length]);
@@ -590,10 +608,6 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
     let agrees = |local: u64, central: u64| local == central || (descriptor && local == 0);
     if !agrees(crc, entry.crc as u64) || !agrees(packed, entry.packed) || !agrees(size, entry.size) {
         return refused(Refusal::Local);
-    }
-    let start = entry.offset + (LOCAL_LENGTH + name_length + extra_length) as u64;
-    if start + entry.packed + if descriptor { 12 } else { 0 } > entry.bound {
-        return refused(Refusal::Overlap);
     }
     Ok(start)
 }
@@ -628,6 +642,8 @@ pub struct ArchiveEntry {
     pub nested: bool,
     pub hidden: bool,
     pub stored: bool,
+    /// What a download of it is saved as: `save_name` of its last part.
+    pub save_name: String,
 }
 
 const ARCHIVE_EXTENSIONS: &[&str] = &[
@@ -658,7 +674,148 @@ fn support_of(entry: &Entry) -> &'static str {
     }
 }
 
+/// How deep the list goes: past 256 parts, or once the archive's entries have used a million
+/// parts between them, an entry is listed flat, under its whole path, at the top (the web's
+/// LIST_DEPTH_MAX and LIST_PARTS_MAX). Without it one 64 KiB name of `a/a/a/…` costs gigabytes in
+/// prefixes.
+pub const LIST_DEPTH_MAX: usize = 256;
+pub const LIST_PARTS_MAX: usize = 1_000_000;
+
+/// Names as a tree, each node a number and each child found by its parent and name: memory grows
+/// with the parts, never with their prefixes.
+#[derive(Default)]
+pub(crate) struct NameTree {
+    children: HashMap<(u32, String), u32>,
+    next: u32,
+}
+
+impl NameTree {
+    /// The child `name` of `parent` (0 is the top), made if asked; 0 when absent.
+    pub fn child(&mut self, parent: u32, name: &str, make: bool) -> u32 {
+        if let Some(&found) = self.children.get(&(parent, name.to_owned())) {
+            return found;
+        }
+        if !make {
+            return 0;
+        }
+        self.next += 1;
+        self.children.insert((parent, name.to_owned()), self.next);
+        self.next
+    }
+
+    /// The node at `parts`, 0 when any step is absent (or `parts` is empty: the top).
+    pub fn find(&mut self, parts: &[String]) -> u32 {
+        let mut node = 0;
+        for part in parts {
+            node = self.child(node, part, false);
+            if node == 0 {
+                return 0;
+            }
+        }
+        node
+    }
+}
+
+/* Characters no file system takes, or that change how a name reads (controls, bidi marks): the web's save-file.ts set. */
+fn unsafe_char(code: u32) -> bool {
+    matches!(char::from_u32(code), Some('\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        || code < 0x20
+        || (0x7f..=0x9f).contains(&code)
+        || code == 0x061c
+        || code == 0x200e
+        || code == 0x200f
+        || (0x202a..=0x202e).contains(&code)
+        || (0x2066..=0x2069).contains(&code)
+}
+
+/* Dots and the whitespace JavaScript's \s matches, written out as the web writes them. */
+fn edge_char(code: u32) -> bool {
+    matches!(
+        code,
+        0x2e | 0x09
+            | 0x0a
+            | 0x0b
+            | 0x0c
+            | 0x0d
+            | 0x20
+            | 0xa0
+            | 0x1680
+            | 0x2028
+            | 0x2029
+            | 0x202f
+            | 0x205f
+            | 0x3000
+            | 0xfeff
+    ) || (0x2000..=0x200a).contains(&code)
+}
+
+fn trim_edges(chars: &[char]) -> &[char] {
+    let mut start = 0;
+    let mut end = chars.len();
+    while start < end && edge_char(chars[start] as u32) {
+        start += 1;
+    }
+    while end > start && edge_char(chars[end - 1] as u32) {
+        end -= 1;
+    }
+    &chars[start..end]
+}
+
+/* Names Windows keeps for devices, with or without an extension, any case. */
+fn reserved(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let stem = lower.split('.').next().unwrap_or("");
+    let rest = &lower[stem.len()..];
+    if !(rest.is_empty() || rest.starts_with('.')) {
+        return false;
+    }
+    matches!(stem, "con" | "prn" | "aux" | "nul")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.as_bytes()[3].is_ascii_digit())
+}
+
+/// The name an entry is saved as when downloaded, from the last part of its path (the web's
+/// `saveName`, ported as is): NFC, forbidden and invisible characters (controls, bidi overrides)
+/// as `_`, no leading or trailing dots or spaces, a Windows device name given a leading `_`, and
+/// at most 255 bytes of UTF-8, cut between code points before an extension of at most 32 bytes.
+pub fn save_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let mapped: Vec<char> = name.nfc().map(|c| if unsafe_char(c as u32) { '_' } else { c }).collect();
+    let mut text: String = trim_edges(&mapped).iter().collect();
+    if text.is_empty() {
+        return "Untitled".into();
+    }
+    if reserved(&text) {
+        text = format!("_{text}");
+    }
+    if text.len() <= 255 {
+        return text;
+    }
+    let (stem, extension) = match text.rfind('.') {
+        Some(dot) if dot > 0 && text.len() - dot <= 32 => (&text[..dot], &text[dot..]),
+        _ => (&text[..], ""),
+    };
+    let room = 255 - extension.len();
+    let mut base = Vec::new();
+    let mut bytes = 0;
+    for c in stem.chars() {
+        if bytes + c.len_utf8() > room {
+            break;
+        }
+        bytes += c.len_utf8();
+        base.push(c);
+    }
+    let kept: String = trim_edges(&base).iter().collect();
+    if kept.is_empty() {
+        "Untitled".into()
+    } else {
+        kept + extension
+    }
+}
+
 pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
+    let mut budget = LIST_PARTS_MAX;
     let mut listed: Vec<ArchiveEntry> = entries
         .iter()
         .map(|entry| {
@@ -666,6 +823,11 @@ pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
             if parts.is_empty() && !entry.directory {
                 parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
             }
+            // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
+            if parts.len() > LIST_DEPTH_MAX || parts.len() > budget {
+                parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
+            }
+            budget = budget.saturating_sub(parts.len());
             let name = parts.last().cloned().unwrap_or_default();
             let link = entry.link && !entry.directory;
             ArchiveEntry {
@@ -684,14 +846,17 @@ pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
                     && ARCHIVE_EXTENSIONS.contains(&extension_of(&name).as_str()),
                 hidden: false,
                 stored: !entry.directory && !entry.link && entry.method == 0 && entry.lock == Lock::None,
+                save_name: save_name(&name),
                 parts,
             }
         })
         .collect();
-    let mut known = HashSet::new();
+    // Every path, explicit or implied by a deeper one, so a `._x` is hidden only beside an `x`.
+    let mut tree = NameTree::default();
     for item in &listed {
-        for depth in 1..=item.parts.len() {
-            known.insert(item.parts[..depth].join("/"));
+        let mut node = 0;
+        for part in &item.parts {
+            node = tree.child(node, part, true);
         }
     }
     for item in &mut listed {
@@ -701,9 +866,9 @@ pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
         }
         if let Some(name) = item.parts.last() {
             if !item.directory && name.starts_with("._") && name.chars().count() > 2 {
-                let mut twin = item.parts[..item.parts.len() - 1].to_vec();
-                twin.push(name[2..].to_owned());
-                if known.contains(&twin.join("/")) {
+                let depth = item.parts.len();
+                let parent = if depth > 1 { tree.find(&item.parts[..depth - 1]) } else { 0 };
+                if (depth == 1 || parent != 0) && tree.child(parent, &name[2..], false) != 0 {
                     item.hidden = true;
                 }
             }
@@ -768,6 +933,10 @@ impl InflateCounter {
     pub fn read(&mut self, bytes: u64) {
         self.consumed += bytes;
     }
+    /// The compressed bytes consumed so far, as how far into the entry's data reading has reached.
+    pub fn reached(&mut self, position: u64) {
+        self.consumed = self.consumed.max(position);
+    }
     pub fn wrote(&mut self, bytes: u64) -> std::result::Result<(), Refusal> {
         self.produced += bytes;
         if self.produced > self.declared {
@@ -778,121 +947,318 @@ impl InflateCounter {
         }
         Ok(())
     }
+    /// At the end: more than declared is a bomb, fewer is damage, each said as such.
     pub fn finish(&self) -> std::result::Result<(), Refusal> {
-        if self.produced != self.declared {
+        if self.produced > self.declared {
             return Err(Refusal::Size);
+        }
+        if self.produced < self.declared {
+            return Err(Refusal::Short);
         }
         Ok(())
     }
 }
 
 // ---------------------------------------------------------------------------
-// The `zip` crate's view, over whichever source the current read uses
+// Decryption: traditional PKWARE (ZipCrypto) and WinZip AES, by hand
 // ---------------------------------------------------------------------------
 
-struct Tally {
-    start: u64,
-    end: u64,
-    consumed: u64,
+const fn crc_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut n = 0;
+    while n < 256 {
+        let mut c = n as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            k += 1;
+        }
+        table[n] = c;
+        n += 1;
+    }
+    table
+}
+const CRC_TABLE: [u32; 256] = crc_table();
+
+fn crc_byte(crc: u32, byte: u8) -> u32 {
+    CRC_TABLE[((crc ^ byte as u32) & 0xff) as usize] ^ (crc >> 8)
 }
 
+/// The traditional PKWARE cipher's three keys.
+struct ZipCrypto([u32; 3]);
+
+impl ZipCrypto {
+    fn new(password: &[u8]) -> Self {
+        let mut keys = ZipCrypto([0x1234_5678, 0x2345_6789, 0x3456_7890]);
+        for &byte in password {
+            keys.update(byte);
+        }
+        keys
+    }
+    fn update(&mut self, byte: u8) {
+        self.0[0] = crc_byte(self.0[0], byte);
+        self.0[1] = self.0[1].wrapping_add(self.0[0] & 0xff).wrapping_mul(134_775_813).wrapping_add(1);
+        self.0[2] = crc_byte(self.0[2], (self.0[1] >> 24) as u8);
+    }
+    fn decrypt(&mut self, bytes: &mut [u8]) {
+        for byte in bytes {
+            let temp = self.0[2] | 2;
+            let plain = *byte ^ ((temp.wrapping_mul(temp ^ 1) >> 8) & 0xff) as u8;
+            self.update(plain);
+            *byte = plain;
+        }
+    }
+}
+
+enum AesKey {
+    A128(Box<aes::Aes128>),
+    A192(Box<aes::Aes192>),
+    A256(Box<aes::Aes256>),
+}
+
+/// WinZip AES: CTR with a little-endian counter from 1, HMAC-SHA1 over the ciphertext.
+struct WinZipAes {
+    key: AesKey,
+    counter: u128,
+    stream: [u8; 16],
+    used: usize,
+    mac: hmac::Hmac<sha1::Sha1>,
+}
+
+/// PBKDF2-HMAC-SHA1 (RFC 8018), as WinZip AES derives its keys: 1,000 iterations.
+fn pbkdf2_sha1(password: &[u8], salt: &[u8], length: usize) -> Zeroizing<Vec<u8>> {
+    use hmac::Mac;
+    let prf = <hmac::Hmac<sha1::Sha1> as Mac>::new_from_slice(password).expect("HMAC takes any key");
+    let mut out = Zeroizing::new(Vec::with_capacity(length));
+    let mut block = 1u32;
+    while out.len() < length {
+        let mut u = prf.clone();
+        u.update(salt);
+        u.update(&block.to_be_bytes());
+        let mut last: [u8; 20] = u.finalize().into_bytes().into();
+        let mut total = last;
+        for _ in 1..1000 {
+            let mut u = prf.clone();
+            u.update(&last);
+            last = u.finalize().into_bytes().into();
+            for (t, l) in total.iter_mut().zip(last.iter()) {
+                *t ^= l;
+            }
+        }
+        let take = (length - out.len()).min(20);
+        out.extend_from_slice(&total[..take]);
+        block += 1;
+    }
+    out
+}
+
+impl WinZipAes {
+    /// The keys from the password and salt, or None when the two-byte verifier says the password is wrong.
+    fn new(strength: u8, password: &[u8], salt: &[u8], verifier: &[u8]) -> Option<Self> {
+        use aes::cipher::KeyInit;
+        use hmac::Mac;
+        let length = match strength {
+            1 => 16,
+            2 => 24,
+            _ => 32,
+        };
+        let derived = pbkdf2_sha1(password, salt, length * 2 + 2);
+        if derived[length * 2..] != verifier[..2] {
+            return None;
+        }
+        let key = &derived[..length];
+        let key = match strength {
+            1 => AesKey::A128(Box::new(aes::Aes128::new_from_slice(key).ok()?)),
+            2 => AesKey::A192(Box::new(aes::Aes192::new_from_slice(key).ok()?)),
+            _ => AesKey::A256(Box::new(aes::Aes256::new_from_slice(key).ok()?)),
+        };
+        let mac = <hmac::Hmac<sha1::Sha1> as Mac>::new_from_slice(&derived[length..length * 2]).ok()?;
+        Some(WinZipAes { key, counter: 0, stream: [0; 16], used: 16, mac })
+    }
+
+    fn decrypt(&mut self, bytes: &mut [u8]) {
+        use aes::cipher::BlockEncrypt;
+        use hmac::Mac;
+        self.mac.update(bytes);
+        for byte in bytes {
+            if self.used == 16 {
+                self.counter = self.counter.wrapping_add(1);
+                let mut block = aes::Block::from(self.counter.to_le_bytes());
+                match &self.key {
+                    AesKey::A128(cipher) => cipher.encrypt_block(&mut block),
+                    AesKey::A192(cipher) => cipher.encrypt_block(&mut block),
+                    AesKey::A256(cipher) => cipher.encrypt_block(&mut block),
+                }
+                self.stream = block.into();
+                self.used = 0;
+            }
+            *byte ^= self.stream[self.used];
+            self.used += 1;
+        }
+    }
+
+    /// Whether the stored code (10 bytes) is the HMAC of everything decrypted, compared in constant time.
+    fn verify(self, code: &[u8]) -> bool {
+        use hmac::Mac;
+        let digest = self.mac.finalize().into_bytes();
+        code.len() == 10 && digest[..10].iter().zip(code).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
+    }
+}
+
+enum Cipher {
+    Plain,
+    ZipCrypto(ZipCrypto),
+    Aes(Box<WinZipAes>),
+}
+
+impl Cipher {
+    fn decrypt(&mut self, bytes: &mut [u8]) {
+        match self {
+            Cipher::Plain => {}
+            Cipher::ZipCrypto(keys) => keys.decrypt(bytes),
+            Cipher::Aes(aes) => aes.decrypt(bytes),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Decompression: stored, Deflate (flate2), Deflate64
+// ---------------------------------------------------------------------------
+
+enum Inflater {
+    Stored,
+    Deflate(Box<flate2::Decompress>, bool),
+    Deflate64(Box<deflate64::InflaterManaged>),
+}
+
+impl Inflater {
+    /// Feeds `input` whole, handing every piece produced to `out`.
+    fn feed(&mut self, input: &[u8], out: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        let mut buffer = Zeroizing::new(vec![0u8; 64 * 1024]);
+        match self {
+            Inflater::Stored => out(input),
+            Inflater::Deflate(inflate, ended) => {
+                let mut at = 0;
+                // Bytes after the stream's end are left alone, as zip.js leaves them.
+                while !*ended {
+                    let (before_in, before_out) = (inflate.total_in(), inflate.total_out());
+                    let status = inflate
+                        .decompress(&input[at..], &mut buffer, flate2::FlushDecompress::None)
+                        .map_err(|_| ArchiveError::from(Refusal::Damaged))?;
+                    let consumed = (inflate.total_in() - before_in) as usize;
+                    let produced = (inflate.total_out() - before_out) as usize;
+                    at += consumed;
+                    if produced > 0 {
+                        out(&buffer[..produced])?;
+                    }
+                    if status == flate2::Status::StreamEnd {
+                        *ended = true;
+                    }
+                    if consumed == 0 && produced == 0 {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+            Inflater::Deflate64(inflate) => {
+                let mut at = 0;
+                while !inflate.finished() {
+                    let result = inflate.inflate(&input[at..], &mut buffer);
+                    if result.data_error {
+                        return refused(Refusal::Damaged);
+                    }
+                    at += result.bytes_consumed;
+                    if result.bytes_written > 0 {
+                        out(&buffer[..result.bytes_written])?;
+                    }
+                    if result.bytes_consumed == 0 && result.bytes_written == 0 {
+                        break;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// The input is all in: whatever the inflater still holds, then whether its stream ended.
+    fn finish(&mut self, out: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        let mut buffer = Zeroizing::new(vec![0u8; 64 * 1024]);
+        match self {
+            Inflater::Stored => Ok(()),
+            Inflater::Deflate(inflate, ended) => {
+                while !*ended {
+                    let before = inflate.total_out();
+                    let status = inflate
+                        .decompress(&[], &mut buffer, flate2::FlushDecompress::Finish)
+                        .map_err(|_| ArchiveError::from(Refusal::Damaged))?;
+                    let produced = (inflate.total_out() - before) as usize;
+                    if produced > 0 {
+                        out(&buffer[..produced])?;
+                    }
+                    if status == flate2::Status::StreamEnd {
+                        *ended = true;
+                    } else if produced == 0 {
+                        return refused(Refusal::Damaged);
+                    }
+                }
+                Ok(())
+            }
+            Inflater::Deflate64(inflate) => {
+                while !inflate.finished() {
+                    let result = inflate.inflate(&[], &mut buffer);
+                    if result.data_error {
+                        return refused(Refusal::Damaged);
+                    }
+                    if result.bytes_written > 0 {
+                        out(&buffer[..result.bytes_written])?;
+                    } else {
+                        return refused(Refusal::Damaged);
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+/// What the inflater is fed at a time, and so how finely the ratio is counted.
+const FEED_BYTES: u64 = 16 * 1024;
+/// What is read from the archive at a time.
+const READ_BYTES: u64 = 64 * 1024;
+const CLOSED: &str = "The archive was closed.";
+
+fn closed_error() -> ArchiveError {
+    ArchiveError::Failed { reason: CLOSED.into() }
+}
+
+// ---------------------------------------------------------------------------
+// An open archive
+// ---------------------------------------------------------------------------
+
+/// The listing and what each entry is.
+pub(crate) struct Listing {
+    pub entries: Vec<Entry>,
+    pub listed: Vec<ArchiveEntry>,
+}
+
+/* The password, and whether the archive is closed: one lock, so an unlock racing a close can't publish a password after it. */
 #[derive(Default)]
-struct Slot {
-    source: Mutex<Option<Arc<dyn RangeRead>>>,
-    tally: Mutex<Option<Tally>>,
-    size: u64,
+struct Lifecycle {
+    password: Option<Zeroizing<Vec<u8>>>,
+    closed: bool,
 }
 
-/// A `Read + Seek` the `zip` crate parses once and every later read reuses, reading from the
-/// source the current operation set (each operation of the phones has a reader of its own).
-#[derive(Clone)]
-struct SlotReader {
-    slot: Arc<Slot>,
-    position: u64,
+/// An open archive: its listing, and the password while one is held. Each entry is decoded from
+/// its own listing record (its offset, method, flags, CRC and sizes): no second parser reads the
+/// directory, so an entry can't be read under any other record.
+pub(crate) struct Zip {
+    listing: Mutex<Option<Arc<Listing>>>,
+    life: Mutex<Lifecycle>,
+    closed: std::sync::atomic::AtomicBool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-impl Read for SlotReader {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let source = lock(&self.slot.source).clone().ok_or_else(|| io::Error::other("closed"))?;
-        let want = (buf.len() as u64).min(CHUNK_BYTES as u64);
-        let bytes = source.read_at(self.position, want).map_err(io::Error::other)?;
-        buf[..bytes.len()].copy_from_slice(&bytes);
-        if let Some(tally) = lock(&self.slot.tally).as_mut() {
-            let end = self.position + bytes.len() as u64;
-            let overlap = end.min(tally.end).saturating_sub(self.position.max(tally.start));
-            tally.consumed += overlap;
-        }
-        self.position += bytes.len() as u64;
-        Ok(bytes.len())
-    }
-}
-
-impl Seek for SlotReader {
-    fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
-        let target = match from {
-            SeekFrom::Start(at) => at as i128,
-            SeekFrom::End(delta) => self.slot.size as i128 + delta as i128,
-            SeekFrom::Current(delta) => self.position as i128 + delta as i128,
-        };
-        if target < 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "seek before the start"));
-        }
-        self.position = target as u64;
-        Ok(self.position)
-    }
-}
-
-fn refusal_of(error: &zip::result::ZipError) -> Refusal {
-    use zip::result::ZipError;
-    match error {
-        ZipError::InvalidPassword => Refusal::WrongPassword,
-        ZipError::UnsupportedArchive(message) if *message == ZipError::PASSWORD_REQUIRED => Refusal::Password,
-        ZipError::CompressionMethodNotSupported(_) => Refusal::Method,
-        ZipError::Io(io) => io_refusal(io),
-        _ => Refusal::Damaged,
-    }
-}
-
-fn io_refusal(error: &io::Error) -> Refusal {
-    let text = error.to_string();
-    if text.contains("Invalid checksum") {
-        Refusal::Crc
-    } else if text.contains("Invalid authentication code") {
-        Refusal::Auth
-    } else if text.contains("larger than its declared uncompressed size") {
-        // The crate's own cap at the declared size, met before the counter's: the same refusal.
-        Refusal::Size
-    } else {
-        Refusal::Damaged
-    }
-}
-
-/* The `zip` crate's archive, and its entries' indexes by local header offset. */
-type Engine = (zip::ZipArchive<SlotReader>, HashMap<u64, usize>);
-
-/// An open archive: its listing, the `zip` crate's view once an entry has been opened, and the
-/// password while one is held.
-pub(crate) struct Zip {
-    entries: Vec<Entry>,
-    listed: Vec<ArchiveEntry>,
-    slot: Arc<Slot>,
-    /* The `zip` crate's view, and its index of each entry by where its local header starts. */
-    engine: Mutex<Option<Engine>>,
-    password: Mutex<Option<Zeroizing<Vec<u8>>>>,
-}
-
-/* Where a source the current operation set is cleared again, whatever happens. */
-struct Using<'a>(&'a Slot);
-
-impl Drop for Using<'_> {
-    fn drop(&mut self) {
-        lock(&self.0.source).take();
-        lock(&self.0.tally).take();
-    }
 }
 
 impl Zip {
@@ -902,24 +1268,28 @@ impl Zip {
         let entries = read_directory(&bytes, &directory)?;
         let listed = list_entries(&entries);
         Ok(Zip {
-            entries,
-            listed,
-            slot: Arc::new(Slot { size: source.size(), ..Default::default() }),
-            engine: Mutex::new(None),
-            password: Mutex::new(None),
+            listing: Mutex::new(Some(Arc::new(Listing { entries, listed }))),
+            life: Mutex::new(Lifecycle::default()),
+            closed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub fn listing(&self) -> Result<Arc<Listing>> {
+        lock(&self.listing).clone().ok_or_else(closed_error)
+    }
+
     pub fn hidden(&self) -> u32 {
-        self.listed.iter().filter(|item| item.hidden && !item.directory).count() as u32
+        self.listing().map_or(0, |listing| {
+            listing.listed.iter().filter(|item| item.hidden && !item.directory).count() as u32
+        })
     }
 
-    fn listed_of(&self, index: u32) -> Option<&ArchiveEntry> {
-        self.listed.iter().find(|item| item.index == index)
-    }
-
-    fn entry(&self, index: u32) -> Result<&Entry> {
-        let Some(entry) = self.entries.get(index as usize) else { return refused(Refusal::Damaged) };
+    fn entry(listing: &Listing, index: u32) -> Result<&Entry> {
+        let Some(entry) = listing.entries.get(index as usize) else { return refused(Refusal::Damaged) };
         if entry.directory {
             return refused(Refusal::Directory);
         }
@@ -933,106 +1303,160 @@ impl Zip {
         }
     }
 
-    fn use_source(&self, source: Arc<dyn RangeRead>) -> Using<'_> {
-        *lock(&self.slot.source) = Some(source);
-        Using(&self.slot)
+    fn nested(listing: &Listing, index: u32) -> bool {
+        listing.listed.iter().any(|item| item.index == index && item.nested)
     }
 
-    /// The entry's bytes through `write`, each piece counted; the CRC or authentication code
-    /// checked at the end (by the `zip` crate). `ratio` holds a preview to 200:1 after 1 MiB.
+    /// The entry's bytes through `write`, each piece counted: never past its declared size, and
+    /// with `ratio` never past 200 times the data reached once 1 MiB has come out. The AES code,
+    /// then the CRC, then the size are checked at the end. With `check_only`, only the password's
+    /// check at the start of the data.
     fn inflate(
         &self,
-        source: Arc<dyn RangeRead>,
+        source: &dyn RangeRead,
         entry: &Entry,
         ratio: bool,
         password: Option<&[u8]>,
+        check_only: bool,
         write: &mut dyn FnMut(&[u8]) -> Result<()>,
     ) -> Result<()> {
-        let _using = self.use_source(source.clone());
+        if self.is_closed() {
+            return Err(closed_error());
+        }
         let header = source.read_at(entry.offset, local_header_read(entry))?;
         let start = check_local_header(entry, &header)?;
         if entry.lock != Lock::None && password.is_none() {
             return refused(Refusal::Password);
         }
-        let mut engine = lock(&self.engine);
-        if engine.is_none() {
-            let reader = SlotReader { slot: self.slot.clone(), position: 0 };
-            let config = zip::read::Config { archive_offset: zip::read::ArchiveOffset::Known(0) };
-            let archive = zip::ZipArchive::with_config(config, reader).map_err(|_| Refusal::Damaged)?;
-            // By where each local header starts: the crate keys its own index by name, and a name
-            // it took from a Unicode path field, or one that two entries share, isn't ours.
-            let mut by_offset = HashMap::new();
-            for i in 0..archive.len() {
-                let data = archive.by_index_data(i).map_err(|_| Refusal::Damaged)?;
-                by_offset.insert(data.header_start(), i);
+        let end = start + entry.packed;
+        let mut at = start;
+        let mut data_end = end;
+        let mut cipher = Cipher::Plain;
+        match entry.lock {
+            Lock::ZipCrypto => {
+                if entry.packed < 12 {
+                    return refused(Refusal::Damaged);
+                }
+                let mut head = source.read_at(start, 12)?;
+                if head.len() != 12 {
+                    return refused(Refusal::Damaged);
+                }
+                let mut keys = ZipCrypto::new(password.unwrap_or_default());
+                keys.decrypt(&mut head);
+                let check =
+                    if entry.flags & 8 != 0 { (entry.dos & 0xffff) >> 8 } else { entry.crc >> 24 } as u8;
+                if head[11] != check {
+                    return refused(Refusal::WrongPassword);
+                }
+                at += 12;
+                cipher = Cipher::ZipCrypto(keys);
             }
-            *engine = Some((archive, by_offset));
+            Lock::Aes => {
+                let salt = match entry.aes_strength {
+                    1 => 8,
+                    2 => 12,
+                    _ => 16,
+                };
+                if entry.packed < salt + 2 + 10 {
+                    return refused(Refusal::Damaged);
+                }
+                let head = source.read_at(start, salt + 2)?;
+                if head.len() as u64 != salt + 2 {
+                    return refused(Refusal::Damaged);
+                }
+                let aes = WinZipAes::new(
+                    entry.aes_strength,
+                    password.unwrap_or_default(),
+                    &head[..salt as usize],
+                    &head[salt as usize..],
+                )
+                .ok_or(Refusal::WrongPassword)?;
+                at += salt + 2;
+                data_end = end - 10;
+                cipher = Cipher::Aes(Box::new(aes));
+            }
+            _ => {}
         }
-        let (archive, by_offset) = engine.as_mut().unwrap();
-        let found = *by_offset.get(&entry.offset).ok_or(Refusal::Damaged)?;
-        {
-            let data = archive.by_index_data(found).map_err(|_| Refusal::Damaged)?;
-            if data.header_start() != entry.offset
-                || data.compressed_size() != entry.packed
-                || data.size() != entry.size
-                || data.encrypted() != (entry.lock != Lock::None)
-            {
+        if check_only {
+            return Ok(());
+        }
+        let method =
+            if entry.lock == Lock::Aes { entry.aes_method.unwrap_or(u16::MAX) } else { entry.method };
+        let mut inflater = match method {
+            0 => Inflater::Stored,
+            8 => Inflater::Deflate(Box::new(flate2::Decompress::new(false)), false),
+            9 => Inflater::Deflate64(deflate64::InflaterManaged::new().into()),
+            _ => return refused(Refusal::Method),
+        };
+        let checks_crc = match entry.lock {
+            Lock::Aes => entry.aes_version == 1,
+            _ => true,
+        };
+        let mut counter = InflateCounter::new(entry.size, ratio);
+        let mut crc = crc32fast::Hasher::new();
+        // How far into the data the inflater has been fed: the ratio counter's input.
+        let reached = std::cell::Cell::new(0u64);
+        let mut emit = |piece: &[u8]| -> Result<()> {
+            counter.reached(reached.get());
+            counter.wrote(piece.len() as u64)?;
+            if checks_crc {
+                crc.update(piece);
+            }
+            write(piece)
+        };
+        while at < data_end {
+            if self.is_closed() {
+                return Err(closed_error());
+            }
+            let mut bytes = Zeroizing::new(source.read_at(at, (data_end - at).min(READ_BYTES))?);
+            if bytes.is_empty() {
                 return refused(Refusal::Damaged);
             }
-        }
-        *lock(&self.slot.tally) = Some(Tally { start, end: start + entry.packed, consumed: 0 });
-        let options = zip::read::ZipReadOptions::new().password(password);
-        let mut file = archive.by_index_with_options(found, options).map_err(|error| refusal_of(&error))?;
-        let mut counter = InflateCounter::new(entry.size, ratio);
-        let mut buffer = Zeroizing::new(vec![0u8; 256 * 1024]);
-        loop {
-            let read = match file.read(&mut buffer) {
-                Ok(read) => read,
-                Err(error) => {
-                    // A failure of the read underneath (a cancel, the network) is that failure, in its words.
-                    if let Some(inner) =
-                        error.get_ref().and_then(|inner| inner.downcast_ref::<ArchiveError>())
-                    {
-                        return Err(inner.clone());
-                    }
-                    if let Some(zip) =
-                        error.get_ref().and_then(|inner| inner.downcast_ref::<zip::result::ZipError>())
-                    {
-                        return refused(refusal_of(zip));
-                    }
-                    return refused(io_refusal(&error));
-                }
-            };
-            if read == 0 {
-                break;
+            let mut fed = 0;
+            while fed < bytes.len() {
+                let stop = (fed + FEED_BYTES as usize).min(bytes.len());
+                let piece = &mut bytes[fed..stop];
+                let length = piece.len();
+                cipher.decrypt(piece);
+                reached.set(at + (fed + length) as u64 - start);
+                inflater.feed(piece, &mut emit)?;
+                fed += length;
             }
-            let consumed = lock(&self.slot.tally).as_ref().map_or(0, |tally| tally.consumed);
-            counter.consumed = consumed;
-            counter.wrote(read as u64)?;
-            write(&buffer[..read])?;
+            at += bytes.len() as u64;
+        }
+        inflater.finish(&mut emit)?;
+        if let Cipher::Aes(aes) = cipher {
+            let code = source.read_at(data_end, 10)?;
+            if !aes.verify(&code) {
+                return refused(Refusal::Auth);
+            }
+        }
+        if checks_crc && crc.finalize() != entry.crc {
+            return refused(Refusal::Crc);
         }
         counter.finish()?;
         Ok(())
     }
 
-    /// For the viewer: the entry inflated whole, at most `limit` bytes declared, under the ratio,
-    /// checked to the end.
+    /// For the viewer: the entry decoded whole, at most `limit` bytes declared, under the ratio,
+    /// checked to its end (the CRC included for a stored one).
     pub fn preview(
         &self,
-        source: Arc<dyn RangeRead>,
+        source: &dyn RangeRead,
         index: u32,
         limit: u64,
         password: Option<&[u8]>,
     ) -> Result<Vec<u8>> {
-        let entry = self.entry(index)?;
-        if self.listed_of(index).is_some_and(|item| item.nested) {
+        let listing = self.listing()?;
+        let entry = Self::entry(&listing, index)?;
+        if Self::nested(&listing, index) {
             return refused(Refusal::Nested);
         }
         if entry.size > limit {
             return refused(Refusal::TooLarge);
         }
         let mut out = Vec::with_capacity(entry.size as usize);
-        self.inflate(source, entry, true, password, &mut |chunk| {
+        self.inflate(source, entry, true, password, false, &mut |chunk| {
             out.extend_from_slice(chunk);
             Ok(())
         })?;
@@ -1041,80 +1465,114 @@ impl Zip {
 
     /// The rules a preview meets without its size limit, the bytes thrown away (the shared table).
     #[cfg(test)]
-    pub fn check(&self, source: Arc<dyn RangeRead>, index: u32, password: Option<&[u8]>) -> Result<()> {
-        let entry = self.entry(index)?;
-        if self.listed_of(index).is_some_and(|item| item.nested) {
+    pub fn check(&self, source: &dyn RangeRead, index: u32, password: Option<&[u8]>) -> Result<()> {
+        let listing = self.listing()?;
+        let entry = Self::entry(&listing, index)?;
+        if Self::nested(&listing, index) {
             return refused(Refusal::Nested);
         }
-        self.inflate(source, entry, true, password, &mut |_| Ok(()))
+        self.inflate(source, entry, true, password, false, &mut |_| Ok(()))
     }
 
     /// For a download or an export: every piece as it comes, held to the declared size only.
     pub fn download(
         &self,
-        source: Arc<dyn RangeRead>,
+        source: &dyn RangeRead,
         index: u32,
         password: Option<&[u8]>,
         write: &mut dyn FnMut(&[u8]) -> Result<()>,
     ) -> Result<()> {
-        let entry = self.entry(index)?;
-        self.inflate(source, entry, false, password, write)
+        let listing = self.listing()?;
+        let entry = Self::entry(&listing, index)?;
+        self.inflate(source, entry, false, password, false, write)
     }
 
-    /// Tries `password` on the smallest locked entry that can be read (in full up to 16 MiB); kept only if it opens.
-    pub fn unlock(&self, source: Arc<dyn RangeRead>, password: &[u8]) -> Result<bool> {
-        let Some(entry) = self
+    /// Tries `password`, on entry `index` first when given (an entry whose own password was asked
+    /// for), then on the locked entries with bytes, smallest first: in full when at most 16 MiB,
+    /// otherwise to its password check. An empty entry proves nothing (ZipCrypto's one check byte
+    /// passes 1 in 256 wrong passwords), so it is never the probe. A wrong password ends it; an
+    /// entry that fails for another reason says nothing of the password, and the next is tried.
+    /// Kept only if it opens one, and never once the archive is closed.
+    pub fn unlock(&self, source: &dyn RangeRead, password: &[u8], index: Option<u32>) -> Result<bool> {
+        let listing = self.listing()?;
+        let mut candidates: Vec<&Entry> = listing
             .entries
             .iter()
             .filter(|entry| {
-                entry.lock != Lock::None && !entry.directory && !entry.link && support_of(entry) == "ok"
+                entry.lock != Lock::None
+                    && entry.size > 0
+                    && !entry.directory
+                    && !entry.link
+                    && support_of(entry) == "ok"
             })
-            .min_by_key(|entry| entry.packed)
-        else {
-            return Ok(false);
-        };
-        let outcome = if entry.packed <= UNLOCK_CHECK_BYTES {
-            self.inflate(source, entry, true, Some(password), &mut |_| Ok(()))
-        } else {
-            // Only the password check at the start of its data: open it, read one piece.
-            let mut first = true;
-            self.inflate(source, entry, false, Some(password), &mut |_| {
-                if first {
-                    first = false;
-                    Err(ArchiveError::Refused { code: "checked".into() })
-                } else {
-                    Ok(())
-                }
-            })
-            .or_else(|error| match &error {
-                ArchiveError::Refused { code } if code == "checked" => Ok(()),
-                _ => Err(error),
-            })
-        };
-        match outcome {
-            Ok(()) => {
-                *lock(&self.password) = Some(Zeroizing::new(password.to_vec()));
-                Ok(true)
-            }
-            Err(ArchiveError::Refused { code }) => {
-                if ["wrong-password", "auth", "crc", "damaged", "size", "ratio"].contains(&code.as_str()) {
-                    Ok(false)
-                } else {
-                    Err(ArchiveError::Refused { code })
-                }
-            }
-            Err(error) => Err(error),
+            .collect();
+        candidates.sort_by_key(|entry| (entry.packed, entry.index));
+        if let Some(first) = index.and_then(|index| candidates.iter().position(|entry| entry.index == index))
+        {
+            let entry = candidates.remove(first);
+            candidates.insert(0, entry);
         }
+        for entry in candidates {
+            if self.is_closed() {
+                return Err(closed_error());
+            }
+            let outcome = self.inflate(
+                source,
+                entry,
+                true,
+                Some(password),
+                entry.packed > UNLOCK_CHECK_BYTES,
+                &mut |_| Ok(()),
+            );
+            match outcome {
+                Ok(()) => {
+                    let mut life = lock(&self.life);
+                    if life.closed {
+                        return Err(closed_error());
+                    }
+                    life.password = Some(Zeroizing::new(password.to_vec()));
+                    return Ok(true);
+                }
+                Err(ArchiveError::Refused { code })
+                    if code == "wrong-password" || code == "auth" || code == "crc" =>
+                {
+                    return Ok(false)
+                }
+                Err(ArchiveError::Refused { .. }) => continue,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(false)
+    }
+
+    /// The same listing and password, open on its own: closing one doesn't close the other.
+    pub fn sibling(&self) -> Result<Zip> {
+        let listing = self.listing()?;
+        let life = lock(&self.life);
+        if life.closed {
+            return Err(closed_error());
+        }
+        Ok(Zip {
+            listing: Mutex::new(Some(listing)),
+            life: Mutex::new(Lifecycle { password: life.password.clone(), ..Default::default() }),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     pub fn password(&self) -> Option<Zeroizing<Vec<u8>>> {
-        lock(&self.password).clone()
+        lock(&self.life).password.clone()
     }
 
+    /// Closes the archive: the password wiped, the listing dropped, every later call refused.
+    /// Never waits on a read in flight: that read stops at its next piece.
     pub fn close(&self) {
-        lock(&self.password).take();
-        lock(&self.engine).take();
-        lock(&self.slot.source).take();
+        {
+            let mut life = lock(&self.life);
+            life.closed = true;
+            life.password = None;
+        }
+        self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+        lock(&self.listing).take();
     }
 }
 
@@ -1128,29 +1586,85 @@ pub trait EntrySink: Send + Sync {
     fn write(&self, chunk: Vec<u8>) -> std::result::Result<(), FetchError>;
 }
 
-/// A zip open in a phone's viewer. Each call reads under the `RunControl` it is given (the app's
-/// cancel and watchdog), through a reader of its own over the version, which the control wipes
-/// when the call's run finishes; the listing is kept. Browsing is a viewer, not a run: the app
-/// does not hold the one-run slot for it. `close` (or dropping it) wipes the password.
+/// A zip open in a phone's viewer. One reader over the version serves every call, re-armed with
+/// each call's `RunControl` (the app's cancel and watchdog), so the archive's last chunk and the
+/// padding after it are fetched once for the session, not once a call. Browsing is a viewer, not
+/// a run: the app does not hold the one-run slot for it. `close_archive` (or dropping it) wipes
+/// the password, the reader's chunks and key, and the listing; every later call fails.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct ZipArchiveSession {
-    source: Arc<dyn ObjectSource>,
-    content: Content,
     zip: Zip,
-    /* One call at a time: the `zip` crate's view reads through one slot. */
+    reader: Mutex<Option<Backing>>,
+    /* One call at a time over the one reader. */
     turn: Mutex<()>,
 }
 
 impl std::fmt::Debug for ZipArchiveSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ZipArchiveSession").field("entries", &self.zip.entries.len()).finish()
+        f.debug_struct("ZipArchiveSession").field("closed", &self.zip.is_closed()).finish()
+    }
+}
+
+/// The bytes of a zip this phone keeps (an offline copy), by range: read from where the app keeps
+/// it, into memory, a range at a time. No key and no network; nothing is written.
+#[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
+pub trait LocalSource: Send + Sync {
+    fn size(&self) -> u64;
+    fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError>;
+}
+
+/* Where a session reads: a version through the core's reader, or a copy the phone keeps. */
+#[derive(Clone)]
+enum Backing {
+    Version(Arc<VersionReader>),
+    Local(Arc<dyn LocalSource>),
+}
+
+/* A kept copy under one call's control: every read first checks the call has not ended. */
+struct LocalRead {
+    source: Arc<dyn LocalSource>,
+    control: Arc<RunControl>,
+}
+
+impl RangeRead for LocalRead {
+    fn size(&self) -> u64 {
+        self.source.size()
+    }
+    fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
+        self.control.check()?;
+        let end = offset.saturating_add(length).min(self.source.size());
+        if end <= offset {
+            return Ok(Vec::new());
+        }
+        let bytes = self
+            .source
+            .read_at(offset, end - offset)
+            .map_err(|FetchError::Failed { reason }| ArchiveError::Failed { reason })?;
+        if bytes.len() as u64 != end - offset {
+            return refused(Refusal::Damaged);
+        }
+        Ok(bytes)
     }
 }
 
 impl ZipArchiveSession {
-    fn reader(&self, control: &Arc<RunControl>) -> Result<Arc<dyn RangeRead>> {
-        let reader = VersionReader::open(self.source.clone(), self.content.clone(), Some(control.clone()))?;
-        Ok(Arc::new(VersionSource(reader)))
+    /* The session's reader for this call (a version's re-armed with its control); refused once closed. */
+    fn reader(&self, control: &Arc<RunControl>) -> Result<Box<dyn RangeRead>> {
+        match lock(&self.reader).clone().ok_or_else(closed_error)? {
+            Backing::Version(reader) => {
+                reader.rearm(control.clone());
+                Ok(Box::new(VersionSource(reader)))
+            }
+            Backing::Local(source) => Ok(Box::new(LocalRead { source, control: control.clone() })),
+        }
+    }
+
+    /* A call's failure, said as the close when the archive closed under it. */
+    fn after<T>(&self, result: Result<T>) -> Result<T> {
+        match result {
+            Err(_) if self.zip.is_closed() => Err(closed_error()),
+            other => other,
+        }
     }
 }
 
@@ -1163,14 +1677,40 @@ impl ZipArchiveSession {
         content: Content,
         control: Arc<RunControl>,
     ) -> Result<Arc<Self>> {
-        let reader = VersionReader::open(source.clone(), content.clone(), Some(control.clone()))?;
-        let zip = Zip::open(&VersionSource(reader))?;
+        let reader = VersionReader::open_session(source, content)?;
+        reader.rearm(control.clone());
+        let zip = Zip::open(&VersionSource(reader.clone()));
+        let zip = match zip {
+            Ok(zip) => zip,
+            Err(error) => {
+                reader.wipe();
+                return Err(error);
+            }
+        };
         control.check()?;
-        Ok(Arc::new(ZipArchiveSession { source, content, zip, turn: Mutex::new(()) }))
+        Ok(Arc::new(ZipArchiveSession {
+            zip,
+            reader: Mutex::new(Some(Backing::Version(reader))),
+            turn: Mutex::new(()),
+        }))
     }
 
+    /// The same, over a copy of the zip this phone keeps (offline): read by range from it, into
+    /// memory, so a kept zip opens without a connection and without another plaintext copy.
+    #[cfg_attr(feature = "uniffi", uniffi::constructor)]
+    pub fn open_local(source: Arc<dyn LocalSource>, control: Arc<RunControl>) -> Result<Arc<Self>> {
+        let zip = Zip::open(&LocalRead { source: source.clone(), control: control.clone() })?;
+        control.check()?;
+        Ok(Arc::new(ZipArchiveSession {
+            zip,
+            reader: Mutex::new(Some(Backing::Local(source))),
+            turn: Mutex::new(()),
+        }))
+    }
+
+    /// The list; empty once closed.
     pub fn entries(&self) -> Vec<ArchiveEntry> {
-        self.zip.listed.clone()
+        self.zip.listing().map(|listing| listing.listed.clone()).unwrap_or_default()
     }
 
     /// Mac resource files left out of the list.
@@ -1183,11 +1723,14 @@ impl ZipArchiveSession {
         self.zip.password().is_some()
     }
 
-    /// Whether `password` opens the archive's locked entries; held, in memory, if it does.
-    pub fn unlock(&self, password: String, control: Arc<RunControl>) -> Result<bool> {
+    /// Whether `password` opens the archive's locked entries, tried on entry `index` first when
+    /// given; held, in memory, if it does.
+    pub fn unlock(&self, password: String, index: Option<u32>, control: Arc<RunControl>) -> Result<bool> {
         let _turn = lock(&self.turn);
         let password = Zeroizing::new(password.into_bytes());
-        let opened = self.zip.unlock(self.reader(&control)?, &password)?;
+        let result =
+            self.reader(&control).and_then(|source| self.zip.unlock(source.as_ref(), &password, index));
+        let opened = self.after(result)?;
         control.check()?;
         Ok(opened)
     }
@@ -1197,8 +1740,10 @@ impl ZipArchiveSession {
     pub fn preview(&self, index: u32, limit: u64, control: Arc<RunControl>) -> Result<Vec<u8>> {
         let _turn = lock(&self.turn);
         let password = self.zip.password();
-        let bytes =
-            self.zip.preview(self.reader(&control)?, index, limit, password.as_deref().map(Vec::as_slice))?;
+        let result = self.reader(&control).and_then(|source| {
+            self.zip.preview(source.as_ref(), index, limit, password.as_deref().map(Vec::as_slice))
+        });
+        let bytes = self.after(result)?;
         control.check()?;
         Ok(bytes)
     }
@@ -1208,42 +1753,55 @@ impl ZipArchiveSession {
         let _turn = lock(&self.turn);
         let password = self.zip.password();
         let mut pending: Vec<u8> = Vec::with_capacity(CHUNK_BYTES);
-        let control_for_write = control.clone();
         let flush = |pending: &mut Vec<u8>| -> Result<()> {
             if pending.is_empty() {
                 return Ok(());
             }
-            control_for_write.progress()?;
+            control.progress()?;
             sink.write(std::mem::take(pending))
                 .map_err(|FetchError::Failed { reason }| ArchiveError::Failed { reason })
         };
-        self.zip.download(
-            self.reader(&control)?,
-            index,
-            password.as_deref().map(Vec::as_slice),
-            &mut |chunk| {
+        let result = self.reader(&control).and_then(|source| {
+            self.zip.download(source.as_ref(), index, password.as_deref().map(Vec::as_slice), &mut |chunk| {
                 pending.extend_from_slice(chunk);
                 if pending.len() >= CHUNK_BYTES {
                     flush(&mut pending)?;
                 }
                 Ok(())
-            },
-        )?;
+            })
+        });
+        self.after(result)?;
         flush(&mut pending)?;
         control.check()?;
         Ok(())
     }
 
-    /// Wipes the password and lets go of the `zip` crate's view. Not `close`: Kotlin's bindings
-    /// make every object `AutoCloseable`, whose `close()` that would clash with.
+    /// The same archive, open a second time with the listing and the password it holds and a
+    /// reader of its own, so a long call (a download) on one doesn't hold up the other's (a
+    /// preview). Each is closed on its own, and sign-out must close both.
+    pub fn sibling(&self) -> Result<Arc<Self>> {
+        let zip = self.zip.sibling()?;
+        let backing = match lock(&self.reader).clone().ok_or_else(closed_error)? {
+            Backing::Version(reader) => Backing::Version(reader.sibling()?),
+            Backing::Local(source) => Backing::Local(source),
+        };
+        Ok(Arc::new(ZipArchiveSession { zip, reader: Mutex::new(Some(backing)), turn: Mutex::new(()) }))
+    }
+
+    /// Closes the archive: the password wiped, the reader's chunks and key dropped, the listing
+    /// gone; every later call fails. Never waits on a call in flight, which stops at its next read.
+    /// Not `close`: Kotlin's bindings make every object `AutoCloseable`, whose `close()` that would clash with.
     pub fn close_archive(&self) {
         self.zip.close();
+        if let Some(Backing::Version(reader)) = lock(&self.reader).take() {
+            reader.wipe();
+        }
     }
 }
 
 impl Drop for ZipArchiveSession {
     fn drop(&mut self) {
-        self.zip.close();
+        self.close_archive();
     }
 }
 

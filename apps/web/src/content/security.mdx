@@ -1,7 +1,7 @@
 ---
 title: How HushOS protects your files
 heading: How HushOS protects your files.
-updated: 2026-11-14
+updated: 2026-11-17
 summary: How HushOS signs you in, makes and keeps your keys, locks your files, shares them, and handles reports, in plain words with the exact terms underneath so you can check each claim against the code.
 lede: What happens to a file from the moment you add it, in plain words. Each step keeps the exact terms underneath for anyone who wants to check them against the code. Where this page and the code disagree, the code is right and this page has a bug.
 ---
@@ -354,7 +354,7 @@ Every name and every version is also signed by the account that wrote it. Your d
         ],
         [
             'Viewers',
-            'After you unlock, the app fetches every viewer, syntax grammar and thumbnail renderer once, so which ones it fetched does not say what you opened',
+            'After you unlock, the app fetches every viewer (the zip reader included), syntax grammar and thumbnail renderer once, so which ones it fetched does not say what you opened',
         ],
         [
             'Signatures',
@@ -538,6 +538,10 @@ An operator opens a report under their own identity. Which operators a report is
             'Tags',
             'That a sealed tag list exists, its size in coarse steps, and when it was last saved; not a name, which items carry a tag, or how many. Tags are never written on an item, so someone you share with sees none of them.',
         ],
+        [
+            'Zip archives',
+            'Nothing of what is inside one: not names, how many items, sizes, or whether it has a password. A zip opens on your device. One over 16 MB is read by range, so the store sees which 8 MB parts of it were fetched (the end first, then those holding the items you open), as it does for large PDFs and videos. A password you type for a zip stays on your device, and only while the zip is open.',
+        ],
         ['Reports', 'The content of an item, once someone with access reports it'],
         [
             'Devices',
@@ -595,6 +599,7 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 - Replacing your recovery phrase stops the old one from resetting your password. A recovery kit you downloaded earlier still holds the old phrase and your account key as it was then, so it can still open that key offline. Password resets and a new recovery phrase keep the same account key; only replacing the account key makes a different one.
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
 - The server sees what’s listed above: your email, padded sizes, times, who wrote each change and how your folders nest. Padding hides a file’s exact size, not roughly how big it is.
+- Opening a zip over 16 MB shows the store which parts of it you read, though not what they hold.
 - For people you never compared words with, whoever runs the server could put its own keys in front of theirs the first time your device sees them, and then read what you share with them. Comparing twelve words, at any time, rules that out from then on.
 - In a family nobody checked, whoever runs the server could plant its own keys for a newcomer, or show a newcomer a family it made up, and read what goes into those family folders. Two members checking each other rules that out from then on, not for what was added before.
 - Items written before HushOS signed changes, and anything re-locked without a signature your device could verify, show as Unverified until someone writes them again.

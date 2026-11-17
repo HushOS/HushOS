@@ -15,7 +15,7 @@
 import { createCipheriv, createHmac, pbkdf2Sync } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { constants, deflateRawSync } from 'node:zlib';
+import { constants, deflateRawSync, inflateRawSync } from 'node:zlib';
 
 /* What a test looks for after a run: plaintext of an inflated entry, which must never reach storage. */
 export const CANARY = 'HUSHOS-CANARY-ZIP-5b1e9c';
@@ -206,6 +206,9 @@ export type Spec = {
     flags?: number;
     extra?: Uint8Array;
     localExtra?: Uint8Array;
+    /* The local header's flags and declared size, when they lie (the central record keeps the truth). */
+    localFlags?: number;
+    localSize?: number;
     versionMadeBy?: number;
     externalAttributes?: number;
     comment?: Uint8Array;
@@ -364,14 +367,14 @@ export function writeZip(specs: Spec[], options: ArchiveOptions = {}) {
         const local = new Bytes();
         local.u32(0x04034b50);
         local.u16(spec.zip64 ? 45 : 20);
-        local.u16(flags);
+        local.u16(spec.localFlags ?? flags);
         local.u16(method);
         local.u16(DOS_TIME);
         local.u16(DOS_DATE);
         const zero = spec.descriptor;
         local.u32(zero ? 0 : crc);
         local.u32(zero ? 0 : spec.zip64 ? 0xffffffff : packed.length);
-        local.u32(zero ? 0 : spec.zip64 ? 0xffffffff : size);
+        local.u32(zero ? 0 : spec.zip64 ? 0xffffffff : (spec.localSize ?? size));
         const localName = nameBytes(spec.localName ?? spec.name);
         const localExtras = spec.zip64
             ? concat([zip64Field([size, packed.length]), localExtra])
@@ -766,6 +769,234 @@ function directory65MiB() {
     return writeZip(specs);
 }
 
+// Round 1 of the review: shapes where two readers could disagree, and the caps on listing.
+
+/*
+ * Two end records: the outer one, whose comment reaches the end of the file, names a directory
+ * that lists report.txt as stored; inside that comment sits a second directory and end record
+ * that list the same bytes as deflated (Fable's differential.zip). HushOS reads the first, on
+ * every client: the stored bytes, as they are.
+ */
+function differentialFixture() {
+    const p1 = utf8('PHONE VIEW: the core inflates this entry under a different central record.\n');
+    const block1 = concat([
+        Uint8Array.of(
+            0,
+            p1.length & 0xff,
+            p1.length >> 8,
+            ~p1.length & 0xff,
+            (~p1.length >> 8) & 0xff,
+        ),
+        p1,
+    ]);
+    let data = new Uint8Array(0);
+    for (let r = 6; r < 400; r++) {
+        const block2 = new Uint8Array(deflateRawSync(new Uint8Array(r).fill(0x20), { level: 9 }));
+        if (r === 5 + block2.length) {
+            data = concat([block1, block2]);
+            break;
+        }
+    }
+    if (!data.length) throw new Error('No differential block.');
+    const inflated = new Uint8Array(inflateRawSync(data));
+    const name = utf8('report.txt');
+    const header = (method: number, crc: number) => {
+        const out = new Bytes();
+        out.u32(0x04034b50);
+        out.u16(20);
+        out.u16(0);
+        out.u16(method);
+        out.u16(0);
+        out.u16(0x5821);
+        out.u32(crc);
+        out.u32(data.length);
+        out.u32(data.length);
+        out.u16(name.length);
+        out.u16(0);
+        out.push(name);
+        return out.done();
+    };
+    const central = (method: number, crc: number) => {
+        const out = new Bytes();
+        out.u32(0x02014b50);
+        out.u16(20);
+        out.u16(20);
+        out.u16(0);
+        out.u16(method);
+        out.u16(0);
+        out.u16(0x5821);
+        out.u32(crc);
+        out.u32(data.length);
+        out.u32(data.length);
+        out.u16(name.length);
+        out.u16(0);
+        out.u16(0);
+        out.u16(0);
+        out.u16(0);
+        out.u32(0);
+        out.u32(0);
+        out.push(name);
+        return out.done();
+    };
+    const end = (size: number, offset: number, comment: Uint8Array) => {
+        const out = new Bytes();
+        out.u32(0x06054b50);
+        out.u16(0);
+        out.u16(0);
+        out.u16(1);
+        out.u16(1);
+        out.u32(size);
+        out.u32(offset);
+        out.u16(comment.length);
+        out.push(comment);
+        return out.done();
+    };
+    const body = concat([header(0, crc32(data)), data]);
+    const cdA = central(0, crc32(data));
+    const cdB = central(8, crc32(inflated));
+    const posB = body.length + cdA.length + 22;
+    const hidden = concat([cdB, end(cdB.length, posB, new Uint8Array(0)), Uint8Array.of(0)]);
+    return concat([body, cdA, end(cdA.length, body.length, hidden)]);
+}
+
+/* Two entries with one name: each read from its own record. */
+function duplicateFixture() {
+    return writeZip([
+        { name: 'same.txt', data: utf8('first copy\n'), method: 0 },
+        { name: 'same.txt', data: utf8('second copy\n'), method: 0 },
+        { name: 'other.txt', data: utf8('other\n'), method: 0 },
+    ]);
+}
+
+/* Extra fields that are not what they say: one overruns the field area, a stray AES field on a plain entry, a one-byte timestamp. */
+function oddExtrasFixture() {
+    const overrun = concat([field(0x4242, new Uint8Array(2)).subarray(0, 4), utf8('xy')]);
+    // The overrunning field claims 40 bytes and has 2.
+    overrun[2] = 40;
+    return writeZip([
+        {
+            name: 'overrun.txt',
+            data: utf8('alpha\n'),
+            method: 0,
+            extra: overrun,
+            localExtra: new Uint8Array(0),
+        },
+        {
+            name: 'aes-field.txt',
+            data: utf8('beta\n'),
+            method: 0,
+            extra: field(0x9901, Uint8Array.of(2, 0, 0x41, 0x45, 3, 8, 0)),
+            localExtra: new Uint8Array(0),
+        },
+        {
+            name: 'stamp.txt',
+            data: utf8('gamma\n'),
+            method: 0,
+            extra: field(0x5455, Uint8Array.of(1)),
+            localExtra: new Uint8Array(0),
+        },
+    ]);
+}
+
+/* A name that starts with a byte order mark: kept, so this is not the __MACOSX folder. */
+function bomFixture() {
+    return writeZip([{ name: '﻿__MACOSX/x.txt', data: utf8('bom\n'), method: 0 }]);
+}
+
+/* Local headers that disagree with their records: the data-descriptor flag only in the local header, and a local size that differs. */
+function localFlagsFixture() {
+    return writeZip([
+        {
+            name: 'descriptor.txt',
+            data: utf8('the local header says a descriptor follows\n'),
+            localFlags: 0x808,
+        },
+        { name: 'size.txt', data: utf8('the local header says another size\n'), localSize: 7 },
+        { name: 'fine.txt', data: utf8('fine\n') },
+    ]);
+}
+
+/* A stored entry whose CRC is wrong: refused when read, on the web as on the phones. */
+function storedBadCrcFixture() {
+    const data = text('Stored, with the wrong checksum.');
+    return writeZip([
+        { name: 'stored-bad-crc.txt', data, method: 0, crc: (crc32(data) ^ 0x5a5a5a5a) >>> 0 },
+    ]);
+}
+
+/* Paths deep enough to cost a listing: 32,768 parts (the longest name a zip holds), 256 parts (listed), 257 (listed flat). */
+function deepFixture() {
+    return writeZip([
+        { name: `${'a/'.repeat(32_767)}z`, data: utf8('x'), method: 0 },
+        { name: `${'b/'.repeat(255)}z`, data: utf8('x'), method: 0 },
+        { name: `${'c/'.repeat(256)}z`, data: utf8('x'), method: 0 },
+    ]);
+}
+
+/* An entry that holds less than it declares. */
+function shortFixture() {
+    const data = utf8('fifty bytes or so, less than the record declares\n');
+    return writeZip([{ name: 'short.txt', data, size: data.length + 100 }]);
+}
+
+/*
+ * A local header whose extra field, as its length declares it, pushes the entry's data past the
+ * next entry's header: the directory alone can't see it (stage one), opening the entry does.
+ */
+function localOverrunFixture() {
+    const zip = writeZip([
+        { name: 'overruns.txt', data: utf8('aaaa'), method: 0 },
+        { name: 'next.txt', data: utf8('next\n'), method: 0 },
+    ]);
+    // The first local header's extra field length: 36 bytes that are really the next entry.
+    zip[28] = 36;
+    return zip;
+}
+
+/* Two entries either side of 200:1: about 150:1 opens, about 300:1 is refused, on every client. */
+function ratioFixture() {
+    const pattern = (zeros: number, length: number) => {
+        const out = new Uint8Array(length);
+        let x = 2463534242;
+        for (let at = 0; at < length; at += zeros + 4) {
+            for (let i = 0; i < 4 && at + i < length; i++) {
+                x ^= x << 13;
+                x ^= x >>> 17;
+                x ^= x << 5;
+                out[at + i] = x & 0xff;
+            }
+        }
+        return out;
+    };
+    return writeZip([
+        { name: 'under.bin', data: pattern(RATIO_UNDER_ZEROS, 8 * MiB) },
+        { name: 'over.bin', data: pattern(RATIO_OVER_ZEROS, 8 * MiB) },
+    ]);
+}
+export const RATIO_UNDER_ZEROS = 1400;
+export const RATIO_OVER_ZEROS = 2900;
+
+/* An empty ZipCrypto entry beside a real one: the password is tried on the one with bytes. */
+function zipCryptoEmptyFixture() {
+    return writeZip([
+        { name: 'empty.txt', data: new Uint8Array(0), method: 0, encrypt: { kind: 'zipcrypto' } },
+        {
+            name: 'secret.txt',
+            data: text('ZipCrypto, beside an empty entry.'),
+            encrypt: { kind: 'zipcrypto' },
+        },
+    ]);
+}
+
+/* A 20 MiB compressible entry: what WebKit's DecompressionStream hands back in one piece. */
+function compressibleFixture() {
+    const lines = Array.from(
+        { length: 20 * 1024 },
+        (_, i) => `line ${i % 97}: ${'the quick brown fox '.repeat(48)}`.padEnd(1023, '.') + '\n',
+    );
+    return writeZip([{ name: 'compressible.txt', data: utf8(lines.join('')) }]);
+}
+
 export type Fixture = { name: string; large: boolean; build: () => Uint8Array };
 
 export const FIXTURES: Fixture[] = [
@@ -784,6 +1015,18 @@ export const FIXTURES: Fixture[] = [
     { name: 'overlap.zip', large: false, build: overlapFixture },
     { name: 'local-mismatch.zip', large: false, build: localMismatchFixture },
     { name: 'strong.zip', large: false, build: strongFixture },
+    { name: 'differential.zip', large: false, build: differentialFixture },
+    { name: 'duplicate.zip', large: false, build: duplicateFixture },
+    { name: 'odd-extras.zip', large: false, build: oddExtrasFixture },
+    { name: 'bom.zip', large: false, build: bomFixture },
+    { name: 'local-flags.zip', large: false, build: localFlagsFixture },
+    { name: 'stored-bad-crc.zip', large: false, build: storedBadCrcFixture },
+    { name: 'deep.zip', large: false, build: deepFixture },
+    { name: 'short.zip', large: false, build: shortFixture },
+    { name: 'local-overrun.zip', large: false, build: localOverrunFixture },
+    { name: 'ratio.zip', large: false, build: ratioFixture },
+    { name: 'zipcrypto-empty.zip', large: false, build: zipCryptoEmptyFixture },
+    { name: 'compressible.zip', large: true, build: compressibleFixture },
     { name: 'zeros-1g.zip', large: true, build: zeros1GiB },
     { name: 'zip64-5g.zip', large: true, build: zip64FiveGiB },
     { name: 'entries-100001.zip', large: true, build: entries100001 },

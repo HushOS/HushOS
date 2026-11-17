@@ -47,17 +47,15 @@ salsa20 = "0.10"
 ed25519-dalek = "3"
 zeroize = "1"
 unicode-normalization = "0.1"
-# Zip listing and entry reading for File tools (docs/file-tools-design.md, section 6). Exactly this release; an upgrade is its own change.
-zip = { version = "=9.3.0", default-features = false, features = [
-    "aes-crypto",
-    "deflate-flate2-zlib-rs",
-    "deflate64",
-] }
-# The Unicode path field's CRC check on zip names; already the zip crate's.
+# Zip entries (docs/file-tools-design.md, section 6), decoded from the core's own listing: CRC-32,
+# Deflate (zlib-rs), Deflate64, and WinZip AES from the block cipher, HMAC and SHA-1 already here.
 crc32fast = "1.5.0"
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
+deflate64 = "0.1.12"
+aes = "0.8.4"
+hmac = "0.12.1"
+sha1 = "0.10.6"
 
 [dev-dependencies]
 rand = "0.8"
-# Writes the large archive fixtures in the tests (gigabytes of zeros as about a thousandth of that); the zip crate's own backend.
-flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 hushos-core = { path = ".", default-features = false, features = ["fixtures"] }

@@ -91,18 +91,22 @@ describe('the archive fixtures, through independent readers', () => {
         try {
             for (const fixture of FIXTURES.filter((item) => !item.large)) {
                 if (fixture.name === 'strong.zip') continue;
-                const facts = (path: string) =>
-                    JSON.parse(
+                const facts = (path: string) => {
+                    const read = JSON.parse(
                         execFileSync('python3', ['-I', '-c', PY_LIST, path, 'list', PASSWORD], {
                             encoding: 'utf8',
                         }),
-                    ).entries.map((entry: PyEntry) => [
+                    ) as { error?: string; entries?: PyEntry[] };
+                    // A fixture zipfile can't read (an extra field that overruns) is compared by its error.
+                    if (!read.entries) return read.error;
+                    return read.entries.map((entry: PyEntry) => [
                         entry.name,
                         entry.method,
                         entry.size,
                         entry.crc,
                         entry.flags,
                     ]);
+                };
                 expect(facts(writeFixture(fixture.name, fresh)), fixture.name).toEqual(
                     facts(join(FIXTURE_DIR, fixture.name)),
                 );

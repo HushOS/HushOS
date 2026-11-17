@@ -28,6 +28,7 @@ import {
     preloadArchiveWorker,
 } from '@/lib/archives/open';
 import {
+    ArchiveRefusal,
     openArchive,
     type ArchiveEntry,
     type ArchiveSession,
@@ -51,36 +52,40 @@ export function preloadArchive() {
 }
 
 type Folder = {
-    folders: Map<string, number>;
+    /* Each folder inside, by name: its node in the tree. */
+    folders: Map<string, Folder>;
     files: ArchiveEntry[];
 };
 
-/* Every folder of the archive by its path ('' is the top), with its folders (and how many items each holds) and files. */
+const emptyFolder = (): Folder => ({ folders: new Map(), files: [] });
+
+/*
+ * The archive's folders as a tree, each folder a node holding its own children only: memory grows
+ * with the entries' parts, not with every prefix of every path (the listing already caps a path
+ * at 256 parts).
+ */
 function treeOf(listing: Listing) {
-    const folders = new Map<string, Folder>();
-    const folder = (key: string) => {
-        let found = folders.get(key);
-        if (!found) folders.set(key, (found = { folders: new Map(), files: [] }));
-        return found;
-    };
-    folder('');
+    const top = emptyFolder();
     for (const entry of listing.entries) {
         if (entry.hidden) continue;
         const depth = entry.directory ? entry.parts.length : entry.parts.length - 1;
+        let node = top;
         for (let i = 0; i < depth; i++) {
-            const parent = folder(entry.parts.slice(0, i).join('/'));
             const name = entry.parts[i]!;
-            if (!parent.folders.has(name)) parent.folders.set(name, 0);
-            folder(entry.parts.slice(0, i + 1).join('/'));
+            let child = node.folders.get(name);
+            if (!child) node.folders.set(name, (child = emptyFolder()));
+            node = child;
         }
-        if (!entry.directory) folder(entry.parts.slice(0, -1).join('/')).files.push(entry);
+        if (!entry.directory) node.files.push(entry);
     }
-    for (const [key, value] of folders)
-        for (const name of value.folders.keys()) {
-            const child = folders.get(key ? `${key}/${name}` : name)!;
-            value.folders.set(name, child.folders.size + child.files.length);
-        }
-    return folders;
+    return top;
+}
+
+/* The folder at `path`, or none when the path isn't in the tree. */
+function folderAt(top: Folder, path: string[]) {
+    let node: Folder | undefined = top;
+    for (const part of path) node = node?.folders.get(part);
+    return node;
 }
 
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -93,7 +98,11 @@ function rowsOf(folder: Folder | undefined): Row[] {
     if (!folder) return [];
     const folders = [...folder.folders]
         .sort(([a], [b]) => byName.compare(a, b))
-        .map(([name, count]): Row => ({ kind: 'folder', name, count }));
+        .map(([name, child]): Row => ({
+            kind: 'folder',
+            name,
+            count: child.folders.size + child.files.length,
+        }));
     const files = [...folder.files]
         .sort((a, b) => byName.compare(a.parts.at(-1)!, b.parts.at(-1)!))
         .map((entry): Row => ({ kind: 'file', name: entry.parts.at(-1)!, entry }));
@@ -147,13 +156,13 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     }, [versionId, attempt]);
 
     const tree = useMemo(() => (listing ? treeOf(listing) : null), [listing]);
-    const rows = useMemo(() => rowsOf(tree?.get(path.join('/'))), [tree, path]);
+    const rows = useMemo(() => rowsOf(tree ? folderAt(tree, path) : undefined), [tree, path]);
 
     function startDownload(entry: ArchiveEntry) {
         if (!session) return;
-        const name = entry.parts.at(-1)!;
-        // The sink first, while the click still counts as one (a save dialog needs it).
-        const sink = openSink({ name, size: entry.size });
+        // The sink first, while the click still counts as one (a save dialog needs it). Under the
+        // name made safe in the worker: no bidi override can make "…exe" read as "…txt".
+        const sink = openSink({ name: entry.saveName, size: entry.size });
         let handle: { done: Promise<void>; stop: () => void } | null = null;
         const record: Download = { entry, written: 0, stop: () => handle?.stop(), error: null };
         setDownloads((list) => [...list.filter((item) => item.entry !== entry), record]);
@@ -217,28 +226,31 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
 
     return (
         <div className="flex min-h-0 flex-1 flex-col" data-archive>
-            <nav
-                aria-label={archiveWords.folders}
-                className="flex min-h-12 shrink-0 items-center border-b border-rule px-3 sm:px-5"
-            >
-                <ol className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm">
-                    <Crumb
-                        label={node.name}
-                        current={path.length === 0 && !opened}
-                        onClick={() => go([])}
-                    />
-                    {path.map((part, i) => (
+            {/* At the top the header already names the archive: the trail shows only inside it. */}
+            {(path.length > 0 || opened) && (
+                <nav
+                    aria-label={archiveWords.folders}
+                    className="flex min-h-12 shrink-0 items-center border-b border-rule px-3 sm:px-5"
+                >
+                    <ol className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm">
                         <Crumb
-                            key={`${i}:${part}`}
-                            label={part}
-                            separated
-                            current={i === path.length - 1 && !opened}
-                            onClick={() => go(path.slice(0, i + 1))}
+                            label={node.name}
+                            current={path.length === 0 && !opened}
+                            onClick={() => go([])}
                         />
-                    ))}
-                    {opened && <Crumb label={opened.parts.at(-1)!} separated current />}
-                </ol>
-            </nav>
+                        {path.map((part, i) => (
+                            <Crumb
+                                key={`${i}:${part}`}
+                                label={part}
+                                separated
+                                current={i === path.length - 1 && !opened}
+                                onClick={() => go(path.slice(0, i + 1))}
+                            />
+                        ))}
+                        {opened && <Crumb label={opened.parts.at(-1)!} separated current />}
+                    </ol>
+                </nav>
+            )}
             {opened ? (
                 <EntryPane
                     key={opened.index}
@@ -519,14 +531,30 @@ function EntryPane({
     const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
     const kind = previewKind(node);
     const icon = <FileMark kind="file" name={name} size="large" />;
+    // The entry has a password of its own (the one held didn't open it): asked for again.
+    const [reprompt, setReprompt] = useState(false);
+    // A stored entry past the limit, shown by range without its checksum checked.
+    const [unchecked, setUnchecked] = useState(false);
+    const [attempt, setAttempt] = useState(0);
     const opener = useMemo(
-        () => (): Promise<FileReader> => session.preview(entry, entryLimit(kind)),
-        [session, entry, kind],
+        () => async (): Promise<FileReader> => {
+            try {
+                const { reader, checked } = await session.preview(entry, entryLimit(kind));
+                setUnchecked(!checked);
+                return reader;
+            } catch (cause) {
+                if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password')
+                    setReprompt(true);
+                throw cause;
+            }
+        },
+        // A new attempt (after a password) opens afresh.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [session, entry, kind, attempt],
     );
     let body: React.ReactNode;
-    if (entry.lock !== 'none' && !unlocked)
-        body = <PasswordCard name={name} session={session} onUnlocked={onUnlocked} />;
-    else if (entry.support !== 'ok')
+    // What can't be read at all says so first: a password would change nothing.
+    if (entry.support !== 'ok')
         body = (
             <Notice
                 icon={icon}
@@ -539,7 +567,21 @@ function EntryPane({
         body = (
             <Notice icon={icon} title={name} text={archiveWords.nested} onDownload={onDownload} />
         );
-    else if (!entry.stored && entry.size > entryLimit(kind))
+    else if ((entry.lock !== 'none' && !unlocked) || reprompt)
+        body = (
+            <PasswordCard
+                name={name}
+                session={session}
+                entry={reprompt ? entry : null}
+                onUnlocked={() => {
+                    setReprompt(false);
+                    setAttempt((value) => value + 1);
+                    onUnlocked();
+                }}
+            />
+        );
+    // An unknown kind is no preview at any size (the viewer looks at small ones as text).
+    else if (!entry.stored && kind !== 'none' && entry.size > entryLimit(kind))
         body = (
             <Notice
                 icon={icon}
@@ -548,7 +590,22 @@ function EntryPane({
                 onDownload={onDownload}
             />
         );
-    else body = <PreviewBody key={node.id} node={node} onDownload={onDownload} open={opener} />;
+    else
+        body = (
+            <>
+                {unchecked && (
+                    <p className="shrink-0 border-b border-rule px-5 py-2.5 text-[13px] text-muted-foreground sm:px-7">
+                        {archiveWords.unverified}
+                    </p>
+                )}
+                <PreviewBody
+                    key={`${node.id}:${attempt}`}
+                    node={node}
+                    onDownload={onDownload}
+                    open={opener}
+                />
+            </>
+        );
     return (
         <div className="flex min-h-0 flex-1 flex-col">
             <div className="flex min-h-12 shrink-0 items-center gap-3 border-b border-rule pr-3 pl-5 sm:pr-5 sm:pl-7">
@@ -575,10 +632,13 @@ function EntryPane({
 function PasswordCard({
     name,
     session,
+    entry,
     onUnlocked,
 }: {
     name: string;
     session: ArchiveSession;
+    /* The entry whose own password this is, tried first; none for the archive's. */
+    entry: ArchiveEntry | null;
     onUnlocked: () => void;
 }) {
     const [password, setPassword] = useState('');
@@ -595,7 +655,7 @@ function PasswordCard({
         setWrong(false);
         setError(null);
         try {
-            if (await session.unlock(password)) onUnlocked();
+            if (await session.unlock(password, entry)) onUnlocked();
             else setWrong(true);
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : viewerWords.broken);

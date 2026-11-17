@@ -45,6 +45,7 @@ export type ZipRefusal =
     | 'crc'
     | 'auth'
     | 'size'
+    | 'short'
     | 'ratio'
     | 'nested'
     | 'link'
@@ -209,8 +210,9 @@ function cp437(bytes: Uint8Array) {
     return out;
 }
 
-const lossy = new TextDecoder('utf-8');
-const strict = new TextDecoder('utf-8', { fatal: true });
+// A byte order mark is kept: it is part of the name as stored, and the core keeps it too.
+const lossy = new TextDecoder('utf-8', { ignoreBOM: true });
+const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 function crc32Table() {
     const table = new Uint32Array(256);
@@ -411,11 +413,16 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     let size: number = data.getUint32(22, true);
     const nameLength = data.getUint16(26, true);
     const extraLength = data.getUint16(28, true);
+    // What the fixed part says first: the method, and the encryption and data-descriptor flags.
+    if (method !== entry.method || (flags & 9) !== (entry.flags & 9)) throw new ZipError('local');
+    // Then the whole span: a header whose name and extra field run past the next entry overlaps it.
+    const start = entry.offset + LOCAL_LENGTH + nameLength + extraLength;
+    if (start + entry.packed + ((flags & 8) !== 0 ? 12 : 0) > entry.bound)
+        throw new ZipError('overlap');
     if (header.length < LOCAL_LENGTH + nameLength + extraLength) throw new ZipError('damaged');
     const name = header.subarray(LOCAL_LENGTH, LOCAL_LENGTH + nameLength);
     if (name.length !== entry.raw.length || name.some((byte, i) => byte !== entry.raw[i]))
         throw new ZipError('local');
-    if (method !== entry.method || (flags & 1) !== (entry.flags & 1)) throw new ZipError('local');
     const fields = extraFields(
         header.subarray(LOCAL_LENGTH + nameLength, LOCAL_LENGTH + nameLength + extraLength),
     );
@@ -439,8 +446,6 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
         local === central || (descriptor && local === 0);
     if (!agrees(crc, entry.crc) || !agrees(packed, entry.packed) || !agrees(size, entry.size))
         throw new ZipError('local');
-    const start = entry.offset + LOCAL_LENGTH + nameLength + extraLength;
-    if (start + entry.packed + (descriptor ? 12 : 0) > entry.bound) throw new ZipError('overlap');
     return start;
 }
 
@@ -521,7 +526,111 @@ export type Listed = {
     hidden: boolean;
     /* A file stored without compression or encryption: read by range at any size. */
     stored: boolean;
+    /* What a download of it is saved as (saveName of its last part). */
+    saveName: string;
 };
+
+/*
+ * How deep the list goes: past 256 parts, or once the archive's entries have used a million parts
+ * between them, an entry is listed flat, under its whole path, at the top. Without it one 64 KiB
+ * name of `a/a/a/…` costs gigabytes in prefixes.
+ */
+export const LIST_DEPTH_MAX = 256;
+export const LIST_PARTS_MAX = 1_000_000;
+
+/* Names as a tree, each node a number and each child found by its parent and name: memory grows with the parts, never with their prefixes. */
+export class NameTree {
+    #children = new Map<string, number>();
+    #next = 1;
+    /* The child `name` of `parent` (0 is the top), made if asked; 0 when absent. */
+    child(parent: number, name: string, make = false) {
+        const key = `${parent}/${name}`;
+        let found = this.#children.get(key) ?? 0;
+        if (!found && make) this.#children.set(key, (found = this.#next++));
+        return found;
+    }
+    /* The node at `parts`, 0 when any step is absent (or `parts` is empty: the top). */
+    find(parts: string[]) {
+        let node = 0;
+        for (const part of parts) {
+            node = this.child(node, part);
+            if (!node) return 0;
+        }
+        return node;
+    }
+}
+
+/* Characters no file system takes, or that change how a name reads (controls, bidi marks): save-file.ts's set. */
+const FORBIDDEN = new Set('\\/:*?"<>|');
+function unsafe(code: number) {
+    return (
+        FORBIDDEN.has(String.fromCodePoint(code)) ||
+        code < 0x20 ||
+        (code >= 0x7f && code <= 0x9f) ||
+        code === 0x061c ||
+        code === 0x200e ||
+        code === 0x200f ||
+        (code >= 0x202a && code <= 0x202e) ||
+        (code >= 0x2066 && code <= 0x2069)
+    );
+}
+/* Dots and the whitespace JavaScript's \s matches, written out so the core strips the same. */
+const EDGE = new Set(
+    [
+        0x2e, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f,
+        0x3000, 0xfeff,
+    ].concat(Array.from({ length: 11 }, (_, i) => 0x2000 + i)),
+);
+const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
+const utf8Length = (text: string) => new TextEncoder().encode(text).length;
+/* Never `String.fromCodePoint(...codes)`: a 64 KiB name is more arguments than a worker's stack takes. */
+const fromCodes = (codes: number[]) => codes.map((code) => String.fromCodePoint(code)).join('');
+
+function trimEdges(chars: number[]) {
+    let start = 0;
+    let end = chars.length;
+    while (start < end && EDGE.has(chars[start]!)) start++;
+    while (end > start && EDGE.has(chars[end - 1]!)) end--;
+    return chars.slice(start, end);
+}
+
+/*
+ * The name an entry is saved as when downloaded, from the last part of its path: NFC, forbidden
+ * and invisible characters (controls, bidi overrides) as `_`, no leading or trailing dots or
+ * spaces, a Windows device name given a leading `_`, and at most 255 bytes of UTF-8, cut between
+ * code points before the extension so ".txt" stays ".txt". A right-to-left override can't make
+ * "…exe" read as "…txt", and a NUL can't cut the name short. Ported as is to the core.
+ */
+export function saveName(name: string) {
+    let chars = trimEdges(
+        Array.from(name.normalize('NFC'), (char) => {
+            const code = char.codePointAt(0)!;
+            return unsafe(code) ? 0x5f : code;
+        }),
+    );
+    let text = fromCodes(chars);
+    if (!text) return 'Untitled';
+    if (RESERVED.test(text)) {
+        text = `_${text}`;
+        chars = [0x5f, ...chars];
+    }
+    if (utf8Length(text) <= 255) return text;
+    const dot = text.lastIndexOf('.');
+    const extension = dot > 0 && utf8Length(text.slice(dot)) <= 32 ? text.slice(dot) : '';
+    const room = 255 - utf8Length(extension);
+    const base: number[] = [];
+    let bytes = 0;
+    for (const code of Array.from(extension ? text.slice(0, dot) : text, (c) =>
+        c.codePointAt(0)!,
+    )) {
+        const length = utf8Length(String.fromCodePoint(code));
+        if (bytes + length > room) break;
+        bytes += length;
+        base.push(code);
+    }
+    const kept = fromCodes(trimEdges(base));
+    return kept ? kept + extension : 'Untitled';
+}
 
 /*
  * The list as the person sees it: each entry's parts, what it is, and whether it is a Mac
@@ -529,9 +638,13 @@ export type Listed = {
  * as stored, so nothing in the archive goes unlisted.
  */
 export function listEntries(entries: ZipEntry[]): Listed[] {
-    const listed = entries.map((entry) => {
+    let budget = LIST_PARTS_MAX;
+    const listed: Listed[] = entries.map((entry) => {
         let parts = pathParts(entry.path);
         if (parts.length === 0) parts = entry.directory ? [] : [entry.path || '_'];
+        // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
+        if (parts.length > LIST_DEPTH_MAX || parts.length > budget) parts = [entry.path || '_'];
+        budget -= parts.length;
         const name = parts[parts.length - 1] ?? '';
         const support = supportOf(entry);
         return {
@@ -549,13 +662,15 @@ export function listEntries(entries: ZipEntry[]): Listed[] {
             nested: !entry.directory && !entry.link && ARCHIVE_EXTENSIONS.has(extensionOf(name)),
             hidden: false,
             stored: !entry.directory && !entry.link && entry.method === 0 && entry.lock === 'none',
+            saveName: saveName(name),
         };
     });
     // Every path, explicit or implied by a deeper one, so a `._x` is hidden only beside an `x`.
-    const known = new Set<string>();
-    for (const item of listed)
-        for (let depth = 1; depth <= item.parts.length; depth++)
-            known.add(item.parts.slice(0, depth).join('/'));
+    const tree = new NameTree();
+    for (const item of listed) {
+        let node = 0;
+        for (const part of item.parts) node = tree.child(node, part, true);
+    }
     for (const item of listed) {
         if (item.parts[0] === '__MACOSX') {
             item.hidden = true;
@@ -563,8 +678,9 @@ export function listEntries(entries: ZipEntry[]): Listed[] {
         }
         const name = item.parts[item.parts.length - 1];
         if (!item.directory && name && name.startsWith('._') && name.length > 2) {
-            const twin = [...item.parts.slice(0, -1), name.slice(2)].join('/');
-            if (known.has(twin)) item.hidden = true;
+            const parent = item.parts.length > 1 ? tree.find(item.parts.slice(0, -1)) : 0;
+            if ((item.parts.length === 1 || parent) && tree.child(parent, name.slice(2)))
+                item.hidden = true;
         }
     }
     return listed.filter((item) => item.parts.length > 0 || !item.directory);
@@ -596,6 +712,11 @@ export class InflateCounter {
         this.consumed += bytes;
     }
 
+    /* The compressed bytes consumed so far, as how far into the entry's data reading has reached. */
+    reached(position: number) {
+        this.consumed = Math.max(this.consumed, position);
+    }
+
     wrote(bytes: number) {
         this.produced += bytes;
         if (this.produced > this.declared) throw new ZipError('size');
@@ -608,8 +729,10 @@ export class InflateCounter {
     }
 
     /* At the end: fewer bytes than declared is damage too. */
+    /* At the end: fewer bytes than declared is damage too, said as such. */
     finish() {
-        if (this.produced !== this.declared) throw new ZipError('size');
+        if (this.produced > this.declared) throw new ZipError('size');
+        if (this.produced < this.declared) throw new ZipError('short');
     }
 }
 

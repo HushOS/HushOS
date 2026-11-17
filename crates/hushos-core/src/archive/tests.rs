@@ -215,6 +215,19 @@ fn large(name: &str) -> Vec<u8> {
                 .collect::<Vec<_>>(),
             false,
         ),
+        "compressible.zip" => {
+            // make.ts's compressibleFixture: 20,480 lines of 1,024 bytes, 20 MiB that deflate about 186:1.
+            let mut text = String::with_capacity(20 * 1024 * 1024);
+            for i in 0..20 * 1024 {
+                let mut line = format!("line {}: {}", i % 97, "the quick brown fox ".repeat(48));
+                while line.len() < 1023 {
+                    line.push('.');
+                }
+                text.push_str(&line);
+                text.push('\n');
+            }
+            write_zip(&[deflated_text("compressible.txt", &text)], false)
+        }
         other => panic!("no large fixture {other}"),
     }
 }
@@ -236,7 +249,7 @@ fn the_large_fixtures_written_here_are_what_they_claim() {
     // 1 GiB of zeros as about a MiB, with the CRC zlib would give the whole of it.
     let (packed, crc) = deflated_zeros(64);
     let mut inflated = Vec::new();
-    flate2::read::DeflateDecoder::new(&packed[..]).read_to_end(&mut inflated).unwrap();
+    std::io::Read::read_to_end(&mut flate2::read::DeflateDecoder::new(&packed[..]), &mut inflated).unwrap();
     assert_eq!(inflated.len() as u64, 64 * MIB);
     assert!(inflated.iter().all(|&byte| byte == 0));
     assert_eq!(crc, crc32fast::hash(&inflated));
@@ -249,6 +262,10 @@ fn the_large_fixtures_written_here_are_what_they_claim() {
     let locator = many.len() - 22 - 20;
     let record = u64_at(&many, locator + 8).unwrap() as usize;
     assert_eq!(u64_at(&many, record + 32).unwrap(), 100_001);
+    // The compressible entry sits under 200:1, as the web's does.
+    let text = large("compressible.zip");
+    let ratio = u32_at(&text, 22) as f64 / u32_at(&text, 18) as f64;
+    assert!(ratio > 150.0 && ratio < 200.0, "{ratio}");
 }
 
 #[test]
@@ -258,21 +275,23 @@ fn every_fixture_as_expected_json_says() {
     for (name, expected) in fixtures {
         let generated = expected["generated"].as_bool().unwrap_or(false);
         let source = bytes_of(name, generated);
-        let listing = Zip::open(source.as_ref()).map(|_| ());
+        let source = source.as_ref();
+        let listing = Zip::open(source).map(|_| ());
         assert_eq!(outcome(listing.clone()), expected["listing"].as_str().unwrap(), "{name}: listing");
         if listing.is_err() {
             continue;
         }
-        let zip = Zip::open(source.as_ref()).unwrap();
+        let zip = Zip::open(source).unwrap();
+        let list = zip.listing().unwrap();
         let wanted = expected["entries"].as_array().unwrap();
-        let paths: Vec<&str> = zip.entries.iter().map(|entry| entry.path.as_str()).collect();
+        let paths: Vec<&str> = list.entries.iter().map(|entry| entry.path.as_str()).collect();
         let want_paths: Vec<&str> = wanted.iter().map(|entry| entry["path"].as_str().unwrap()).collect();
         assert_eq!(paths, want_paths, "{name}: paths");
         assert_eq!(zip.hidden() as u64, expected["hidden"].as_u64().unwrap(), "{name}: hidden");
         for (index, want) in wanted.iter().enumerate() {
-            let entry = &zip.entries[index];
-            let listed = zip.listed.iter().find(|item| item.index == index as u32).unwrap();
-            let label = format!("{name}: {}", entry.path);
+            let entry = &list.entries[index];
+            let listed = list.listed.iter().find(|item| item.index == index as u32).unwrap();
+            let label = format!("{name}: {}", entry.path.chars().take(40).collect::<String>());
             let flag = |key: &str| want[key].as_bool().unwrap_or(false);
             assert_eq!(entry.directory, flag("directory"), "{label}: directory");
             assert_eq!(listed.hidden, flag("hidden"), "{label}: hidden");
@@ -290,25 +309,34 @@ fn every_fixture_as_expected_json_says() {
             let password = (entry.lock != Lock::None).then_some(PASSWORD.as_bytes());
             let index = index as u32;
             assert_eq!(
-                outcome(zip.check(source.clone(), index, password)),
+                outcome(zip.check(source, index, password)),
                 want["check"].as_str().unwrap(),
                 "{label}: check"
             );
+            // Hashed only where the table pins the bytes: SHA-256 unoptimised over 5 GiB takes minutes.
+            let pinned = want["downloadSha256"].as_str();
+            let mut hash = sha2::Sha256::default();
             assert_eq!(
-                outcome(zip.download(source.clone(), index, password, &mut |_| Ok(()))),
+                outcome(zip.download(source, index, password, &mut |chunk| {
+                    if pinned.is_some() {
+                        sha2::Digest::update(&mut hash, chunk);
+                    }
+                    Ok(())
+                })),
                 want["download"].as_str().unwrap(),
                 "{label}: download"
             );
+            if let Some(digest) = pinned {
+                let got: String =
+                    sha2::Digest::finalize(hash).iter().map(|byte| format!("{byte:02x}")).collect();
+                assert_eq!(got, digest, "{label}: the bytes downloaded");
+            }
             if let Some(code) = want["withoutPassword"].as_str() {
-                assert_eq!(
-                    outcome(zip.check(source.clone(), index, None)),
-                    code,
-                    "{label}: without a password"
-                );
+                assert_eq!(outcome(zip.check(source, index, None)), code, "{label}: without a password");
             }
             if let Some(code) = want["wrongPassword"].as_str() {
                 assert_eq!(
-                    outcome(zip.check(source.clone(), index, Some(b"not it"))),
+                    outcome(zip.check(source, index, Some(b"not it"))),
                     code,
                     "{label}: a wrong password"
                 );
@@ -316,16 +344,27 @@ fn every_fixture_as_expected_json_says() {
         }
         if let Some(parts) = expected["parts"].as_object() {
             for (path, want) in parts {
-                let got = &zip.listed.iter().find(|item| &item.path == path).unwrap().parts;
+                let got = &list.listed.iter().find(|item| &item.path == path).unwrap().parts;
                 let want: Vec<String> =
                     want.as_array().unwrap().iter().map(|part| part.as_str().unwrap().to_owned()).collect();
                 assert_eq!(got, &want, "{name}: parts of {path}");
             }
         }
+        if let Some(lengths) = expected["partsLength"].as_object() {
+            for (path, want) in lengths {
+                let got = list.listed.iter().find(|item| &item.path == path).unwrap().parts.len();
+                assert_eq!(got as u64, want.as_u64().unwrap(), "{name}: parts of a path {} long", path.len());
+            }
+        }
+        if let Some(names) = expected["saveNames"].as_object() {
+            for (path, want) in names {
+                let got = &list.listed.iter().find(|item| &item.path == path).unwrap().save_name;
+                assert_eq!(got, want.as_str().unwrap(), "{name}: the name {path:?} is saved as");
+            }
+        }
         if let Some(unlock) = expected.get("unlock") {
-            let right =
-                Zip::open(source.as_ref()).unwrap().unlock(source.clone(), PASSWORD.as_bytes()).unwrap();
-            let wrong = Zip::open(source.as_ref()).unwrap().unlock(source.clone(), b"not it").unwrap();
+            let right = Zip::open(source).unwrap().unlock(source, PASSWORD.as_bytes(), None).unwrap();
+            let wrong = Zip::open(source).unwrap().unlock(source, b"not it", None).unwrap();
             assert_eq!(right, unlock["right"].as_bool().unwrap(), "{name}: unlock with the password");
             assert_eq!(wrong, unlock["wrong"].as_bool().unwrap(), "{name}: unlock with another");
         }
@@ -335,21 +374,89 @@ fn every_fixture_as_expected_json_says() {
 #[test]
 fn a_preview_is_held_to_its_limit_and_a_password_is_kept_only_once_it_opens() {
     let source = bytes_of("basic.zip", false);
-    let zip = Zip::open(source.as_ref()).unwrap();
-    let readme = zip.entries.iter().position(|entry| entry.path == "docs/readme.txt").unwrap() as u32;
-    let text = zip.preview(source.clone(), readme, 1024, None).unwrap();
+    let source = source.as_ref();
+    let zip = Zip::open(source).unwrap();
+    let readme =
+        zip.listing().unwrap().entries.iter().position(|entry| entry.path == "docs/readme.txt").unwrap()
+            as u32;
+    let text = zip.preview(source, readme, 1024, None).unwrap();
     assert!(String::from_utf8(text).unwrap().contains("Read me. This entry is deflated."));
-    assert_eq!(outcome(zip.preview(source.clone(), readme, 10, None).map(|_| ())), "too-large");
+    assert_eq!(outcome(zip.preview(source, readme, 10, None).map(|_| ())), "too-large");
 
     let source = bytes_of("aes.zip", false);
-    let zip = Zip::open(source.as_ref()).unwrap();
-    assert!(!zip.unlock(source.clone(), b"not it").unwrap());
+    let source = source.as_ref();
+    let zip = Zip::open(source).unwrap();
+    assert!(!zip.unlock(source, b"not it", None).unwrap());
     assert!(zip.password().is_none());
-    assert!(zip.unlock(source.clone(), PASSWORD.as_bytes()).unwrap());
-    let opened = zip.preview(source.clone(), 0, 1024, zip.password().as_deref().map(Vec::as_slice)).unwrap();
+    assert!(zip.unlock(source, PASSWORD.as_bytes(), None).unwrap());
+    let opened = zip.preview(source, 0, 1024, zip.password().as_deref().map(Vec::as_slice)).unwrap();
     assert!(String::from_utf8(opened).unwrap().contains("AE-2"));
     zip.close();
     assert!(zip.password().is_none());
+    // Closed, nothing reads any more, an entry it opened or not, and no password comes back.
+    assert!(matches!(
+        zip.preview(source, 0, 1024, Some(PASSWORD.as_bytes())),
+        Err(ArchiveError::Failed { .. })
+    ));
+    assert!(matches!(zip.preview(source, 2, 1024, None), Err(ArchiveError::Failed { .. })));
+    assert!(matches!(zip.unlock(source, PASSWORD.as_bytes(), None), Err(ArchiveError::Failed { .. })));
+    assert!(zip.password().is_none());
+}
+
+#[test]
+fn an_unlock_racing_a_close_never_brings_the_password_back() {
+    /* A source whose reads wait until the test lets them go, so the close lands mid-unlock. */
+    struct Gate {
+        bytes: Vec<u8>,
+        go: std::sync::Barrier,
+        waited: std::sync::atomic::AtomicBool,
+    }
+    impl RangeRead for Gate {
+        fn size(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
+            // The first read of entry data waits for the close.
+            if offset < 64 && !self.waited.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.go.wait();
+                self.go.wait();
+            }
+            self.bytes.read_at(offset, length)
+        }
+    }
+    let bytes = std::fs::read(fixture_dir().join("zipcrypto.zip")).unwrap();
+    let opened = Zip::open(&bytes).unwrap();
+    let gate = Arc::new(Gate { bytes, go: std::sync::Barrier::new(2), waited: Default::default() });
+    let zip = Arc::new(opened);
+    let (zip2, gate2) = (zip.clone(), gate.clone());
+    let unlock = std::thread::spawn(move || zip2.unlock(gate2.as_ref(), PASSWORD.as_bytes(), None));
+    gate.go.wait();
+    zip.close();
+    gate.go.wait();
+    let result = unlock.join().unwrap();
+    assert!(matches!(result, Err(ArchiveError::Failed { .. }) | Ok(false)), "{result:?}");
+    assert!(zip.password().is_none());
+}
+
+#[test]
+fn opening_checks_the_whole_span_and_the_local_header_s_sizes_and_crc() {
+    // Stage two: the local extra field pushes the data past the next entry's header.
+    let bytes = std::fs::read(fixture_dir().join("local-overrun.zip")).unwrap();
+    let zip = Zip::open(&bytes).unwrap();
+    assert_eq!(outcome(zip.check(&bytes, 0, None)), "overlap");
+    assert_eq!(outcome(zip.check(&bytes, 1, None)), "ok");
+    // The same archive with the local header's size, then its CRC, made to differ from the directory's.
+    let bytes = std::fs::read(fixture_dir().join("basic.zip")).unwrap();
+    let zip = Zip::open(&bytes).unwrap();
+    let readme =
+        zip.listing().unwrap().entries.iter().find(|entry| entry.path == "docs/readme.txt").unwrap().clone();
+    let at = readme.offset as usize;
+    for field in [22usize, 14] {
+        let mut changed = bytes.clone();
+        changed[at + field] ^= 1;
+        let zip = Zip::open(&changed).unwrap();
+        assert_eq!(outcome(zip.check(&changed, readme.index, None)), "local", "field at {field}");
+    }
 }
 
 #[test]
@@ -373,6 +480,33 @@ fn refuses_more_entries_or_a_larger_directory_than_the_caps_before_reading_it() 
 }
 
 #[test]
+fn a_deep_path_costs_its_parts_not_their_prefixes() {
+    // 32,768 parts in one name: listed flat, under its whole path, and fast.
+    let bytes = std::fs::read(fixture_dir().join("deep.zip")).unwrap();
+    let started = std::time::Instant::now();
+    let zip = Zip::open(&bytes).unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    let list = zip.listing().unwrap();
+    assert_eq!(list.listed[0].parts, vec![list.entries[0].path.clone()]);
+    assert_eq!(list.listed[1].parts.len(), LIST_DEPTH_MAX);
+}
+
+#[test]
+fn save_names_are_safe_on_every_system() {
+    assert_eq!(save_name("rtl\u{202e}txt.exe"), "rtl_txt.exe");
+    assert_eq!(save_name("nul\u{0}name.txt"), "nul_name.txt");
+    assert_eq!(save_name("CON"), "_CON");
+    assert_eq!(save_name("lpt1.log"), "_lpt1.log");
+    assert_eq!(save_name("lpt10.log"), "lpt10.log");
+    assert_eq!(save_name(" .hidden. "), "hidden");
+    assert_eq!(save_name("..."), "Untitled");
+    assert_eq!(save_name("e\u{301}.txt"), "\u{e9}.txt");
+    let long = format!("{}.txt", "é".repeat(200));
+    let saved = save_name(&long);
+    assert!(saved.len() <= 255 && saved.ends_with(".txt"), "{saved}");
+}
+
+#[test]
 fn names_follow_the_flag_the_unicode_field_strict_utf8_then_cp437() {
     let cp437 = [0x63, 0x61, 0x66, 0x82, 0x9b, 0xff];
     assert_eq!(decode_name("día".as_bytes(), 0x800, &HashMap::new()), "día");
@@ -380,6 +514,8 @@ fn names_follow_the_flag_the_unicode_field_strict_utf8_then_cp437() {
     assert_eq!(decode_name(&cp437, 0, &HashMap::new()), "café¢\u{a0}");
     assert_eq!(decode_name("naïve.txt".as_bytes(), 0, &HashMap::new()), "naïve.txt");
     assert_eq!(decode_name(&[0x61, 0xc3], 0, &HashMap::new()), "a├");
+    // A byte order mark stays part of the name, as on the web.
+    assert_eq!(decode_name("\u{feff}a".as_bytes(), 0x800, &HashMap::new()), "\u{feff}a");
     let mut field = vec![1u8];
     field.extend_from_slice(&crc32fast::hash(&cp437).to_le_bytes());
     field.extend_from_slice("Ünïcødé.txt".as_bytes());
@@ -404,20 +540,26 @@ fn the_counter_stops_at_the_byte_past_the_size_and_at_the_ratio_after_a_mib() {
     counter.read(MIB / 50);
     assert!(counter.wrote(2 * MIB).is_ok());
     assert_eq!(counter.wrote(3 * MIB), Err(Refusal::Ratio));
-    assert!(InflateCounter::new(5, false).finish().is_err());
+    // Reached by position: reading the same range again counts once.
+    let mut counter = InflateCounter::new(u64::MAX, true);
+    counter.reached(MIB / 50);
+    counter.reached(MIB / 100);
+    assert_eq!(counter.consumed, MIB / 50);
+    assert_eq!(InflateCounter::new(5, false).finish(), Err(Refusal::Short));
 }
 
-#[test]
-fn the_session_reads_through_the_version_reader_and_wipes_the_password_on_close() {
-    /* The archive exactly as an upload stores it, served chunk by chunk. */
-    struct Sealed(Vec<u8>);
-    impl ObjectSource for Sealed {
-        fn fetch(&self, range: crate::ByteRange, _drain: bool) -> std::result::Result<Vec<u8>, FetchError> {
-            Ok(self.0[range.start as usize..=range.end as usize].to_vec())
-        }
-        fn drain_later(&self, _ranges: Vec<crate::ByteRange>) {}
+/* The archive exactly as an upload stores it, served chunk by chunk, counting what was fetched. */
+struct Sealed(Vec<u8>, std::sync::atomic::AtomicU64);
+impl ObjectSource for Sealed {
+    fn fetch(&self, range: crate::ByteRange, _drain: bool) -> std::result::Result<Vec<u8>, FetchError> {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.0[range.start as usize..=range.end as usize].to_vec())
     }
-    let plain = std::fs::read(fixture_dir().join("aes.zip")).unwrap();
+    fn drain_later(&self, _ranges: Vec<crate::ByteRange>) {}
+}
+
+fn sealed(name: &str) -> (Arc<Sealed>, Content) {
+    let plain = std::fs::read(fixture_dir().join(name)).unwrap();
     let content = Content {
         workspace_id: "11111111-1111-4111-8111-111111111111".into(),
         object_id: "66666666-6666-4666-8666-666666666666".into(),
@@ -436,29 +578,46 @@ fn the_session_reads_through_the_version_reader_and_wipes_the_password_on_close(
             crate::chunk_encrypt(content.clone(), index, plain[start..start + length].to_vec()).unwrap(),
         );
     }
-    let source: Arc<dyn ObjectSource> = Arc::new(Sealed(object));
+    (Arc::new(Sealed(object, Default::default())), content)
+}
+
+#[test]
+fn the_session_reads_through_one_reader_and_closing_ends_it() {
+    let (store, content) = sealed("aes.zip");
+    let source: Arc<dyn ObjectSource> = store.clone();
     let control = RunControl::new(30_000, None);
-    let session = ZipArchiveSession::open(source.clone(), content, control.clone()).unwrap();
+    let session = ZipArchiveSession::open(source, content, control.clone()).unwrap();
+    control.finish();
+    let fetched = store.1.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(session.entries().len(), 3);
     assert_eq!(session.entries()[0].lock, "aes");
-    assert!(!session.unlock("not it".into(), RunControl::new(30_000, None)).unwrap());
+    assert!(!session.unlock("not it".into(), None, RunControl::new(30_000, None)).unwrap());
     assert_eq!(
         session.preview(0, 1024, RunControl::new(30_000, None)),
         Err(ArchiveError::Refused { code: "password".into() })
     );
-    assert!(session.unlock(PASSWORD.into(), RunControl::new(30_000, None)).unwrap());
-    let text = session.preview(0, 1024, RunControl::new(30_000, None)).unwrap();
+    assert!(session.unlock(PASSWORD.into(), Some(1), RunControl::new(30_000, None)).unwrap());
+    let call = RunControl::new(30_000, None);
+    let text = session.preview(0, 1024, call.clone()).unwrap();
+    // A call's run finishing leaves the session's reader as it was: the next call fetches nothing.
+    call.finish();
     assert!(String::from_utf8(text).unwrap().contains(CANARY));
-    // A cancelled read stops with the cancel, not a refusal.
+    assert!(session.preview(1, 1024, RunControl::new(30_000, None)).is_ok());
+    assert_eq!(store.1.load(std::sync::atomic::Ordering::SeqCst), fetched, "one chunk, fetched once");
+    // A cancelled call stops with the cancel, not a refusal, and the session goes on.
     let cancelled = RunControl::new(30_000, None);
     cancelled.cancel();
     assert!(matches!(session.preview(0, 1024, cancelled), Err(ArchiveError::Failed { .. })));
+    assert!(session.preview(0, 1024, RunControl::new(30_000, None)).is_ok());
     session.close_archive();
     assert!(!session.unlocked());
-    assert_eq!(
-        session.preview(0, 1024, RunControl::new(30_000, None)),
-        Err(ArchiveError::Refused { code: "password".into() })
-    );
+    assert!(session.entries().is_empty());
+    for result in [
+        session.preview(0, 1024, RunControl::new(30_000, None)).map(|_| ()),
+        session.unlock(PASSWORD.into(), None, RunControl::new(30_000, None)).map(|_| ()),
+    ] {
+        assert_eq!(result, Err(ArchiveError::Failed { reason: CLOSED.into() }));
+    }
 }
 
 #[test]
@@ -477,4 +636,54 @@ fn phones_preview_entries_up_to_the_section_3_limits_halved_on_small_devices() {
     );
     // 4 GB exactly counts as small.
     assert_eq!(zip_entry_preview_limits("media".into(), 4 * 1024 * MIB).ceiling, 32 * MIB);
+}
+
+#[test]
+fn a_kept_copy_opens_from_the_phone_and_closes_like_any_archive() {
+    struct Kept(Vec<u8>);
+    impl LocalSource for Kept {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+            Ok(self.0[offset as usize..(offset + length) as usize].to_vec())
+        }
+    }
+    let kept = Arc::new(Kept(std::fs::read(fixture_dir().join("aes.zip")).unwrap()));
+    let session = ZipArchiveSession::open_local(kept, RunControl::new(30_000, None)).unwrap();
+    assert!(session.unlock(PASSWORD.into(), None, RunControl::new(30_000, None)).unwrap());
+    let text = session.preview(0, 1024, RunControl::new(30_000, None)).unwrap();
+    assert!(String::from_utf8(text).unwrap().contains(CANARY));
+    // A cancelled call reads nothing.
+    let cancelled = RunControl::new(30_000, None);
+    cancelled.cancel();
+    assert!(session.preview(1, 1024, cancelled).is_err());
+    session.close_archive();
+    assert!(session.preview(2, 1024, RunControl::new(30_000, None)).is_err());
+}
+
+#[test]
+fn a_sibling_reads_beside_the_archive_with_its_password_and_closes_on_its_own() {
+    struct Kept(Vec<u8>);
+    impl LocalSource for Kept {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+            Ok(self.0[offset as usize..(offset + length) as usize].to_vec())
+        }
+    }
+    let kept = Arc::new(Kept(std::fs::read(fixture_dir().join("aes.zip")).unwrap()));
+    let session = ZipArchiveSession::open_local(kept, RunControl::new(30_000, None)).unwrap();
+    assert!(session.unlock(PASSWORD.into(), None, RunControl::new(30_000, None)).unwrap());
+    let sibling = session.sibling().unwrap();
+    // The password came along: the sibling opens the locked entry without asking.
+    assert!(String::from_utf8(sibling.preview(0, 1024, RunControl::new(30_000, None)).unwrap())
+        .unwrap()
+        .contains(CANARY));
+    sibling.close_archive();
+    assert!(sibling.preview(0, 1024, RunControl::new(30_000, None)).is_err());
+    assert!(session.preview(0, 1024, RunControl::new(30_000, None)).is_ok());
+    session.close_archive();
+    assert!(session.sibling().is_err());
 }

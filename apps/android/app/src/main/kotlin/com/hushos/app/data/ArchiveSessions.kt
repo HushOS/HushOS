@@ -3,6 +3,8 @@ package com.hushos.app.data
 import com.hushos.core.ByteRange
 import com.hushos.core.Content
 import com.hushos.core.EntrySink
+import com.hushos.core.FetchException
+import com.hushos.core.LocalSource
 import com.hushos.core.ObjectSource
 import com.hushos.core.RunControl
 import com.hushos.core.ToolClock
@@ -33,7 +35,7 @@ class ArchiveSessions {
 
     /* Sign-out and account removal: every archive's password goes and every call ends. */
     fun closeAll() {
-        for (archive in open.toList()) archive.close()
+        for (archive in ArrayList(open)) archive.close()
     }
 
     internal fun add(archive: OpenArchive) = open.add(archive)
@@ -41,12 +43,12 @@ class ArchiveSessions {
 
     /*
      * Opens the archive whose object `source` reads and `content` opens, reading its directory under
-     * the first call. `current` is where the source looks for the control of the call reading.
+     * the first call. `current` is where the source looks for the control of the call reading (on its thread).
      */
     suspend fun open(
         source: ObjectSource,
         content: Content,
-        current: AtomicReference<RunControl?> = AtomicReference(null),
+        current: CallControl = CallControl(),
         watchdogMillis: Long = toolWatchdogMillis().toLong(),
         pollMillis: Long = 1_000,
         clock: ToolClock? = null,
@@ -64,14 +66,64 @@ class ArchiveSessions {
         }
     }
 
+    /*
+     * Opens a zip this phone keeps (an offline copy) from that copy, read by range into memory as the
+     * core asks: it opens without a connection, and no further plaintext copy is made.
+     */
+    suspend fun openLocal(
+        source: LocalSource,
+        watchdogMillis: Long = toolWatchdogMillis().toLong(),
+        pollMillis: Long = 1_000,
+        clock: ToolClock? = null,
+    ): OpenArchive {
+        val archive = OpenArchive(this, CallControl(), watchdogMillis, pollMillis, clock)
+        add(archive)
+        try {
+            archive.session = archive.call { control -> ZipArchiveSession.openLocal(source, control) }
+            if (archive.closed) throw CancellationException("Closed.")
+            return archive
+        } catch (error: Throwable) {
+            archive.close()
+            throw error
+        }
+    }
+
     companion object {
         val shared = ArchiveSessions()
     }
 }
 
+/* A kept file by range: each read opens it, seeks and reads that much, keeping nothing. */
+class FileLocalSource(private val file: java.io.File) : LocalSource {
+    private val length = file.length()
+    override fun size(): ULong = length.toULong()
+    override fun readAt(offset: ULong, length: ULong): ByteArray = try {
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            val bytes = ByteArray(length.toInt())
+            raf.seek(offset.toLong())
+            raf.readFully(bytes)
+            bytes
+        }
+    } catch (error: Exception) {
+        throw FetchException.Failed(error.message ?: "The kept copy couldn't be read.")
+    }
+}
+
+/*
+ * The control of the call reading, for the object source: per thread, since each call runs on a
+ * thread of its own and the core fetches on that thread. An archive and its siblings share one
+ * source while their calls run side by side, so a fetch is always cut off by its own call's end,
+ * never by another's.
+ */
+class CallControl {
+    private val local = ThreadLocal<RunControl?>()
+    fun get(): RunControl? = local.get()
+    internal fun set(control: RunControl?) = if (control == null) local.remove() else local.set(control)
+}
+
 class OpenArchive internal constructor(
     private val owner: ArchiveSessions,
-    private val current: AtomicReference<RunControl?>,
+    private val current: CallControl,
     private val watchdogMillis: Long,
     private val pollMillis: Long,
     private val clock: ToolClock?,
@@ -92,7 +144,8 @@ class OpenArchive internal constructor(
     val hidden get() = opened().hidden().toInt()
     val unlocked get() = session?.unlocked() == true
 
-    suspend fun unlock(password: String): Boolean = call { opened().unlock(password, it) }
+    /* Whether `password` opens the archive; tried on entry `index` first (an item whose own password was asked for). */
+    suspend fun unlock(password: String, index: UInt? = null): Boolean = call { opened().unlock(password, index, it) }
 
     /* The entry's bytes for the viewer, at most `limit` declared, checked to the end: kept in memory, never in a file. */
     suspend fun preview(index: UInt, limit: Long): ByteArray = call { opened().preview(index, limit.toULong(), it) }
@@ -100,10 +153,33 @@ class OpenArchive internal constructor(
     /* The entry into `sink`, a MiB at a time, held to its declared size. */
     suspend fun download(index: UInt, sink: EntrySink) = call { opened().download(index, sink, it) }
 
-    /* Wipes the password, ends the call going (it fails at its next read) and forgets the archive. */
+    /*
+     * The same archive again, with the listing and the password this one holds and a reader of its
+     * own: a download runs on one so previews never wait behind it. Closed on its own (the caller
+     * closes it when its download ends), with this archive, and by a sign-out's closeAll.
+     */
+    suspend fun sibling(): OpenArchive {
+        val parent = opened()
+        val child = OpenArchive(owner, current, watchdogMillis, pollMillis, clock)
+        child.session = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { parent.sibling() }
+        owner.add(child)
+        children.add(child)
+        child.parent = this
+        // Closed meanwhile: the child goes too, and says so.
+        if (closed) { child.close(); throw CancellationException("Closed.") }
+        return child
+    }
+    private val children = ConcurrentHashMap.newKeySet<OpenArchive>()
+    @Volatile private var parent: OpenArchive? = null
+
+    /* Wipes the password, ends the call going (it fails at its next read) and forgets the archive; its siblings close with it. */
     fun close() {
         closed = true
-        for (end in calls.toList()) end()
+        for (child in ArrayList(children)) child.close()
+        children.clear()
+        parent?.children?.remove(this)
+        // Copied by iterating, never by size then elements: a call's thread may remove itself meanwhile.
+        for (end in ArrayList(calls)) end()
         session?.closeArchive()
         owner.remove(this)
     }
@@ -128,24 +204,25 @@ class OpenArchive internal constructor(
                 Unit
             }
             calls.add(end)
-            current.set(control)
             val thread = Thread(null, {
+                var result: Result<T>? = null
+                current.set(control)
                 try {
-                    val result = runCatching { work(control) }.recoverCatching { error ->
+                    result = runCatching { work(control) }.recoverCatching { error ->
                         when {
                             control.isCancelled() -> throw CancellationException("Cancelled.")
                             control.timedOut() -> throw ToolFailed()
                             else -> throw error
                         }
                     }
-                    // The call's reader lets go of its chunks and its key before anyone hears it is over.
-                    control.finish()
-                    outcome.complete(result)
                 } finally {
+                    // The call is over in every sense before anyone hears it is: its control
+                    // finished, it is no longer live, and the next call may start.
                     control.finish()
                     calls.remove(end)
-                    current.compareAndSet(control, null)
+                    current.set(null)
                     turn.unlock(token)
+                    outcome.complete(result ?: Result.failure(ToolFailed()))
                 }
             }, "archive-call", 8L shl 20)
             handedOver = true
@@ -154,7 +231,6 @@ class OpenArchive internal constructor(
             } catch (error: Throwable) {
                 handedOver = false
                 calls.remove(end)
-                current.compareAndSet(control, null)
                 throw ToolFailed(cause = error)
             }
             val watchdog = Timers.watchdogs.every(pollMillis) {
@@ -184,7 +260,7 @@ fun archiveSourceOf(
     api: DriveApi,
     versionId: String,
     workspaceId: String,
-    current: AtomicReference<RunControl?>,
+    current: CallControl,
     online: () -> Boolean = { true },
     metered: () -> Boolean = { false },
     drains: PaddingDrains = PaddingDrains.shared,
@@ -217,10 +293,14 @@ fun archiveSourceOf(
     }
 }
 
-/* Opens `item`'s current version as an archive: its directory read and checked, nothing else. */
+/*
+ * Opens `item`'s current version as an archive: its directory read and checked, nothing else. A
+ * zip kept on this phone opens from the kept copy, offline included.
+ */
 suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveSessions.shared): OpenArchive {
+    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept)) }
     val opened = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { openVersion(item) }
-    val current = AtomicReference<RunControl?>(null)
+    val current = CallControl()
     val source = archiveSourceOf(
         api, opened.versionId, item.node.workspaceId, current,
         online = { Resumable.online(context) },
