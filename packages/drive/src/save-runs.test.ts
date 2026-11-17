@@ -1642,6 +1642,79 @@ describe('a save run', () => {
         expect(w.runs.rows.get('answered')!.chosen).toBeUndefined();
     });
 
+    test('a lock that comes while finish asks about a stale upload removes nothing: the run had finished', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [folder('f'), doc], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const stale = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        w.begin(w.ids()[1]!, 'up-v', 'doc');
+        w.failWith(w.ids()[1]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: false },
+        });
+        await stale;
+        // finish asks again about the stale upload; that answer is held while the app locks.
+        let answer: () => void = () => {};
+        const abort = w.deps.abortUpload;
+        w.deps.abortUpload = (ws, id) =>
+            new Promise((resolve) => {
+                answer = () => void abort(ws, id).then(resolve);
+            });
+        const finishing = run.finish();
+        await tick();
+        const [locked] = await lockRuns();
+        expect(locked).toMatchObject({ cleanup: 'nothing', message: ALREADY_SAVED });
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(w.server.trash.size).toBe(0);
+        answer();
+        await finishing;
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('an interrupted clean-up that a sign-out overtakes writes nothing back for that account', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'left',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow', 'node-x'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+            uncertain: [{ id: 'slow', at: Date.now() }],
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        // The sign-out lands while the clean-up asks the server: the journal goes with the account.
+        const trash = w.deps.trash;
+        w.deps.trash = async (ws, ids) => {
+            const fates = await trash(ws, ids);
+            session = false;
+            w.runs.rows.clear();
+            return fates;
+        };
+        await cleanUpInterrupted(w.deps, row);
+        expect(w.runs.rows.size).toBe(0);
+        // Signed out before it began: nothing is asked of the server at all.
+        w.deps.trash = trash;
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        expect(w.server.live.has('node-x')).toBe(true);
+    });
+
     test('finish waits for a folder still being made: the row stays until its creation settles', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });

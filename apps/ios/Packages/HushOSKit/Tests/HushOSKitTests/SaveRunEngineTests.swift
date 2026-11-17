@@ -252,9 +252,8 @@ extension OnFakeDrive {
             // As AccountStore.wipe does, on this journal's own session, from another thread.
             world.signOut = {
                 DispatchQueue.global().async {
-                    session.end()
+                    SaveRunJournal.end(url, session)
                     SaveRuns.abandonAll(session)
-                    try? FileManager.default.removeItem(at: url)
                 }
             }
             let outcome: Outcome

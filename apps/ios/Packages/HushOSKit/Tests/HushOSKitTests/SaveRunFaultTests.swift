@@ -342,9 +342,8 @@ final class RunBox: @unchecked Sendable {
                 // another thread, as a sign-out is (the run's lock may be held where this wait was reached).
                 world.signOut()
                 DispatchQueue.global().async {
-                    session.end()
+                    SaveRunJournal.end(url, session)
                     SaveRuns.abandonAll(session)
-                    try? FileManager.default.removeItem(at: url)
                 }
             default: break
             }

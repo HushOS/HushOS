@@ -262,11 +262,13 @@ class SaveRunFaultTest {
         val drive = FaultyDrive(world, healthy = false)
         val escaped = ArrayList<String>()
         var started: SaveRun? = null
+        val wipes = java.util.Collections.synchronizedList(ArrayList<Thread>())
         world.interrupt = { fault ->
             when (fault) {
                 Fault.CANCEL -> started?.let { run -> pool.submit { run.cancel() } }
-                // As AccountStore.wipe does, on this journal's own session: runs abandoned, the journal gone.
-                Fault.SIGNOUT -> { world.signedOut = true; SaveRuns.abandonAll(session); session.end(); file.delete() }
+                // As AccountStore.wipe does, on this journal's own session: runs abandoned, then the session ended and the
+                // journal gone under its lock. From a thread of its own, as a sign-out is: one during a write waits for it.
+                Fault.SIGNOUT -> { world.signedOut = true; val wipe = Thread { SaveRuns.abandonAll(session); SaveRunJournal.end(file, session) }.also { it.start() }; wipes += wipe; wipe.join(200) }
                 else -> Unit
             }
         }
@@ -288,6 +290,7 @@ class SaveRunFaultTest {
             escaped += error.toString()
             Outcome.Stopped(run.cancel())
         }
+        for (wipe in wipes.toList()) wipe.join(5_000)
         return Played(world, file, session, outcome, escaped)
     }
 

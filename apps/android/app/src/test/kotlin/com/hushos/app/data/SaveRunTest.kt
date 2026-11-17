@@ -920,7 +920,7 @@ class SaveRunTest {
         val pool = Executors.newSingleThreadExecutor()
         val next = pool.submit<Opened> { run.file(byteArrayOf(2), "b", null, own, folder = opened("g")) }
         assertTrue(listing.await(5, TimeUnit.SECONDS))
-        assertThrows(SaveRunRefusal::class.java) { run.finish() }
+        assertThrows(RunBusy::class.java) { run.finish() }
         // The listing fails: the run was never finished, so it stops all or nothing.
         fail.countDown()
         assertTrue(runCatching { next.get(5, TimeUnit.SECONDS) }.exceptionOrNull()?.cause is SaveRunStopped)
@@ -964,7 +964,7 @@ class SaveRunTest {
         val pool = Executors.newSingleThreadExecutor()
         val folder = pool.submit<Opened> { run.folder("Out", own) }
         assertTrue(making.await(5, TimeUnit.SECONDS))
-        assertThrows(SaveRunRefusal::class.java) { run.finish() }
+        assertThrows(RunBusy::class.java) { run.finish() }
         assertEquals(listOf("made-Out"), rows.list().single().nodeIds)
         go.countDown()
         folder.get(5, TimeUnit.SECONDS)

@@ -98,8 +98,7 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         } catch (_: Exception) {
             try { write(rows) } catch (error: Exception) { throw SaveUnrecorded(error) }
         }
-        // Signed out while it was written (endAccount doesn't wait for this lock): the row goes again.
-        if (!live) runCatching { write(read().filter { it.id != row.id }) }
+        // A sign-out ends the session under this same lock (endAccount): it can't come between the check and the write.
     }
 
     /*
@@ -177,12 +176,14 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
          * Sign-out, deletion, removal: the session ends and the journal in `files` goes, both under the file's lock, so a
          * write already under way finishes before the delete, and one after it sees the session ended and writes nothing.
          */
-        fun endAccount(files: File) {
-            val file = File(files, FILE)
+        fun endAccount(files: File) = end(File(files, FILE), account)
+
+        /* A session's end and its journal's removal under the file's lock (endAccount; the tests' own sessions too). */
+        internal fun end(file: File, epoch: Epoch) {
             synchronized(locks.computeIfAbsent(file.absoluteFile.normalize().path) { Any() }) {
-                account.end()
+                epoch.end()
                 file.delete()
-                File(files, STAGING).delete()
+                File(file.absoluteFile.parentFile, file.name + STAGING_SUFFIX).delete()
             }
         }
     }
@@ -190,6 +191,9 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
 
 /* A finished run (or kept results) whose record this device would not update: not retired, and asking again may. */
 class SaveRecordNotUpdated : Exception("This was saved, but this device couldn’t update its record of it. Try again.")
+
+/* finish() refused while a folder, file or version is still on its way (waiting()): ask again once it is in. The web's RunBusy. */
+class RunBusy : Exception("Some results are still being saved.")
 
 /* Work a run can't take (it finished, or a result it wasn't planned for): nothing was sent and nothing cleaned up. */
 class SaveRunRefusal(message: String) : Exception(message)
@@ -1006,7 +1010,7 @@ class SaveRun private constructor(
         val (future, owner) = synchronized(lock) {
             stopping?.let { return@synchronized it to false }
             // Finished in the meantime (a cancel that checked just before finish took the lock): it was saved, and stays.
-            if (finished) return SaveRunStopped(SaveRunStopped.Reason.CANCELLED,
+            if (finished) return SaveRunStopped(reason,
                 if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions)
             val made = CompletableFuture<SaveRunStopped>()
             stopping = made
@@ -1036,7 +1040,7 @@ class SaveRun private constructor(
     fun finish() {
         val waiting = synchronized(lock) {
             stopping ?: run {
-                if (inFlight > 0) throw SaveRunRefusal("Some results are still being saved.")
+                if (inFlight > 0) throw RunBusy()
                 finished = true
                 sealed = true
                 // Not retired: nothing more is taken in (`finished`), and finish may be asked again.

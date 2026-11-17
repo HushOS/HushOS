@@ -186,13 +186,17 @@ public final class SaveRunJournal: @unchecked Sendable {
     private static func dropStaging(_ url: URL) { try? FileManager.default.removeItem(at: staging(url)) }
 
     /* Sign-out, deletion, removal: the rows go, a staging file with them, and no journal opened before writes again. */
-    public static func endAccount() {
-        // The session ends under the file's lock too: a write under way finishes before the delete, and one after it
-        // sees the session ended and writes nothing.
-        lock(for: defaultURL).withLock {
-            account.end()
-            try? FileManager.default.removeItem(at: defaultURL)
-            dropStaging(defaultURL)
+    public static func endAccount() { end(defaultURL, account) }
+
+    /*
+     * A session's end and its journal's removal under the file's lock (endAccount; the tests' own sessions too): a write
+     * under way finishes before the delete, and one after it sees the session ended and writes nothing.
+     */
+    static func end(_ url: URL, _ epoch: Epoch) {
+        lock(for: url).withLock {
+            epoch.end()
+            try? FileManager.default.removeItem(at: url)
+            dropStaging(url)
         }
     }
 
@@ -220,8 +224,7 @@ public final class SaveRunJournal: @unchecked Sendable {
             do { try write(rows) } catch {
                 do { try write(rows) } catch { throw SaveUnrecorded() }
             }
-            // Signed out while it was written (endAccount doesn't wait for this lock): the row goes again.
-            if !live { try? write(read().filter { $0.id != row.id }) }
+            // A sign-out ends the session under this same lock (endAccount): it can't come between the check and the write.
         }
     }
 
@@ -335,6 +338,12 @@ public final class SaveRunJournal: @unchecked Sendable {
 public struct SaveRecordNotUpdated: Error, Equatable, LocalizedError {
     public init() {}
     public var errorDescription: String? { "This was saved, but this device couldn’t update its record of it. Try again." }
+}
+
+/* finish() refused while a folder, file or version is still on its way (waiting()): ask again once it is in. The web's RunBusy. */
+public struct RunBusy: Error, Equatable, LocalizedError {
+    public init() {}
+    public var errorDescription: String? { "Some results are still being saved." }
 }
 
 /* Work a run can't take (it finished, or a result it wasn't planned for): nothing was sent and nothing cleaned up. */
@@ -1357,7 +1366,7 @@ public actor SaveRun {
     public func finish() async throws {
         if let stopping { throw await stopping.value }
         if let stopped { throw stopped }
-        guard inFlight == 0 else { throw SaveRunRefusal(message: "Some results are still being saved.") }
+        guard inFlight == 0 else { throw RunBusy() }
         finished = true
         let row = state.seal()
         // Only uploads whose reservation wasn't confirmed released are left in the row: asked again now. One still

@@ -264,8 +264,10 @@ class SaveRunEngineTest {
         val found = ArrayList<String>()
         var started: SaveRun? = null
         s.world.interrupt = { started?.let { run -> pool.submit { run.cancel() } } }
-        // As AccountStore.wipe does, on this journal's own session: runs abandoned, the journal gone.
-        s.world.signOut = { SaveRuns.abandonAll(session); session.end(); file.delete() }
+        // As AccountStore.wipe does, on this journal's own session: runs abandoned, then the session ended and the journal gone
+        // under its lock. From a thread of its own, as a sign-out is: one that comes during a write waits for it.
+        val wipes = java.util.Collections.synchronizedList(ArrayList<Thread>())
+        s.world.signOut = { val wipe = Thread { SaveRuns.abandonAll(session); SaveRunJournal.end(file, session) }.also { it.start() }; wipes += wipe; wipe.join(200) }
         val outcome: Outcome = try {
             val run = SaveRun.start(writer, listOf(s.f, s.doc), emptyList(), rows, pause = {}).also { started = it }
             try {
@@ -284,6 +286,7 @@ class SaveRunEngineTest {
             Outcome.NotStarted
         }
         Thread.sleep(50)
+        for (wipe in wipes.toList()) wipe.join(5_000)
         for (late in s.world.late.toList()) late.get(10, java.util.concurrent.TimeUnit.SECONDS)
         found += judge(s, file, session, recorded, outcome)
         // A part the store took after its upload was aborted is the fake's own lookup failing (the real store answers 404).

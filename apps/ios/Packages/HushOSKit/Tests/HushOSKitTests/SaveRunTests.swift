@@ -703,11 +703,13 @@ let own = SaveSources.ownWriting
         // Signed out with a file's completion on its way: it may still be there.
         let writer = FakeWriter()
         let gate = AsyncGate()
-        await writer.set(landing: { await gate.wait() })
+        let completing = AsyncGate()
+        await writer.set(landing: { await completing.open(); await gate.wait() })
         let session = SaveRunJournal.Epoch()
         let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal(session))
         let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
-        try await Task.sleep(for: .milliseconds(50))
+        // Once its completion was sent (the fake is landing it), not after a guessed pause.
+        await completing.wait()
         SaveRuns.abandonAll(session)
         await gate.open()
         do {
@@ -1008,7 +1010,7 @@ let own = SaveSources.ownWriting
         await writer.set(namesFail: true)
         let next = Task { try await run.file(Data([2]), name: "b", mime: nil, sources: own, in: opened("g")) }
         try await Task.sleep(for: .milliseconds(50))
-        await #expect(throws: SaveRunRefusal.self) { try await run.finish() }
+        await #expect(throws: RunBusy.self) { try await run.finish() }
         // The listing fails: the run was never finished, so it stops all or nothing.
         await gate.open()
         await #expect(throws: SaveRunStopped.self) { _ = try await next.value }
@@ -1049,7 +1051,7 @@ let own = SaveSources.ownWriting
         let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
         let making = Task { try await run.folder("Out", sources: own) }
         try await Task.sleep(for: .milliseconds(50))
-        await #expect(throws: SaveRunRefusal.self) { try await run.finish() }
+        await #expect(throws: RunBusy.self) { try await run.finish() }
         #expect(rows.list().first?.nodeIds == ["made-Out"])
         await gate.open()
         _ = try await making.value

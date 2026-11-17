@@ -1217,6 +1217,8 @@ async function cleanUp(
         /* Folders whose creation got no definite answer: one not found yet may still be made. */
         mayExist?: Set<string>;
         current?: () => boolean;
+        /* Stop asking the server once signed out (an interrupted run's clean-up). */
+        quitOnSignOut?: boolean;
     } = {},
 ): Promise<{
     cleanup: Cleanup;
@@ -1261,6 +1263,17 @@ async function cleanUp(
             else othersMayLand = true;
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
+    // An interrupted run's clean-up signed out meanwhile: nothing more is asked of the server or
+    // written for that account (a live run's stop goes on, and says what may remain).
+    if (options.quitOnSignOut && !(options.current?.() ?? true))
+        return {
+            cleanup: 'left',
+            keptVersions,
+            uncertainVersions,
+            remains: null,
+            waiting: false,
+            onlyWaitingOn: null,
+        };
     const notFound = new Set<string>();
     const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound).catch(
         (): Cleanup => 'left',
@@ -1474,11 +1487,14 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
             .filter((held) => now - held.at < CREATION_SETTLE_MS)
             .map((held) => held.id),
     );
-    const result = await cleanUp(deps, row, [], { mayExist });
+    // The session this clean-up began in: after a sign-out it asks nothing more and writes nothing.
+    const current = () => signedIn(deps);
+    if (!current()) return 'left';
+    const result = await cleanUp(deps, row, [], { mayExist, current, quitOnSignOut: true });
     // Kept only to wait for folders that may still land, all else done: the row names just those,
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
-    if (result.cleanup === 'left' && waitingOn) {
+    if (result.cleanup === 'left' && waitingOn && current()) {
         const { holds: _seen, ...rest } = row;
         await deps.runs
             .put({
