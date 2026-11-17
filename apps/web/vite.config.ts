@@ -160,6 +160,34 @@ function playgroundOutOfBuild(): Plugin {
     };
 }
 
+/*
+ * zip.js runs in the archive's tools worker, whose policy loads nothing at run time
+ * (docs/file-tools-design.md, "Content Security Policy"), and check-worker-code.ts fails the build
+ * on any import a tools worker could make. zip.js can import a codec module by URL for a
+ * compression method registered with `registerCodec`; HushOS registers none, so that one
+ * `import()` is replaced by a refusal. If an upgrade moves it, the build stops here rather than
+ * shipping a worker with a way to load code.
+ */
+function zipJsWithoutCodecImport(): Plugin {
+    const file = /@zip\.js[\\/]zip\.js[\\/]lib[\\/]core[\\/]codec-registry\.js$/;
+    const call = 'await import(/* webpackIgnore: true */ /* @vite-ignore */ codecURI)';
+    return {
+        name: 'hushos:zip-js-without-codec-import',
+        enforce: 'pre',
+        transform(code, id) {
+            if (!file.test(id.split('?')[0]!)) return null;
+            if (!code.includes(call))
+                this.error(
+                    'zip.js no longer imports codec modules where expected: check codec-registry.js.',
+                );
+            return code.replace(
+                call,
+                'await Promise.reject(new Error("HushOS loads no codec modules."))',
+            );
+        },
+    };
+}
+
 export default defineConfig({
     server: {
         host: '0.0.0.0',
@@ -168,6 +196,8 @@ export default defineConfig({
         allowedHosts: ['.ts.net'],
     },
     resolve: { tsconfigPaths: true },
+    // Worker bundles take only these plugins in a build (the list below applies to them in dev).
+    worker: { plugins: () => [zipJsWithoutCodecImport()] },
     // Loaded by the runtime from the output's node_modules, never bundled: its dependencies
     // need their own load order (nitro.config.ts, `traceDeps`).
     ssr: { external: ['@simplewebauthn/server'] },
@@ -193,6 +223,7 @@ export default defineConfig({
     plugins: [
         oneRequestPerConnectionInCI(),
         playgroundOutOfBuild(),
+        zipJsWithoutCodecImport(),
         pdfjsAssets(),
         mdxMeta(),
         {

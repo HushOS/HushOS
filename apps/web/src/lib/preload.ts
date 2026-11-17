@@ -24,6 +24,8 @@ export function preloadViewers() {
                 () => import('@/components/drive/office-viewer').then((m) => m.preloadOffice()),
                 () => import('@/components/drive/rich-text'),
                 () => import('@/components/drive/json-view').then((m) => m.preloadJsonView()),
+                // The archive reader opens like a viewer (docs/file-tools-design.md, "Dependencies").
+                () => import('@/components/drive/archive-view').then((m) => m.preloadArchive()),
                 () => import('@/lib/highlight').then((m) => m.preloadGrammars()),
                 () => import('@/lib/thumbnails').then((m) => m.preloadThumbnailer()),
             ];

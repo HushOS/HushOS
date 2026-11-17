@@ -1,0 +1,63 @@
+import Foundation
+
+/*
+ * What the archive viewer says (docs/file-tools-design.md, section 1 (a)), word for word the web's
+ * (apps/web/src/lib/archives/words.ts) and Android's (data/ArchiveWords.kt): change them together.
+ */
+public enum ArchiveWords {
+    public static let needsPassword = "Needs a password"
+    public static let link = "Link, not opened"
+    public static let nested = "Extract it first, or download it."
+    public static let method = "This item uses a kind of compression HushOS can’t open. Download the archive to open it on your computer."
+    public static let encryption = "This item uses a kind of encryption HushOS can’t open. Download the archive to open it on your computer."
+    public static let encryptedDirectory = "This archive’s list of contents is encrypted. HushOS can’t open it."
+    public static func hidden(_ count: Int) -> String {
+        count == 1 ? "1 Mac resource file isn’t shown." : "\(count) Mac resource files aren’t shown."
+    }
+    public static func items(_ count: Int) -> String {
+        count == 1 ? "1 item" : "\(count.formatted()) items"
+    }
+    public static let empty = "This folder in the archive is empty."
+    public static func passwordTitle(_ name: String) -> String { "“\(name)” needs a password" }
+    public static let passwordLabel = "Password"
+    public static let open = "Open"
+    public static let wrongPassword = "That password isn’t right."
+    public static func asksFirst(size: String, packed: String) -> String { "This item expands to \(size) from \(packed)." }
+    public static func downloading(_ name: String) -> String { "Downloading “\(name)”" }
+    public static let stop = "Stop"
+    public static let download = "Download"
+    public static let cancel = "Cancel"
+    /* The viewer's own words, as the web's viewerWords say them. */
+    public static let noPreview = "This kind of file has no preview yet."
+    public static let broken = "This file can’t be shown"
+    public static func tooLarge(_ size: String) -> String { "This file is \(size), too large to preview here." }
+    public static let elsewhere = "Download it to open it in another app."
+    public static func large(_ size: String) -> String { "This file is \(size)." }
+    public static let largeRisk = "Opening it uses a lot of memory and may be slow on this device."
+    public static let openAnyway = "Open anyway"
+
+    /* Why an archive or an entry was refused, by the core's code (archive.rs, `Refusal::code`). */
+    public static let refusals: [String: String] = [
+        "damaged": "This archive is damaged, or isn’t a zip archive HushOS can read.",
+        "directory-too-large": "This archive’s list of contents is too large to open here. Download it to open it on your computer.",
+        "too-many-entries": "This archive has more than 100,000 items, too many to list here. Download it to open it on your computer.",
+        "encrypted-directory": encryptedDirectory,
+        "split": "This is one part of an archive split into several. HushOS can’t open it.",
+        "overlap": "This archive’s items overlap each other, which is how some zip bombs work. HushOS won’t open it.",
+        "local": "This item doesn’t match the archive’s list of contents. HushOS won’t open it.",
+        "method": method,
+        "encryption": encryption,
+        "password": needsPassword,
+        "wrong-password": wrongPassword,
+        "crc": "This item is damaged: its contents don’t match its checksum.",
+        "auth": "This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown.",
+        "size": "This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it.",
+        "ratio": "This item expands far more than ordinary files do, which is how some zip bombs work. HushOS stopped reading it.",
+        "nested": nested,
+    ]
+
+    /* A refusal's words, or the tools' own failure for any code without words. */
+    public static func refusal(_ code: String) -> String {
+        refusals[code] ?? toolFailedMessage()
+    }
+}

@@ -312,7 +312,7 @@ class PaddingDrains(
  * Timer threads of the harness's own, never behind a shared pool: one for the watchdogs and one
  * for the cut-offs, so a disconnect that blocks never holds up the next run's watchdog.
  */
-private class Timers(name: String) {
+internal class Timers(name: String) {
     private val timer = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, name).apply { isDaemon = true } }
 
     fun every(millis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
@@ -328,7 +328,7 @@ private class Timers(name: String) {
 }
 
 /* Cuts off a connection whose run has ended, within a tenth of a second. */
-private object Cutoff {
+internal object Cutoff {
     fun <T> whileRunning(control: RunControl, call: RangeCall, block: () -> T): T {
         // cut() never blocks, so one stuck connection never holds up another's cut-off.
         val watch = Timers.cutoffs.every(100) { if (control.isEnded()) call.cut() }
@@ -341,7 +341,7 @@ private object Cutoff {
 }
 
 /* A wait between tries that ends, failing, as soon as the run does. */
-private fun sleepWhileRunning(control: RunControl, millis: Long) {
+internal fun sleepWhileRunning(control: RunControl, millis: Long) {
     var left = millis
     while (left > 0) {
         control.check()

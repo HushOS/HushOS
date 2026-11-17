@@ -667,6 +667,16 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 - `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the `RangeCall` to cut off).
 - Tests: `ToolRunsTest`.
 
+### Archives
+
+- A zip (name `.zip`, or `application/zip` / `application/x-zip-compressed`) opens as its list in the app (`ui/ArchiveScreen.kt`), drawn while `DriveState.archive` is set (`DriveViewModel.showArchive`, called before `downloadOpened` at each place a file opens). It is never decrypted to a cache file nor handed to another app. Kept offline copies and link visitors' files still open the old way.
+- `data/ArchiveSessions.kt`: each open zip is a core `ZipArchiveSession` (listing, and the typed password, in the core's memory). Every call runs on a thread of its own under a fresh `RunControl` (watchdog polled each second, cancel on coroutine cancel, `finish()` when the thread returns), one call at a time per archive, the next only after the last thread returned. Browsing does not take `ToolRuns`' slot. `archiveSourceOf` fetches through the control of the call reading (from the version id only). `AccountStore.wipe` calls `ArchiveSessions.shared.closeAll()`; closing the screen closes the archive.
+- `data/ArchiveTree.kt` folders the list (implied folders, counts, Mac resource entries left out, numeric order) and dates entries (Unix time, else DOS local). `data/ArchiveWords.kt` is the web's `lib/archives/words.ts` word for word; change them together, with iOS.
+- Previews come from memory only: images through `ImageDecoder` (at most 4096 px a side), text in blocks of 200 lines, Markdown through `MarkdownBlockView`, PDF through `PdfRenderer` over an anonymous memory file (`Os.memfd_create`), so PDFs preview on Android 11 and later only. Other kinds say "This kind of file has no preview yet." and offer Download. The large-file card's numbers are the core's `zipEntryPreviewLimits(kind, totalMem)`.
+- Download streams through an `EntrySink` into the file the person picks (`CreateDocument`); a failed or stopped one deletes what it wrote. Over 4 GiB at more than 200:1 (`zipEntryAsksFirst`) asks first.
+- The core's `ZipArchiveSession.close` clashes with Kotlin's `AutoCloseable.close()` in the generated bindings; the app calls `closeArchive()` (the core method needs that name).
+- Tests: `ArchiveTreeTest`, `foreign/ArchiveSessionsTest` (a sealed `aes.zip`/`basic.zip` from e2e/fixtures/archives through `StoreSource`).
+
 ### Tools on a device
 
 The unit tests use the host JVM's networking. `src/androidTest/.../ToolCutoffTest.kt` runs the cut-offs on Android's own: a run's end cutting off a trickling range and a trickling address request, and a padding drain's deadline cutting off a trickling range. CI runs no instrumented tests; run it by hand after changing `RangeCall`, `Cutoff`, `PaddingDrains` or `DriveApi.range`/`versionUrl`.

@@ -53,7 +53,7 @@ type Scope = {
 };
 
 /* Reads across every source take turns, so the page's allowance is never exceeded. */
-function turns() {
+export function turns() {
     let reads = 0;
     let bytes = 0;
     const queue: { length: number; go: () => void }[] = [];
@@ -82,7 +82,12 @@ function turns() {
     };
 }
 
-function rangeSource(size: number, port: MessagePort, take: ReturnType<typeof turns>): RangeSource {
+/* A source read by range over `port`, its reads taking their `turns`: also what the archive viewer's worker reads through. */
+export function rangeSource(
+    size: number,
+    port: MessagePort,
+    take: ReturnType<typeof turns>,
+): RangeSource {
     let next = 0;
     const pending = new Map<
         number,

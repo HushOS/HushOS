@@ -11,3 +11,14 @@ panic = "abort"
 # The workspace profile is tuned for the mobile core; the relay is a server, so it optimises for speed.
 [profile.release.package.hushos-push]
 opt-level = 3
+
+# The core's tests inflate the archive fixtures (gigabytes of zeros, docs/file-tools-design.md
+# section 7); unoptimised, zlib-rs and the CRC take minutes over them instead of seconds.
+[profile.dev.package.zlib-rs]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.flate2]
+opt-level = 3

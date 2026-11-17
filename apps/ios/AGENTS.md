@@ -709,6 +709,19 @@ See `docs/identity-pq-design.md`.
 - `Vault.toolReader` (`ToolReaders.reader`) gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
 - Tests: `ToolRunsTests`.
 
+### Archives
+
+- A zip (by name, or `application/zip` / `application/x-zip-compressed`) opens in the viewer as its list (`App/ArchiveView.swift`, `ArchiveScreen`), never fetched whole: `Opener.open` skips the download for it and `FileViewer` shows `ArchiveScreen` in QuickLook's place. An earlier version of a zip still goes to QuickLook.
+- `HushOSKit/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and reads only the entries asked for, by range.
+    - Browsing is a viewer: no ToolRuns slot. Each call (open, unlock, preview, download) takes its turn first (`ArchiveTurns`, so waiting never counts against a watchdog), then runs on a thread of its own under a fresh `RunControl`, watchdog polled each second, cancelled with its task, `finish()`ed when the thread returns.
+    - `ArchiveSource` fetches each range under the calling thread's control (kept in the thread's dictionary), padding owed to `PaddingDrains`.
+    - The password lives in the core's session only; `close()` (leaving the viewer) and `ArchiveSessions.closeAll()` (from `AccountStore.wipe`) wipe it and cancel calls in flight.
+- Entries preview from memory only: QuickLook reads only files, so it is not used for them. Images through `UIImage(data:)`, PDFs through PDFKit's `PDFDocument(data:)`, Markdown through `MarkdownView(data:)`, other text as text. Everything else says it has no preview and offers Download. Video, audio and Office entries have no in-memory route here.
+- The large-file card per entry: `ArchiveEntries.limits` asks the core (`zipEntryPreviewLimits`, halved at 4 GB of memory or less); past the threshold Open anyway and Download, past the ceiling Download only. A stored entry is previewed under the same limits (the web reads stored entries by range at any size; this doesn't).
+- Download streams the entry into a folder the person picks (`fileImporter` for a folder, the next free name there), a MiB at a time, and deletes what it wrote if it fails or is stopped. No temp file. An entry over 4 GiB at more than 200:1 asks first (`zipEntryAsksFirst`).
+- Words are the web's (`ArchiveWords`, apps/web/src/lib/archives/words.ts; Android's data/ArchiveWords.kt).
+- Tests: `ArchiveSessionsTests` (the AES fixture's password kept only until close or sign-out, the bomb refused, a download byte for byte, a stalled call released by its cancel, the tree, the words, the card's stages, entry dates).
+
 ## Files app (File Provider)
 
 - `FileProviderExtension` is replicated (`NSFileProviderReplicatedExtension`).

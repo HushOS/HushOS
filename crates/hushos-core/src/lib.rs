@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod account;
+mod archive;
 mod area_ledger;
 mod area_open;
 mod bytes;
@@ -51,6 +52,10 @@ mod tools;
 mod two_step;
 
 pub use account::*;
+pub use archive::{
+    zip_entry_asks_first, zip_entry_preview_limits, ArchiveEntry, ArchiveError, EntrySink, PreviewLimits,
+    ZipArchiveSession,
+};
 pub use area_ledger::*;
 pub use area_open::*;
 pub use bytes::*;

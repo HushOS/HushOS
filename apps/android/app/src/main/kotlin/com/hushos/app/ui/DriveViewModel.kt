@@ -20,6 +20,7 @@ import com.hushos.app.data.isFamilyWorkspace
 import com.hushos.app.data.olderThan
 import com.hushos.app.data.catalogueAll
 import com.hushos.app.data.saveFromLink
+import com.hushos.app.data.openArchive
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
@@ -140,6 +141,8 @@ data class DriveState(
     val notice: Notice? = null,
     /* A Markdown file open in the app's own viewer (MarkdownViewer), over every screen. */
     val reading: Reading? = null,
+    /* A zip open as its list (ArchiveScreen), over every screen: never decrypted to a file, nor handed to another app. */
+    val archive: com.hushos.app.data.Opened? = null,
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
@@ -2492,6 +2495,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* A Markdown file, opened in HushOS's own viewer instead of whichever app claims text (openWith). */
     fun read(name: String, uri: Uri, mime: String?, node: String?, workspace: String?) = _state.update { it.copy(reading = Reading(name, uri, mime, node, workspace)) }
     fun closeReading() = _state.update { it.copy(reading = null) }
+
+    /* A zip opens as its list in the app (ArchiveScreen); false for anything else, which opens as before. */
+    fun showArchive(item: Opened): Boolean {
+        if (item.isFolder || !com.hushos.app.data.ArchiveTree.isZip(item.name, item.metadata.mime)) return false
+        _state.update { it.copy(archive = item) }
+        return true
+    }
+    fun closeArchive() = _state.update { it.copy(archive = null) }
+
+    /* The archive's directory, read under this session's vault; the caller closes it when its screen goes. */
+    suspend fun openArchive(item: Opened): com.hushos.app.data.OpenArchive {
+        val vault = vault ?: throw kotlin.coroutines.cancellation.CancellationException("Signed out.")
+        return vault.openArchive(item)
+    }
 
     /* One notice on screen at a time, until-read ones never lost to the next (NoticeQueue). */
     private val notices = NoticeQueue { notice -> _state.update { it.copy(notice = notice) } }

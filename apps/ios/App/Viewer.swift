@@ -36,6 +36,9 @@ struct FileViewer: View {
 
     private var index: Int { items.firstIndex { $0.id == current.id } ?? 0 }
 
+    /* A zip's current version opens as its list (ArchiveScreen); an earlier version still comes down to QuickLook. */
+    private var isArchive: Bool { version == nil && ArchiveEntries.handles(name: current.name, mime: current.metadata.mime) }
+
     var body: some View {
         NavigationStack {
             page
@@ -80,7 +83,10 @@ struct FileViewer: View {
     private var page: some View {
         VStack(spacing: 0) {
             ZStack {
-                if let url {
+                if isArchive {
+                    // A zip opens as the list of what is inside it, read by range; it is never fetched whole to a file.
+                    ArchiveScreen(item: current)
+                } else if let url {
                     // Markdown as a document (MarkdownView); QuickLook shows it as raw text. Past the limit, QuickLook.
                     // The limit is the opened file's own size: an earlier version's isn't the current one's.
                     if MarkdownDocument.handles(name: current.name, mime: current.metadata.mime),
@@ -102,7 +108,8 @@ struct FileViewer: View {
                     }
                     .padding(Alpine.Space.s8)
                 }
-                if version == nil, items.count > 1 { edges }
+                // Not over an archive's list: its rows and crumbs run to the edges, and a tap there must open them.
+                if version == nil, items.count > 1, !isArchive { edges }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if version != nil { versionFoot }
@@ -115,6 +122,7 @@ struct FileViewer: View {
         // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
         .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
             url = nil
+            if isArchive { return }
             // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
             // comes down instead, and the viewer shows that row.
             do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
@@ -283,6 +291,11 @@ struct QuickLookView: UIViewControllerRepresentable {
 enum Opener {
     static func open(_ item: Opened, store: DriveStore, show: @escaping (Opened) -> Void) {
         guard store.opening[item.id] == nil else { return }
+        // A zip is never fetched whole: the viewer reads its list and the entries asked for by range.
+        if ArchiveEntries.handles(name: item.name, mime: item.metadata.mime) {
+            show(item)
+            return
+        }
         Task {
             do {
                 _ = try await store.fetch(item)

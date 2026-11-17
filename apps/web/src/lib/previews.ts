@@ -22,6 +22,8 @@ export type PreviewKind =
     | 'video'
     | 'audio'
     | 'office'
+    /* A zip, which opens as the list of what is inside it (components/drive/archive-view.tsx). */
+    | 'archive'
     | 'none';
 
 export {
@@ -107,6 +109,8 @@ export function previewKind(node: DriveNode): PreviewKind {
     if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx')
         return 'markdown';
     if (officeKind(node.name, mime)) return 'office';
+    if (mime === 'application/zip' || mime === 'application/x-zip-compressed' || ext === 'zip')
+        return 'archive';
     if (
         mime.startsWith('text/') ||
         mime === 'application/json' ||

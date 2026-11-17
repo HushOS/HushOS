@@ -1,0 +1,472 @@
+{
+    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (the ratio counter on); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped).",
+    "password": "correct horse battery",
+    "fixtures": {
+        "basic.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "docs/",
+                    "directory": true,
+                    "check": "directory",
+                    "download": "directory"
+                },
+                {
+                    "path": "docs/readme.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "docs/notes/todo.md",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "docs/stored.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                },
+                {
+                    "path": "pixel.png",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                },
+                {
+                    "path": "empty/",
+                    "directory": true,
+                    "check": "directory",
+                    "download": "directory"
+                },
+                {
+                    "path": "streamed.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "deflate64.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "names.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "../evil.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "../../etc/passwd",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "a/../../b",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "a\\..\\..\\b",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "/abs.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "\\abs.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "C:\\win.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "C:evil.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "\\\\server\\share\\x",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "./a",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "a//b",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "é.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "é.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "d0/d1/d2/d3/d4/d5/d6/d7/d8/d9/d10/d11/d12/d13/d14/d15/d16/d17/d18/d19/d20/d21/d22/d23/d24/d25/d26/d27/d28/d29/d30/d31/d32/d33/d34/d35/d36/d37/d38/d39/deep.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "nul\u0000name.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "rtl‮txt.exe",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "CON",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "aux.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "same",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "same/inner.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ],
+            "parts": {
+                "../evil.txt": ["..", "evil.txt"],
+                "a\\..\\..\\b": ["a", "..", "..", "b"],
+                "\\\\server\\share\\x": ["server", "share", "x"],
+                "./a": ["a"],
+                "a//b": ["a", "b"],
+                "C:\\win.txt": ["C:", "win.txt"]
+            }
+        },
+        "cp437.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "café-ö.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "Ünïcødé.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "oldé.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "naïve-utf8.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "日本語.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "mac.zip": {
+            "listing": "ok",
+            "hidden": 2,
+            "entries": [
+                {
+                    "path": "photo.jpg",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                },
+                {
+                    "path": "__MACOSX/",
+                    "directory": true,
+                    "hidden": true,
+                    "check": "directory",
+                    "download": "directory"
+                },
+                {
+                    "path": "__MACOSX/._photo.jpg",
+                    "check": "ok",
+                    "download": "ok",
+                    "hidden": true
+                },
+                {
+                    "path": "folder/file.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "folder/._file.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "hidden": true
+                },
+                {
+                    "path": "folder/._orphan",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "nested.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "inner.zip",
+                    "nested": true,
+                    "stored": true,
+                    "check": "nested",
+                    "download": "ok"
+                },
+                {
+                    "path": "outer.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "symlink.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "link",
+                    "link": true,
+                    "check": "link",
+                    "download": "link"
+                },
+                {
+                    "path": "link/evil",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "methods.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "bzip2.bin",
+                    "support": "method",
+                    "check": "method",
+                    "download": "method"
+                },
+                {
+                    "path": "lzma.bin",
+                    "support": "method",
+                    "check": "method",
+                    "download": "method"
+                },
+                {
+                    "path": "zstd.bin",
+                    "support": "method",
+                    "check": "method",
+                    "download": "method"
+                },
+                {
+                    "path": "ppmd.bin",
+                    "support": "method",
+                    "check": "method",
+                    "download": "method"
+                },
+                {
+                    "path": "ok.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "aes.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "secret.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                },
+                {
+                    "path": "secret-ae1.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                },
+                {
+                    "path": "plain.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "aes-flipped.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": false,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "tampered.txt",
+                    "lock": "aes",
+                    "check": "auth",
+                    "download": "auth"
+                }
+            ]
+        },
+        "zipcrypto.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "secret.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "zipcrypto",
+                    "withoutPassword": "password"
+                },
+                {
+                    "path": "stored-secret.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "zipcrypto",
+                    "withoutPassword": "password"
+                }
+            ]
+        },
+        "bad-crc.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "bad-crc.txt",
+                    "check": "crc",
+                    "download": "crc"
+                }
+            ]
+        },
+        "declares-1k.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "small.txt",
+                    "check": "size",
+                    "download": "size"
+                }
+            ]
+        },
+        "overlap.zip": {
+            "listing": "overlap"
+        },
+        "local-mismatch.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "shown.txt",
+                    "check": "local",
+                    "download": "local"
+                },
+                {
+                    "path": "fine.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "strong.zip": {
+            "listing": "encrypted-directory"
+        },
+        "zeros-1g.zip": {
+            "generated": true,
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "zeros.bin",
+                    "check": "ratio",
+                    "download": "ok",
+                    "asksFirst": false
+                }
+            ]
+        },
+        "zip64-5g.zip": {
+            "generated": true,
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "zeros-5g.bin",
+                    "size": 5368709120,
+                    "check": "ratio",
+                    "download": "ok",
+                    "asksFirst": true
+                },
+                {
+                    "path": "readme.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "entries-100001.zip": {
+            "generated": true,
+            "listing": "too-many-entries"
+        },
+        "directory-65m.zip": {
+            "generated": true,
+            "listing": "directory-too-large"
+        }
+    }
+}

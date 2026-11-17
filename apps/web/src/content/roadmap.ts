@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-16';
+export const updated = '2026-11-17';
 
 export const sections: RoadmapSection[] = [
     {
@@ -283,6 +283,16 @@ export const sections: RoadmapSection[] = [
                 title: 'Sign in with a passkey',
                 body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
             },
+            {
+                id: 'file-tools',
+                status: 'now',
+                area: 'Drive',
+                title: 'File tools',
+                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device. Zip archives already open as a list you can browse, preview and download from, on the web and the phone apps.',
+                links: [
+                    { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
+                ],
+            },
         ],
     },
     {
@@ -297,16 +307,6 @@ export const sections: RoadmapSection[] = [
                 title: 'Editing in the browser',
                 body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
                 links: [{ kind: 'docs', path: 'docs/editing-design.md', label: 'Read the design' }],
-            },
-            {
-                id: 'file-tools',
-                status: 'next',
-                area: 'Drive',
-                title: 'File tools',
-                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device.',
-                links: [
-                    { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
-                ],
             },
         ],
     },

@@ -82,6 +82,9 @@ const MarkdownView = lazy(() =>
 const JsonView = lazy(() =>
     import('@/components/drive/json-view').then((m) => ({ default: m.JsonView })),
 );
+const ArchiveView = lazy(() =>
+    import('@/components/drive/archive-view').then((m) => ({ default: m.ArchiveView })),
+);
 
 /*
  * A control inside the viewer that uses the arrow keys itself keeps them: the JSON tree, and a
@@ -367,32 +370,55 @@ const NO_READER: { reader: FileReader | null; error: string | null } = {
     error: null,
 };
 
-function useReader(node: DriveNode, enabled: boolean, wholeRead: boolean) {
+function useReader(
+    node: DriveNode,
+    enabled: boolean,
+    wholeRead: boolean,
+    open?: () => Promise<FileReader>,
+) {
     const [state, setState] = useState(NO_READER);
     /*
      * Opened again only for another file or version. A refetched listing hands the viewer a new
      * node object for the same version (every window focus does); reopening on that read the
      * file again and remounted what showed it, which undid Colour anyway and Expand all.
      */
-    const latest = useRef(node);
+    const latest = useRef({ node, open });
     useEffect(() => {
-        latest.current = node;
+        latest.current = { node, open };
     });
     const identity = `${node.id}:${node.currentVersion?.id ?? ''}:${node.keyEpoch}`;
     useEffect(() => {
         if (!enabled) return;
         let active = true;
         let opened: FileReader | null = null;
-        let failure: string | null = null;
-        try {
-            opened = openReader(latest.current, wholeRead);
-        } catch (cause) {
-            failure = cause instanceof Error ? cause.message : 'This file could not be opened.';
+        const publish = (reader: FileReader | null, error: string | null) => {
+            if (!active) {
+                void reader?.close();
+                return;
+            }
+            opened = reader;
+            setState({ reader, error });
+        };
+        const failure = (cause: unknown) =>
+            cause instanceof Error ? cause.message : 'This file could not be opened.';
+        const { node: current, open: opener } = latest.current;
+        if (opener)
+            // An entry of an archive: what the archive's worker hands back, once it is checked.
+            opener().then(
+                (reader) => publish(reader, null),
+                (cause: unknown) => publish(null, failure(cause)),
+            );
+        else {
+            let reader: FileReader | null = null;
+            let error: string | null = null;
+            try {
+                reader = openReader(current, wholeRead);
+            } catch (cause) {
+                error = failure(cause);
+            }
+            // Published after the effect settles, never during it; a new reader clears an old error.
+            void Promise.resolve().then(() => publish(reader, error));
         }
-        // Published after the effect settles, never during it; a new reader clears an old error.
-        void Promise.resolve().then(() => {
-            if (active) setState({ reader: opened, error: failure });
-        });
         return () => {
             active = false;
             void opened?.close();
@@ -432,14 +458,18 @@ function useFocusWhenShown(armed: boolean) {
     }, [armed]);
 }
 
-function PreviewBody({
+export function PreviewBody({
     node,
     onDownload,
+    open,
 }: {
     node: DriveNode;
     onDownload: (node: DriveNode) => void;
+    /* Where the bytes come from instead of the node's version: an entry of an archive. */
+    open?: () => Promise<FileReader>;
 }) {
-    const kind = previewKind(node);
+    // An archive inside an archive is never opened in place (the archive view says so first).
+    const kind = open && previewKind(node) === 'archive' ? 'none' : previewKind(node);
     const size = nodeSize(node) ?? 0;
     // The large-file card's choices, for this viewing only: the body is keyed by version.
     const [opened, setOpened] = useState(false);
@@ -463,13 +493,20 @@ function PreviewBody({
         textWhole && recalled?.kind === 'text' && recalled.truncated ? null : recalled;
     const { reader, error } = useReader(
         node,
-        (kind !== 'none' || sniff) && !held && remembered === null,
+        (kind !== 'none' || sniff) && kind !== 'archive' && !held && remembered === null,
         kind === 'image' || kind === 'office' || kind === 'text' || kind === 'markdown' || sniff,
+        open,
     );
     const download = () => onDownload(node);
     const textLimit = textWhole ? TEXT_CEILING : PREVIEW_LIMITS.text;
     const loadWhole = () => setTextWhole(true);
     if (kind === 'none' && !sniff) return <NoPreview node={node} onDownload={download} />;
+    if (kind === 'archive')
+        return (
+            <Suspense fallback={<Opening />}>
+                <ArchiveView node={node} onDownload={download} />
+            </Suspense>
+        );
     if (held && cardKind)
         return (
             <LargeFile
