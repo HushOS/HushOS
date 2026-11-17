@@ -102,6 +102,12 @@ public final class SaveRunJournal: @unchecked Sendable {
 
     let url: URL
     let epoch: Epoch
+    /*
+     * Whose rows these are (apps/ios/AGENTS.md, one account at a time): written with every row, and rows another
+     * account wrote are dropped unread, so a sign-in through the Files sheet while the app was stopped never hands the
+     * last account's runs to the next one's clean-up.
+     */
+    let owner: AccountOwner?
     private let born: Int
     /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
     private let lock: NSLock
@@ -122,24 +128,36 @@ public final class SaveRunJournal: @unchecked Sendable {
         return support.appendingPathComponent("HushOS", isDirectory: true).appendingPathComponent("save-runs.json")
     }
 
-    public init() {
+    public init(owner: AccountOwner? = AccountOwner.signedIn) {
         url = Self.defaultURL
         epoch = Self.account
+        self.owner = owner
         born = epoch.current
         lock = Self.lock(for: url)
+        lock.withLock { Self.dropStaging(url) }
     }
 
-    init(url: URL, epoch: Epoch = SaveRunJournal.account) {
+    init(url: URL, epoch: Epoch = SaveRunJournal.account, owner: AccountOwner? = nil) {
         self.url = url
         self.epoch = epoch
+        self.owner = owner
         born = epoch.current
         lock = Self.lock(for: url)
+        lock.withLock { Self.dropStaging(url) }
     }
 
-    /* Sign-out, deletion, removal: the rows go, and no journal opened before writes again. */
+    /* The file a write stages its rows in before renaming it over the journal. */
+    static func staging(_ url: URL) -> URL { url.appendingPathExtension("next") }
+    /* A staging file a write left (it failed, or the process died mid-write) never outlives it. */
+    private static func dropStaging(_ url: URL) { try? FileManager.default.removeItem(at: staging(url)) }
+
+    /* Sign-out, deletion, removal: the rows go, a staging file with them, and no journal opened before writes again. */
     public static func endAccount() {
         account.end()
-        lock(for: defaultURL).withLock { try? FileManager.default.removeItem(at: defaultURL) }
+        lock(for: defaultURL).withLock {
+            try? FileManager.default.removeItem(at: defaultURL)
+            dropStaging(defaultURL)
+        }
     }
 
     /* Whether this journal still belongs to the session it was opened in. */
@@ -197,9 +215,20 @@ public final class SaveRunJournal: @unchecked Sendable {
         }
     }
 
+    /* The rows on disk with their owner. */
+    private struct Stored: Codable {
+        let owner: AccountOwner?
+        let rows: [SaveRunRow]
+    }
+
+    /* This journal's account's rows; another account's (or an unowned file's) are dropped unread. */
     private func read() -> [SaveRunRow] {
         guard let data = try? Data(contentsOf: url) else { return [] }
-        return (try? JSONDecoder().decode([SaveRunRow].self, from: data)) ?? []
+        guard let stored = try? JSONDecoder().decode(Stored.self, from: data), stored.owner == owner else {
+            try? FileManager.default.removeItem(at: url)
+            return []
+        }
+        return stored.rows
     }
 
     /*
@@ -215,19 +244,25 @@ public final class SaveRunJournal: @unchecked Sendable {
             return
         }
         Unbacked.folder(folder)
-        let next = url.appendingPathExtension("next")
+        let next = Self.staging(url)
         guard FileManager.default.createFile(atPath: next.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
-        let handle = try FileHandle(forWritingTo: next)
         do {
-            try handle.write(contentsOf: try JSONEncoder().encode(rows))
-            // To stable storage: fsync alone leaves it in the drive's cache on Apple platforms (F_FULLFSYNC).
-            if fcntl(handle.fileDescriptor, F_FULLFSYNC) == -1 { try handle.synchronize() }
-            try handle.close()
+            let handle = try FileHandle(forWritingTo: next)
+            do {
+                try handle.write(contentsOf: try JSONEncoder().encode(Stored(owner: owner, rows: rows)))
+                // To stable storage: fsync alone leaves it in the drive's cache on Apple platforms (F_FULLFSYNC).
+                if fcntl(handle.fileDescriptor, F_FULLFSYNC) == -1 { try handle.synchronize() }
+                try handle.close()
+            } catch {
+                try? handle.close()
+                throw error
+            }
+            guard rename(next.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
         } catch {
-            try? handle.close()
+            // A write that failed leaves no staging file behind.
+            Self.dropStaging(url)
             throw error
         }
-        guard rename(next.path, url.path) == 0 else { throw CocoaError(.fileWriteUnknown) }
         Self.flush(folder: folder)
     }
 
@@ -479,6 +514,11 @@ public enum SaveRuns {
                 guard completing?.contains(uploadId) ?? true else { break }
                 if versions.contains(uploadId) { uncertain += 1 } else { othersMayLand = true }
             case .finished: if versions.contains(uploadId) { kept += 1 }
+            case .gone where versions.contains(uploadId) && (completing?.contains(uploadId) ?? false):
+                // A version whose completion was sent, and the upload not found: the share may have ended (a 404 for
+                // lost access), not the upload gone. It may have landed.
+                unsettled = true
+                uncertain += 1
             default: break
             }
         }

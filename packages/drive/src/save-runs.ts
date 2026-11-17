@@ -441,7 +441,7 @@ export type SaveRun = {
     waiting(): number;
 };
 
-type LiveRun = SaveRun & { abandon(): void };
+type LiveRun = SaveRun & { abandon(): void; lock(): Promise<RunStopped> };
 
 /* Runs live in this page: a result still waiting to upload asks before the page unloads. */
 const liveRuns = new Set<LiveRun>();
@@ -459,6 +459,16 @@ export function resultsWaiting() {
 export function abandonRuns() {
     // A Set may lose the entry being visited: each run removes itself as it ends.
     for (const run of liveRuns) run.abandon();
+}
+
+/*
+ * The device locked (the app's explicit lock, not only an upload's worker
+ * finding out): every run in this page stops and cleans up, a result paused or
+ * completing included, rather than hold its plaintext until someone unlocks or
+ * report a save afterwards.
+ */
+export function lockRuns() {
+    return Promise.all([...liveRuns].map((run) => run.lock()));
 }
 
 /*
@@ -827,13 +837,26 @@ function createRun(
 
     function stop(reason: StopReason, item?: UploadItem, failure?: string): Promise<RunStopped> {
         if (stopping) return stopping;
+        // Finished (its record retired, or being retired): what it made was saved and stays. A lock
+        // or a late failure after that removes nothing.
+        if (finished)
+            return Promise.resolve(
+                new RunStopped(
+                    reason,
+                    keptVersions || row.nodeIds.length ? ALREADY_SAVED : RUN_CANCELLED,
+                    'nothing',
+                    keptVersions,
+                ),
+            );
         // Set before any of it runs: a result handed in from here on is refused (open), and the
         // cancels the clean-up sends are heard here without stopping it twice.
         stopping = (async () => {
             await Promise.resolve();
-            // Settled one way or the other before the clean-up looks (a lost answer included).
-            await Promise.allSettled(creating);
             const open = [...pending.keys()];
+            // Its uploads stopped first, then its folder creations already sent settled one way or
+            // the other (a lost answer included), then the clean-up looks.
+            await Promise.allSettled(open.map((id) => deps.transfers.cancel(id)));
+            await Promise.allSettled(creating);
             const result = await cleanUp(deps, row, open, {
                 seal: () => {
                     sealed = true;
@@ -1006,6 +1029,9 @@ function createRun(
         waiting() {
             return pending.size;
         },
+        lock() {
+            return stop('locked');
+        },
         abandon() {
             if (stopped) return;
             abandoned = true;
@@ -1081,6 +1107,15 @@ async function cleanUp(
             if (!(options.completing?.has(uploadId) ?? true)) continue;
             if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
             else othersMayLand = true;
+        } else if (
+            fate === 'gone' &&
+            options.versionUploads?.has(uploadId) &&
+            (options.completing?.has(uploadId) ?? false)
+        ) {
+            // A version whose completion was sent, and the upload not found: the share may have
+            // ended (a 404 for lost access), not the upload gone. It may have landed.
+            unsettled = true;
+            uncertainVersions += 1;
         } else if (fate === 'denied') {
             denied = true;
             // No longer this person's to ask: once its completion was sent it may have landed.

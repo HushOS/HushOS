@@ -420,6 +420,12 @@ final class FakeDrive: @unchecked Sendable {
      * key wrapped under its parent's, its name sealed again under it and signed by the owner. What it holds stays where it
      * was, under its key before. Called under the server's lock (from `beforeRotationSend`).
      */
+    /* Another device's key change of `id` (a file or a folder) to a new epoch, as it would land; under the server's lock. */
+    func rekeyHeld(_ id: String) throws {
+        target = max(target, nodes[id]?.keyEpoch ?? 0) + 1
+        try rekeyedElsewhere(id)
+    }
+
     func rekeyedElsewhere(_ id: String) throws {
         guard let old = nodes[id], let key = keys[id] else { return }
         let parentKey = old.parentId.flatMap { keys[$0] } ?? workspaceKey
@@ -531,8 +537,12 @@ final class FakeDrive: @unchecked Sendable {
                   made(.version, sent["versionId"], sent["versionIdSeed"]), made(.object, sent["objectId"], sent["objectIdSeed"]),
                   let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
             else { return Self.notMade }
-            // As packages/db's begin: a new version names the version it replaces, or is `stale`.
+            // As packages/db's begin: a new version names the version it replaces, and the key epoch the file has
+            // now, or is `stale`.
             if (wire["expectedVersionId"] as? String) != nodes[nodeId]?.currentVersion?.id {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
+            if let epoch = (wire["keyEpoch"] as? NSNumber)?.uint64Value, epoch != nodes[nodeId]?.keyEpoch {
                 return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
             }
             let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
@@ -549,6 +559,11 @@ final class FakeDrive: @unchecked Sendable {
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
         case ("POST", ["uploads"]):
             guard let wire = sent["node"] as? [String: Any], wire["existing"] as? Bool == false, let nodeId = wire["id"] as? String else { return (400, ["message": "Bad upload"]) }
+            // Sealed under the folder's key as it is now, or `stale`.
+            if let parent = wire["parentId"] as? String, let epoch = (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value,
+               let held = nodes[parent], held.keyEpoch != epoch {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
             guard made(.node, nodeId, wire["idSeed"]), made(.version, sent["versionId"], sent["versionIdSeed"]),
                   made(.object, sent["objectId"], sent["objectIdSeed"]),
                   let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
@@ -582,11 +597,17 @@ final class FakeDrive: @unchecked Sendable {
                   let versionId = begun["versionId"] as? String, let objectId = begun["objectId"] as? String else { return (404, ["message": "No upload"]) }
             if completed.contains(rest[1]) { return (409, ["message": "This upload is ready."]) }
             beforeComplete?()
-            // As packages/db finishCompleting: a new version whose file moved on, or was re-keyed, is `conflicted`.
+            // As packages/db finishCompleting: a new version whose file moved on, or was re-keyed, is `conflicted`; a new
+            // file whose folder was re-keyed too.
+            if wire["existing"] as? Bool != true, let parent = wire["parentId"] as? String,
+               let epoch = (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value, let held = nodes[parent], held.keyEpoch != epoch {
+                return (409, ["code": "conflict", "message": "This file changed while it was uploading.", "data": ["conflicted": true]])
+            }
             if wire["existing"] as? Bool == true {
                 let expected = wire["expectedVersionId"] as? String
                 let current = nodes[nodeId]?.currentVersion?.id
-                if expected != current || rekeyAtComplete {
+                let rekeyed = (wire["keyEpoch"] as? NSNumber).map { $0.uint64Value != nodes[nodeId]?.keyEpoch } ?? false
+                if expected != current || rekeyAtComplete || rekeyed {
                     rekeyAtComplete = false
                     return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
                                   "data": ["conflicted": true, "currentVersionId": current as Any? ?? NSNull()]])

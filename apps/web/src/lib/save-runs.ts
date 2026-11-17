@@ -8,6 +8,7 @@ import {
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import {
     abandonRuns,
+    lockRuns,
     askAbort,
     cleanUpInterrupted,
     deniedWhole,
@@ -208,6 +209,11 @@ export async function keepSaveRun(queryClient: QueryClient, row: RunRow) {
 
 /* A sign-out, here or in another tab: every run stops at once, writing nothing (packages/drive abandonRuns). */
 export { abandonRuns };
+
+/* The device locked: every run stops and cleans up, a paused or completing result included (packages/drive lockRuns). */
+export function lockSaveRuns() {
+    return lockRuns();
+}
 
 /* What a run would name a result in `folder`, shown and editable before saving. */
 export async function suggestedName(queryClient: QueryClient, folder: DriveNode, name: string) {

@@ -654,10 +654,14 @@ describe('the save path under failure at every wait', { timeout: 120_000 }, () =
                     await results;
                     await settle();
                     const named = new Set((await disk.list()).flatMap((row) => row.nodeIds));
-                    const mayRemain =
-                        !app.state.dead && stopped.message.includes('may still be there');
+                    // Only "can no longer remove it" (or a sign-out's "may still be there") excuses an
+                    // unnamed node; "you'll be asked about it next time" promises a row naming it.
+                    const message = app.state.dead ? '' : stopped.message;
+                    const excused =
+                        message.includes('can no longer remove it') ||
+                        (app.state.signedOut && message.includes('may still be there'));
                     for (const id of srv.published())
-                        if (!srv.lineage(id).some((at) => named.has(at)) && !mayRemain)
+                        if (!srv.lineage(id).some((at) => named.has(at)) && !excused)
                             failures.push(
                                 `${point} #${k} ${fault}: ${id} unaccounted for after a cancel`,
                             );

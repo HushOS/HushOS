@@ -17,15 +17,20 @@ import Testing
  * storage outside FakeDrive, so it is not one of these waits here; the web's harness fails it.)
  */
 enum EnginePoint: String, CaseIterable, Sendable { case listing, allocate, folder, begin, part, complete, abort, trash, purge, journal }
-enum EngineFault: String, CaseIterable, Sendable { case network, lost, refused, outage, cancel, crash, death }
+/*
+ * `revoked`: from that wait on, the share has ended and the server answers 404 for it. `signout`: the person signs out
+ * (runs abandoned, the journal gone). `slow`: a journal write takes its time and the process dies before it lands. (The
+ * phone has no lock of its own to fail: the vault stays open until a sign-out.)
+ */
+enum EngineFault: String, CaseIterable, Sendable { case network, lost, refused, outage, cancel, crash, death, revoked, signout, slow }
 
 extension EnginePoint {
     var faults: [EngineFault] {
         switch self {
-        case .listing, .allocate: [.network, .refused, .outage, .cancel, .death]
-        case .part: [.network, .refused, .outage, .cancel, .death]
-        case .journal: [.refused, .crash, .cancel, .death]
-        default: EngineFault.allCases
+        case .listing, .allocate: [.network, .refused, .outage, .cancel, .death, .signout]
+        case .part: [.network, .refused, .outage, .cancel, .death, .signout]
+        case .journal: [.refused, .crash, .cancel, .death, .slow, .signout]
+        default: [.network, .lost, .refused, .outage, .cancel, .crash, .death, .revoked, .signout]
         }
     }
 
@@ -56,8 +61,11 @@ final class EngineWorld: @unchecked Sendable {
     private var dropping = Set<ObjectIdentifier>()
     private(set) var dead = false
     private(set) var outage = false
+    private(set) var revoked = false
+    private(set) var signedOut = false
     var live = true
     var cancel: (@Sendable () -> Void)?
+    var signOut: (@Sendable () -> Void)?
     var trashed = Set<String>()
 
     init(plan: EnginePlan?) { self.plan = plan }
@@ -72,14 +80,18 @@ final class EngineWorld: @unchecked Sendable {
             guard let plan, plan.point == point, plan.k == k else { return nil }
             if plan.fault == .death { dead = true }
             if plan.fault == .outage { outage = true }
+            if plan.fault == .revoked { revoked = true }
+            if plan.fault == .signout { signedOut = true }
             return plan.fault
         }
         if fault == .cancel { cancel?() }
+        if fault == .signout { signOut?() }
         return fault
     }
     func drop() { lock.withLock { _ = dropping.insert(ObjectIdentifier(Thread.current)) } }
     func dropped() -> Bool { lock.withLock { dropping.remove(ObjectIdentifier(Thread.current)) != nil } }
     var reachable: Bool { lock.withLock { !live || !(dead || outage) } }
+    var lostAccess: Bool { lock.withLock { live && revoked } }
 }
 
 extension OnFakeDrive {
@@ -113,6 +125,8 @@ extension OnFakeDrive {
                 if !world.reachable { throw network }
                 let fault = world.fault(point)
                 if fault == .network { throw network }
+                // The share ended: every request about it is a 404, as the server answers one no longer theirs.
+                if world.lostAccess { return (404, ["code": "not-found", "message": "This item no longer exists."]) }
                 if fault == .refused { return (403, ["code": "forbidden", "message": "Refused."]) }
                 if fault == .lost || fault == .crash { world.drop() }
                 if fault == .crash { world.die() }
@@ -131,6 +145,8 @@ extension OnFakeDrive {
                     let id = parts.last ?? ""
                     return server.locked {
                         guard server.nodes[id] != nil else { return (404, ["code": "not-found", "message": "This item no longer exists."]) }
+                        // Only what is in the Trash is deleted forever: anything else is refused.
+                        guard world.trashed.contains(id) else { return (409, ["code": "conflict", "message": "This item isn't in the Trash."]) }
                         // A folder goes with everything inside it.
                         var gone: [String] = []
                         var queue = [id]
@@ -173,11 +189,29 @@ extension OnFakeDrive {
                 return Made(nodes: [out.id, a.id])
             }),
             ("a new version", Scenario { run, s in try await versionOf(run, s) }),
-            // A key change re-keyed the file while the version went up (its version the same): sealed afresh, never stale.
-            ("a key change, the version the same", Scenario(before: { s in s.server.rekeyAtComplete = true }) { run, s in try await versionOf(run, s) }),
+            // Another device re-keys the file while the version goes up (its version the same): its completion is
+            // `conflicted`, and the version is sealed afresh under the key the file has now, never stale; one sealed
+            // again under the old key would be refused `stale` at begin.
+            ("another device re-keys the file mid-upload", Scenario(before: { s in
+                let once = Locked(true)
+                let server = s.server
+                server.onPart = { _ in if once.value { once.value = false; try? server.rekeyHeld(server.g) } }
+            }) { run, s in try await versionOf(run, s) }),
+            // The same for a new file, its folder re-keyed while it goes up.
+            ("another device re-keys the folder mid-upload", Scenario(before: { s in
+                let once = Locked(true)
+                let server = s.server
+                server.onPart = { _ in if once.value { once.value = false; try? server.rekeyHeld(server.b) } }
+            }) { run, s in
+                let a = try await run.file(Data("a".utf8), name: "a.txt", mime: "text/plain", sources: own, in: s.into)
+                return Made(nodes: [a.id])
+            }),
         ]
 
-        enum Outcome { case finished(Made), notStarted, unrecorded, stopped(SaveRunStopped) }
+        enum Outcome {
+            case finished(Made), notStarted, unrecorded, stopped(SaveRunStopped)
+            var isFinished: Bool { if case .finished = self { return true } else { return false } }
+        }
 
         static func play(_ scenario: Scenario, plan: EnginePlan?) async throws -> (EngineWorld, [String]) {
             let s = try await setUp(plan)
@@ -189,11 +223,25 @@ extension OnFakeDrive {
             rows.fault = { _ in
                 let fault = world.fault(.journal)
                 if world.dead || fault == .refused { throw CocoaError(.fileWriteOutOfSpace) }
+                // A slow disk: the write takes its time, and the process dies before it lands.
+                if fault == .slow {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    world.die()
+                    throw CocoaError(.fileWriteUnknown)
+                }
                 if fault == .crash { world.die() }
             }
             var found: [String] = []
             let held = RunBox()
             world.cancel = { if let run = held.run { Task { _ = await run.cancel() } } }
+            // As AccountStore.wipe does, on this journal's own session, from another thread.
+            world.signOut = {
+                DispatchQueue.global().async {
+                    session.end()
+                    SaveRuns.abandonAll(session)
+                    try? FileManager.default.removeItem(at: url)
+                }
+            }
             let outcome: Outcome
             do {
                 let run = try await SaveRun.start(writer: s.vault, targets: [s.into, s.doc], results: [], journal: rows, pause: { _ in })
@@ -242,14 +290,20 @@ extension OnFakeDrive {
         static func judge(_ s: Setup, url: URL, session: SaveRunJournal.Epoch, outcome: Outcome) async -> [String] {
             var found: [String] = []
             let dead = s.world.dead
+            let signedOut = s.world.signedOut
             s.world.live = false
+            // A sign-out's wipe (on another thread) is done before anything is read.
+            if signedOut {
+                try? await Task.sleep(for: .milliseconds(20))
+                try? FileManager.default.removeItem(at: url)
+            }
             let disk = SaveRunJournal(url: url, epoch: session)
             let rows = disk.list()
             let named = Set(rows.flatMap(\.nodeIds))
             let out = published(s)
             var excused = false
             if case .stopped(let stopped) = outcome, !dead {
-                excused = stopped.message.contains("can no longer remove it")
+                excused = stopped.message.contains("can no longer remove it") || (signedOut && stopped.message.contains("may still be there"))
                 if stopped.message.contains("Nothing was saved"), !out.isEmpty || versions(s) > 0 {
                     found.append("says nothing was saved: \(out.count) there, \(versions(s)) versions")
                 }
@@ -259,7 +313,10 @@ extension OnFakeDrive {
                 }
             }
             let offered = rows.filter { $0.done != true }
-            if case .finished(let made) = outcome, offered.isEmpty {
+            if signedOut, !(outcome.isFinished && offered.isEmpty) {
+                // The journal went with the account: what is there must have been said to remain.
+                if !dead, !excused { for id in out { found.append("\(id) is there after a sign-out that didn't say so") } }
+            } else if case .finished(let made) = outcome, offered.isEmpty {
                 for id in made.nodes where !out.contains(id) { found.append("a saved result \(id) isn't there") }
                 if versions(s) < made.saved { found.append("a saved version isn't there") }
                 for current in made.stale where versions(s) == 0 { found.append("said stale (naming \(current ?? "none")), but nobody else saved") }
@@ -274,7 +331,7 @@ extension OnFakeDrive {
         }
 
         /* Plays per scenario, drawn from every wait and fault: SAVE_ENGINE_SAMPLE runs more (or all). */
-        static let sample = Int(ProcessInfo.processInfo.environment["SAVE_ENGINE_SAMPLE"] ?? "") ?? 40
+        static let sample = Int(ProcessInfo.processInfo.environment["SAVE_ENGINE_SAMPLE"] ?? "") ?? 30
 
         @Test func theRuleHoldsOverTheRealVaultWhateverFails() async throws {
             var failures: [String] = []

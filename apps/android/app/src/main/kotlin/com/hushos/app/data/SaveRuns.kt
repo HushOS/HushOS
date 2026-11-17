@@ -59,6 +59,8 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     }
 
     private val born = epoch.current
+    /* Where a write stages its rows before renaming them over the journal; one a failed write or a dead process left goes at open. */
+    private val staging = File(file.absoluteFile.parentFile, file.name + STAGING_SUFFIX).also { it.delete() }
     /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
     private val lock: Any = locks.computeIfAbsent(file.absoluteFile.normalize().path) { Any() }
 
@@ -125,14 +127,19 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
             return
         }
         folder?.mkdirs()
-        val next = File(folder, file.name + ".tmp")
-        java.io.FileOutputStream(next).use { out ->
-            out.write(JSONArray(rows.map { it.json() }).toString().toByteArray())
-            out.fd.sync()
-        }
-        if (!next.renameTo(file)) {
-            file.delete()
-            if (!next.renameTo(file)) throw java.io.IOException("The save record couldn’t be written.")
+        try {
+            java.io.FileOutputStream(staging).use { out ->
+                out.write(JSONArray(rows.map { it.json() }).toString().toByteArray())
+                out.fd.sync()
+            }
+            if (!staging.renameTo(file)) {
+                file.delete()
+                if (!staging.renameTo(file)) throw java.io.IOException("The save record couldn’t be written.")
+            }
+        } catch (error: Exception) {
+            // A write that failed leaves no staging file behind.
+            staging.delete()
+            throw error
         }
         flush(folder)
     }
@@ -145,6 +152,9 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
 
     companion object {
         const val FILE = "save-runs.json"
+        private const val STAGING_SUFFIX = ".tmp"
+        /* The staging file beside FILE: it goes with the account's files too (AccountStore.ACCOUNT_FILES). */
+        const val STAGING = FILE + STAGING_SUFFIX
         val account = Epoch()
         private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
         fun of(context: android.content.Context) = SaveRunJournal(File(context.filesDir, FILE))
@@ -394,6 +404,9 @@ object SaveRuns {
                 if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
             }
             SaveAbortFate.FINISHED -> if (uploadId in versions) kept++
+            // A version whose completion was sent, and the upload not found: the share may have ended (a 404 for lost access),
+            // not the upload gone. It may have landed.
+            SaveAbortFate.GONE -> if (uploadId in versions && completing?.contains(uploadId) == true) { unsettled = true; uncertain++ }
             else -> {}
         }
         val discarded = discard(row.nodeIds, row.workspaceId, writer)

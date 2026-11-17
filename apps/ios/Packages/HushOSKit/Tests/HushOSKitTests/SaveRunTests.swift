@@ -729,6 +729,39 @@ let own = SaveSources.ownWriting
         _ = try? await saving.value
     }
 
+    /*
+     * Account A's rows, then B signs in (through the Files sheet while the app was stopped): B's journal on the same file
+     * hands B nothing to clean up, and A's rows are dropped unread. Fails if a journal reads another account's rows.
+     */
+    @Test func anotherAccountsRowsAreNeverHandedToTheNextOnesCleanUp() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let session = SaveRunJournal.Epoch()
+        let a = SaveRunJournal(url: url, epoch: session, owner: AccountOwner(userId: "a", origin: "https://drive.test"))
+        try a.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        #expect(SaveRuns.interrupted(a).map(\.id) == ["run-a"])
+        let b = SaveRunJournal(url: url, epoch: session, owner: AccountOwner(userId: "b", origin: "https://drive.test"))
+        #expect(SaveRuns.interrupted(b).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        // The same user id on another server is another account too.
+        try a.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        let elsewhere = SaveRunJournal(url: url, epoch: session, owner: AccountOwner(userId: "a", origin: "https://other.test"))
+        #expect(elsewhere.list().isEmpty)
+    }
+
+    /* A staging file a write left behind goes at the next open and at the sign-out's wipe. */
+    @Test func aLeftoverStagingFileIsGoneAtOpenAndAtTheWipe() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let staging = SaveRunJournal.staging(url)
+        try Data("rows".utf8).write(to: staging)
+        _ = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch())
+        #expect(!FileManager.default.fileExists(atPath: staging.path))
+        let defaultStaging = SaveRunJournal.staging(SaveRunJournal.defaultURL)
+        try FileManager.default.createDirectory(at: defaultStaging.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("rows".utf8).write(to: defaultStaging)
+        SaveRunJournal.endAccount()
+        #expect(!FileManager.default.fileExists(atPath: defaultStaging.path))
+    }
+
     /* A sign-out while a run starts: abandonAll can't reach it yet, so it never starts and writes no row. */
     @Test func aSignOutWhileARunStartsLeavesNoRunAndNoRow() async throws {
         let session = SaveRunJournal.Epoch()

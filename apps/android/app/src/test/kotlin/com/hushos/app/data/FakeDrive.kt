@@ -298,7 +298,8 @@ class FakeDrive : AutoCloseable {
         node.keyEpoch = epoch
         val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), newKey, metadata)
         node.metadataEnvelope = base64urlEncode(sealed)
-        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed, MetadataStatement(ws, id, NodeKind.FOLDER, node.metadataVersion.toULong()), sealed))
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed,
+            MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
         node.signer = owners.getValue(ws).id
         bump(node)
         for (child in children(id)) {
@@ -777,6 +778,12 @@ class FakeDrive : AutoCloseable {
                     if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
                         return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
                 }
+                // A new file sealed under its folder's key as it is now, or `stale`.
+                body.optJSONObject("node")?.takeIf { !it.optBoolean("existing") && it.has("parentKeyEpoch") }?.let { n ->
+                    val folder = nodes[n.getString("parentId")]
+                    if (folder != null && folder.keyEpoch != n.getLong("parentKeyEpoch"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
+                }
                 // A move's source as packages/db `moveSourceAtBegin` holds it: another workspace's file, live, at the version read.
                 body.optJSONObject("moveOf")?.let { move ->
                     val source = nodes[move.getString("nodeId")]
@@ -831,9 +838,14 @@ class FakeDrive : AutoCloseable {
                     val existing = node(n.getString("id"))
                     val expected = if (n.isNull("expectedVersionId")) null else n.getString("expectedVersionId")
                     // As packages/db finishCompleting answers: `conflicted`, naming the version current now.
-                    if (existing.version?.id != expected) return 409 to JSONObject().put("code", "conflict").put("message", "A newer version is there")
+                    // The version moved on, or the file's key did (a key change since begin): `conflicted` either way.
+                    if (existing.version?.id != expected || existing.keyEpoch != n.getLong("keyEpoch")) return 409 to JSONObject().put("code", "conflict").put("message", "A newer version is there")
                         .put("data", JSONObject().put("conflicted", true).put("currentVersionId", existing.version?.id ?: JSONObject.NULL))
                     existing.also { bump(it) }
+                } else if (nodes[n.getString("parentId")]?.keyEpoch?.let { it != n.getLong("parentKeyEpoch") } == true) {
+                    // A new file whose folder was re-keyed since begin: `conflicted`, as packages/db finishCompleting answers.
+                    return 409 to JSONObject().put("code", "conflict").put("message", "This file changed while it was uploading.")
+                        .put("data", JSONObject().put("conflicted", true))
                 } else Node(n.getString("id"), upload.ws, n.getString("parentId"), "file", n.getLong("keyEpoch"), n.getLong("parentKeyEpoch"),
                     n.getString("keyEnvelope"), 1L, n.getString("metadataEnvelope"), userId, n.getString("metadataSignature"), changeSeq = changeSeq++)
                 node.version = version

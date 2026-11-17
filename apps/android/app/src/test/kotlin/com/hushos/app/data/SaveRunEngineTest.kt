@@ -33,15 +33,20 @@ import java.util.concurrent.Executors
 @Config(sdk = [35])
 class SaveRunEngineTest {
     enum class Point { ROOM, LISTING, ALLOCATE, FOLDER, BEGIN, PART, COMPLETE, ABORT, TRASH, PURGE, JOURNAL }
-    enum class Fault { NETWORK, LOST, REFUSED, OUTAGE, CANCEL, CRASH, DEATH }
+    /*
+     * REVOKED: from that wait on, the share has ended and the server answers 404 for it. SIGNOUT: the person signs out (runs
+     * abandoned, the journal gone). SLOW: a journal write takes its time and the process dies before it lands. (The phone
+     * has no lock of its own to fail: the vault stays open until a sign-out.)
+     */
+    enum class Fault { NETWORK, LOST, REFUSED, OUTAGE, CANCEL, CRASH, DEATH, REVOKED, SIGNOUT, SLOW }
     data class Plan(val point: Point, val k: Int, val fault: Fault)
 
-    private val asking = listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH)
-    private val all = Fault.values().toList()
+    private val asking = listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH, Fault.SIGNOUT)
+    private val all = listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.CRASH, Fault.DEATH, Fault.REVOKED, Fault.SIGNOUT)
     private fun faultsOf(point: Point) = when (point) {
         Point.ROOM, Point.LISTING, Point.ALLOCATE -> asking
-        Point.PART -> listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH)
-        Point.JOURNAL -> listOf(Fault.REFUSED, Fault.CRASH, Fault.CANCEL, Fault.DEATH)
+        Point.PART -> listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH, Fault.SIGNOUT)
+        Point.JOURNAL -> listOf(Fault.REFUSED, Fault.CRASH, Fault.CANCEL, Fault.DEATH, Fault.SLOW, Fault.SIGNOUT)
         else -> all
     }
 
@@ -67,8 +72,13 @@ class SaveRunEngineTest {
         private val counts = HashMap<Point, Int>()
         @Volatile var dead = false
         @Volatile var outage = false
+        @Volatile var revoked = false
+        @Volatile var signedOut = false
         @Volatile var live = true
         @Volatile var interrupt: (() -> Unit)? = null
+        @Volatile var signOut: (() -> Unit)? = null
+        /* Runs as the first part arrives: another device acting while the bytes go up. */
+        @Volatile var firstPart: (() -> Unit)? = null
         val reached: Map<Point, Int> get() = synchronized(counts) { HashMap(counts) }
         fun fault(point: Point): Fault? {
             if (!live) return null
@@ -79,7 +89,9 @@ class SaveRunEngineTest {
             }
             if (fault == Fault.DEATH) dead = true
             if (fault == Fault.OUTAGE) outage = true
+            if (fault == Fault.REVOKED) revoked = true
             if (fault == Fault.CANCEL) interrupt?.invoke()
+            if (fault == Fault.SIGNOUT) { signedOut = true; signOut?.invoke() }
             return fault
         }
     }
@@ -114,6 +126,7 @@ class SaveRunEngineTest {
             // A part for an upload already aborted: the store has nothing there.
             else if (abortAsked.any { path.contains("/parts/$it/") }) 404
             else {
+                world.firstPart?.let { act -> world.firstPart = null; act() }
                 val fault = world.fault(Point.PART)
                 when {
                     world.live && (world.dead || world.outage) -> 503
@@ -143,6 +156,8 @@ class SaveRunEngineTest {
             val fault = synchronized(pending) { pending[Thread.currentThread()] }
             when {
                 Thread.currentThread() in unreached -> 503 to JSONObject()
+                // The share ended: every request about it is a 404, as the server answers one no longer theirs.
+                world.live && world.revoked -> 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
                 fault == Fault.REFUSED -> { synchronized(pending) { pending.remove(Thread.currentThread()) }; 403 to JSONObject().put("code", "forbidden").put("message", "Refused.") }
                 // Trash and delete forever, per item, as the batch routes answer.
                 method == "POST" && segments.size == 4 && segments[3] == "trash-batch" -> {
@@ -153,9 +168,15 @@ class SaveRunEngineTest {
                         else JSONObject().put("id", id).put("status", "refused").put("reason", "not-found")
                     }))
                 }
-                method == "DELETE" && segments.size == 3 && segments[1] == "nodes" ->
-                    if (runCatching { server.node(segments[2]) }.isSuccess) { server.purgeAs(segments[2]); 200 to JSONObject() }
-                    else 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
+                method == "DELETE" && segments.size == 3 && segments[1] == "nodes" -> {
+                    val held = runCatching { server.node(segments[2]) }.getOrNull()
+                    when {
+                        held == null -> 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
+                        // Only what is in the Trash is deleted forever: anything else is refused.
+                        held.trashedAt == null -> 409 to JSONObject().put("code", "conflict").put("message", "This item isn't in the Trash.")
+                        else -> { server.purgeAs(segments[2]); 200 to JSONObject() }
+                    }
+                }
                 else -> null
             }
         }
@@ -184,18 +205,14 @@ class SaveRunEngineTest {
         "a child renamed elsewhere" to Scenario(before = { s -> s.server.renameAs(s.server.child(s.f.id, "report.pdf").id, "summary.pdf") }) { run, s ->
             Made(listOf(run.file("s".toByteArray(), "summary.pdf", "application/pdf", own, folder = s.f).id))
         },
-        // A key change re-keyed the file while the version went up (its version the same): sealed afresh, never stale.
-        "a key change, the version the same" to Scenario(before = { s ->
-            var once = true
-            val served = s.server.extraRoutes
-            s.server.extraRoutes = { method, segments, query, body ->
-                if (once && method == "POST" && segments.size == 4 && segments[1] == "uploads" && segments[3] == "complete") {
-                    once = false
-                    409 to JSONObject().put("code", "conflict").put("message", "This file changed while it was uploading.")
-                        .put("data", JSONObject().put("conflicted", true).put("currentVersionId", s.docVersion))
-                } else served?.invoke(method, segments, query, body)
-            }
-        }) { run, s -> versionOf(run, s) },
+        // Another device re-keys the file while the version goes up (its version the same): its completion is `conflicted`,
+        // and the version is sealed afresh under the key the file has now, never stale; one sealed again under the old key
+        // would be refused `stale` at begin.
+        "another device re-keys the file mid-upload" to Scenario(before = { s -> s.world.firstPart = { s.server.rekeyFolderAs(s.doc.id) } }) { run, s -> versionOf(run, s) },
+        // The same for a new file, its folder re-keyed while it goes up.
+        "another device re-keys the folder mid-upload" to Scenario(before = { s -> s.world.firstPart = { s.server.rekeyFolderAs(s.f.id) } }) { run, s ->
+            Made(listOf(run.file("a".toByteArray(), "a.txt", "text/plain", own, folder = s.f).id))
+        },
     )
 
     sealed class Outcome {
@@ -221,6 +238,8 @@ class SaveRunEngineTest {
             fault = { written ->
                 val fault = s.world.fault(Point.JOURNAL)
                 if (s.world.dead || fault == Fault.REFUSED) throw java.io.IOException("No space left on device")
+                // A slow disk: the write takes its time, and the process dies before it lands.
+                if (fault == Fault.SLOW) { Thread.sleep(50); s.world.dead = true; throw java.io.IOException("The process ended mid-write.") }
                 for (row in written) recorded += row.uploadIds
                 if (fault == Fault.CRASH) s.world.dead = true
             }
@@ -234,6 +253,8 @@ class SaveRunEngineTest {
         val found = ArrayList<String>()
         var started: SaveRun? = null
         s.world.interrupt = { started?.let { run -> pool.submit { run.cancel() } } }
+        // As AccountStore.wipe does, on this journal's own session: runs abandoned, the journal gone.
+        s.world.signOut = { SaveRuns.abandonAll(session); session.end(); file.delete() }
         val outcome: Outcome = try {
             val run = SaveRun.start(writer, listOf(s.f, s.doc), emptyList(), rows, pause = {}).also { started = it }
             try {
@@ -281,8 +302,11 @@ class SaveRunEngineTest {
         val rows = disk.list()
         val named = rows.flatMap { it.nodeIds }.toSet()
         val published = published(s)
+        val signedOut = s.world.signedOut
         val message = if (outcome is Outcome.Stopped && !dead) outcome.stopped.message.orEmpty() else null
-        val excused = message != null && "can no longer remove it" in message
+        // "You'll be asked about it next time" promises a row; only "can no longer remove it", and a sign-out's "may still be
+        // there" (its journal went with the account), excuse an unnamed node.
+        val excused = message != null && ("can no longer remove it" in message || (signedOut && "may still be there" in message))
         if (outcome is Outcome.Stopped && message != null) {
             val stopped = outcome.stopped
             if ("Nothing was saved" in message && (published.isNotEmpty() || versions(s) > 0)) found += "says nothing was saved: ${published.size} there, ${versions(s)} versions"
@@ -290,7 +314,10 @@ class SaveRunEngineTest {
             if (versions(s) > stopped.keptVersions + stopped.uncertainVersions) found += "${versions(s)} versions published, ${stopped.keptVersions + stopped.uncertainVersions} said"
         }
         val offered = rows.filter { !it.done }
-        if (outcome is Outcome.Finished && offered.isEmpty()) {
+        if (signedOut && !(outcome is Outcome.Finished && offered.isEmpty())) {
+            // The journal went with the account: what is there must have been said to remain.
+            if (!dead && !excused) for (id in published) found += "$id is there after a sign-out that didn't say so"
+        } else if (outcome is Outcome.Finished && offered.isEmpty()) {
             for (id in outcome.made.nodes) if (id !in published) found += "a saved result $id isn't there"
             if (versions(s) < outcome.made.saved) found += "a saved version isn't there"
             for (current in outcome.made.stale) if (s.server.node(s.doc.id).version?.id == s.docVersion) found += "said stale (naming $current), but nobody else saved"

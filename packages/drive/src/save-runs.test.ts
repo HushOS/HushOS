@@ -36,6 +36,7 @@ import {
     cleanUpInterrupted,
     interruptedRuns,
     keepInterrupted,
+    lockRuns,
     resultEstimate,
     resultsWaiting,
     roomOf,
@@ -1528,6 +1529,42 @@ describe('a save run', () => {
         const stopped = await run.cancel();
         expect(stopped.cleanup).toBe('left');
         expect(stopped.message).toBe(RUN_CANCELLED);
+    });
+
+    test('the app’s lock stops a run whose result is paused or completing, and its clean-up starts', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const paused = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        const completing = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a, b] = w.ids();
+        // `a` begun and its parts paused; `b` with its completion sent. No upload reports a lock.
+        w.begin(a!, 'up-a', 'node-a');
+        w.begin(b!, 'up-b', 'node-b');
+        await w.queued.get(b!)!.input.produced!.beforeComplete!();
+        await lockRuns();
+        await expect(paused).rejects.toMatchObject({ reason: 'locked' });
+        await expect(completing).rejects.toMatchObject({ reason: 'locked' });
+        expect(w.server.aborted).toEqual(expect.arrayContaining(['up-a', 'up-b']));
+        expect(w.runs.rows.size).toBe(0);
+        expect(resultsWaiting()).toBe(false);
+    });
+
+    test('a version whose completion was sent and whose abort finds nothing (a share ended) may have been saved', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        // Access lost: the server answers 404 for the upload, as it does for a workspace no longer theirs.
+        w.server.open.delete('up-v');
+        const stopped = await run.cancel();
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).not.toMatch(/Nothing was saved/);
     });
 
     test('a row the journal refuses to write stops the run: nothing is attached or completed that it does not name', async () => {

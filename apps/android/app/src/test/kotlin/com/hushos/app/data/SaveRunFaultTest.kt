@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.file.Files
 import java.util.UUID
-import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 
 /*
@@ -216,9 +215,7 @@ class SaveRunFaultTest {
      * Results handed in one after another, on a thread of their own each but never two at once: the k-th begin is the
      * same one every time, so a failure replays (concurrent results are SaveRunTest's).
      */
-    private fun <T> together(vararg work: () -> T): List<T> = work.map { pool.submit(Callable { it() }).let { future ->
-        try { future.get() } catch (error: java.util.concurrent.ExecutionException) { throw error.cause ?: error }
-    } }
+    private fun <T> together(vararg work: () -> T): List<T> = work.map { it() }
 
     /* What a run was given: its new files and folders, and how many new versions were saved. */
     data class Made(val nodes: List<String> = emptyList(), val versions: Int = 0)
