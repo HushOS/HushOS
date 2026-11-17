@@ -604,6 +604,67 @@ describe('download manager', () => {
         await reader.close();
     });
 
+    test('a tool’s reader keeps the file’s last chunk and fetches its padding once', async () => {
+        const size = 2 * CHUNK - 10;
+        const h = harness({ sealed: { 'o-tl': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        const reader = h.manager.openReader(paddedFile('tl', size, 1000), 1, { tool: true });
+        // A zip's directory first, then the entries, then the directory again.
+        for (const offset of [size - 100, 0, size - 50, 10, size - 1]) {
+            const read = reader.read(offset, 10);
+            await settle(100);
+            await read;
+        }
+        expect(h.attempts.get('o-tl:1')).toBe(1);
+        expect(h.attempts.get('o-tl:2')).toBe(1);
+        // Chunk 0 shares the one cache slot with nothing else: fetched once too.
+        expect(h.attempts.get('o-tl:0')).toBe(1);
+        await reader.close();
+    });
+
+    test('a tool’s read fails when the padding fails; a viewer’s does not', async () => {
+        const size = CHUNK - 10;
+        const sealed = { 'o-pf': { plaintextSize: size, thumbnailBytes: 1000 } };
+        const decide = (_object: string, index: number) =>
+            index === 1
+                ? { ok: false as const, status: 404, retryable: false, message: 'gone' }
+                : null;
+        const tool = harness({ sealed, decide }).manager.openReader(
+            paddedFile('pf', size, 1000),
+            1,
+            {
+                tool: true,
+            },
+        );
+        const failing = expect(tool.read(0, 10)).rejects.toThrow();
+        await settle(100);
+        await failing;
+        const viewer = harness({ sealed, decide }).manager.openReader(
+            paddedFile('pf', size, 1000),
+            1,
+        );
+        const read = viewer.read(0, 10);
+        await settle(100);
+        expect((await read).byteLength).toBe(10);
+    });
+
+    test('a tool’s reader made to seek without end stops at four times the object', async () => {
+        const size = 4 * CHUNK;
+        const h = harness({});
+        const reader = h.manager.openReader(file('cy', size), 1, { tool: true });
+        let error: unknown = null;
+        let reads = 0;
+        // Chunks 0, 1 and 2 in turn past a cache of one: every read a fetch.
+        while (!error && reads < 40) {
+            const read = reader.read((reads++ % 3) * CHUNK, 1);
+            read.catch((e: unknown) => (error = e));
+            await settle(100);
+        }
+        expect(String(error)).toMatch(/more times than a tool needs/);
+        const fetched = [...h.attempts.values()].reduce((sum, n) => sum + n, 0);
+        expect(fetched).toBe(16);
+        await reader.close();
+    });
+
     test('a version whose envelope promises another chunk count than the listing is refused', async () => {
         // The listing said no thumbnail (one chunk); the envelope opened says a trailer (two).
         const size = CHUNK - 10;

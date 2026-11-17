@@ -10,9 +10,23 @@ import { serveTool } from '../../../apps/web/src/lib/tools/worker';
 type Input =
     | { mode: 'digest'; offset: number; length: number; step: number }
     | { mode: 'spin' }
-    | { mode: 'produce'; count: number; size: number };
+    | { mode: 'produce'; count: number; size: number }
+    | { mode: 'reach' };
 
 const alive = new BroadcastChannel('probe');
+// The page can't see a violation inside a worker: it is told, and its check fails on it.
+self.addEventListener('securitypolicyviolation', (event) =>
+    alive.postMessage({ violation: `${event.violatedDirective} ${event.blockedURI}` }),
+);
+
+/* Whether a fetch got an answer, or was refused before leaving. */
+async function answered(url: string) {
+    try {
+        return (await fetch(url, { credentials: 'include' })).ok;
+    } catch {
+        return false;
+    }
+}
 
 serveTool<Input, unknown>(async (input, { sources, progress, produce }) => {
     if (input.mode === 'digest') {
@@ -25,6 +39,12 @@ serveTool<Input, unknown>(async (input, { sources, progress, produce }) => {
         }
         const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', out));
         return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    if (input.mode === 'reach') {
+        return {
+            api: await answered('/api/health'),
+            own: await answered(import.meta.url),
+        };
     }
     if (input.mode === 'spin') {
         // A parser stuck in a loop: busy, never yielding, never reporting progress.

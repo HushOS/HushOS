@@ -339,15 +339,24 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return if (urls.length() > 0) urls.getJSONObject(0).getString("url") else null
     }
 
-    /* One byte range of a stored object, from its presigned URL. */
-    fun range(url: String, range: ByteRange): ByteArray {
+    /*
+     * One byte range of a stored object, from its presigned URL. `guard` runs the request with the
+     * connection in hand, so a file tool's run can cut it off when it ends (toolReaderOf).
+     */
+    fun range(
+        url: String,
+        range: ByteRange,
+        guard: (HttpURLConnection, () -> ByteArray) -> ByteArray = { _, request -> request() },
+    ): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.setRequestProperty("Range", "bytes=${range.start}-${range.end}")
         connection.connectTimeout = 30_000
         connection.readTimeout = 120_000
-        val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
-        if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
-        return try { connection.inputStream.use { it.readBytes() } } catch (error: java.io.IOException) { throw Unreachable() }
+        return guard(connection) {
+            val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
+            if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
+            try { connection.inputStream.use { it.readBytes() } } catch (error: java.io.IOException) { throw Unreachable() }
+        }
     }
 
     fun putPart(url: String, data: ByteArray): String {

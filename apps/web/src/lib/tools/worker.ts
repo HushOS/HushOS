@@ -1,6 +1,7 @@
 import {
     RANGE_READ_MAX,
-    TOOL_FAILED,
+    READS_IN_FLIGHT,
+    RESULT_MAX_BYTES,
     type RangeAnswer,
     type RangeRequest,
     type ToPage,
@@ -9,18 +10,24 @@ import {
 
 /*
  * The worker's side of a tool run: imported by each tools worker (archive, PDF, image),
- * which calls `serveTool` once with its work. The worker holds no keys and reads its
- * sources only through the page; whatever it produces is transferred to the page, and the
- * next result waits until the page has room for it. It never ends itself: the page
- * terminates it when the run is over, which also frees its WebAssembly heap.
+ * which calls `serveTool` once with its work. A tools worker's file is named
+ * `*.tool-worker.ts`, which the server answers with the narrower policy of
+ * apps/web/server/csp.ts. The worker holds no keys and reads its sources only through the
+ * page, at most READS_IN_FLIGHT reads at a time (more wait their turn here); whatever it
+ * produces is transferred to the page, and the next result waits until the page has room
+ * for it. It never ends itself: the page terminates it when the run is over.
  */
 
-/* A refusal the tool understood, in the person's words. Any other error becomes TOOL_FAILED. */
-export class ToolError extends Error {}
+/* A refusal the tool understood, by a code the page has words for. Any other error becomes TOOL_FAILED. */
+export class ToolError extends Error {
+    constructor(readonly code: string) {
+        super(code);
+    }
+}
 
 export type RangeSource = {
     size: number;
-    read(offset: number, length: number): Promise<Uint8Array>;
+    read: (offset: number, length: number) => Promise<Uint8Array>;
 };
 
 export type ToolContext = {
@@ -35,7 +42,37 @@ type Scope = {
     onmessage: ((event: MessageEvent<ToWorker>) => void) | null;
 };
 
-function rangeSource(size: number, port: MessagePort): RangeSource {
+/* Reads across every source take turns, so the page's allowance is never exceeded. */
+function turns() {
+    let reads = 0;
+    let bytes = 0;
+    const queue: { length: number; go: () => void }[] = [];
+    function next() {
+        while (queue.length) {
+            const head = queue[0]!;
+            if (reads + 1 > READS_IN_FLIGHT || bytes + head.length > RANGE_READ_MAX) return;
+            queue.shift();
+            reads++;
+            bytes += head.length;
+            head.go();
+        }
+    }
+    return async <T>(length: number, read: () => Promise<T>) => {
+        await new Promise<void>((go) => {
+            queue.push({ length, go });
+            next();
+        });
+        try {
+            return await read();
+        } finally {
+            reads--;
+            bytes -= length;
+            next();
+        }
+    };
+}
+
+function rangeSource(size: number, port: MessagePort, take: ReturnType<typeof turns>): RangeSource {
     let next = 0;
     const pending = new Map<
         number,
@@ -56,12 +93,21 @@ function rangeSource(size: number, port: MessagePort): RangeSource {
             if (offset < 0 || end <= offset) return Promise.resolve(new Uint8Array(0));
             if (end - offset > RANGE_READ_MAX)
                 return Promise.reject(new Error('The read was too long.'));
-            const id = next++;
-            return new Promise((resolve, reject) => {
-                pending.set(id, { resolve, reject });
-                const request: RangeRequest = { type: 'read', id, offset, length: end - offset };
-                port.postMessage(request);
-            });
+            return take(
+                end - offset,
+                () =>
+                    new Promise<Uint8Array>((resolve, reject) => {
+                        const id = next++;
+                        pending.set(id, { resolve, reject });
+                        const request: RangeRequest = {
+                            type: 'read',
+                            id,
+                            offset,
+                            length: end - offset,
+                        };
+                        port.postMessage(request);
+                    }),
+            );
         },
     };
 }
@@ -82,12 +128,15 @@ export function serveTool<I, R>(
         }
         if (msg.type !== 'start' || started) return;
         started = true;
+        const take = turns();
         const context: ToolContext = {
-            sources: msg.sources.map((source) => rangeSource(source.size, source.port)),
+            sources: msg.sources.map((source) => rangeSource(source.size, source.port, take)),
             progress(done, total = null) {
                 scope.postMessage({ type: 'progress', done, total });
             },
             produce(name, bytes, mime = null) {
+                if (bytes.byteLength > RESULT_MAX_BYTES)
+                    return Promise.reject(new Error('The result is too large.'));
                 const id = nextOutput++;
                 // Transferred whole: a view onto a larger buffer is cut out first.
                 const buffer =
@@ -104,7 +153,7 @@ export function serveTool<I, R>(
             (error: unknown) =>
                 scope.postMessage({
                     type: 'fail',
-                    message: error instanceof ToolError ? error.message : TOOL_FAILED,
+                    code: error instanceof ToolError ? error.code : null,
                 }),
         );
     };

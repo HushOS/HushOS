@@ -678,8 +678,11 @@ See `docs/identity-pq-design.md`.
 
 - `HushOSKit/ToolRuns.swift`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
 - `ToolRuns.run` takes one run at a time (a second waits, told `waiting(behind:)`), runs the work on a `Thread` of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling task is cancelled.
-- A thread can't be killed: cancel and the watchdog end the run for the caller at once, and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
-- `Vault.toolReader` gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, a request in flight is cancelled (`StoreSource` waits in slices), and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
+- `ToolRuns.budget` is the process's one `ToolBudget`: tools produce into it with their run's control, and whoever takes a result releases it when uploaded or dropped.
+- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()`: nothing runs past a sign-out.
+- The watchdog's clock is injectable (`clock:`); tests use one that moves a second per read.
+- `Vault.toolReader` (`ToolReaders.reader`) gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
 - Tests: `ToolRunsTests`.
 
 ## Files app (File Provider)

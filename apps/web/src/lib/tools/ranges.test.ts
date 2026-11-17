@@ -4,7 +4,7 @@ import type { DriveApi } from '@hushos/drive/api';
 import type { DriveNode, Rpc } from '@hushos/drive/client';
 import { createDownloadManager } from '@hushos/drive/downloads';
 import type { ToPage, ToWorker } from './protocol';
-import { memoryReader, serveRanges, type RangeReader } from './ranges';
+import { memoryReader, readAllowance, serveRanges, type RangeReader } from './ranges';
 import { serveTool, ToolError, type ToolContext } from './worker';
 
 /*
@@ -122,9 +122,14 @@ function runTool<R>(
     };
     serveTool(work, scope);
     const stops: (() => void)[] = [];
+    // The page's limits as a run sets them: a worker runtime that broke one would be caught here.
+    const allowance = readAllowance();
+    const abused: number[] = [];
     const channels = sources.map((reader) => {
         const channel = new MessageChannel();
-        stops.push(serveRanges(channel.port1, reader));
+        stops.push(
+            serveRanges(channel.port1, reader, { allowance, onAbuse: () => abused.push(1) }),
+        );
         return { size: reader.size, port: channel.port2 };
     });
     scope.onmessage!({
@@ -140,7 +145,7 @@ function runTool<R>(
     });
     const accept = (id: number) =>
         scope.onmessage!({ data: { type: 'accepted', id } } as MessageEvent<ToWorker>);
-    return { sent, finished, accept, stop: () => stops.forEach((stop) => stop()) };
+    return { sent, finished, accept, abused, stop: () => stops.forEach((stop) => stop()) };
 }
 
 const same = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
@@ -226,18 +231,24 @@ describe('the range port', () => {
         // A read failing inside a tool is an error the tool did not understand: the generic words.
         const failing = { size: 10, read: async () => Promise.reject(new Error('network')) };
         const { finished } = runTool([failing], async (_i, { sources }) => sources[0]!.read(0, 4));
-        expect(await finished).toEqual({
-            type: 'fail',
-            message: "This file couldn't be processed.",
-        });
-        // A refusal the tool understood keeps its words.
+        expect(await finished).toEqual({ type: 'fail', code: null });
+        // A refusal the tool understood is sent as its code, for the page to put into words.
         const refused = runTool([memoryReader(new Uint8Array(4))], async () => {
-            throw new ToolError('This PDF has a password.');
+            throw new ToolError('password');
         });
-        expect(await refused.finished).toEqual({
-            type: 'fail',
-            message: 'This PDF has a password.',
+        expect(await refused.finished).toEqual({ type: 'fail', code: 'password' });
+    });
+
+    test('a tool asking for many ranges at once is paced within what the page allows', async () => {
+        const bytes = new Uint8Array(1000).map((_, i) => i & 0xff);
+        const { finished, abused } = runTool([memoryReader(bytes)], async (_i, { sources }) => {
+            const reads = await Promise.all(
+                Array.from({ length: 10 }, (_, i) => sources[0]!.read(i * 100, 100)),
+            );
+            return reads.every((read, i) => read[0] === ((i * 100) & 0xff));
         });
+        expect(await finished).toEqual({ type: 'done', result: true });
+        expect(abused).toEqual([]);
     });
 
     test('a produced result is transferred to the page and the next waits for its acceptance', async () => {

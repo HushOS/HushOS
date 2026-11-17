@@ -1,5 +1,6 @@
 import { COLOUR_CEILING, HIGHLIGHT_LIMIT } from '@/lib/highlight';
 import { OFFICE_LIMIT } from '@/lib/office';
+import { PREVIEW_LIMITS } from '@/lib/preview-limits';
 
 /*
  * How much of a file the viewer reads as it opens, and the large-file card's
@@ -7,16 +8,7 @@ import { OFFICE_LIMIT } from '@/lib/office';
  * a browser; lib/previews.ts re-exports them.
  */
 
-export const PREVIEW_LIMITS = {
-    image: 100 * 1024 * 1024,
-    text: 8 * 1024 * 1024,
-    /* A PDF up to this size is read whole and remembered; larger ones stream by range. */
-    document: 16 * 1024 * 1024,
-    /* A clip up to this size plays from memory and is remembered; larger media streams by range. */
-    media: 16 * 1024 * 1024,
-    /* Media falls back to a blob where the service worker is unavailable. */
-    mediaBlob: 256 * 1024 * 1024,
-};
+export { PREVIEW_LIMITS };
 
 /*
  * Past a kind's threshold a file is shown only in part, or not coloured, or

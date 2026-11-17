@@ -1,15 +1,15 @@
 import { TOOL_BUDGET_BYTES } from './protocol';
 
 /*
- * The produced-plaintext budget of one run: what the tool handed on and the upload has not
- * yet taken. The save path releases each result as its upload finishes with the bytes. The
+ * The produced-plaintext budget: what tools handed on and the upload has not yet taken. One
+ * for the tab (`toolBudget`), not one per run: a run that is done leaves its results counted
+ * until the save path releases them, so the next run cannot add another 512 MiB on top. The
  * result that crosses the limit is taken; the next is held back until releases bring the
- * total under it again, so a run holds at most the limit plus one result.
+ * total under it again.
  */
 export class PlaintextBudget {
     #waiting = 0;
-    #closed: Error | null = null;
-    #waiters: { resolve: () => void; reject: (error: Error) => void }[] = [];
+    #waiters = new Set<() => void>();
 
     constructor(readonly limit = TOOL_BUDGET_BYTES) {}
 
@@ -22,31 +22,28 @@ export class PlaintextBudget {
     }
 
     take(bytes: number) {
-        if (this.#closed) throw this.#closed;
         this.#waiting += bytes;
     }
 
     release(bytes: number) {
         this.#waiting = Math.max(0, this.#waiting - bytes);
         if (this.full) return;
-        const waiters = this.#waiters;
-        this.#waiters = [];
-        for (const waiter of waiters) waiter.resolve();
+        const waiters = [...this.#waiters];
+        this.#waiters.clear();
+        for (const waiter of waiters) waiter();
     }
 
-    /* Settles once there is room; rejects if the run ends first. */
-    whenRoom(): Promise<void> {
-        if (this.#closed) return Promise.reject(this.#closed);
-        if (!this.full) return Promise.resolve();
-        return new Promise((resolve, reject) => this.#waiters.push({ resolve, reject }));
-    }
-
-    /* The run ended: nothing is waiting any more, and whoever waits for room is told why. */
-    close(reason: Error) {
-        this.#closed = reason;
-        this.#waiting = 0;
-        const waiters = this.#waiters;
-        this.#waiters = [];
-        for (const waiter of waiters) waiter.reject(reason);
+    /* Calls `onRoom` once there is room (at once if there is); returns what stops waiting. */
+    whenRoom(onRoom: () => void): () => void {
+        if (!this.full) {
+            onRoom();
+            return () => {};
+        }
+        const waiter = () => onRoom();
+        this.#waiters.add(waiter);
+        return () => this.#waiters.delete(waiter);
     }
 }
+
+/* The tab's budget, which every run shares. */
+export const toolBudget = new PlaintextBudget();

@@ -117,6 +117,9 @@ export type DownloadManagerOptions = {
     offline?: () => boolean;
 };
 
+/* A tool's reader fetches at most this many times its object's chunks. */
+const TOOL_FETCH_FACTOR = 4;
+
 type Internal = {
     item: DownloadItem;
     generation: number;
@@ -448,8 +451,19 @@ export function createDownloadManager(options: DownloadManagerOptions) {
      * Random access to one file for a viewer: a read covers whatever chunks it
      * touches, each decrypted once and kept while it is among the most recently
      * used, so a PDF paging back and forth or a video seeking does not refetch.
+     *
+     * For a file tool (`tool`), which parses what anyone could have uploaded:
+     * the file's last chunk is kept for the reader's life and its padding is
+     * fetched once with it, a padding chunk that fails fails the read (as the
+     * phones' core reader does), and the reader fetches at most four times the
+     * object's chunks before every read fails, so a parser made to seek without
+     * end cannot download the file over and over.
      */
-    function openReader(node: DriveNode, cacheChunks = 4): FileReader {
+    function openReader(
+        node: DriveNode,
+        cacheChunks = 4,
+        options: { tool?: boolean } = {},
+    ): FileReader {
         // Per chunk, the most fetched so far: a chunk fetched again after eviction counts once.
         const fetched = new Map<number, number>();
         const listeners = new Set<(fetched: number) => void>();
@@ -481,7 +495,34 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             });
             return pending;
         }
+        /* Tool readers: the file's last chunk, with its padding, fetched once. */
+        let tail: Promise<Uint8Array> | null = null;
+        let fetches = 0;
+        function fetchOne(index: number) {
+            if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
+                return Promise.reject(
+                    new Error('This file was read more times than a tool needs.'),
+                );
+            return source.open().then(() => source.fetchChunk(index));
+        }
         function chunk(index: number) {
+            if (options.tool && index === source.fileChunks - 1) {
+                if (!tail) {
+                    const pending = (async () => {
+                        const plaintext = await fetchOne(index);
+                        for (let pad = source.fileChunks; pad < source.total; pad++) {
+                            if (closed) throw new Error('The preview was closed.');
+                            await fetchOne(pad);
+                        }
+                        return plaintext;
+                    })();
+                    pending.catch(() => {
+                        if (tail === pending) tail = null;
+                    });
+                    tail = pending;
+                }
+                return tail;
+            }
             const cached = cache.get(index);
             if (cached) {
                 // Most recently used moves to the end.
@@ -489,7 +530,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 cache.set(index, cached);
                 return cached;
             }
-            const fetched = source.open().then(() => source.fetchChunk(index));
+            const fetched = fetchOne(index);
             fetched.catch(() => cache.delete(index));
             cache.set(index, fetched);
             while (cache.size > cacheChunks) cache.delete(cache.keys().next().value!);
@@ -521,12 +562,17 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             },
             async drain() {
                 if (closed) return;
+                if (options.tool) {
+                    await chunk(source.fileChunks - 1);
+                    return;
+                }
                 // A read that reached the file's end already fetched the padding.
                 await (padding ??= fetchPadding());
             },
             async close() {
                 closed = true;
                 cache.clear();
+                tail = null;
                 listeners.clear();
                 await source.close();
             },

@@ -64,6 +64,33 @@ export function buildCsp(input: CspInput) {
     return directives.map(([name, values]) => `${name} ${values.join(' ')}`).join('; ');
 }
 
+/*
+ * A tools worker (`*.tool-worker.ts`, emitted as `/assets/<name>.tool-worker-<hash>.js`) parses
+ * files anyone could have uploaded, and a parser bug could hand it to them. Holding no keys is
+ * not enough: a same-origin worker could call the API with the person's session cookie. Its
+ * script is served with a policy of its own, which a dedicated worker runs under: scripts and
+ * WebAssembly from this origin, fetches only under /assets/ (WebAssembly and data files the
+ * build emits), and nothing else: no API, no store, no other origin, no workers of its own.
+ * IndexedDB and the other storage APIs are not governed by any policy; docs/file-tools-design.md
+ * (section 3) records what that leaves.
+ */
+export function isToolWorkerScript(pathname: string) {
+    return /^\/assets\/[\w.-]+\.tool-worker-[\w-]+\.js$/.test(pathname);
+}
+
+export function buildToolWorkerCsp(origin: string) {
+    const assets = `${new URL(origin).origin}/assets/`;
+    const directives: [string, string[]][] = [
+        ['default-src', ["'none'"]],
+        ['script-src', ["'self'", "'wasm-unsafe-eval'"]],
+        ['connect-src', [assets]],
+        ['worker-src', ["'none'"]],
+        ['base-uri', ["'none'"]],
+        ['form-action', ["'none'"]],
+    ];
+    return directives.map(([name, values]) => `${name} ${values.join(' ')}`).join('; ');
+}
+
 /* Origins as "https://host" entries; anything that does not parse as one is dropped, never guessed. */
 export function parseOrigins(value: string | undefined) {
     if (!value) return [];

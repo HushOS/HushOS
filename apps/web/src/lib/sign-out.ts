@@ -238,6 +238,8 @@ async function forgetOpened() {
         drive.then(({ closeSpaces }) => closeSpaces()),
         import('@/lib/thumbnails').then(({ forgetThumbnails }) => forgetThumbnails()),
         import('@/lib/previews').then(({ forgetPreviews }) => forgetPreviews()),
+        // Tool runs too: their workers stop and their results waiting for upload are dropped.
+        import('@/lib/tools/active').then(({ cancelAllToolRuns }) => cancelAllToolRuns()),
     ];
     const results = await Promise.allSettled(parts);
     // Only now that nothing open can pull the feed into it.

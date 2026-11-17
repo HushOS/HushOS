@@ -1,10 +1,11 @@
+import { PlaintextBudget } from '../../../apps/web/src/lib/tools/budget';
 import { memoryReader } from '../../../apps/web/src/lib/tools/ranges';
 import { startToolRun, type ToolOutput, type ToolRun } from '../../../apps/web/src/lib/tools/run';
 
 /*
  * The page e2e/tools-harness.spec.ts drives: the real harness and a real module worker,
- * bundled by Vite and served under the production Content Security Policy. Everything the
- * spec needs is on `window.tools`.
+ * bundled by Vite and served under the production Content Security Policy (the worker under
+ * the tools worker's own). Everything the spec needs is on `window.tools`.
  */
 
 const violations: string[] = [];
@@ -12,14 +13,19 @@ document.addEventListener('securitypolicyviolation', (event) =>
     violations.push(`${event.violatedDirective} ${event.blockedURI}`),
 );
 
-/* When the worker last said it was alive, by its own clock (Date.now, shared with the page). */
+/*
+ * When the worker last said it was alive, by its own clock (Date.now, shared with the page),
+ * and any policy violation inside it, which a page listener would never see.
+ */
 let lastBeat = 0;
 const beats = new BroadcastChannel('probe');
-beats.onmessage = (event: MessageEvent<number>) => {
-    lastBeat = Math.max(lastBeat, event.data);
+beats.onmessage = (event: MessageEvent<number | { violation: string }>) => {
+    if (typeof event.data === 'number') lastBeat = Math.max(lastBeat, event.data);
+    else violations.push(`worker: ${event.data.violation}`);
 };
 
-const probe = () => new Worker(new URL('./probe.worker.ts', import.meta.url), { type: 'module' });
+const probe = () =>
+    new Worker(new URL('./probe.tool-worker.ts', import.meta.url), { type: 'module' });
 
 /* A source that is not periodic, so bytes read from the wrong offset change the digest. */
 function sourceBytes(size: number) {
@@ -52,6 +58,7 @@ const settled = (run: ToolRun<unknown>) =>
 
 const tools = {
     violations: () => violations,
+    clearViolations: () => void violations.splice(0),
     /* The worker's last sign of life, and now, both by Date.now. */
     lastBeat: () => lastBeat,
     now: () => Date.now(),
@@ -92,7 +99,7 @@ const tools = {
             worker: probe,
             input: { mode: 'produce', count, size },
             sources: [],
-            budgetBytes,
+            budget: new PlaintextBudget(budgetBytes),
             onOutput: (output) => {
                 held.push(output);
                 if (autoRelease) output.release();
@@ -105,7 +112,7 @@ const tools = {
             ),
             (c) => c.charCodeAt(0),
         );
-        url = current.objectUrl(new Blob([png], { type: 'image/png' }));
+        url = current.objectUrl(new Blob([png], { type: 'image/png' }), 'image');
         void settled(current).then(
             (outcome) => ((window as unknown as Record<string, unknown>).produced = outcome),
         );
@@ -119,6 +126,16 @@ const tools = {
     releaseAsTheyCome() {
         autoRelease = true;
         for (const output of held) output.release();
+    },
+    /* What the worker could reach: this origin's API (with the person's cookie), and its own assets. */
+    async reach() {
+        current = startToolRun({
+            label: 'Reach',
+            worker: probe,
+            input: { mode: 'reach' },
+            sources: [],
+        });
+        return settled(current);
     },
     cancel: () => current?.cancel(),
     produced: () => (window as unknown as Record<string, unknown>).produced ?? null,

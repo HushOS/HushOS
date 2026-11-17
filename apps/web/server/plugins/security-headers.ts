@@ -2,7 +2,13 @@ import { appEnv } from '@hushos/env/app';
 import { storageEnv } from '@hushos/env/storage';
 import { definePlugin } from 'nitro';
 import { analyticsAllowed } from '../../src/lib/analytics-paths';
-import { buildCsp, parseOrigins, storeOrigin } from '../csp';
+import {
+    buildCsp,
+    buildToolWorkerCsp,
+    isToolWorkerScript,
+    parseOrigins,
+    storeOrigin,
+} from '../csp';
 
 /*
  * Every response leaves with the security headers, and every page with a
@@ -35,18 +41,21 @@ export default definePlugin((nitroApp) => {
     });
     nitroApp.hooks.hook('response', (response, event) => {
         const nonce = event.req.context?.cspNonce;
+        const pathname = new URL(event.req.url).pathname;
         response.headers.set(
             'Content-Security-Policy',
-            buildCsp({
-                nonce: typeof nonce === 'string' ? nonce : null,
-                dev,
-                storeOrigins,
-                extraConnect,
-                // A private page never lets the analytics script in, even one left in the head.
-                analyticsOrigins: analyticsAllowed(new URL(event.req.url).pathname)
-                    ? analyticsOrigins
-                    : [],
-            }),
+            isToolWorkerScript(pathname)
+                ? buildToolWorkerCsp(appEnv.APP_ORIGIN)
+                : buildCsp({
+                      nonce: typeof nonce === 'string' ? nonce : null,
+                      dev,
+                      storeOrigins,
+                      extraConnect,
+                      // A private page never lets the analytics script in, even one left in the head.
+                      analyticsOrigins: analyticsAllowed(new URL(event.req.url).pathname)
+                          ? analyticsOrigins
+                          : [],
+                  }),
         );
         response.headers.set('X-Content-Type-Options', 'nosniff');
         response.headers.set('X-Frame-Options', 'DENY');

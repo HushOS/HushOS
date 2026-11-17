@@ -638,8 +638,11 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 
 - `data/ToolRuns.kt`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
 - `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
-- A thread can't be killed: cancel and the watchdog end the run for the caller at once, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns.
-- `Vault.toolReader` gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, a connection in flight is disconnected and a retry's wait cut short, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns; a caller cancelled before the thread starts gives the slot back itself.
+- `ToolRuns.budget` is the process's one `ToolBudget`: tools produce into it with their run's control, and whoever takes a result releases it when uploaded or dropped.
+- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()`: nothing runs past a sign-out.
+- The watchdog's clock is injectable (`clock =`); tests use one that moves a second per read.
+- `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the connection to cut off).
 - Tests: `ToolRunsTest`.
 
 ## Saves from other apps (write-backs)

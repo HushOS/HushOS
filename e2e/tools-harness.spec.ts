@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { extname, join, normalize } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import { buildCsp } from '../apps/web/server/csp';
+import { buildCsp, buildToolWorkerCsp, isToolWorkerScript } from '../apps/web/server/csp';
 import { newPage } from './helpers';
 
 /*
@@ -15,7 +15,8 @@ import { newPage } from './helpers';
  * stops one producing and drops what the page held, the budget holds producing back, and a
  * range read across the source arrives byte for byte. The policy reports nothing throughout.
  *
- * The last test is against the app itself: a worker script a build serves carries the policy.
+ * A tools worker runs under its own narrower policy and cannot call the API. The last test is
+ * against the app itself: a worker script a build serves carries the policy.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -40,6 +41,7 @@ async function buildFixture() {
         configFile: false,
         root: join(import.meta.dirname, 'fixtures/tools'),
         logLevel: 'warn',
+        resolve: { alias: { '@': join(ROOT, 'apps/web/src') } },
         build: { outDir: OUT, emptyOutDir: true },
         worker: { format: 'es' },
     });
@@ -49,6 +51,11 @@ function serve() {
     const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript' };
     return createServer((request, response) => {
         const path = new URL(request.url ?? '/', 'http://x').pathname;
+        // The API a worker taken over would want: answered, so a refusal is the policy's doing.
+        if (path === '/api/health') {
+            response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
+            return;
+        }
         const file = normalize(join(OUT, path === '/' ? 'index.html' : path));
         if (!file.startsWith(OUT) || !existsSync(file)) {
             response.writeHead(404).end();
@@ -56,7 +63,10 @@ function serve() {
         }
         response.writeHead(200, {
             'Content-Type': types[extname(file)] ?? 'application/octet-stream',
-            'Content-Security-Policy': POLICY,
+            // As the app's server does: a tools worker's script gets the narrower policy.
+            'Content-Security-Policy': isToolWorkerScript(path)
+                ? buildToolWorkerCsp(origin)
+                : POLICY,
         });
         response.end(readFileSync(file));
     });
@@ -64,6 +74,8 @@ function serve() {
 
 type Tools = {
     violations(): string[];
+    clearViolations(): void;
+    reach(): Promise<{ ok: boolean; value?: unknown }>;
     lastBeat(): number;
     now(): number;
     state(): { status: string } | null;
@@ -177,6 +189,16 @@ test('cancel terminates the worker, empties what the page held and revokes the r
     expect(await tools((t) => t.heldBytes())).toEqual([0, 0]);
     expect(await tools((t) => t.urlLoads())).toBe(false);
     await expectStopped(100);
+});
+
+test('a tools worker cannot reach the API, only the files the build emitted', async () => {
+    const outcome = await tools((t) => t.reach());
+    expect(outcome).toEqual({ ok: true, value: { api: false, own: true } });
+    // Refused by the worker's own policy, and the worker said so.
+    expect(await tools((t) => t.violations())).toEqual([
+        expect.stringMatching(/^worker: connect-src .*\/api\/health$/),
+    ]);
+    await tools((t) => t.clearViolations());
 });
 
 test('the app serves its worker scripts under the same policy', async ({ browser }) => {
