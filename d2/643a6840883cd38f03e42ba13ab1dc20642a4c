@@ -1,0 +1,84 @@
+packages/drive/src/trust.ts
+  s_c60e24772e04af::t_6e78b5c176246d 72-100
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_0d4f1a67477393 1-159
+  s_c60e24772e04af::t_92fd206ab05546 160-161
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_7a6e23f7431bf3 1-296
+  s_c60e24772e04af::t_e3e9411c50426d 297-309
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_3c218d2405aa49 1-396
+  s_c60e24772e04af::t_807f693f6b5bca 397
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_00f1e884e2925f 1-469
+  s_c60e24772e04af::t_0322a9bad919ac 470-474
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_d8d96a5a16719e 163-182,185-191,650,775,843
+  s_c60e24772e04af::t_70fe723dc0a0c4 100-105
+  s_c60e24772e04af::t_c00a492d9a984f 192,354-355,649,651-652,737,774,776,840-842,1028-1082,1143,1145-1147,1174-1178,1183,1280-1282,1305,1321,1345,1475-1483,1490,1507,1532,1570-1572,1591-1596,1601-1602,1675,1760,1838-1841
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_49e6a9c72ad174 1-626
+  s_c60e24772e04af::t_8491abe7711e4c 627-669
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_12b3147d61dfcc 1-300
+  s_c60e24772e04af::t_14e25f1e9f9372 301-305
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_c567d0cfe0c01d 1-547
+  s_c60e24772e04af::t_9f21fdda891e47 548-574
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_bdd961c6dbf74d 1609
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c60e24772e04af::t_7e1c70649608f5 74
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_8e5778c76f0979 2016,2019-2060,2065-2067,2077-2078,2096,2098,2163,2165,2173,2181,2188,2278-2316
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_f11a9c495f40e7 1243
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_6ab1c5391dfec0 636-687,689,707-709,736,738,797,799,872-888,891-894,896-897,955-995,1064,1068-1069
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_c60e24772e04af::t_bd140ad35d805d 340-342,519-522,556-558,602-605
+apps/web/src/lib/device-data.ts
+  s_c60e24772e04af::t_f3be6333cc1bdd 174-175
+apps/web/src/lib/drive.ts
+  s_c60e24772e04af::t_3d24924f46b975 74-75
+apps/web/src/lib/space-registry.ts
+  s_c60e24772e04af::t_a221f2fd3c6326 63-66
+apps/web/src/lib/transfers.ts
+  s_c60e24772e04af::t_5485192d9bf9f6 3,202-207,213
+apps/web/src/lib/uploads.ts
+  s_c60e24772e04af::t_117f3f4f58b6b9 176
+crates/hushos-core/AGENTS.md
+  s_c60e24772e04af::t_01a7b2b9db83a0 65
+crates/hushos-core/fixtures/save-estimate-cases.json
+  s_c60e24772e04af::t_a4728e3d72502a 1-106
+crates/hushos-core/src/drive.rs
+  s_c60e24772e04af::t_af8cd804c75eda 1016-1097,2622-2660
+crates/hushos-core/src/signatures.rs
+  s_c60e24772e04af::t_8b002ecf13f2bf 399-437,2362-2408
+crates/hushos-core/tests/save_estimate.rs
+  s_c60e24772e04af::t_45d281e35000f2 1-52
+packages/drive/package.json
+  s_c60e24772e04af::t_3ae0cb3d7a4f0e 14
+packages/drive/src/connection.test.ts
+  s_c60e24772e04af::t_c8e4fcf2096b3c 110-111
+packages/drive/src/journal.ts
+  s_c60e24772e04af::t_bf43990051c1d3 129,133-154,158-221,225,274-276,280
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_a8fff54eccd479 121-126,314-319,340-346,349-354,395-408,2446-2603
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2643a6840883cd38f03e42ba13ab1dc20642a4c",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
