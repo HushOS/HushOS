@@ -37,7 +37,11 @@ object KitScan {
     /* Sets of three finders tried after the usual reader: six codes in view make about 40. */
     internal const val MOST_SETS = 64
 
-    /* Finder squares looked for before the second read gives up: twelve codes in view make 37. */
+    /*
+     * Finder squares looked for before the second read gives up: twelve codes in view make about 40.
+     * Measured on CameraX's default 640 × 480 analysis frames; larger frames turn up more squares
+     * from noise (a kit code at 1920 × 1440 showed 52), so revisit this if the resolution goes up.
+     */
     internal const val MOST_FINDERS = 64
 
     private class TooManyFinders : RuntimeException()
