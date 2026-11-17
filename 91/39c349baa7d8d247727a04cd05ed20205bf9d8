@@ -1,0 +1,35 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_bda7efcdfe7ef1 99-100,103
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_54a62247e839b8 49-50
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_191fd05133cbe0 10,96
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_7dd0448c4c4bea 538,543-547
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_d8afe0308c519f 685,690,843-845,849,867,1441-1444
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_4a4fb432b42fc7 258,262,344-348,355,441,511-513,551
+docs/file-tools-design.md
+  s_c60e24772e04af::t_2639b0c052917d 375
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_2676ffee4e659f 891-892
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_949be5fb52420e 1324,1327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9139c349baa7d8d247727a04cd05ed20205bf9d8",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
