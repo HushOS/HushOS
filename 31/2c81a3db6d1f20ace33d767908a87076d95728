@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_8dca0d2f6a905a 93-121,219,226
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveScreen.kt
+  s_c60e24772e04af::t_d861c30e64a5c1 142-143,150,175,182-185,192,359-361,392,396
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveBrowseTest.kt
+  s_c60e24772e04af::t_a57d7f6c67abf0 19,79-110
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_373e313bdada97 247-248
+apps/web/src/components/drive/archive-view.tsx
+  s_c60e24772e04af::t_96e8b401e77ce0 323-327
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_553cf1288822a4 2177-2186
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_744776f8352b12 1005-1074
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_6a493a335896e1 176,197
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "312c81a3db6d1f20ace33d767908a87076d95728",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
