@@ -1,13 +1,18 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newFolder, newPage, openFolder, registerAccount, seedFolders } from './helpers';
+import { grip, newFolder, newPage, openFolder, registerAccount } from './helpers';
 
 /*
  * A folder long enough that the list draws only the rows near the screen (components/drive/
  * virtual-list.tsx): the keys, a Shift-click range, the row semantics and the right-click
  * menu must reach rows that are not drawn, or were never drawn together. One account and a
- * folder of 300 rows for the whole file; each test starts at the top with nothing selected.
- * The last two change the folder (a drag moves a row, a range goes to the Trash), so they
- * run last and count from what is there rather than from 300.
+ * folder of 300 files, uploaded through the page as a person would, for the whole file; each
+ * test starts at the top with nothing selected. The later tests change the folder (a drag
+ * moves a file into a new folder, a range goes to the Trash, items arrive and leave from a
+ * second tab), so they run last and count from what is there rather than from 300.
+ *
+ * Everything goes through the app as it ships, so the file runs against a production build
+ * as CI's does: another tab on the same account stands in for another device, and its changes
+ * reach this tab as a sync does, when this tab next polls for changes.
  */
 
 let page: Page;
@@ -70,62 +75,68 @@ const under = (p: Page) =>
             : null;
     });
 
-/*
- * Moves `names` in the folder on screen to the Trash the way another device would: through the
- * app's Drive client in the page (dev server only, as seedFolders), so the tab hears of it when
- * it next polls for changes.
- */
-async function trashBySync(p: Page, names: string[]) {
-    await p.evaluate(async (names) => {
-        type Drive = {
-            clientFor(): { listFolder(id: string): Promise<{ children: { name: string }[] }> };
-            trashNodes(nodes: unknown[]): Promise<unknown>;
-        };
-        const module = '/src/lib/drive.ts';
-        const drive = (await import(/* @vite-ignore */ module)) as Drive;
-        const id = /\/app\/drive\/f\/([^/?#]+)/.exec(location.pathname)![1]!;
-        const { children } = await drive.clientFor().listFolder(id);
-        await drive.trashNodes(children.filter((node) => names.includes(node.name)));
-    }, names);
+/* Another tab on the same account, on the folder this one shows: another device, in effect. */
+async function otherTab(p: Page) {
+    const other = await p.context().newPage();
+    await other.goto(p.url());
+    await expect(other.locator('table')).toBeVisible({ timeout: 60_000 });
+    await other.keyboard.press('Escape');
+    return other;
+}
+
+/* Makes a folder in the folder `p` shows, through the New folder dialog. */
+async function makeFolder(p: Page, folder: string) {
+    await p.keyboard.press('Shift+N');
+    await p.getByPlaceholder('Reports/2026').fill(folder);
+    await p.keyboard.press('Enter');
+    await expect(p.getByRole('dialog')).toHaveCount(0);
+}
+
+/* Uploads small text files named `names` into the folder `p` shows, and lets the transfers go. */
+async function upload(p: Page, names: string[]) {
+    const count = Number(await p.locator('table').getAttribute('aria-rowcount'));
+    await p
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles(
+            names.map((file) => ({
+                name: file,
+                mimeType: 'text/plain',
+                buffer: Buffer.from(`${file}\n`),
+            })),
+        );
+    // The panel draws every upload; folded away, the page does not redraw a row per byte.
+    const fold = p.getByRole('button', { name: 'Collapse transfers', exact: true });
+    if (await fold.isVisible().catch(() => false)) await fold.click();
+    await expect(p.locator('table')).toHaveAttribute(
+        'aria-rowcount',
+        String(count + names.length),
+        { timeout: 240_000 },
+    );
+    const close = p.getByRole('button', { name: 'Close transfers', exact: true });
+    await expect(close).toBeVisible({ timeout: 60_000 });
+    await close.click();
 }
 
 /*
- * Makes `make` as folders and moves `trash` to the Trash in the folder on screen, in one sync:
- * the tab's change polling waits while it happens (it pauses while the page is hidden), so the
- * next poll brings both at once, as one refresh of the listing.
+ * Selects the rows named `first` to `last` in `p` (Shift-click) and moves them to the Trash.
+ * They sit at one `end` of the list, which `p` scrolls to first: the rows elsewhere are not drawn.
  */
-async function syncTogether(p: Page, { make, trash }: { make: string[]; trash: string[] }) {
-    await p.evaluate(
-        async ({ make, trash }) => {
-            type Drive = {
-                clientFor(): {
-                    listFolder(
-                        id: string,
-                    ): Promise<{ folder: unknown; children: { name: string }[] }>;
-                    createFolderPath(parent: unknown, path: string[]): Promise<unknown>;
-                };
-                trashNodes(nodes: unknown[]): Promise<unknown>;
-            };
-            const module = '/src/lib/drive.ts';
-            const drive = (await import(/* @vite-ignore */ module)) as Drive;
-            const id = /\/app\/drive\/f\/([^/?#]+)/.exec(location.pathname)![1]!;
-            Object.defineProperty(document, 'visibilityState', {
-                configurable: true,
-                get: () => 'hidden',
-            });
-            try {
-                // A poll already on its way lands before anything changes.
-                await new Promise((resolve) => setTimeout(resolve, 1_500));
-                const client = drive.clientFor();
-                const { folder, children } = await client.listFolder(id);
-                for (const name of make) await client.createFolderPath(folder, [name]);
-                await drive.trashNodes(children.filter((node) => trash.includes(node.name)));
-            } finally {
-                delete (document as { visibilityState?: unknown }).visibilityState;
-            }
-        },
-        { make, trash },
-    );
+async function trashRange(p: Page, first: string, last: string, end: 'top' | 'foot') {
+    await p.evaluate((end) => {
+        const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+        sheet.scrollTop = end === 'top' ? 0 : sheet.scrollHeight;
+    }, end);
+    const named = (label: string) =>
+        p
+            .locator('[data-node-id]')
+            .filter({ has: p.locator('[data-row-name]').getByText(label, { exact: true }) });
+    await expect(named(first)).toBeVisible();
+    await named(first).click(grip);
+    await expect(named(last)).toBeVisible();
+    await named(last).click({ ...grip, modifiers: ['Shift'] });
+    await p.keyboard.press('Delete');
+    await expect(p.getByText(/moved to Trash/).first()).toBeVisible({ timeout: 60_000 });
 }
 
 /* Rows the table draws past each edge of the screen (virtual-list.tsx's overscan). */
@@ -177,13 +188,16 @@ test.beforeAll(async ({ browser }) => {
     await page.getByPlaceholder('Reports/2026').fill('Long');
     await page.keyboard.press('Enter');
     await openFolder(page, 'Long');
-    await seedFolders(
+    // An empty folder has no table yet: its first file draws one, then the rest arrive.
+    await page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles({ name: name(0), mimeType: 'text/plain', buffer: Buffer.from('0\n') });
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', '2', { timeout: 60_000 });
+    await upload(
         page,
-        Array.from({ length: COUNT }, (_, index) => name(index)),
+        Array.from({ length: COUNT - 1 }, (_, index) => name(index + 1)),
     );
-    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(COUNT + 1), {
-        timeout: 120_000,
-    });
 });
 test.afterAll(async () => {
     await page.close();
@@ -244,7 +258,7 @@ test('a right-click on a row deep in the list selects it and its menu acts on it
     await expect(row(page, 180)).toBeVisible();
     await row(page, 180).click({ button: 'right', position: { x: 600, y: 28 } });
     const menu = page.getByRole('menu');
-    await expect(menu.getByRole('menuitem', { name: /^Open/ })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: /^Preview/ })).toBeVisible();
     await expect(row(page, 180)).toHaveAttribute('aria-selected', 'true');
     await expect(selection(page)).toContainText('1 selected');
     await menu.getByRole('menuitem', { name: /^Rename/ }).click();
@@ -261,7 +275,7 @@ test('the ⋯ menu of a row deep in the list acts on that row and gives the keys
     const more = page.getByRole('button', { name: `More for ${name(220)}`, exact: true });
     await more.click();
     const menu = page.getByRole('menu');
-    await expect(menu.getByRole('menuitem', { name: /^Open/ })).toBeVisible();
+    await expect(menu.getByRole('menuitem', { name: /^Preview/ })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     await expect(more).toBeFocused();
@@ -430,6 +444,12 @@ test('at a phone’s width the window scrolls and the rows drawn follow it', asy
 
 test('a row dragged up past the drawn rows into a folder is drawn once, and leaves', async () => {
     await reset(page);
+    // The folder it goes into, at the top of the list (folders come first).
+    await makeFolder(page, 'box');
+    const box = rows(page).filter({
+        has: page.locator('[data-row-name]').getByText('box', { exact: true }),
+    });
+    await expect(box).toBeVisible();
     const before = await rowCount(page);
     await scrollToRow(page, 198);
     const source = row(page, 200);
@@ -440,13 +460,13 @@ test('a row dragged up past the drawn rows into a folder is drawn once, and leav
     await page.mouse.move(700, 400, { steps: 4 });
     const card = page.locator('[data-drag-card]');
     await expect(card).toContainText(name(200));
-    // The list scrolls up under the drag, far past the rows drawn around the one picked up.
-    // Its target sits clear of the selection bar at the foot of the sheet.
-    await scrollToRow(page, 140);
-    await expect(row(page, 143)).toBeVisible();
+    // The list scrolls up under the drag to its top, far past the rows drawn around the one
+    // picked up.
+    await scrollToRow(page, 0);
+    await expect(box).toBeVisible();
     expect(await duplicates(page)).toBe(0);
     expect(await page.locator(`[data-node-id="${id}"]`).count()).toBe(1);
-    const target = (await row(page, 143).boundingBox())!;
+    const target = (await box.boundingBox())!;
     const x = target.x + 300;
     const y = target.y + target.height / 2;
     await page.mouse.move(x, y, { steps: 4 });
@@ -454,10 +474,10 @@ test('a row dragged up past the drawn rows into a folder is drawn once, and leav
     await expect(async () => {
         nudge = 1 - nudge;
         await page.mouse.move(x + nudge, y);
-        await expect(card.getByText(`Move to “${name(143)}”`)).toBeVisible({ timeout: 1_000 });
+        await expect(card.getByText('Move to “box”')).toBeVisible({ timeout: 1_000 });
     }).toPass({ timeout: 20_000 });
     await page.mouse.up();
-    await expect(page.getByText(`“${name(200)}” moved to “${name(143)}”`)).toBeVisible();
+    await expect(page.getByText(`“${name(200)}” moved to “box”`)).toBeVisible();
     await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before - 1));
     await expect(page.locator(`[data-node-id="${id}"]`)).toHaveCount(0);
     expect(await duplicates(page)).toBe(0);
@@ -473,7 +493,7 @@ test('a range that was never drawn together goes to the Trash whole', async () =
     const label = (await selection(page).innerText()).match(/(\d+) selected/)!;
     const picked = Number(label[1]);
     // From row-002 to row-250, less the row the drag moved away.
-    expect(picked).toBe(before - 1 - 2 - (COUNT - 251));
+    expect(picked).toBe(249 - 1);
     await page.keyboard.press('Delete');
     await expect(page.getByText(`${picked} items moved to Trash`)).toBeVisible({
         timeout: 60_000,
@@ -483,7 +503,8 @@ test('a range that was never drawn together goes to the Trash whole', async () =
     await expect(row(page, 1)).toBeVisible();
     await expect(row(page, 2)).toHaveCount(0);
     await expect(row(page, 120)).toHaveCount(0);
-    await expect(rows(page).nth(2)).toContainText(name(251));
+    // box, row-000, row-001, then row-251.
+    await expect(rows(page).nth(3)).toContainText(name(251));
     expect(await duplicates(page)).toBe(0);
 });
 
@@ -496,9 +517,11 @@ test('rows that arrive above the screen leave the rows on it where they were', a
     expect(await firstOnScreen(page)).toBeGreaterThan(2 * OVERSCAN);
     const still = await under(page);
     expect(still).not.toBeNull();
-    // Three folders that sort above everything on screen, made the way another device would
-    // make them: the tab hears of them when it next polls for changes, as with any sync.
-    await seedFolders(page, ['aa-0', 'aa-1', 'aa-2'], { reload: false });
+    // Three folders that sort above everything on screen, made in another tab: this one hears
+    // of them when it next polls for changes, as with any sync.
+    const other = await otherTab(page);
+    for (const folder of ['aa-0', 'aa-1', 'aa-2']) await makeFolder(other, folder);
+    await other.close();
     await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3), {
         timeout: 90_000,
     });
@@ -525,7 +548,9 @@ test('rows that leave above the screen at the foot of the list leave the last ro
     expect(still).not.toBeNull();
     // Three rows at the top of the list leave by sync: the browser pulls the scroll in by as
     // much, as the list got shorter, and the list must not pull it in again.
-    await trashBySync(page, ['aa-0', 'aa-1', 'aa-2']);
+    const other = await otherTab(page);
+    await trashRange(other, 'aa-0', 'aa-2', 'top');
+    await other.close();
     await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before - 3), {
         timeout: 90_000,
     });
@@ -541,7 +566,8 @@ test('as many rows arriving above the screen as leave below it, in one sync, lea
     await reset(page);
     const before = await rowCount(page);
     // Three rows at the foot of the list, to leave below the screen.
-    await seedFolders(page, ['zz-0', 'zz-1', 'zz-2'], { reload: false });
+    const other = await otherTab(page);
+    await upload(other, ['zz-0', 'zz-1', 'zz-2']);
     await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3), {
         timeout: 90_000,
     });
@@ -556,7 +582,26 @@ test('as many rows arriving above the screen as leave below it, in one sync, lea
         has: page.locator('[data-row-name]').getByText(still!.name!, { exact: true }),
     });
     const index = Number(await held.getAttribute('aria-rowindex'));
-    await syncTogether(page, { make: ['aa-3', 'aa-4', 'aa-5'], trash: ['zz-0', 'zz-1', 'zz-2'] });
+    // Both in one sync: this tab's change polling waits while it is hidden, so while the other
+    // tab makes three folders and moves three files to the Trash, this one is made to say it is
+    // hidden, and its next poll brings both at once.
+    await page.evaluate(() =>
+        Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            get: () => 'hidden',
+        }),
+    );
+    try {
+        // A poll already on its way lands before anything changes.
+        await page.waitForTimeout(1_500);
+        for (const folder of ['aa-3', 'aa-4', 'aa-5']) await makeFolder(other, folder);
+        await trashRange(other, 'zz-0', 'zz-2', 'foot');
+    } finally {
+        await page.evaluate(
+            () => delete (document as { visibilityState?: unknown }).visibilityState,
+        );
+        await other.close();
+    }
     // The count is the same; the row that was under the point is three further down the list.
     await expect(held).toHaveAttribute('aria-rowindex', String(index + 3), { timeout: 90_000 });
     await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before + 3));

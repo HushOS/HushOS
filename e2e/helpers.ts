@@ -182,47 +182,6 @@ export async function dragOnto(page: Page, source: Locator, target: Locator, say
     await expect(card).toHaveCount(0);
 }
 
-/*
- * Makes `names` as folders inside the folder on screen, fast: through the app's own Drive
- * client in the page, so each is sealed and signed exactly as the New folder dialog does,
- * without opening the dialog hundreds of times. Folders, as a file needs an upload; a list
- * test wants rows, not their bytes. The page then lists the folder afresh, unless `reload` is
- * false: the rows then arrive the way another device's do, when the tab next polls for changes.
- *
- * It needs the dev server, which serves the app's modules by their source path, as every e2e
- * run starts or is pointed at today (E2E_BASE_URL at a verification launch). A built server
- * serves hashed chunks with no way in from outside, and the helper says so instead of guessing.
- */
-export async function seedFolders(page: Page, names: string[], { reload = true } = {}) {
-    const folderId = /\/app\/drive\/f\/([^/?#]+)/.exec(page.url())?.[1];
-    if (!folderId) throw new Error('seedFolders needs a folder of ones own on screen.');
-    const failure = await page.evaluate(
-        async ({ folderId, names }) => {
-            type Client = {
-                listFolder(id: string): Promise<{ folder: unknown }>;
-                createFolderPath(parent: unknown, path: string[]): Promise<unknown>;
-            };
-            const module = '/src/lib/drive.ts';
-            let drive: { clientFor(workspaceId?: string | null): Client };
-            try {
-                drive = await import(/* @vite-ignore */ module);
-            } catch {
-                return `seedFolders needs the dev server: ${location.origin} does not serve ${module}, as a built server never does. Point E2E_BASE_URL at \`bun run dev\` or a verification launch.`;
-            }
-            const client = drive.clientFor();
-            const { folder } = await client.listFolder(folderId);
-            for (let i = 0; i < names.length; i += 8)
-                await Promise.all(
-                    names.slice(i, i + 8).map((name) => client.createFolderPath(folder, [name])),
-                );
-            return null;
-        },
-        { folderId, names },
-    );
-    if (failure) throw new Error(failure);
-    if (reload) await page.reload();
-}
-
 /* Opens the New folder dialog from the folder's Add menu. */
 export async function newFolder(page: Page) {
     await page.getByRole('button', { name: 'Add', exact: true }).click();
