@@ -9,6 +9,8 @@ on:
         paths:
             - packages/crypto/**
             - crates/**
+            - apps/web/src/lib/archives/**
+            - e2e/fixtures/archives/**
             - .github/workflows/fuzz.yml
     schedule:
         # Nightly, at an hour nothing else runs.
@@ -139,6 +141,8 @@ jobs:
                     - record_integrity
                     - origin_open
                     - area_ledger
+                    # Its "TypeScript" run is the web's zip reader against the core (differential.ts).
+                    - archive
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -187,6 +191,8 @@ jobs:
               run: bun run fuzz js ${{ matrix.target }} --time "$SECONDS_PER_TARGET"
             - name: Replay both corpora in the other twin
               id: differential
+              # The archive target's replay is its "TypeScript" run (the web against the core).
+              if: matrix.target != 'archive'
               continue-on-error: true
               # Anchored, so roster does not also run roster_build.
               run: bun run fuzz:diff -t "twins agree > ${{ matrix.target }} > on "

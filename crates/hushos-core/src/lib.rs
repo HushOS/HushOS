@@ -98,6 +98,27 @@ pub use two_step::*;
 pub mod fuzzing {
     use serde_json::Value;
 
+    /// Each entry of a zip as its central directory records it, by index: its method (inside
+    /// AES, the real one) and its CRC. None when the archive doesn't list.
+    pub fn zip_records(bytes: &[u8]) -> Option<Vec<(u32, u16, u32)>> {
+        let zip = crate::archive::Zip::open(&bytes.to_vec()).ok()?;
+        let listing = zip.listing().ok()?;
+        Some(
+            listing
+                .entries
+                .iter()
+                .map(|entry| {
+                    let method = if entry.lock == crate::archive::Lock::Aes {
+                        entry.aes_method.unwrap_or(u16::MAX)
+                    } else {
+                        entry.method
+                    };
+                    (entry.index, method, entry.crc)
+                })
+                .collect(),
+        )
+    }
+
     /// The parts a statement's bytes hold, or none when the grammar refuses them.
     pub fn parse_statement(bytes: &[u8]) -> Option<Vec<Value>> {
         crate::canonical::parse_statement(bytes, "statement").ok()

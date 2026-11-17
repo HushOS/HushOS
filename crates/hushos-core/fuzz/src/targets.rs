@@ -2177,9 +2177,11 @@ fn joins_record_kind(value: &Value) -> Option<Value> {
 
 /// The shared fixtures' password, tried on every archive.
 pub const ARCHIVE_PASSWORD: &str = "correct horse battery";
-/// The most entries an archive verdict previews, and the most each preview may hold.
+/// The most entries an archive verdict previews and downloads, the most a preview may hold, and
+/// the largest entry it downloads.
 const ARCHIVE_PREVIEWS: usize = 32;
 const ARCHIVE_PREVIEW_LIMIT: u64 = 1 << 20;
+const ARCHIVE_DOWNLOAD_MAX: u64 = 4 << 20;
 
 /* Bytes as a kept copy, read by range as a phone reads one. */
 struct ArchiveBytes(Vec<u8>);
@@ -2195,6 +2197,20 @@ impl LocalSource for ArchiveBytes {
     }
 }
 
+/* A download's sink that keeps nothing: what came, hashed and counted. */
+#[derive(Default)]
+struct ArchiveSink(std::sync::Mutex<(sha2::Sha256, u64)>);
+
+impl EntrySink for ArchiveSink {
+    fn write(&self, chunk: Vec<u8>) -> std::result::Result<(), FetchError> {
+        use sha2::Digest;
+        let mut held = self.0.lock().unwrap();
+        held.0.update(&chunk);
+        held.1 += chunk.len() as u64;
+        Ok(())
+    }
+}
+
 fn archive_code<T>(result: std::result::Result<T, ArchiveError>) -> (Option<T>, String) {
     match result {
         Ok(value) => (Some(value), "ok".into()),
@@ -2203,11 +2219,19 @@ fn archive_code<T>(result: std::result::Result<T, ArchiveError>) -> (Option<T>, 
     }
 }
 
-/// Any bytes as a zip, the way a phone opens one: listed, each entry previewed (at most 32, each
-/// within 1 MiB), the shared password tried, and the locked entries previewed again under it.
-/// The web's verdict is the same JSON (apps/web/src/lib/archives/differential.ts). Invariants:
-/// no panic; every folder after its parent with a name a path could hold; every entry in a folder
-/// that exists; a preview never longer than the entry declares.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Any bytes as a zip, the way a phone opens one: listed (every field the apps read, and each
+/// entry's method and CRC as recorded), each entry previewed (at most 32, each within 1 MiB) and
+/// downloaded into a sink that keeps nothing (up to 4 MiB), the content of each named by its
+/// SHA-256; then the shared password tried, and the locked entries previewed again under it.
+/// The web's verdict is the same JSON (apps/web/src/lib/archives/differential.ts), so wrong bytes
+/// show as well as wrong refusals. Invariants: no panic; every folder after its parent with a name
+/// a path could hold; every entry in a folder that exists; a preview or a download never other
+/// than the size the entry declares.
 pub fn archive(data: &[u8]) -> Value {
     let control = || RunControl::new(60_000, None);
     let session =
@@ -2215,6 +2239,11 @@ pub fn archive(data: &[u8]) -> Value {
             Ok(session) => session,
             Err(error) => return ok(json!({ "listing": archive_code::<()>(Err(error)).1 })),
         };
+    let records: std::collections::HashMap<u32, (u16, u32)> = fuzzing::zip_records(data)
+        .expect("a zip the session lists, listed again")
+        .into_iter()
+        .map(|(index, method, crc)| (index, (method, crc)))
+        .collect();
     let entries = session.entries();
     let folders = session.take_folders();
     assert_eq!(folders.parents.len() % 4, 0, "parents are u32s");
@@ -2241,23 +2270,46 @@ pub fn archive(data: &[u8]) -> Value {
     };
     let preview = |index: u32, size: u64| {
         let (bytes, code) = archive_code(session.preview(index, ARCHIVE_PREVIEW_LIMIT, control()));
-        if let Some(bytes) = bytes {
-            assert_eq!(bytes.len() as u64, size, "a preview is its declared size");
+        match bytes {
+            Some(bytes) => {
+                assert_eq!(bytes.len() as u64, size, "a preview is its declared size");
+                json!({ "code": code, "sha256": sha256_hex(&bytes) })
+            }
+            None => json!({ "code": code }),
         }
-        code
+    };
+    let download = |index: u32, size: u64| {
+        use sha2::Digest;
+        let sink = std::sync::Arc::new(ArchiveSink::default());
+        let (_, code) = archive_code(session.download(index, sink.clone(), control()));
+        let (hash, count) = std::mem::take(&mut *sink.0.lock().unwrap());
+        if code == "ok" {
+            assert_eq!(count, size, "a download is its declared size");
+            let digest: String = hash.finalize().iter().map(|b| format!("{b:02x}")).collect();
+            json!({ "code": code, "sha256": digest })
+        } else {
+            assert!(count <= size, "a download never past its declared size");
+            json!({ "code": code })
+        }
     };
     let listed: Vec<Value> = entries
         .iter()
         .enumerate()
         .map(|(n, entry)| {
             assert!((entry.folder as usize) < parents.len(), "entry in a folder that exists");
+            let (method, crc) = records[&entry.index];
             let mut out = json!({
                 "index": entry.index, "path": entry.path, "at": at(entry.folder), "name": entry.name,
                 "directory": entry.directory, "hidden": entry.hidden, "lock": entry.lock, "support": entry.support,
-                "size": entry.size, "saveName": entry.save_name,
+                "size": entry.size, "packed": entry.packed, "method": method, "crc": crc, "stored": entry.stored,
+                "link": entry.link, "nested": entry.nested, "dos": entry.dos, "mtime": entry.mtime_millis,
+                "saveName": entry.save_name,
             });
             if n < ARCHIVE_PREVIEWS && !entry.directory {
-                out["preview"] = json!(preview(entry.index, entry.size));
+                out["preview"] = preview(entry.index, entry.size);
+                if entry.size <= ARCHIVE_DOWNLOAD_MAX {
+                    out["download"] = download(entry.index, entry.size);
+                }
             }
             out
         })
@@ -2267,7 +2319,7 @@ pub fn archive(data: &[u8]) -> Value {
     if unlocked == Some(true) {
         for entry in entries.iter().take(ARCHIVE_PREVIEWS) {
             if entry.lock != "none" && !entry.directory {
-                after.push(json!(preview(entry.index, entry.size)));
+                after.push(preview(entry.index, entry.size));
             }
         }
     }
@@ -2297,6 +2349,12 @@ mod tests {
             }
             let verdict = archive(&std::fs::read(dir.join(name)).unwrap());
             let out = &verdict["out"];
+            // Every preview that opened names its content.
+            for entry in out["entries"].as_array().into_iter().flatten() {
+                if entry["preview"]["code"] == "ok" {
+                    assert_eq!(entry["preview"]["sha256"].as_str().map(str::len), Some(64), "{name}");
+                }
+            }
             assert_eq!(out["listing"], expected["listing"], "{name}: listing");
             if let Some(unlock) = expected.get("unlock") {
                 assert_eq!(out["unlock"], unlock["right"], "{name}: unlock");

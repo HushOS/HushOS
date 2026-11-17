@@ -5,28 +5,34 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
 import { ZipArchive } from './zip-archive';
+import { entryRefusalWords } from './words';
 import { ZipError } from './zip-format';
 
 /*
- * The web's archive reader against the core's, on the same bytes: what each lists (every entry's
- * path, folder, name and what it is, the folders included), what previewing each entry meets, and
- * what the shared password unlocks. The core's side is the `archive` verdict of
- * crates/hushos-core/fuzz (targets.rs), served by its `verdicts` example; the cargo-fuzz target
+ * The web's archive reader against the core's, on the same bytes: what each lists (every field
+ * the apps read, each entry's recorded method and CRC, the folders), what previewing and
+ * downloading each entry meets and the SHA-256 of what it hands back, and what the shared password
+ * unlocks and the content of each locked entry under it. The core's side is the `archive` verdict
+ * of crates/hushos-core/fuzz (targets.rs), served by its `verdicts` example; the cargo-fuzz target
  * `archive` fuzzes that verdict alone, with every invariant asserted.
  *
- *     bun apps/web/src/lib/archives/differential.ts [--time <seconds>] [--seed <n>]
+ *     bun apps/web/src/lib/archives/differential.ts [--time <seconds>] [--seed <n>] [--invert]
  *
  * Inputs: every committed fixture of e2e/fixtures/archives, the cargo-fuzz corpus
  * (crates/hushos-core/fuzz/corpus/archive, when there is one), then edits of the fixtures (bytes
- * flipped, fields set to edge values, cut short, spliced) until the time is up.
+ * flipped, fields set to edge values, cut short, spliced) until the time is up. `--invert` is the
+ * runner's own check: every byte the web hands back is inverted, and the run must fail.
  *
- * Refusals of damaged data are compared as one: `damaged`, `size`, `short`, `crc` and `auth`. Which
- * check notices a damaged stream first depends on the inflater (zlib-rs and the deflate64 crate
- * hand back what they decoded before they notice; zip.js's inflaters fail the whole piece; an AES
- * entry's code may be checked before or after its stream breaks), and the first runs found only
- * such pairs. Everything else must match exactly: whether an entry opens at all, the listing's
- * refusals, every path, folder and name, the password's outcomes, and the ratio, method,
- * encryption, nested and too-large refusals.
+ * One thing is compared by what a person sees rather than by its code: an entry's refusal, by its
+ * words (entryRefusalWords). The integrity codes (`damaged`, `size`, `short`, `crc`, `auth`)
+ * share one sentence on every client, because they can't be aligned: on the same damaged bytes the
+ * core's decoders (zlib-rs, the deflate64 crate) and zip.js's notice the damage at different
+ * points, in both directions (one hands back more before it stops, or accepts a Deflate64 stream
+ * the other calls invalid), and whether an AES entry's code is checked before its stream breaks
+ * follows zip.js's stream timing. Making the core copy that timing was tried and only moved the
+ * differences. Everything else must match exactly: whether an entry opens at all, the bytes it
+ * opens to, every listed field, the listing's refusals, the password's outcomes, and every other
+ * refusal.
  *
  * A divergence, a core panic or a web error outside the refusals is written to
  * crates/hushos-core/fuzz/artifacts/archive-diff/<hash>.zip and counted. Exits 1 if any.
@@ -38,9 +44,10 @@ const corpus = join(root, 'crates/hushos-core/fuzz/corpus/archive');
 const artifacts = join(root, 'crates/hushos-core/fuzz/artifacts/archive-diff');
 const binary = join(root, 'crates/hushos-core/fuzz/target/release/examples/verdicts');
 const PASSWORD = 'correct horse battery';
-// The core's archive verdict: at most 32 entries previewed, each within 1 MiB.
+// The core's archive verdict: at most 32 entries previewed, each within 1 MiB, and downloaded up to 4 MiB.
 const PREVIEWS = 32;
 const PREVIEW_LIMIT = 1 << 20;
+const DOWNLOAD_MAX = 4 << 20;
 
 const args = process.argv.slice(2);
 const option = (name: string, fallback: number) => {
@@ -49,6 +56,12 @@ const option = (name: string, fallback: number) => {
 };
 const seconds = option('--time', 60);
 let seed = option('--seed', Date.now() % 2 ** 31) >>> 0;
+// A self-check: every byte the web hands back is inverted, and the run must find it.
+const invert = args.includes('--invert');
+
+/* What the web hands back, made wrong on purpose with --invert: the runner must then fail. */
+const handBack = (bytes: Uint8Array) => (invert ? bytes.map((byte) => byte ^ 0xff) : bytes);
+const sha256 = (bytes: Uint8Array) => createHash('sha256').update(handBack(bytes)).digest('hex');
 
 /* The web's verdict: the same JSON as the core's `archive` verdict. */
 async function web(bytes: Uint8Array) {
@@ -75,14 +88,29 @@ async function web(bytes: Uint8Array) {
     };
     const preview = async (index: number) => {
         try {
-            await archive.preview(index, PREVIEW_LIMIT);
-            return 'ok';
+            return { code: 'ok', sha256: sha256(await archive.preview(index, PREVIEW_LIMIT)) };
         } catch (error) {
-            return code(error);
+            return { code: code(error) };
+        }
+    };
+    const download = async (index: number, size: number) => {
+        const hash = createHash('sha256');
+        let count = 0;
+        try {
+            await archive.download(index, (chunk) => {
+                hash.update(handBack(chunk));
+                count += chunk.length;
+            });
+            if (count !== size) return { code: `failed: ${count} bytes of ${size}` };
+            return { code: 'ok', sha256: hash.digest('hex') };
+        } catch (error) {
+            if (count > size) return { code: `failed: ${count} bytes of ${size}` };
+            return { code: code(error) };
         }
     };
     const entries = [];
     for (const [n, item] of archive.listed.entries()) {
+        const record = archive.entries[item.index]!;
         const out: Record<string, unknown> = {
             index: item.index,
             path: item.path,
@@ -93,9 +121,20 @@ async function web(bytes: Uint8Array) {
             lock: item.lock,
             support: item.support,
             size: item.size,
+            packed: item.packed,
+            method: record.lock === 'aes' ? (record.aes?.method ?? 0xffff) : record.method,
+            crc: record.crc,
+            stored: item.stored,
+            link: item.link,
+            nested: item.nested,
+            dos: item.dos,
+            mtime: item.mtime,
             saveName: item.saveName,
         };
-        if (n < PREVIEWS && !item.directory) out.preview = await preview(item.index);
+        if (n < PREVIEWS && !item.directory) {
+            out.preview = await preview(item.index);
+            if (item.size <= DOWNLOAD_MAX) out.download = await download(item.index, item.size);
+        }
         entries.push(out);
     }
     let unlock: unknown;
@@ -188,12 +227,10 @@ const seeds = readdirSync(fixtures)
     .map((name) => new Uint8Array(readFileSync(join(fixtures, name))));
 const replayed = read(corpus);
 
-const DAMAGE = new Set(['damaged', 'size', 'short', 'crc', 'auth']);
+/* A verdict as a person reads it: each entry's outcome by its words. */
 const judged = (verdict: unknown) =>
     JSON.parse(JSON.stringify(verdict), (key, value: unknown) =>
-        (key === 'preview' || /^\d+$/.test(key)) && typeof value === 'string' && DAMAGE.has(value)
-            ? 'damage'
-            : value,
+        key === 'code' && typeof value === 'string' ? (entryRefusalWords[value] ?? value) : value,
     ) as unknown;
 
 let compared = 0;

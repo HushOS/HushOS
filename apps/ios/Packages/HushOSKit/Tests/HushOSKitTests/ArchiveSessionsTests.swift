@@ -258,6 +258,23 @@ import Testing
         other.close()
     }
 
+    @Test func theAllowlistSweepClosesAZipOfAFamilyNoLongerKept() async throws {
+        let kept = UUID().uuidString.lowercased(), dropped = UUID().uuidString.lowercased()
+        let staying = try await Self.open("aes.zip", registered: true)
+        let going = try await Self.open("aes.zip", registered: true)
+        ArchiveSessions.mark(archive: staying.identity, family: kept)
+        ArchiveSessions.mark(archive: going.identity, family: dropped)
+        #expect(try await staying.unlock("correct horse battery"))
+        #expect(try await going.unlock("correct horse battery"))
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporary) }
+        #expect(TemporaryCopies.sweepFamily(keeping: [kept], in: temporary))
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!going.unlocked)
+        #expect(staying.unlocked)
+        staying.close()
+    }
+
     final class Counter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0

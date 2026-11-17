@@ -41,13 +41,16 @@ object ArchiveWords {
     fun tooLarge(size: Long) = "This file is ${formatBytes(size)}, too large to preview here."
     fun large(size: Long) = "This file is ${formatBytes(size)}."
 
+    /* An item whose bytes are damaged: one sentence, whichever check noticed first (the web's ITEM_DAMAGED). */
+    private const val ITEM_DAMAGED = "This item is damaged, or isn’t something HushOS can read."
+
     /*
      * Why an archive or one of its items was refused, by the core's code; anything else is the tools'
      * failure. `entry`: an item's own refusal, where "damaged" says the item is, not the archive,
      * which still lists (the web's entryRefusalWords).
      */
     fun refusal(code: String, entry: Boolean = false): String = when (code) {
-        "damaged" -> if (entry) "This item is damaged, or isn’t something HushOS can read." else "This archive is damaged, or isn’t a zip archive HushOS can read."
+        "damaged" -> if (entry) ITEM_DAMAGED else "This archive is damaged, or isn’t a zip archive HushOS can read."
         "directory-too-large" -> "This archive’s list of contents is too large to open here. Download it to open it on your computer."
         "too-many-entries" -> "This archive has more than ${String.format(java.util.Locale.US, "%,d", com.hushos.core.zipEntriesMax().toLong())} items, too many to list here. Download it to open it on your computer."
         "encrypted-directory" -> ENCRYPTED_DIRECTORY
@@ -58,11 +61,10 @@ object ArchiveWords {
         "encryption" -> ENCRYPTION
         "password" -> NEEDS_PASSWORD
         "wrong-password" -> WRONG_PASSWORD
-        "crc" -> "This item is damaged: its contents don’t match its checksum."
-        "auth" -> "This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown."
-        "size" -> "This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it."
+        // One sentence whichever check noticed the damage first: the web's decoders notice it at
+        // their own point (words.ts, ITEM_DAMAGED).
+        "crc", "auth", "size", "short" -> ITEM_DAMAGED
         "ratio" -> "This item expands far more than ordinary files do, which is how some zip bombs work. HushOS stopped reading it."
-        "short" -> "This item is damaged: it holds less than it says."
         "link" -> "This item is a link, which HushOS doesn’t open."
         "directory" -> "This is a folder in the archive, not a file."
         "too-large" -> "This item is too large to preview here. Download it to open it in another app."

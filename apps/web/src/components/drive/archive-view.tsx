@@ -119,9 +119,11 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     useEffect(() => {
         let active = true;
         let current: ArchiveSession | null = null;
+        // Closing the viewer while a small archive is read whole stops the read itself.
+        const leaving = new AbortController();
         void (async () => {
             try {
-                const reader = await archiveReader(node);
+                const reader = await archiveReader(node, leaving.signal);
                 if (!active) {
                     void reader.close?.();
                     return;
@@ -136,6 +138,7 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         })();
         return () => {
             active = false;
+            leaving.abort();
             current?.close();
             setSession(null);
             setListing(null);

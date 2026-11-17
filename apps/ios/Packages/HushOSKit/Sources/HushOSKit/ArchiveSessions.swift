@@ -59,8 +59,18 @@ public enum ArchiveSessions {
      */
     static func closeFamily(_ workspaces: [String]) {
         let forgotten = Set(workspaces.map { $0.lowercased() })
+        close(familiesWhere: { forgotten.contains($0) })
+    }
+
+    /* The allowlist sweep (`TemporaryCopies.sweepFamily`): every family archive whose workspace isn't kept closes. */
+    static func closeFamilies(keeping: Set<String>) {
+        let kept = Set(keeping.map { $0.lowercased() })
+        close(familiesWhere: { !kept.contains($0) })
+    }
+
+    private static func close(familiesWhere goes: (String) -> Bool) {
         let closes = live.lock.withLock {
-            let ids = live.families.filter { forgotten.contains($0.value) }.map(\.key)
+            let ids = live.families.filter { goes($0.value) }.map(\.key)
             return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
                 live.families[id] = nil
                 return live.archives.removeValue(forKey: id).map { (id, $0) }

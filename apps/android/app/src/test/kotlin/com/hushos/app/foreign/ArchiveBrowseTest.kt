@@ -67,11 +67,11 @@ class ArchiveBrowseTest {
         assertEquals(entry, browse.opened)
         assertTrue(entry.index in browse.reprompt)
         assertTrue(browse.downloads.isEmpty())
-        // Anything else stays on the bar, in the item's words.
+        // Anything else stays on the bar, in the item's words: a damaged item in the one sentence every client says.
         val other = EntryDownload(entry)
         browse.downloads.add(other)
         browse.downloadFailed(other, ArchiveException.Refused("crc"))
-        assertTrue(other.error.value!!.contains("checksum"))
+        assertEquals("This item is damaged, or isn’t something HushOS can read.", other.error.value)
         browse.close()
         scope.cancel()
     }

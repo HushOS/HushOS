@@ -38,6 +38,8 @@ public enum ArchiveWords {
     public static let largeRisk = "Opening it uses a lot of memory and may be slow on this device."
     public static let openAnyway = "Open anyway"
 
+    static let itemDamaged = "This item is damaged, or isn’t something HushOS can read."
+
     /* Why an archive or an entry was refused, by the core's code (archive.rs, `Refusal::code`). */
     public static let refusals: [String: String] = [
         "damaged": "This archive is damaged, or isn’t a zip archive HushOS can read.",
@@ -51,10 +53,12 @@ public enum ArchiveWords {
         "encryption": encryption,
         "password": needsPassword,
         "wrong-password": wrongPassword,
-        "crc": "This item is damaged: its contents don’t match its checksum.",
-        "auth": "This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown.",
-        "size": "This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it.",
-        "short": "This item is damaged: it holds less than it says.",
+        // One sentence whichever check noticed the damage first: the web's decoders notice it at
+        // their own point (words.ts, ITEM_DAMAGED).
+        "crc": itemDamaged,
+        "auth": itemDamaged,
+        "size": itemDamaged,
+        "short": itemDamaged,
         "link": "This item is a link, which HushOS doesn’t open.",
         "directory": "This is a folder in the archive, not a file.",
         "too-large": "This item is too large to preview here. Download it to open it in another app.",
@@ -64,7 +68,7 @@ public enum ArchiveWords {
 
     /* An item's own refusal: "damaged" says the item is, not the archive, which still lists. */
     public static let entryRefusals: [String: String] = refusals.merging(
-        ["damaged": "This item is damaged, or isn’t something HushOS can read."]
+        ["damaged": itemDamaged]
     ) { _, entry in entry }
 
     /* Which refusal words: the archive's (opening it) or an item's (reading one entry). */

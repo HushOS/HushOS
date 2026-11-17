@@ -151,19 +151,13 @@ describe('leaving an entry while it previews', () => {
         leaving.abort();
         await expect(previewing).rejects.toThrow('Stopped.');
         expect(posted.at(-1)).toEqual({ type: 'stop', id: asked.id });
-        // The worker's answer, already on its way, is let go: not a broken worker.
+        // The worker's last message for it (`end`, after a stop) is let go: not a broken worker.
+        fake.onmessage!({ data: { type: 'end', id: asked.id } } as MessageEvent);
+        expect(terminated).toBe(false);
+        // And the id is forgotten with it: anything more for it is a worker off its script.
         fake.onmessage!({
             data: { type: 'bytes', id: asked.id, bytes: new ArrayBuffer(10) },
         } as MessageEvent);
-        expect(terminated).toBe(false);
-        // The next entry previews as before.
-        const next = session.preview(entry() as ArchiveEntry, 1024);
-        await Promise.resolve();
-        await Promise.resolve();
-        const again = posted.filter((message) => message.type === 'preview').at(-1)!;
-        fake.onmessage!({
-            data: { type: 'bytes', id: again.id, bytes: new ArrayBuffer(10) },
-        } as MessageEvent);
-        expect((await next).checked).toBe(true);
+        expect(terminated).toBe(true);
     });
 });

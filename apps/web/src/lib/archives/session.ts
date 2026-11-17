@@ -277,6 +277,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         if (ended) return;
         const msg = event.data as Record<string, unknown> | null;
         if (typeof msg?.id === 'number' && stopped.has(msg.id)) {
+            // Every id gets one last message, `end` after a stop: then it is forgotten here too.
             if (['end', 'fail', 'bytes', 'span'].includes(msg.type as string))
                 stopped.delete(msg.id);
             return;

@@ -332,7 +332,7 @@ public enum TemporaryCopies {
     public static func sweepFamily(keeping: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
         let kept = Set(keeping.map { $0.lowercased() })
-        return forgetLock.withLock {
+        let swept = forgetLock.withLock { () -> Bool in
             if let session, !session.open { return false }
             for folder in (try? FileManager.default.contentsOfDirectory(at: family, includingPropertiesForKeys: nil)) ?? [] {
                 let workspace = folder.lastPathComponent.lowercased()
@@ -342,6 +342,9 @@ public enum TemporaryCopies {
             }
             return true
         }
+        // A zip of a family no longer kept closes too, idle or not: its listing and password go now.
+        if swept { ArchiveSessions.closeFamilies(keeping: keeping) }
+        return swept
     }
 
     static let forgetLock = NSLock()

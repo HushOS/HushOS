@@ -96,7 +96,9 @@ async function download(id: number, index: number) {
         await send();
         scope.postMessage({ type: 'end', id });
     } catch (error) {
-        if (!stop.signal.aborted) fail(id, error);
+        // Stopped: said once, so the page lets go of the id (each id gets one last message).
+        if (stop.signal.aborted) scope.postMessage({ type: 'end', id });
+        else fail(id, error);
     } finally {
         running.delete(id);
     }
@@ -158,13 +160,18 @@ scope.onmessage = (event) => {
                         return;
                     }
                     const bytes = await opened.preview(msg.index, msg.limit, stop.signal);
-                    if (stop.signal.aborted) return;
+                    // Stopped: said once, so the page lets go of the id (each id gets one last message).
+                    if (stop.signal.aborted) {
+                        scope.postMessage({ type: 'end', id: msg.id });
+                        return;
+                    }
                     scope.postMessage(
                         { type: 'bytes', id: msg.id, bytes: bytes.buffer as ArrayBuffer },
                         [bytes.buffer as ArrayBuffer],
                     );
                 } catch (error) {
-                    if (!stop.signal.aborted) fail(msg.id, error);
+                    if (stop.signal.aborted) scope.postMessage({ type: 'end', id: msg.id });
+                    else fail(msg.id, error);
                 } finally {
                     running.delete(msg.id);
                 }

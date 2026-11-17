@@ -35,6 +35,14 @@ export const archiveWords = {
     unverified: 'This item is too large to check before it’s shown, so it may be damaged.',
 };
 
+/*
+ * An item whose bytes are damaged: one sentence, whichever check noticed first (its stream, its
+ * size, its CRC, its AES code). The decoders behind each client notice damage at their own
+ * point (zlib-rs and the deflate64 crate in the core, zip.js's inflaters on the web), so the same
+ * bytes can meet different checks; a person sees the same words on every client all the same.
+ */
+const ITEM_DAMAGED = 'This item is damaged, or isn’t something HushOS can read.';
+
 /* Why an archive or an entry was refused, in the person's words. Anything else is the tools' TOOL_FAILED. */
 export const refusalWords: Record<string, string> = {
     damaged: 'This archive is damaged, or isn’t a zip archive HushOS can read.',
@@ -50,10 +58,10 @@ export const refusalWords: Record<string, string> = {
     encryption: archiveWords.encryption,
     password: archiveWords.needsPassword,
     'wrong-password': archiveWords.wrongPassword,
-    crc: 'This item is damaged: its contents don’t match its checksum.',
-    auth: 'This item is damaged: it doesn’t pass the archive’s check, so nothing of it is shown.',
-    size: 'This item holds more than it says, which is how some zip bombs work. HushOS stopped reading it.',
-    short: 'This item is damaged: it holds less than it says.',
+    crc: ITEM_DAMAGED,
+    auth: ITEM_DAMAGED,
+    size: ITEM_DAMAGED,
+    short: ITEM_DAMAGED,
     link: 'This item is a link, which HushOS doesn’t open.',
     directory: 'This is a folder in the archive, not a file.',
     'too-large': 'This item is too large to preview here. Download it to open it in another app.',
@@ -64,5 +72,5 @@ export const refusalWords: Record<string, string> = {
 /* An item's own refusal: "damaged" says the item is, not the archive, which still lists. */
 export const entryRefusalWords: Record<string, string> = {
     ...refusalWords,
-    damaged: 'This item is damaged, or isn’t something HushOS can read.',
+    damaged: ITEM_DAMAGED,
 };
