@@ -1,5 +1,6 @@
 package com.hushos.app.data
 
+import kotlinx.coroutines.async
 import com.hushos.core.Integrity
 import com.hushos.core.MetadataStatement
 import com.hushos.core.NodeKind
@@ -287,6 +288,45 @@ class TrustLoads {
 
     /* Runs `apply` (which keeps the load's result) only when no load began after `ticket`; null otherwise. */
     fun <T> land(ticket: Long, apply: () -> T): T? = synchronized(lock) { if (ticket == begun.get()) apply() else null }
+}
+
+/*
+ * The view model's launch-time trust loads (loadRoot and coming to the front ask from two places at once): an ask that
+ * may `join` waits for a load already under way for the same key (the vault) and generation, and is answered by it when it
+ * settled the trust set. Otherwise, and only while `current()` is still that key (a session change while it waited is
+ * never loaded for), it starts its own. The run is held only while it runs: a finished one, and `clear` (sign-out, a lost
+ * session, another account), let go of the key, so a signed-out vault is never kept reachable from here.
+ */
+class JoinedLoads<K : Any> {
+    private class Run<K>(val load: kotlinx.coroutines.Deferred<Boolean>, val key: K, val generation: Long)
+    private val lock = Any()
+    private var run: Run<K>? = null
+
+    /* What is held now: for tests (a finished or cleared run holds nothing). */
+    val holding: K? get() = synchronized(lock) { run?.key }
+
+    suspend fun load(
+        scope: kotlinx.coroutines.CoroutineScope,
+        key: K,
+        generation: Long,
+        join: Boolean,
+        current: () -> K?,
+        start: suspend () -> Boolean,
+    ) {
+        if (join) {
+            val joined = synchronized(lock) { run?.takeIf { it.load.isActive && it.key === key && it.generation == generation } }
+            if (joined != null && joined.load.await()) return
+            // The joined load didn't settle it: loaded once more, but only for the session still current.
+            if (current() !== key) return
+        }
+        val started = scope.async { start() }
+        val mine = Run(started, key, generation)
+        synchronized(lock) { run = mine }
+        started.invokeOnCompletion { synchronized(lock) { if (run === mine) run = null } }
+        started.await()
+    }
+
+    fun clear() = synchronized(lock) { run = null }
 }
 
 /*

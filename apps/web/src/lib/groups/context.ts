@@ -117,9 +117,12 @@ export type SettingsAccess = {
     /*
      * The stored settings, opened in the worker. Opening them is how the
      * worker learns the settings pins it takes as marks, so every acceptance
-     * reads them through here first.
+     * reads them through here first. A sync's own steps (its acceptance, the
+     * pin it settles) may be handed one read for a short while
+     * (lib/contacts.ts); an act (a join, a creation, an admission sent, a
+     * family check) asks `fresh` and reads them now.
      */
-    read(): Promise<{ settings: GroupSettings; version: number }>;
+    read(options?: { fresh?: boolean }): Promise<{ settings: GroupSettings; version: number }>;
     /* Compare-and-set over `version`: false when another device saved first. */
     write(version: number, settings: GroupSettings): Promise<boolean>;
 };

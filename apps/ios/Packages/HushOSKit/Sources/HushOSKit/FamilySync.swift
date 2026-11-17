@@ -227,6 +227,61 @@ public actor FamilySync: FamilyJudge {
     private var chains: [String: AcceptedRosters] = [:]
     /* Families whose last refusal was a fork (lowercase): a later refusal keeps the core's fork. A commit clears it. */
     private var forked: Set<String> = []
+    /*
+     * One family pass (the app's refreshFamilies: route 2, then every family listed): route 25 answers for every family of
+     * the account at once, so the pass asks for it once rather than once per family. The answer belongs to the pass's own
+     * task (`inPass`, a task-local the work it starts inherits): no other sync sees it, an act's own sync after it lands
+     * included, and it is gone when the pass ends however it ends (a cancel too).
+     */
+    final class PassSpaces: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: (spaces: [SpaceList.Entry], landings: UInt64)?
+        private var over = false
+        /* The listing, while the pass runs and no call has landed since it was asked for (`landings` then). */
+        func spaces(landings: UInt64) -> [SpaceList.Entry]? {
+            lock.withLock { over ? nil : held.flatMap { $0.landings == landings ? $0.spaces : nil } }
+        }
+        func keep(_ spaces: [SpaceList.Entry], landings: UInt64) { lock.withLock { if !over { held = (spaces, landings) } } }
+        /* The pass returned: a task it started that outlives it (a walk) asks for itself. */
+        func end() { lock.withLock { over = true; held = nil } }
+    }
+    @TaskLocal static var pass: PassSpaces?
+
+    /* `work` runs on the caller's actor (the app's refreshFamilies is the main actor's). */
+    public static func inPass<T>(isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T) async rethrows -> T {
+        let pass = PassSpaces()
+        defer { pass.end() }
+        return try await $pass.withValue(pass, operation: work, isolation: isolation)
+    }
+
+    /*
+     * `work` with no pass, on the caller's actor: for a task created under a pass whose work is its own (a walk, a
+     * release adopted), which would otherwise inherit the pass's listing.
+     */
+    public static func outsidePass<T>(isolation: isolated (any Actor)? = #isolation, _ work: () async throws -> T) async rethrows -> T {
+        try await $pass.withValue(nil, operation: work, isolation: isolation)
+    }
+
+    /*
+     * A task of its own on the main actor (a walk, a release adopted) that may be started under a pass: it runs outside
+     * it, so it never reads the pass's listing, while the pass runs or after.
+     */
+    @discardableResult
+    public static func taskOutsidePass(_ work: @escaping @MainActor @Sendable () async -> Void) -> Task<Void, Never> {
+        Task { @MainActor in await outsidePass { await work() } }
+    }
+
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it, and again after a call lands), else asked now. */
+    private func passSpaces() async throws -> [SpaceList.Entry] {
+        guard let current = Self.pass else { return try await api.spaces() }
+        let at = landings
+        if let spaces = current.spaces(landings: at) { return spaces }
+        let spaces = try await api.spaces()
+        current.keep(spaces, landings: at)
+        return spaces
+    }
+    /* Chain calls this sync saw land: each makes a pass's folder listing from before it stale. */
+    var landings: UInt64 = 0
     /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */
     private var acceptedFamilies: Set<String> = []
 
@@ -849,7 +904,7 @@ public actor FamilySync: FamilyJudge {
     func accept(_ groupId: String) async throws -> Acceptance {
         var overtaken = 0
         while true {
-            let pinned = try await vault.familyPin(groupId)
+            let pinned = try await vault.familyPin(groupId, look: true)
             let row = records.read(userId: userId, groupId: groupId)
             if row == nil && pinned == nil { return .unchecked }
             let me = try await vault.ownIdentities()
@@ -948,7 +1003,7 @@ public actor FamilySync: FamilyJudge {
      * folder that doesn't open says "Couldn't check this folder's keys", as the web's row.
      */
     func openAreas(_ groupId: String, chain: AcceptedRosters) async throws -> [OpenedFolder] {
-        let spaces = try await api.spaces()
+        let spaces = try await passSpaces()
         guard let space = spaces.first(where: { $0.space.kind == "group" && $0.space.groupId?.lowercased() == groupId.lowercased() }) else { return [] }
         // Only folders whose ids are derived under this family count as its own: never the personal drive, never another family's.
         let family = space.areas.filter { area in
@@ -1118,7 +1173,7 @@ public actor FamilySync: FamilyJudge {
         var pin = accepted
         var latest: AcceptedRosters?
         for _ in 0 ..< 4 {
-            let current = try await vault.familyPin(groupId)
+            let current = try await vault.familyPin(groupId, look: true)
             if case .merged(let merged) = try mergePin(groupId: groupId, current: current, next: pin, opened: opened) {
                 if !pinAhead(current: current, next: merged) { return .settled(latest) }
                 if try await vault.saveGroupPin(groupId, over: current, merged, checked: checked, now: Self.checkTime(now())) { return .settled(latest) }

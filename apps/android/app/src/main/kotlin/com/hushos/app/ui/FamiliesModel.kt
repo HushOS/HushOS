@@ -41,7 +41,9 @@ import com.hushos.app.data.finishHandingOver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /* What stands in a family folder's place when it can't be listed: its family's words, or a removal. */
@@ -888,7 +890,31 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
      */
     suspend fun refreshFamilies(force: Boolean = false, maxAgeMs: Long = 60_000, session: FamilySession? = null) {
         val s = session ?: begin() ?: return
+        // A pass already under way (the app's start asks from two places at once) is waited for, not run twice: once it
+        // has listed, the due check below finds nothing to do. Never from inside a pass (it would wait for itself), and
+        // never for a forced pass, which asks again on purpose.
+        // Only a pass of this very session: one an ended session left stalled (a sign-out and back in meanwhile) is never
+        // waited for, and reset() lets go of it.
+        val running = passRunning?.takeIf { it.first.generation == s.generation && it.first.owner === s.owner }?.second
+        if (!force && running != null && running.isActive && currentCoroutineContext()[InFamilyPass] == null) running.join()
         if (!gate.current(s) || !familiesDue(now(), syncedAt, list != null, force, maxAgeMs)) return
+        val pass = kotlinx.coroutines.Job()
+        passRunning = s to pass
+        try {
+            withContext(InFamilyPass()) { runFamilyPass(s) }
+        } finally {
+            pass.complete()
+            if (passRunning?.second === pass) passRunning = null
+        }
+    }
+
+    /* The pass refreshFamilies runs, one at a time unless forced, with the session it runs for. */
+    private var passRunning: Pair<FamilySession, kotlinx.coroutines.CompletableJob>? = null
+    private class InFamilyPass : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+        companion object Key : kotlin.coroutines.CoroutineContext.Key<InFamilyPass>
+    }
+
+    private suspend fun runFamilyPass(s: FamilySession) {
         listenForRemovals(s)
         val result = gate.run(s) { s.owner.families.let { sync -> sync.listReconciling().let { (listed, gone) -> Triple(listed, gone, sync.unsettled(listed)) } } } ?: return
         result.onSuccess { (listed, gone, unsettled) ->
@@ -901,9 +927,12 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
             model.familyWork(listed.any { it.state == "active" } || unsettled.isNotEmpty() || gone.any { it.state != FamilyState.Wiped })
             // Every removal found so far, by this pass or by the background work through the same vault.
             applyRemovals(s)
-            for (summary in listed) {
-                if (!gate.current(s)) return
-                refreshFamily(summary, session = s)
+            // One pass: route 25 asked once for every family listed, in this coroutine only (FamilySync.pass).
+            withContext(FamilySync.pass()) {
+                for (summary in listed) {
+                    if (!gate.current(s)) return@withContext
+                    refreshFamily(summary, session = s)
+                }
             }
         }.onFailure { error ->
             error.rethrowIfCancelled()
@@ -1289,6 +1318,9 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     /* Sign-out, a lost session: nothing of the last account's families stays drawn. */
     fun reset() {
         gate.reset()
+        // The ended session's pass: nobody waits on it any longer (refreshFamilies), whatever it is still stuck on.
+        passRunning?.second?.complete()
+        passRunning = null
         list = null; served = null; invitation = null; checking = null
         states.clear(); names.clear(); shown.clear(); details.clear(); syncing.clear(); refreshed.clear(); problems.clear(); verdicts.reset()
         checkedAt.clear(); joining.clear(); syncedAt = 0L; folders = FamilyFolders(); held = null; heldStack = emptyMap(); shownRevision.clear()

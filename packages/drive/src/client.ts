@@ -335,7 +335,13 @@ export type DriveClientOptions = {
  * ever sealed again, and a stop leaves the ledger before it reaches the server.
  */
 export type SharingLedger = {
-    read(): Promise<{ shares: Record<string, string[]>; links: Record<string, string> }>;
+    /*
+     * `fresh`: read now, never a copy an earlier read left for the readers that only look. A rotation and a
+     * re-seal after a key replacement (whose marker is cleared at the end) ask it.
+     */
+    read(options?: {
+        fresh?: boolean;
+    }): Promise<{ shares: Record<string, string[]>; links: Record<string, string> }>;
     addShare(nodeId: string, granteeUserId: string): Promise<void>;
     removeShare(nodeId: string, granteeUserId: string): Promise<void>;
     addLink(linkId: string, nodeId: string): Promise<void>;
@@ -557,11 +563,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                     changeSeq: view.changeSeq,
                 };
             }
+            // The identity opens while the workspace is fetched: neither needs the other, and the
+            // worker still holds the identity before it opens the workspace key below.
+            const identity = options.openIdentity?.(userId);
+            identity?.catch(() => {});
             const view = await api.workspace();
             if (!view.grant)
                 throw new Error('This account has no workspace key yet. Finish account setup.');
             workspace = view;
-            await options.openIdentity?.(userId);
+            await identity;
             await rpc('driveOpenWorkspace', { userId, grant: view.grant });
             let root = view.root;
             if (!root) {
@@ -1436,7 +1446,17 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         // (owed again later), never as refused, which would mark its grantee done.
         const ownWorkspace = workspace?.workspaceId;
         if (!ownWorkspace) return { resealed: 0, refused: 0 };
-        const [mine, ledger] = await Promise.all([api.sharedByMe(), options.ledger.read()]);
+        // Owed work (after this account replaced its keys every share is sealed again and the reminder cleared at
+        // the end; grantees whose pin followed a succession are acknowledged) is judged over what is shared and
+        // recorded now, so a share another device made since an earlier read is never skipped by a pass that then
+        // says it is done. Otherwise what was just read will do: a share missed is found next time.
+        const all = input.all || ((await options.resealAll?.()) ?? false);
+        const waiting = new Set((await options.resealPending?.()) ?? []);
+        const now = all || waiting.size > 0;
+        const [mine, ledger] = await Promise.all([
+            sharedByMe(!now),
+            options.ledger.read(now ? { fresh: true } : undefined),
+        ]);
         // Each grantee the owner shared with, checked against their pin once: a pin that
         // follows a succession here asks for what was shared to be sealed to the new keys.
         const trusted = new Map<string, Promise<TrustedGrantee>>();
@@ -1452,8 +1472,6 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         for (const share of mine.shares)
             if (ledger.shares[share.node.id]?.includes(share.grantee.id))
                 await trust(share).catch(() => {});
-        const waiting = new Set((await options.resealPending?.()) ?? []);
-        const all = input.all || ((await options.resealAll?.()) ?? false);
         let failed = 0;
         // Grantees whose pin asked for this, and whether every share to them went through.
         const owed = new Map<string, boolean>();
@@ -1742,7 +1760,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         if (kind === 'folder') await listFolder(rootId);
         else if (rootParentId) await listFolder(rootParentId);
         // What may be sealed again: the owner's ledger, never the server's list alone.
-        const ledger = (await options.ledger?.read()) ?? { shares: {}, links: {} };
+        // What the owner recorded as it stands now: a rotation seals again only what the ledger holds.
+        const ledger = (await options.ledger?.read({ fresh: true })) ?? { shares: {}, links: {} };
         // Who this person trusts: every record is checked before it is signed again, and
         // without the trust set the rotation stops here and is retried, never run unchecked.
         const signers = await trustedSigners();
@@ -2013,9 +2032,27 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         );
     }
 
+    /*
+     * What this account shares out. Shared by me always asks afresh, since it is fetched again
+     * right after a change and must show it. The upgrade pass, which runs as Drive opens beside
+     * Shared by me and re-seals only what was there already (a share it misses is found next
+     * time), `join`s a request already on its way instead of sending its own.
+     */
+    let sharedByMeRequest: ReturnType<DriveApi['sharedByMe']> | undefined;
+    function sharedByMe(join = false) {
+        if (join && sharedByMeRequest) return sharedByMeRequest;
+        const request = api.sharedByMe();
+        sharedByMeRequest = request;
+        const done = () => {
+            if (sharedByMeRequest === request) sharedByMeRequest = undefined;
+        };
+        request.then(done, done);
+        return request;
+    }
+
     /* What this person shares out, nodes named, for managing in one place. */
     async function mySharing() {
-        const mine = await api.sharedByMe();
+        const mine = await sharedByMe();
         const nodes = new Map<string, NodeView>();
         for (const entry of [...mine.shares, ...mine.links]) nodes.set(entry.node.id, entry.node);
         // Names need the folder chain: open each node's parents by listing them once.
@@ -2284,6 +2321,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         openedNodes.clear();
         workspaceOf.clear();
         mounts = undefined;
+        // A Shared by me request still out belongs to the account that locked: never joined by the next one's pass.
+        sharedByMeRequest = undefined;
         // Names die with the keys; the mirror on disk is ciphertext and stays.
         generation++;
         building = undefined;

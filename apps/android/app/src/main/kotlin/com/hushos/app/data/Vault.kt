@@ -311,6 +311,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     companion object {
         fun fromShared(context: Context): Vault? = Shared.session(context)?.let { Vault(context, DriveApi(it)) }
+
+        /* How long one settings read serves the readers that only look (settingsToLook): one open, one family sync. */
+        const val SETTINGS_REUSE_MS = 10_000L
     }
 
     private fun saveIndex() {
@@ -567,15 +570,49 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* The settings as loadSettings reads them, with what the server served them in (the area ledger opens those itself). */
     internal fun settingsServed(): Pair<Settings, Auth.StoredSettings> {
-        val userId = api.session.userId
-        val identity = identityKeys()
-        val stored = Auth.settings(context, api.session)
-        val mark = marks(stored)
-        // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
-        mark.adopt(userId, listOf(identity.encryptionPublicKey))
-        return readServedSettings(userId, stored.envelope, stored.sequence, mark) {
-            openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
-        } to stored
+        // Taken before the read: a guard write or a save while it runs leaves its copy unused (settingsToLook).
+        val generation = memory.generation.get()
+        val read = try {
+            val userId = api.session.userId
+            val identity = identityKeys()
+            val stored = Auth.settings(context, api.session)
+            val mark = marks(stored)
+            // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
+            mark.adopt(userId, listOf(identity.encryptionPublicKey))
+            readServedSettings(userId, stored.envelope, stored.sequence, mark) {
+                openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
+            } to stored
+        } catch (failed: Exception) {
+            // Any read that didn't finish (no answer, the identity or the marks unreadable, a rollback refused): no reader
+            // goes on with an earlier copy; each reads, and fails or is refused, itself.
+            settingsCopy = null
+            throw failed
+        }
+        val (settings, stored) = read
+        settingsCopy = SettingsCopy(generation, memory.clock(), settings.json.toString(), settings.version, stored)
+        return read
+    }
+
+    /*
+     * One settings read serves the readers that only look, for a short while, as on the web (lib/contacts.ts): a family
+     * sync's steps (the pin it accepts against, the pin it settles over, whether this person vouched), whether a family
+     * was checked, and the contacts list. What is reused is only ever what a fresh read above checked against the marks,
+     * handed out as a copy of its own. Never reused: a read under the guard turn (trust, an act on a contact, a family's
+     * verdicts), a save's base (updateSettings), a rotation, a push's names: those call loadSettings and read now.
+     * The copy is dropped by any guard write or settings save in this process (TrustMemory's generation moves), and after
+     * SETTINGS_REUSE_MS; a copy older than the marks every vault of this phone raises (another vault read or wrote later
+     * settings) is read again. A save over a copy another device moved past is refused by the server's compare-and-set,
+     * and moves the generation, so the next read is fresh.
+     */
+    private class SettingsCopy(val generation: Long, val at: Long, val json: String, val version: ULong, val served: Auth.StoredSettings)
+    @Volatile private var settingsCopy: SettingsCopy? = null
+
+    internal fun settingsToLook(): Pair<Settings, Auth.StoredSettings> {
+        val held = settingsCopy
+        if (held != null && held.generation == memory.generation.get() && memory.clock() - held.at in 0 until SETTINGS_REUSE_MS &&
+            marks(held.served).read(api.session.userId).settings <= held.version
+        ) return Settings(JSONObject(held.json), held.version) to held.served
+        return settingsServed()
     }
 
     /*
@@ -604,12 +641,16 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 return Settings(settings.json, next)
             } catch (error: AuthFailure) {
                 if (error.status != 409 || ++attempt >= 3) throw error
+            } finally {
+                // Landed, refused or unknown: a read that ran while the save was out (and took the generation from
+                // before it) is not reused after it either.
+                memory.generation.incrementAndGet()
             }
         }
     }
 
     /* Everyone pinned, newest first. */
-    fun contacts(): List<ContactPin> = loadSettings().contacts.values.sortedByDescending { it.pinnedAt }
+    fun contacts(): List<ContactPin> = settingsToLook().first.contacts.values.sortedByDescending { it.pinnedAt }
 
     /* This account's own fingerprint, for the other person to check. */
     fun ownFingerprint(): String = ownFingerprint(identityKeys())

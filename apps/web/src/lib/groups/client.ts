@@ -50,7 +50,7 @@ export function groupContext(userId: string): GroupContext {
         },
         store: deviceStore(),
         settings: {
-            read: () => readSettingsForFamilies(userId),
+            read: (options) => readSettingsForFamilies(userId, options),
             write: (version, settings) => compareAndSetSettings(userId, version, settings),
         },
         guard: familyGuardOf(familyGuardStore, userId),

@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 import type { DriveApi, NodeView, ServedIdentity } from './api';
 import { createDriveClient, type Rpc, type SharingLedger } from './client';
 import type { TreeMirror } from './mirror';
@@ -399,6 +399,78 @@ describe('finishing a replacement of one’s own keys', () => {
         // Done: suite 4 shares are left alone from now on.
         await client.upgradeShares();
         expect(h.resealed).toHaveLength(3);
+    });
+});
+
+describe('re-sealing after a key replacement reads what is shared now', () => {
+    /*
+     * The reminder is cleared at the end of the pass, so the pass must cover what is shared and
+     * recorded now: a share another device made after Shared by me's request went out, or after
+     * the settings were last read, is sealed again before the reminder goes. Fails if the pass
+     * joins that request or takes the ledger a looking reader was handed.
+     */
+    test('a share made since the listing asked is sealed again before the reminder is cleared', async () => {
+        const h = harness({ g1: 4, g2: 4 });
+        let pending = true;
+        let answerOld!: () => void;
+        const old = new Promise<void>((done) => (answerOld = done));
+        let asked = 0;
+        const api = {
+            ...h.api,
+            sharedByMe: async () => {
+                asked++;
+                // The listing's request went out before g1's share was made on another device.
+                if (asked === 1) {
+                    await old;
+                    return { ...(await h.api.sharedByMe()), shares: [] };
+                }
+                return h.api.sharedByMe();
+            },
+        } as DriveApi;
+        // The ledger as a looking reader holds it (from before the share), and as it is stored now.
+        const held = { shares: {}, links: {} };
+        const stored = { shares: { [A]: ['g1'] }, links: {} };
+        const client = createDriveClient(h.rpc, api, {
+            trustGrantee: h.trustGrantee,
+            ledger: {
+                ...ledgerOf(stored),
+                read: async (options) => (options?.fresh ? stored : held),
+            },
+            resealAll: async () => pending,
+            resealedAll: async () => {
+                pending = false;
+            },
+        });
+        await client.open('owner');
+        const listing = client.mySharing();
+        await vi.waitFor(() => expect(asked).toBe(1));
+        await client.upgradeShares();
+        expect(h.resealed).toEqual(['share-g1']);
+        expect(pending).toBe(false);
+        answerOld();
+        await listing;
+    });
+
+    test('a rotation seals again over the ledger as it is stored now', async () => {
+        const h = harness();
+        const client = createDriveClient(h.rpc, h.api, {
+            trustGrantee: h.trustGrantee,
+            ledger: {
+                ...ledgerOf({ shares: { [A]: ['g1'] }, links: { l1: A } }),
+                // A looking reader's copy from before the share and the link were recorded.
+                read: async (options) => {
+                    const stored: Awaited<ReturnType<SharingLedger['read']>> = {
+                        shares: { [A]: ['g1'] },
+                        links: { l1: A },
+                    };
+                    return options?.fresh ? stored : { shares: {}, links: {} };
+                },
+            },
+            signers: async () => ({}),
+        });
+        await client.open('owner');
+        await client.rotate(node(A, ROOT) as never);
+        expect(h.rotated).toEqual([{ shares: ['share-g1'], links: ['l1'] }]);
     });
 });
 
@@ -1146,5 +1218,129 @@ describe('trash and restore', () => {
         }[];
         expect(opened).toMatchObject({ parentKeyEpoch: 5, keyEnvelope: 'rewrapped' });
         expect(restored).toMatchObject({ keyEnvelope: 'rewrapped', parentKeyEpoch: 5 });
+    });
+});
+
+describe('opening', () => {
+    /* A promise settled from outside, to hold one step of the open while the rest goes on. */
+    function deferred<T = void>() {
+        let resolve!: (value: T) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<T>((done, fail) => {
+            resolve = done;
+            reject = fail;
+        });
+        return { promise, resolve, reject };
+    }
+
+    test('the workspace key opens only after the identity has, though both are asked for at once', async () => {
+        const h = harness();
+        const steps: string[] = [];
+        const identityOpened = deferred();
+        const api = {
+            ...h.api,
+            workspace: async () => {
+                steps.push('workspace');
+                return h.api.workspace();
+            },
+        };
+        const rpc = ((operation: string, input: unknown) => {
+            steps.push(operation);
+            return (h.rpc as (operation: string, input: unknown) => Promise<unknown>)(
+                operation,
+                input,
+            );
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, api as DriveApi, {
+            openIdentity: async () => {
+                steps.push('identity');
+                await identityOpened.promise;
+            },
+        });
+        const opening = client.open('owner');
+        await vi.waitFor(() => expect(steps).toContain('workspace'));
+        // Asked for together, and nothing opened under a workspace key while the identity is out.
+        expect(steps).toEqual(['identity', 'workspace']);
+        await new Promise((done) => setTimeout(done, 10));
+        expect(steps).not.toContain('driveOpenWorkspace');
+        identityOpened.resolve();
+        await opening;
+        expect(steps.indexOf('driveOpenWorkspace')).toBeGreaterThan(steps.indexOf('identity'));
+    });
+
+    test('an identity that does not open stops the open before the workspace key', async () => {
+        const h = harness();
+        const steps: string[] = [];
+        const rpc = ((operation: string, input: unknown) => {
+            steps.push(operation);
+            return (h.rpc as (operation: string, input: unknown) => Promise<unknown>)(
+                operation,
+                input,
+            );
+        }) as unknown as Rpc;
+        const client = createDriveClient(rpc, h.api, {
+            openIdentity: async () => {
+                throw new Error('The identity didn’t open.');
+            },
+        });
+        await expect(client.open('owner')).rejects.toThrow('The identity didn’t open.');
+        expect(steps).not.toContain('driveOpenWorkspace');
+    });
+
+    test('a lock lets go of a Shared by me request still out: the next account’s pass never joins it', async () => {
+        const h = harness();
+        let asked = 0;
+        const answer = deferred();
+        const api = {
+            ...h.api,
+            sharedByMe: async () => {
+                asked++;
+                if (asked === 1) await answer.promise;
+                return h.api.sharedByMe();
+            },
+        };
+        const client = createDriveClient(h.rpc, api as DriveApi, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+        });
+        await client.open('owner');
+        const listing = client.mySharing();
+        await vi.waitFor(() => expect(asked).toBe(1));
+        // Locked (another account signs in next): the request still out is the old account's.
+        client.close();
+        await client.open('owner');
+        await client.upgradeShares();
+        expect(asked).toBe(2);
+        answer.resolve();
+        await listing.catch(() => {});
+    });
+
+    test('Shared by me asks afresh even while the upgrade pass’s request is on its way', async () => {
+        const h = harness();
+        let asked = 0;
+        const answer = deferred();
+        const api = {
+            ...h.api,
+            sharedByMe: async () => {
+                asked++;
+                await answer.promise;
+                return h.api.sharedByMe();
+            },
+        };
+        const client = createDriveClient(h.rpc, api as DriveApi, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+        });
+        await client.open('owner');
+        // Shared by me first, as Drive opens: the upgrade pass joins its request.
+        const listed = client.mySharing();
+        const upgraded = client.upgradeShares();
+        await vi.waitFor(() => expect(asked).toBe(1));
+        // Shared by me again (after a share changed): its own request, never the one on its way.
+        const again = client.mySharing();
+        await vi.waitFor(() => expect(asked).toBe(2));
+        answer.resolve();
+        await Promise.all([listed, upgraded, again]);
+        expect(asked).toBe(2);
     });
 });

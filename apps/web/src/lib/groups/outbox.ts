@@ -477,7 +477,7 @@ type SendMode = { inSync?: boolean; walking?: (running: boolean) => void };
  */
 async function admissionPin(ctx: GroupContext, entry: OutboxEntry) {
     if (entry.route.kind !== 'admit' || entry.state === 'awaiting-check') return null;
-    const { settings } = await ctx.settings.read();
+    const { settings } = await ctx.settings.read({ fresh: true });
     const contact = settings.contacts?.[entry.route.userId];
     return contact ? { userId: entry.route.userId, keys: await keyCommitment(contact) } : null;
 }
@@ -750,7 +750,7 @@ const ROUTES: Record<GroupStageOp['kind'], (op: GroupStageOp) => ChainRoute> = {
 export async function createFamily(ctx: GroupContext, name: string, areaName?: string) {
     // The settings first: settings that hold no family pin (none opened here) stop it before
     // anything is made, rather than leave a family on the server this device can't check.
-    await ctx.settings.read();
+    await ctx.settings.read({ fresh: true });
     const identities = await ctx.identities();
     const created = await ctx.rpc('groupCreate', {
         userId: ctx.userId,

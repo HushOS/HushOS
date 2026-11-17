@@ -239,7 +239,7 @@ extension DriveAPI {
 extension Vault {
     /* Everyone pinned, newest first. */
     public func contacts() async throws -> [ContactPin] {
-        try await loadSettings().contacts.values.sorted { $0.pinnedAt > $1.pinnedAt }
+        try await settingsToLook().contacts.values.sorted { $0.pinnedAt > $1.pinnedAt }
     }
 
     /*
@@ -395,9 +395,21 @@ public struct SharingIndex: Sendable {
 }
 
 extension Vault {
+    /*
+     * GET /shares/mine. The sharing listing always asks afresh (it is asked again right after a change and must show it), and By me (`sharedByMe`) does too;
+     * the upgrade pass `join`s a request already on its way instead of sending its own.
+     */
+    func sharedByMeAnswer(join: Bool = false) async throws -> SharedByMeResponse {
+        if join, let sharedByMeRequest { return try await sharedByMeRequest.value }
+        let task = Task { [api] in try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self) }
+        sharedByMeRequest = task
+        defer { if sharedByMeRequest == task { sharedByMeRequest = nil } }
+        return try await task.value
+    }
+
     /* The same answer as `sharedByMe`, keyed by node, without opening any node: cheap enough to ask on every refresh. */
     public func sharingIndex() async throws -> SharingIndex {
-        let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
+        let reply = try await sharedByMeAnswer()
         var index = SharingIndex()
         for share in reply.shares {
             index.entries[share.node.id, default: .init()].people.append(share.grantee)

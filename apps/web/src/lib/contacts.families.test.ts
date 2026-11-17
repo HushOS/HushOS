@@ -159,11 +159,20 @@ describe('families on an account whose settings did not open here', () => {
         await compareAndSetSettings(USER, 3, { version: 2, contacts: {} });
         await readSettingsForFamilies(USER);
         expect(settingsOpens()).toHaveLength(1);
-        // The server goes back to the version 1 document, or to none: refused, nothing saved.
+        // The server goes back to the version 1 document, or to none. Within one sync the copy
+        // that opened is what families go on reading, never the older one; the next sync's read
+        // (past the reuse window) refuses it, and nothing is saved.
         server.envelope = { version: 1, settingsVersion: 4, nonce: 'n', ciphertext: 'c' };
-        await expect(readSettingsForFamilies(USER)).rejects.toThrow(/older settings/);
-        server.envelope = null;
-        await expect(readSettingsForFamilies(USER)).rejects.toThrow(/older settings/);
+        expect((await readSettingsForFamilies(USER)).version).toBe(4);
+        const now = performance.now();
+        const later = vi.spyOn(performance, 'now').mockImplementation(() => now + 60_000);
+        try {
+            await expect(readSettingsForFamilies(USER)).rejects.toThrow(/older settings/);
+            server.envelope = null;
+            await expect(readSettingsForFamilies(USER)).rejects.toThrow(/older settings/);
+        } finally {
+            later.mockRestore();
+        }
         expect(server.saves).toBe(1);
     });
 });

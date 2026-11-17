@@ -204,6 +204,16 @@ public actor Vault {
 
     /* The top folder being made, so callers that arrive meanwhile wait for it instead of making a second. */
     var makingRoot: Task<WorkspaceView, Error>?
+    /* The workspace being read, so callers that arrive meanwhile (the first list and the live sync at launch) share it. */
+    var loadingWorkspace: Task<WorkspaceView, Error>?
+
+    /* One settings read for the readers that only look (`settingsToLook`, Settings.swift), and what drops it. */
+    var settingsCopy: SettingsCopy?
+    var settingsWrites: UInt64 = 0
+    /* The clock the reuse window is measured on (tests move it). */
+    var settingsNow: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    /* GET /shares/mine on its way from the sharing listing, which the upgrade pass joins rather than asking again. */
+    var sharedByMeRequest: Task<SharedByMeResponse, Error>?
 
     /*
      * The family write rules and keys (the core's `AreaLedger`, one per unlocked session in this
@@ -344,6 +354,17 @@ public actor Vault {
     }
 
     public func loadWorkspace() async throws -> WorkspaceView {
+        if let workspace { return workspace }
+        // One read at a time: a caller arriving while it is under way (at launch, the first list and the live sync) waits
+        // for it rather than fetching, opening and caching the workspace a second time.
+        if let loadingWorkspace { return try await loadingWorkspace.value }
+        let task = Task { try await self.readWorkspace() }
+        loadingWorkspace = task
+        defer { if loadingWorkspace == task { loadingWorkspace = nil } }
+        return try await task.value
+    }
+
+    private func readWorkspace() async throws -> WorkspaceView {
         if let workspace { return workspace }
         // Kept sealed in the mirror, so a start without network still opens the drive.
         let key = "workspace:\(session.userId)"

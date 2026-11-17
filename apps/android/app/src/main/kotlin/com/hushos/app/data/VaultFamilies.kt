@@ -63,9 +63,14 @@ internal fun Vault.useForFamilies(stored: Auth.StoredSettings) {
     }
 }
 
-/* The settings read afresh, handed to the ledger as marks, and this family's pin: null for none, refused when it doesn't read. */
-internal fun Vault.familyPin(groupId: String): GroupPin? {
-    val (settings, stored) = settingsServed()
+/*
+ * The settings read afresh, handed to the ledger as marks, and this family's pin: null for none, refused when it doesn't
+ * read. Every family act reads them so before it sends anything. `look`: a sync's own acceptance and settle, which one
+ * read serves (Vault.settingsToLook); a save that lost to another device moves the generation, so the acceptance that
+ * follows reads afresh.
+ */
+internal fun Vault.familyPin(groupId: String, look: Boolean = false): GroupPin? {
+    val (settings, stored) = if (look) settingsToLook() else settingsServed()
     useForFamilies(stored)
     return settings.groupPin(groupId)
 }

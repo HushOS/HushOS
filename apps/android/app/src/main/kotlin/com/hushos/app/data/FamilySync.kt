@@ -1,5 +1,6 @@
 package com.hushos.app.data
 
+import kotlinx.coroutines.asContextElement
 import com.hushos.core.AcceptedRosters
 import com.hushos.core.AreaBlock
 import com.hushos.core.CoreException
@@ -180,8 +181,24 @@ class FamilySync(
     /* Families route 2 stopped listing that this session wiped on the server's not-member: not asked about again unless listed again. */
     private val settledUnlisted: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
+
+    /* Chain calls this sync saw land: each makes a pass's folder listing from before it stale. */
+    @Volatile private var landings = 0L
+    internal fun chainLanded() { landings++ }
+
+    /* Route 25, as the pass this sync runs in has it (asked at most once in it, and again after a call lands), else asked now. */
+    private fun spaces(): Map<String, List<SpaceArea>> {
+        val current = passSpaces.get() ?: return api.spaces()
+        val at = landings
+        current.spaces?.let { if (current.landingsAt == at) return it }
+        return api.spaces().also {
+            current.spaces = it
+            current.landingsAt = at
+        }
+    }
 
 
     /* What kept calls the staging gate sent first came to (family, route, end), for whoever draws the families next to say. */
@@ -448,7 +465,7 @@ class FamilySync(
                     if (error is NotAuthenticated) throw error
                 }
                 // Read with the settings the pin was just saved into: Verified by the family only when this person vouched for it.
-                vouched[groupId] = runCatching { vault.loadSettings().familyChecked(groupId) }.getOrDefault(false)
+                vouched[groupId] = runCatching { vault.settingsToLook().first.familyChecked(groupId) }.getOrDefault(false)
                 FamilyState.Accepted(view(groupId, settled.latest ?: chain, areas.map { it.first }, reset))
             }
         }
@@ -552,7 +569,7 @@ class FamilySync(
     internal fun accept(groupId: String): Acceptance {
         var overtaken = 0
         while (true) {
-            val pinned = vault.familyPin(groupId)
+            val pinned = vault.familyPin(groupId, look = true)
             val row = records.read(userId, groupId)
             if (row == null && pinned == null) return Acceptance.Unchecked
             val me = vault.ownIdentities()
@@ -634,7 +651,7 @@ class FamilySync(
      * "Couldn't check this folder's keys", as the web's row.
      */
     internal fun openAreas(groupId: String, chain: AcceptedRosters): List<Pair<FamilyArea, OpenedArea?>> {
-        val listed = api.spaces()[groupId.lowercase()].orEmpty()
+        val listed = spaces()[groupId.lowercase()].orEmpty()
         // Only folders whose ids are derived under this family count as its own: never the personal drive, never another family's.
         val family = listed.filter { area -> area.idSeed != null && runCatching { checkId(IdKind.WORKSPACE, groupId, area.idSeed, area.workspaceId) }.isSuccess }
         val proven = family.map { it.workspaceId }.sorted()
@@ -732,7 +749,7 @@ class FamilySync(
         var pin = accepted
         var latest: AcceptedRosters? = null
         repeat(4) {
-            val current = vault.familyPin(groupId)
+            val current = vault.familyPin(groupId, look = true)
             val merge = mergePin(groupId, current, pin, opened)
             if (merge is PinMerge.Merged) {
                 if (!pinAhead(current, merge.pin)) return Settled.Done(latest)
@@ -894,6 +911,21 @@ class FamilySync(
     }
 
     companion object {
+        /*
+         * One family pass (FamiliesModel.refreshFamilies: route 2, then every family listed): route 25 answers for every
+         * family of the account at once, so the pass asks for it once rather than once per family. The answer belongs to
+         * the pass's own coroutine (`pass()`, a context element that follows it onto the threads it runs on): no other
+         * sync sees it, an act's own sync after it lands included, and it is gone when the pass ends however it ends.
+         */
+        class PassSpaces {
+            @Volatile var spaces: Map<String, List<SpaceArea>>? = null
+            /* `FamilySync.landings` when it was asked for: a call that lands since makes it stale. */
+            @Volatile var landingsAt = -1L
+        }
+        private val passSpaces = ThreadLocal<PassSpaces?>()
+
+        fun pass(): kotlin.coroutines.CoroutineContext = passSpaces.asContextElement(PassSpaces())
+
         /* What a member check says instead of its words when the family isn't accepted as shown (null: the words show). */
         fun checkProblem(state: FamilyState): String? = when (state) {
             is FamilyState.Accepted -> null

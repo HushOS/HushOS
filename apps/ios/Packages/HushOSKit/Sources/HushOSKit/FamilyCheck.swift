@@ -184,11 +184,11 @@ extension FamilySync {
 struct FamilyCheckMoved: Error {}
 
 extension Vault {
-    /* Whether this person vouched for the family, from the settings read now (Settings.familyChecked). */
-    func familyChecked(_ groupId: String) async throws -> Bool { try await loadSettings().familyChecked(groupId) }
+    /* Whether this person vouched for the family (Settings.familyChecked), as a family sync reads the settings. */
+    func familyChecked(_ groupId: String) async throws -> Bool { try await settingsToLook().familyChecked(groupId) }
 
     /* The other member of this person's family check of `groupId`, if there is one. */
-    func familyCheckWith(_ groupId: String) async throws -> String? { try await loadSettings().familyCheckWith(groupId) }
+    func familyCheckWith(_ groupId: String) async throws -> String? { try await settingsToLook().familyCheckWith(groupId) }
 
     /*
      * This phone's guard entry for a person, with an act left pending settled first, for a family

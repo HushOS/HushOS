@@ -48,6 +48,28 @@ extension OnFakeDrive {
         }
 
         /*
+         * A call that lands changes the family: within one family pass, the sync after it asks route 25
+         * again rather than read the folders as the pass found them before the act. Fails if a landing
+         * leaves the pass's listing standing.
+         */
+        @Test func aCallThatLandsInAPassMakesItAskForTheFoldersAgain() async throws {
+            let m = try await Self.managed()
+            defer { m.phone.done() }
+            let person = try await m.waitingGrace()
+            m.server.clearRequests()
+            let landed = try await FamilySync.inPass {
+                _ = await m.phone.sync.sync(m.summary)
+                #expect(m.server.count("/api/drive/spaces") == 1)
+                let end = try await Self.quickly { try await m.phone.sync.letIn(m.summary, person) }
+                _ = await m.phone.sync.sync(m.summary)
+                return end
+            }
+            #expect(landed == .landed)
+            // Once before the landing, once after it (Let them in's own sync), never per sync.
+            #expect(m.server.count("/api/drive/spaces") == 2)
+        }
+
+        /*
          * Let them in lands: one call, the chain one longer, nothing left kept, Grace no longer
          * waiting and pinned first-seen (never verified), every call sent as this app (ios/), and a
          * fresh sync accepts the new member list. Fails if a landed call is kept or sent twice.

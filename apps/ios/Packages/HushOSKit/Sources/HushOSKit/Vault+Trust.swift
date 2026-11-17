@@ -209,6 +209,8 @@ extension Vault {
             throw GuardError.unsaved
         }
         forgetSigners()
+        // What was judged over the guard as it was is judged again: no reader is handed a settings copy from before it.
+        forgetSettingsCopy()
         try afterGuardCommit?()
         return entry
     }

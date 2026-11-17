@@ -756,6 +756,75 @@ describe('joining a family on first use', () => {
         expect(await bob.store.join(BOB, f.groupId)).toBeNull();
     });
 
+    /*
+     * A join is an act: it reads the settings now, never the copy one read hands the readers that
+     * only look (lib/contacts.ts). Modelled here as a copy that does not open (it throws as an
+     * unopened one does) until a fresh read replaces it, and that is stale again once the join
+     * holds the family's lock (another device saved while it waited). Fails if any read the join
+     * makes before its acceptance takes the copy.
+     */
+    function heldCopy(
+        bob: Awaited<ReturnType<Awaited<ReturnType<typeof invitedFamily>>['bobDevice']>>,
+        { staleInLock = true } = {},
+    ) {
+        const inner = bob.ctx.settings;
+        let stale = true;
+        let waited = false;
+        bob.ctx.settings = {
+            read: async (options) => {
+                if (options?.fresh) {
+                    stale = false;
+                    return inner.read();
+                }
+                if (stale) throw new Error('A held copy was read.');
+                return inner.read();
+            },
+            write: (version, doc) => inner.write(version, doc),
+        };
+        const original = { ...bob.ctx };
+        bob.ctx.lock = (groupId, work) =>
+            original.lock(groupId, () => {
+                if (staleInLock && !waited) {
+                    waited = true;
+                    stale = true;
+                }
+                return work();
+            });
+    }
+
+    test('a first-use join reads the settings now, before and once it holds the lock', async () => {
+        const f = await invitedFamily();
+        await f.admit();
+        await f.land();
+        const bob = await f.bobDevice();
+        heldCopy(bob);
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+    });
+
+    test('a join finished after a reload reads the settings now', async () => {
+        const f = await invitedFamily();
+        await f.admit();
+        await f.land();
+        const bob = await f.bobDevice();
+        const settings = bob.ctx.settings;
+        let failed = false;
+        bob.ctx.settings = {
+            read: (options) => settings.read(options),
+            write: async (version, doc) => {
+                if (!failed && doc.groups?.[f.groupId]) {
+                    failed = true;
+                    throw new Error('offline');
+                }
+                return settings.write(version, doc);
+            },
+        };
+        await expect(joinStatus(bob.ctx, f.groupId)).rejects.toThrow('offline');
+        expect(await bob.store.join(BOB, f.groupId)).not.toBeNull();
+        // Its device record was written, so in the lock it finishes as a sync, whose own reads may take a copy.
+        heldCopy(bob, { staleInLock: false });
+        expect(await joinStatus(bob.ctx, f.groupId)).toMatchObject({ status: 'joined' });
+    });
+
     test('a joins record that does not open goes, and the join is a first use', async () => {
         const f = await invitedFamily();
         await f.admit();

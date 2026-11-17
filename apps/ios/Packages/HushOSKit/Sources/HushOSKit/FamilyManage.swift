@@ -281,6 +281,8 @@ extension FamilySync {
         // `saysLater`: a call nobody waits on for its own answer (the resume, the gate) keeps what it came to to be said,
         // first, then its entry goes: a crash in between says it once (one per outbox id), and a relaunch loses nothing.
         func drop(_ end: CallEnd, _ route: ChainRoute?) async throws {
+            // A call that landed changed the family: a pass's folder listing from before it is asked for again.
+            if end == .landed { landings &+= 1 }
             if saysLater, let unsaid = FamilyRecords.UnsaidEnd(outboxId: outboxId, end: end, route: route) {
                 try records.keepUnsaid(userId: userId, groupId: groupId, unsaid)
             }

@@ -89,6 +89,24 @@ class FamilyManageTest {
     }
 
     /*
+     * A call that lands changes the family: within one family pass, a sync after it asks route 25 again rather than
+     * read the folders as the pass found them before the act. Fails if a landing leaves the pass's listing standing.
+     */
+    @Test
+    fun aCallThatLandsInAPassMakesItAskForTheFoldersAgain() {
+        val phone = phone()
+        family.asked.clear()
+        kotlinx.coroutines.runBlocking(FamilySync.pass()) {
+            phone.sync.sync(summary)
+            assertEquals(1, family.asked.count { it == "GET /drive/spaces" })
+            assertEquals(LetIn.Landed, phone.sync.letIn(summary, grace))
+            phone.sync.sync(summary)
+        }
+        // Once before the landing, once after it (Let them in's own sync), never per sync.
+        assertEquals(2, family.asked.count { it == "GET /drive/spaces" })
+    }
+
+    /*
      * The server doesn't answer, then does: the very same bytes are sent each time, never signed again. Fails if an
      * unknown outcome is followed by a newly signed call (which could let them in twice, or not at all).
      */

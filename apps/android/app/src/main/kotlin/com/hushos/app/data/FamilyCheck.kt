@@ -114,7 +114,7 @@ fun FamilySync.checkMatch(groupId: String, member: FamilyMemberRef, rosterVersio
 }
 
 /* Whom this person's family check of `groupId` was with, if it was one (their own words check them then, 6.10). */
-fun FamilySync.checkedFamilyWith(groupId: String): String? = runCatching { vault.loadSettings().familyCheckWith(groupId) }.getOrNull()
+fun FamilySync.checkedFamilyWith(groupId: String): String? = runCatching { vault.settingsToLook().first.familyCheckWith(groupId) }.getOrNull()
 
 /*
  * This phone's guard entry for a person, with an act left pending settled first, for a family check, and the revision it

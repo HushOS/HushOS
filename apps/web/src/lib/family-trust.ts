@@ -131,8 +131,8 @@ export async function familyCheckMatch(
     member: { userId: string; email: string; name: string },
     shown: { rosterVersion: number; code: string[] },
 ) {
-    // Read first, so the worker holds the settings pin of them it compares with.
-    await ctx.settings.read();
+    // Read first (now, as every act reads them), so the worker holds the settings pin of them it compares with.
+    await ctx.settings.read({ fresh: true });
     const guard = await contactGuardEntry(userId, member.userId);
     const { served } = await fetchServed(ctx, groupId, 0);
     const match = await ctx.rpc('groupPairMatch', {

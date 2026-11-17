@@ -1,6 +1,6 @@
 import type { Signer } from '@hushos/drive/api';
 import type { QueryClient } from '@tanstack/react-query';
-import { contactKeys, followServedKeys } from '@/lib/contacts';
+import { contactKeys, followServedKeys, forgetSettingsRead } from '@/lib/contacts';
 import { driveClient, driveKeys } from '@/lib/drive';
 
 /*
@@ -47,6 +47,8 @@ export function afterContactAdded(queryClient: QueryClient, pin: { resealShares?
  * listing is checked again.
  */
 export async function retryChecks(queryClient: QueryClient, userId: string) {
+    // Never the copy one settings read hands the readers that only look (lib/contacts.ts).
+    forgetSettingsRead();
     await queryClient.invalidateQueries({ queryKey: contactKeys.settings(userId) });
     afterTrustChanged(queryClient);
 }

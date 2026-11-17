@@ -366,6 +366,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
+        trustJoins.clear()
         notices.clear()
         vault = Vault.fromShared(context)
         filesAppChanged()
@@ -626,6 +627,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
@@ -959,6 +961,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val ending = vault
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
@@ -988,6 +991,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
@@ -1132,12 +1136,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (state.value.rootId != null) return@launch
         // The identity first: a version 1 identity is upgraded here, before anything is signed (the root may be made).
         io { it.identityKeys() }
+        // Who may have written what (the trust set) loads beside the workspace: neither needs the other, and the
+        // catalogue's first draw is judged against it, so it is in hand before the rows are.
+        val trust = launch { refreshTrust(join = true) }
         io { it.rootId }?.let { id -> _state.update { it.copy(rootId = id) } }
-        refreshTrust()
+        trust.join()
         // The catalogue: the whole tree from the mirror on disk, then only the feed's changes.
         buildCatalogue()
         // The account's families (none on a server without them): Account's section and any family folder on screen.
-        families.refreshFamilies()
+        // On their own, not as part of this job: Home's rows and its loading state never wait for every family's pass.
+        viewModelScope.launch { families.refreshFamilies() }
     }
 
     /* Builds the catalogue once, then redraws every list from it. */
@@ -1267,7 +1275,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         sync(quiet = true)
         refreshKeptFolders(withShares = true)
         // Someone checked on another device counts here too once the app is back.
-        refreshTrust()
+        refreshTrust(join = true)
         // And a family changed elsewhere (a removal), at most once a minute.
         families.refreshFamilies()
     }
@@ -1865,16 +1873,34 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * shows Couldn't check with a retry, never no mark; only a lost network keeps a set already loaded. Only the latest
      * load lands (TrustLoads), and only while its vault is still the one signed in.
      */
-    suspend fun refreshTrust() {
+    suspend fun refreshTrust(join: Boolean = false) {
         val vault = vault ?: return
+        // `join`, only for the launch-time asks (loadRoot and coming to the front, which ask from two places at once): a
+        // load already under way for the same vault, started since the last guard write or settings save, answers it.
+        // Every other ask follows an act (a check, a Continue, this account's own key replacement, Try again), which may
+        // have changed what trust rests on without moving that generation, so it always loads afresh.
+        // Joined, and it settled the trust set: that answers. One that failed or didn't land is loaded once more, but only
+        // while this vault is still the session's (JoinedLoads).
+        trustJoins.load(viewModelScope, vault, vault.memory.generation.get(), join, current = { this.vault }) { loadTrust(vault) }
+    }
+
+    /* The launch-time loads that join one another; holds a vault only while its load runs, and is cleared with the session. */
+    private val trustJoins = com.hushos.app.data.JoinedLoads<com.hushos.app.data.Vault>()
+
+    /*
+     * Whether this load settled the trust set: it landed and loaded, or the session ended (nothing to load again for). A
+     * failure, or a load a later one or another vault overtook, did not.
+     */
+    private suspend fun loadTrust(vault: com.hushos.app.data.Vault): Boolean {
         val load = trustLoads.begin()
         val result = withContext(Dispatchers.IO) { runCatching { vault.trust() } }
-        trustLoads.land(load) {
-            if (this.vault !== vault) return@land
-            if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return@land }
+        return trustLoads.land(load) {
+            if (this.vault !== vault) return@land false
+            if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return@land true }
             if (result.exceptionOrNull() is Unreachable) _state.update { it.copy(unreachable = true) }
             _state.update { it.copy(trust = it.trust.after(result)) }
-        }
+            result.isSuccess
+        } ?: false
     }
 
     private val trustLoads = com.hushos.app.data.TrustLoads()
@@ -2227,6 +2253,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         viewModelScope.launch { families.reset() }
+        trustJoins.clear()
         notices.clear()
         filesAppChanged()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)

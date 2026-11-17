@@ -107,6 +107,8 @@ authClient.store.subscribe((state, previous) => {
         opened = undefined;
         settingsKeyOpened = undefined;
         consentBackfilled = undefined;
+        // The worker forgot the settings it opened: they are fetched and opened again.
+        forgetSettingsRead();
         if (state.unlockedUserId) sealOlderGuard(state.unlockedUserId);
     }
 });
@@ -315,7 +317,8 @@ export async function marksKeyReady(
     };
     let served: SettingsKeyEnvelope | null;
     try {
-        served = (await authClient.settings()).settingsKey;
+        // At unlock this is the same request as the first settings read's (fetchSettings).
+        served = (await fetchSettings()).settingsKey;
     } catch (error) {
         if (await fromKept()) return kept;
         throw error;
@@ -332,13 +335,125 @@ function requireUnlocked(userId: string) {
         throw new Error('Unlock your account first.');
 }
 
-async function readSettings(userId: string, create: boolean): Promise<LoadedSettings> {
+/*
+ * One settings read serves the readers that only look, for a short while, so opening the app
+ * and one family sync fetch and open the settings once instead of once per step (each a round
+ * trip): the settings query, the sharing ledger and re-seal reminders, and families (whose
+ * writes are compare-and-set, and accept again over settings read afresh when one is refused).
+ * What is reused is only ever the result of a fresh read below, rollback checks and the
+ * worker's settingsOpen done, handed out as a copy so no reader changes another's.
+ *
+ * Never reused: a read under the account's lock (`fresh`), which judges or moves trust and
+ * must see the settings as they are once the lock is held, not as they were before it waited;
+ * and a save's read (saveSettings), whose base is the stored settings, read for it.
+ *
+ * The copy is dropped after: any settings write from this tab, landed, refused or of unknown
+ * outcome; any guard write, in this tab or announced by another (guardMoved, the
+ * BroadcastChannel below); a lock or an unlock; a read that failed; and the reuse window.
+ * Messages between tabs are not ordered with anything here, so a reuse also asks the rollback
+ * marks, which every tab raises on each read and write: a copy older than this browser has
+ * seen (another tab read or wrote later settings) is read again before it is used.
+ */
+const SETTINGS_REUSE_MS = 10_000;
+let settingsGeneration = 0;
+let settingsRead:
+    | {
+          userId: string;
+          generation: number;
+          /* When it was read, on both clocks: performance.now() may stand still while the device sleeps. */
+          at: number;
+          wall: number;
+          /* The settings key envelope the server served with it, for a reader that may create one. */
+          served: SettingsKeyEnvelope | null;
+          promise: Promise<LoadedSettings>;
+      }
+    | undefined;
+/* GET /api/auth/settings in flight, joined by readers that start before it answers (same generation). */
+let settingsRequest:
+    | { generation: number; promise: ReturnType<typeof authClient.settings> }
+    | undefined;
+
+/* Within the window on one clock: a negative step (a clock set back) reads again too. */
+const withinReuse = (elapsed: number) => elapsed >= 0 && elapsed < SETTINGS_REUSE_MS;
+
+/* What a settings read was based on is gone: the next reader fetches, checks and opens them again. */
+export function forgetSettingsRead() {
+    settingsGeneration++;
+    settingsRead = undefined;
+    settingsRequest = undefined;
+}
+
+/* `join`: a request already on its way will do. A fresh read sends its own, which others may join. */
+function fetchSettings(join = true) {
+    if (!join || settingsRequest?.generation !== settingsGeneration) {
+        const request = { generation: settingsGeneration, promise: authClient.settings() };
+        settingsRequest = request;
+        const done = () => {
+            if (settingsRequest === request) settingsRequest = undefined;
+        };
+        request.promise.then(done, done);
+    }
+    return settingsRequest.promise;
+}
+
+async function readSettings(
+    userId: string,
+    create: boolean,
+    fresh = false,
+): Promise<LoadedSettings> {
     requireUnlocked(userId);
+    const held = settingsRead;
+    if (
+        !fresh &&
+        held?.userId === userId &&
+        held.generation === settingsGeneration &&
+        withinReuse(performance.now() - held.at) &&
+        withinReuse(Date.now() - held.wall)
+    ) {
+        const loaded = await held.promise;
+        requireUnlocked(userId);
+        // Another tab saved or read a later sequence meanwhile: this copy is older than this
+        // browser has seen, so it is read again (and the rollback checks run on what comes).
+        if ((await settingsSeen(userId)) <= loaded.version) {
+            await settingsKeyReady(userId, held.served, create);
+            return structuredClone(loaded);
+        }
+        if (settingsRead === held) forgetSettingsRead();
+    }
+    const read = {
+        userId,
+        generation: settingsGeneration,
+        at: performance.now(),
+        wall: Date.now(),
+        served: null as SettingsKeyEnvelope | null,
+        promise: undefined as unknown as Promise<LoadedSettings>,
+    };
+    read.promise = freshSettings(userId, create, fresh, (key) => {
+        read.served = key;
+    });
+    settingsRead = read;
+    read.promise.catch(() => {
+        if (settingsRead === read) settingsRead = undefined;
+    });
+    return structuredClone(await read.promise);
+}
+
+async function freshSettings(
+    userId: string,
+    create: boolean,
+    own: boolean,
+    servedKey: (key: SettingsKeyEnvelope | null) => void,
+): Promise<LoadedSettings> {
+    // Asked for beside the identity rather than after it: nothing below looks at it before the
+    // identity has opened. A read that must be fresh sends its own request.
+    const fetched = fetchSettings(!own);
+    fetched.catch(() => {});
     // The identity first, with its history: what this account signed is checked against it,
     // and a failure here must fail the trust set rather than leave it half loaded.
     await openIdentity(userId);
     requireUnlocked(userId);
-    const { settings: served, settingsKey, settingsVersion } = await authClient.settings();
+    const { settings: served, settingsKey, settingsVersion } = await fetched;
+    servedKey(settingsKey);
     await settingsKeyReady(userId, settingsKey, create);
     // The stored sequence, whatever is stored: a device that has seen a later one refuses it,
     // document or none. A document served at another sequence than the server says is stored
@@ -381,6 +496,10 @@ async function readSettings(userId: string, create: boolean): Promise<LoadedSett
 
 function loadSettings(userId: string) {
     return readSettings(userId, false);
+}
+/* Under the account's lock, or for a person's own act: read now, never an earlier copy. */
+function loadSettingsNow(userId: string) {
+    return readSettings(userId, false, true);
 }
 
 export const settingsQueryOptions = (userId: string) =>
@@ -426,7 +545,7 @@ export const ownFingerprintQueryOptions = (userId: string) =>
  * sync reads them through here before it accepts anything (lib/groups/pins.ts).
  */
 export function readSettingsForWrite(userId: string) {
-    return readSettings(userId, true);
+    return readSettings(userId, true, true);
 }
 
 /*
@@ -443,8 +562,8 @@ export const FAMILY_SETTINGS_NEEDED =
     'Add someone in Contacts first. That sets up where HushOS keeps your family checks on this account.';
 
 /* The settings as families read them (lib/groups/client.ts): refused, plainly, when none opened. */
-export async function readSettingsForFamilies(userId: string) {
-    const loaded = await readSettings(userId, true);
+export async function readSettingsForFamilies(userId: string, { fresh = false } = {}) {
+    const loaded = await readSettings(userId, true, fresh);
     if (loaded.unopened) throw new Error(FAMILY_SETTINGS_NEEDED);
     return loaded;
 }
@@ -483,6 +602,9 @@ export async function compareAndSetSettings(
     } catch (error) {
         if (/another device/.test(String((error as Error).message))) return false;
         throw error;
+    } finally {
+        // Landed, refused or unknown: the next reader reads the settings again.
+        forgetSettingsRead();
     }
 }
 
@@ -500,7 +622,7 @@ export async function saveSettings(
     beforeSend?: (expectedVersion: number) => Promise<void>,
 ) {
     for (let attempt = 0; attempt < 2; attempt++) {
-        const current = await readSettings(userId, true);
+        const current = await readSettings(userId, true, true);
         // Removals count against the room the document has: the oldest go first (2.7).
         const next = settingsThatFit(await change(structuredClone(current.settings)));
         const { envelope } = await authClient.rpc('settingsSeal', {
@@ -524,8 +646,12 @@ export async function saveSettings(
             });
             return next;
         } catch (error) {
+            // The next attempt reads afresh: forgetSettingsRead below, before it starts.
             if (attempt === 0 && /another device/.test(String((error as Error).message))) continue;
             throw error;
+        } finally {
+            // Landed, refused or unknown: the next reader reads the settings again.
+            forgetSettingsRead();
         }
     }
     throw new Error('Your settings keep changing on another device. Try again.');
@@ -633,6 +759,8 @@ const guardChannel =
 guardChannel?.addEventListener('message', (event: MessageEvent) => {
     const data = event.data as { userId?: unknown; contactId?: unknown } | null;
     guardWrites++;
+    // Before the queries below fetch again: they must not be handed the copy read before it.
+    forgetSettingsRead();
     if (typeof data?.userId !== 'string') return;
     if (typeof data.contactId === 'string') clearChange(data.userId, data.contactId);
     void boundQueryClient?.invalidateQueries({ queryKey: contactKeys.settings(data.userId) });
@@ -647,6 +775,7 @@ guardChannel?.addEventListener('message', (event: MessageEvent) => {
 });
 function guardMoved(moved: { userId: string; contactId: string } | null) {
     guardWrites++;
+    forgetSettingsRead();
     if (moved) guardChannel?.postMessage(moved);
 }
 /* The guard's revision as this tab knows it, for queries built over it. */
@@ -863,7 +992,7 @@ async function rememberKeys(
  */
 async function guardedView(userId: string) {
     return withGuardLock(userId, async () => {
-        const { settings, version: at } = await loadSettings(userId);
+        const { settings, version: at } = await loadSettingsNow(userId);
         const { store } = contactGuard();
         const read = async () => {
             try {
@@ -1046,7 +1175,7 @@ async function stand(
     served: Served,
     { act, follow, sealUnsaved = false }: { act: boolean; follow: boolean; sealUnsaved?: boolean },
 ): Promise<Standing> {
-    const loaded = await loadSettings(userId);
+    const loaded = await loadSettingsNow(userId);
     const found = pinOf(loaded.settings.contacts, contactId);
     let pin = found?.pin ?? null;
     let { entry, kept } = await guardFor(userId, contactId, pin, loaded.version);
@@ -1183,7 +1312,7 @@ export async function followServedKeys(
     userId: string,
     signer: { id: string },
 ): Promise<'same' | 'followed' | 'recheck' | 'changed' | 'not-pinned'> {
-    const { settings } = await loadSettings(userId);
+    const { settings } = await loadSettingsNow(userId);
     const held = pinOf(settings.contacts, signer.id)?.pin;
     if (!held) return 'not-pinned';
     const { contact } = await authClient.lookupContact(held.email);
@@ -1514,7 +1643,7 @@ export async function continueWith(
         throw new Error('That address now belongs to a different account.');
     if (!(await keysHold(contact.userId, contact))) throw new Error(notUpgradedWords(contact.name));
     const pin = await withGuardLock(userId, async () => {
-        const loaded = await loadSettings(userId);
+        const loaded = await loadSettingsNow(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
         const { entry } = await guardFor(userId, contact.userId, before, loaded.version);
@@ -1557,7 +1686,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
         kemPublicKey: contact.kemPublicKey,
     });
     const pin = await withGuardLock(userId, async () => {
-        const loaded = await loadSettings(userId);
+        const loaded = await loadSettingsNow(userId);
         const found = pinOf(loaded.settings.contacts, contact.userId);
         const before = found?.pin ?? null;
         const { entry } = await guardFor(userId, contact.userId, before, loaded.version);
@@ -1601,7 +1730,7 @@ export async function pinContact(queryClient: QueryClient, userId: string, looku
  */
 export async function contactGuardEntry(userId: string, contactId: string) {
     return withGuardLock(userId, async () => {
-        const loaded = await loadSettings(userId);
+        const loaded = await loadSettingsNow(userId);
         const pin = pinOf(loaded.settings.contacts, contactId)?.pin ?? null;
         return (await guardFor(userId, contactId, pin, loaded.version)).entry;
     });
@@ -1645,7 +1774,7 @@ export async function saveFamilyCheck(
     const keys = input.keys;
     const contactId = input.member.userId;
     await withGuardLock(userId, async () => {
-        const loaded = await loadSettings(userId);
+        const loaded = await loadSettingsNow(userId);
         const before = pinOf(loaded.settings.contacts, contactId)?.pin ?? null;
         const { entry } = await guardFor(userId, contactId, before, loaded.version);
         // Decided over this very entry, or not at all: a Continue or a check since is its own act.
@@ -2056,10 +2185,10 @@ export function sharingLedger(userId: () => string | null): SharingLedger {
         }).then(() => undefined);
     };
     return {
-        async read() {
+        async read({ fresh = false } = {}) {
             const id = userId();
             if (!id) return { shares: {}, links: {} };
-            const { settings } = await loadSettings(id);
+            const { settings } = await (fresh ? loadSettingsNow(id) : loadSettings(id));
             return settings.sharing ?? { shares: {}, links: {} };
         },
         addShare: (nodeId, granteeUserId) =>

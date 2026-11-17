@@ -117,7 +117,9 @@ extension FamilySync {
      */
     public func walk(_ groupId: String, _ target: WalkTarget, progress: @escaping @Sendable (Int) -> Void = { _ in },
                      checkStop: @escaping @Sendable () throws -> Void = {}) async throws -> WalkOutcome {
-        try await FamilyLocks.walks.holding(target.workspaceId) {
+        // However far it got, the folder's keys moved: a pass's folder listing from before it is asked for again.
+        defer { landings &+= 1 }
+        return try await FamilyLocks.walks.holding(target.workspaceId) {
             try checkStop()
             guard Self.stillRunning(try await api.spaces(), groupId: groupId, target: target) else { return .endedElsewhere }
             do {

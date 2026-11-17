@@ -476,6 +476,25 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - A pin that doesn't fit is "Your contacts are full. Remove someone you no longer share with."
 - `firstSeen` and every field another client wrote are kept.
 
+### One read for the readers that only look
+
+- `loadSettings` always reads now; `settingsToLook` (`Settings.swift`) hands back the last fresh read for up to `settingsReuse` (10 s), as the web's `lib/contacts.ts` does.
+    - Look-only readers use it: a family sync's acceptance and settle (`familyPin(_:look: true)`), `familyChecked`, `familyCheckWith`, the contacts list, the sharing ledger, the upgrade pass when nothing is owed.
+    - Everything else reads now: every family act before it sends (`familyPin` without `look`), every read in the guard's turn, `updateSettings`'s base, rotation, a push's names, and the upgrade pass when a key replacement's re-seal (`ResealPending`) or a followed pin's (`ResealTo`) is owed, since it clears or acknowledges them.
+    - The copy is dropped by any save or guard write from the vault (`forgetSettingsCopy`, from `updateSettings` and `commitGuard`), a sign-out (`GuardGeneration`), a failed read, and the window; a copy older than the marks another process raised is read again.
+    - Look-only readers therefore see another device's change, a server rollback included, up to 10 s late; a fresh read refuses a rollback at once.
+    - Tests: `SettingsReuseTests`.
+- A family pass (`Families.refreshFamilies`) asks route 25 once: `FamilySync.inPass` holds the answer in a task-local.
+    - Plain `Task { }`s inherit task-locals, so the listing is ended when `inPass` returns (cancelled or not); a task that outlives the pass then asks for itself.
+    - A task created under a pass for work of its own (a walk in `startWalks`, a release adopted in `applyReleases`) is made by `FamilySync.taskOutsidePass`, so it never reads the pass's listing even while the pass still runs.
+    - A chain call that lands (`sendKept`'s `drop(.landed)`) or a walk that ends moves `FamilySync.landings`; a listing asked for before it is asked for again.
+    - Each session has its own vault, so the workspace read and the `/shares/mine` join never cross a sign-out.
+    - Tests: `SettingsReuseTests` (one listing per pass, none for a detached sync, a task outside the pass or one that syncs after it) and `FamilyManageTests` (asked again after a call lands).
+- Requests made together share one answer:
+    - `loadWorkspace` (`loadingWorkspace`): the first list and the live sync at launch.
+    - `sharedByMeAnswer(join:)`: the upgrade pass joins the sharing listing's `/shares/mine` when nothing is owed; the listing always asks afresh.
+    - `identityKeys` (`openingIdentity`): `loadRoot` opens it beside the workspace; a version 1 upgrade happens once.
+
 ### Rollback marks
 
 - `RollbackMarks.swift`, `RollbackMarkStore`: the highest settings sequence, identity key version and identity version this phone has seen.

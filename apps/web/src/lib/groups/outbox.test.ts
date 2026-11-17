@@ -606,6 +606,33 @@ describe('admissions', () => {
         },
     );
 
+    test('creating a family reads the settings now, never a copy held from before', async () => {
+        const h = harness();
+        h.settingsLog.copyError = new Error('A held copy was read.');
+        const { outcome } = await createFamily(h.ctx, 'Lindqvist');
+        expect(outcome.status).toBe('landed');
+    });
+
+    test('a kept admission is judged against the pin as it is now, never a copy a sync was handed', async () => {
+        const store = createMemoryGroupStore();
+        const first = harness({ store });
+        await checked(first);
+        first.server.script.push(...RESEND_DELAYS_MS.map(() => noAnswer()), noAnswer());
+        const kept = await letIn(first.ctx, GROUP, admit, CHECKED);
+        if (kept.status !== 'sent') throw new Error(kept.status);
+        // Another device moved the newcomer's pin; a read made before it is still held for looking readers.
+        const again = harness({ store });
+        await checked(again, RECHECKED);
+        again.settingsLog.copy = structuredClone({
+            ...again.settings.doc,
+            contacts: { [NEWCOMER]: CHECKED as never },
+        });
+        await resumeOutbox(again.ctx);
+        // Sealed over keys the pin no longer holds: never sent, and kept until dropped knowingly.
+        expect(again.server.sent).toEqual([]);
+        expect(await store.outbox(USER, GROUP)).toHaveLength(1);
+    });
+
     test('a final refusal after the pin moved still drops the admission rather than holding it forever', async () => {
         const before = await pinOf('seen', [1, 2, 3, 4]);
         const after = await pinOf('seen', [1, 2, 3, 12]);
