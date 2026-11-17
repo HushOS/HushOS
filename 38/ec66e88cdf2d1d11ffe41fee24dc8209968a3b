@@ -1,0 +1,82 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ToolRunsTests.swift
+  s_c60e24772e04af::t_4e370ee799160f 1-164
+  s_c60e24772e04af::t_8d0c65bbf524ba 165-173
+apps/web/src/lib/tools/budget.ts
+  s_c60e24772e04af::t_8406b9afc57fb1 1-52
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_d2d6c3c5936a1d 1-273
+  s_c60e24772e04af::t_16b1f242391be9 274-287
+apps/web/src/lib/tools/watchdog.ts
+  s_c60e24772e04af::t_205f33f5297bc6 1-57
+e2e/tools-harness.spec.ts
+  s_c60e24772e04af::t_5836c17c0f9519 1-183
+  s_c60e24772e04af::t_b87904088780ae 184-205
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_e6bd717b5132a6 1-47
+  s_c60e24772e04af::t_ecce9be6bbb7ad 48-49
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ToolRuns.swift
+  s_c60e24772e04af::t_bcd02967fb1503 1-248,250-251
+  s_c60e24772e04af::t_86f43ee101214c 249,252-253
+apps/web/src/lib/tools/ranges.ts
+  s_c60e24772e04af::t_c95d1648fc704a 1-83
+apps/web/src/lib/tools/worker.ts
+  s_c60e24772e04af::t_b453e4b3522f61 1-111
+e2e/fixtures/tools/page.ts
+  s_c60e24772e04af::t_ace680cc88bdd3 1-129,132
+  s_c60e24772e04af::t_bdbf8b9fdde44c 130-131,133-135
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_bfdb2d1b89d413 1-153,156-157,159
+  s_c60e24772e04af::t_d0abb3445d538a 154-155,158,160-162
+apps/web/scripts/worker-code.ts
+  s_c60e24772e04af::t_9f81c5fe3c58f1 1-144
+  s_c60e24772e04af::t_038c77bae7c91f 145-152
+apps/android/app/src/test/kotlin/com/hushos/app/data/ToolRunsTest.kt
+  s_c60e24772e04af::t_6d522b13ec4755 1-174
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_5798fc82a960e9 1-266
+  s_c60e24772e04af::t_ab84d30384041a 267-298
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_2762a4ceefa824 1-732
+  s_c60e24772e04af::t_198ea44700a493 733-776
+apps/web/scripts/worker-code.test.ts
+  s_c60e24772e04af::t_e24b7eb9ca458e 1-74
+e2e/fixtures/tools/probe.worker.ts
+  s_c60e24772e04af::t_4206244e286f05 1-50
+apps/web/src/lib/tools/ranges.test.ts
+  s_c60e24772e04af::t_6ee9e8df5b6ed0 1-255
+  s_c60e24772e04af::t_71577c49efb947 256-270
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_243c4fedcf7674 1-41
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_5d8748675ea93e 637-644
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_76a18606264191 677-684
+apps/web/package.json
+  s_c60e24772e04af::t_1b1730b552dcff 9
+apps/web/tsconfig.json
+  s_c60e24772e04af::t_8d0dd41f2c5591 17-20
+apps/web/vitest.config.ts
+  s_c60e24772e04af::t_1b637e7a540d16 27
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_be428acaad2868 50,85
+docs/file-tools-design.md
+  s_c60e24772e04af::t_ca5e5866f435ab 148-150,359
+e2e/fixtures/tools/index.html
+  s_c60e24772e04af::t_b4b60614ff2691 1-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38ec66e88cdf2d1d11ffe41fee24dc8209968a3b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
