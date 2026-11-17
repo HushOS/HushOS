@@ -1,0 +1,47 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_ff9bd1a29403e9 1658
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_97fb1f90586a84 31-36,38,43-44,62-63,68-69,71-72,78,90-94,96-106,115,129,185-186,188,249-255,262,273,308-312,315,324,330-334,336-341,346,349,351,357-358,361-363,408-409,534-558,561-562,571-574,639,672-677,752-753,755-756,768,836-837,840-841
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_77ab68840d954f 1709,1711,1727,2075,2080,2121-2122,2232,2242,2277-2278
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_a23f85d0639e5f 87-90,95-100,103-104,107,111,127-128,130,598-690,888-899
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_5f840316466e63 1281
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_7a402fea599545 72-73,96-108,119,126,132,138-139,141,164-168,171-184,194,235-236,238-239,323-327,335,340,375-377,382,392,396-401,406,410,412-413,419-420,422-424,462-463,486-501,674-692,695-697,706-709,773-774,811-812,879-880,882-883,902,974-975,979-980,982
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_d4c35666b5dac6 24-26,41,898,943-944,984-985,995
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_041b83c6e050a3 49-52,80,83,86-87,90,93-95,97-98,114-115,117,538,549,565,642-742,943-959
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_b7d3e1c3d6e421 118,123-124
+docs/file-tools-design.md
+  s_c60e24772e04af::t_dc6ebf946ba031 300-304
+packages/drive/src/client.attributes.test.ts
+  s_c60e24772e04af::t_51f64ad1a636c3 85-86,101-104,173,323-343
+packages/drive/src/client.ts
+  s_c60e24772e04af::t_11eabebd1a51c6 1086-1094,1132
+packages/drive/src/journal.ts
+  s_c60e24772e04af::t_49b45cfc66facf 153-157
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_abb214447842e3 486-489,890-892,898,1227-1385,1483-1484
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_04cd5698baad50 145-149,158,163-168,175,189,325-334,532-539,748,799,810,824-845,858-875,881-882,886,897-903,932,980-981,984-990,996,1001-1003,1005,1009-1012,1015-1016,1021,1023-1046,1081-1085,1112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "65c532dfd20063db58c999fb36ca520f9086b595",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

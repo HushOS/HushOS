@@ -1,0 +1,49 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_f059c10bdb6f05 1656-1657
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_edf0406d3fbf14 169-170,569-571
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_2ee9084c56db9a 61-63,66-80,82-86,94-95,99-102,115-117,168,170,187-192,206,225-226,233-244,247-248,282,284-290,297-299,301,305,307-311,320,372-373,387-388,391,399-403,410-416,420-423,425,433-436,443-455,517-520,524,527-528,531,538-541,545-571,610,615,621-622,624-625,628-629,632,635-637,647,656-663,667-668,689-691,792,799-820,824,826
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_cde3eee7dd231e 2219-2227,2294-2299,2301-2302,2395-2398
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_c60e24772e04af::t_002c9b9b570790 122-137
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_196be5faa85c2c 80-86,90,107-115,129,134,406-409,411,417,432-436,505-508,510,512-514,516-517,520-644,767-804
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_3a1384eeae161b 1280
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c60e24772e04af::t_db22a23e631c06 365-368,378-388
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_af9e2935a30f0c 122-124,129-135,139-143,150-151,160-165,167,171-176,204,211,238-241,248,262,287-288,296-305,344-350,355-356,360,363-366,375,413-414,424-429,432,436-438,443,448,450,458-474,543-544,547,557-561,570-575,579-582,584,638,641,643,646,650-651,654-657,661-690,731,734,736,738-739,743-746,749-750,753,764,777,781-782,801,803-804,806,888,890-891,899,924-928,930-933,937,939
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_1d9f7257f2ad79 894,901-907,979,989
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_784daae5cf3a37 42-48,66-73,86,93-101,110,124,392,396-399,401,406-407,422-431,498-626,816-867
+docs/file-tools-design.md
+  s_c60e24772e04af::t_f9b635093f2625 298-300
+packages/drive/src/connection.ts
+  s_c60e24772e04af::t_e8e3bcc943512a 8-10,16-18,20,38-42
+packages/drive/src/journal.ts
+  s_c60e24772e04af::t_f250a64ba7ef65 199,201-211
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_85273484dabaa6 583,603,864-911,1146-1151,1244-1331
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_5d4712a2792297 111-114,122,144-147,150-155,158,165,169-179,240-242,258,462-466,469,477-478,480-485,534-535,538-544,546-547,549-558,573-576,578,780,784,810,812-814,930,935,938-942,954,1004-1008,1013-1014
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b04216074d7ab6981b40137fd6f50fecc70878f2",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

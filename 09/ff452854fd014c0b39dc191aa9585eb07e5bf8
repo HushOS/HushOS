@@ -1,0 +1,27 @@
+apps/web/src/lib/leave-guard.test.ts
+  s_c60e24772e04af::t_9df0305db7d935 1-35
+apps/web/src/lib/leave-guard.ts
+  s_c60e24772e04af::t_88953dfddde5bb 1-31
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_dd34316ae83547 20,119,121,124-126
+apps/web/src/lib/transfers.ts
+  s_c60e24772e04af::t_b77d274e76245b 26,216,218-219
+docs/file-tools-design.md
+  s_c60e24772e04af::t_76df5185a67252 566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "09ff452854fd014c0b39dc191aa9585eb07e5bf8",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
