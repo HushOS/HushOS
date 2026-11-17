@@ -240,25 +240,25 @@ tasks.withType<Test>().configureEach {
 }
 
 /*
- * The file tools harness's tests implement the core's foreign traits (ObjectSource, ToolClock). UniFFI
- * keeps one callback table per process, set by whichever class loader loaded the bindings last, and
- * Robolectric loads them again in its sandbox: in the shared test JVM a callback could reach the other
- * loader's objects (seen as garbled answers and a watchdog that never fired). So those tests run in a
- * JVM of their own, right after the rest: `./gradlew :app:testDebugUnitTest` runs both, and
- * `:app:testDebugToolRuns` runs them alone.
+ * Tests that implement the core's foreign traits (ObjectSource, ToolClock, any later one) live in
+ * the test package com.hushos.app.foreign, and run in a JVM of their own. UniFFI keeps one callback
+ * table per process, set by whichever class loader loaded the bindings last, and Robolectric loads
+ * them again in its sandbox: in the shared test JVM a callback could reach the other loader's
+ * objects (seen as garbled answers and a watchdog that never fired). `testDebugUnitTest` runs
+ * everything else and then `testDebugForeignTraits`, which can also run alone.
  */
 afterEvaluate {
+    val foreign = "com.hushos.app.foreign.*"
     val unit = tasks.named<Test>("testDebugUnitTest")
-    val toolRuns = tasks.register<Test>("testDebugToolRuns") {
-        description = "The file tools harness's tests, in a JVM of their own."
+    val foreignTraits = tasks.register<Test>("testDebugForeignTraits") {
+        description = "Tests that implement the core's foreign traits, in a JVM of their own."
         group = "verification"
         testClassesDirs = unit.get().testClassesDirs
         classpath = unit.get().classpath
-        filter.includeTestsMatching("com.hushos.app.data.ToolRunsTest")
+        filter.includeTestsMatching(foreign)
     }
     unit.configure {
-        filter.excludeTestsMatching("com.hushos.app.data.ToolRunsTest")
-        finalizedBy(toolRuns)
+        filter.excludeTestsMatching(foreign)
+        finalizedBy(foreignTraits)
     }
 }
-

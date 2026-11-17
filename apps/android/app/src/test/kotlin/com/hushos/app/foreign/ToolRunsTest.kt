@@ -1,4 +1,14 @@
-package com.hushos.app.data
+package com.hushos.app.foreign
+
+import com.hushos.app.data.ApiError
+import com.hushos.app.data.DriveApi
+import com.hushos.app.data.OpenedVersion
+import com.hushos.app.data.Shared
+import com.hushos.app.data.StoreSource
+import com.hushos.app.data.ToolFailed
+import com.hushos.app.data.ToolRunState
+import com.hushos.app.data.ToolRuns
+import com.hushos.app.data.toolReaderOf
 
 import com.hushos.core.Content
 import com.hushos.core.RunControl
@@ -83,7 +93,7 @@ class ToolRunsTest {
         val size = chunk + 5000
         val (content, stored, plain) = sealed(size)
         val fetches = Collections.synchronizedList(ArrayList<Long>())
-        val source = StoreSource { range ->
+        val source = StoreSource { range, _ ->
             fetches.add(range.start.toLong())
             stored.copyOfRange(range.start.toInt(), range.end.toInt() + 1)
         }
@@ -98,7 +108,7 @@ class ToolRunsTest {
 
     @Test fun aStoreFailureFailsTheRunWithTheGenericWords() = runBlocking {
         val (content, _, _) = sealed(1000)
-        val source = StoreSource { throw ApiError(404, "gone") }
+        val source = StoreSource { _, _ -> throw ApiError(404, "gone") }
         try {
             ToolRuns().run("Digest") { control -> rangeDigest(VersionReader(source, content, control), control, 0uL, 10uL) }
             fail("the run succeeded")
@@ -322,6 +332,10 @@ class ToolRunsTest {
         val stalled = AtomicInteger()
         /* While set, the store holds every range open until released (a stalled network). */
         @Volatile var stall: CountDownLatch? = null
+        /* Ranges every request saw, stalled or not, in order. */
+        val asked = Collections.synchronizedList(ArrayList<String>())
+        /* When set, only the range starting here stalls. */
+        @Volatile var stallAt: Int? = null
 
         init {
             server.createContext("/api/drive/versions/") { exchange ->
@@ -338,7 +352,10 @@ class ToolRunsTest {
                     exchange.close()
                     return@createContext
                 }
-                stall?.let { stalled.incrementAndGet(); it.await(10, TimeUnit.SECONDS) }
+                val asking = exchange.requestHeaders.getFirst("Range")
+                asked.add(asking)
+                val startsAt = asking.removePrefix("bytes=").substringBefore("-").toInt()
+                if (stallAt == null || stallAt == startsAt) stall?.let { stalled.incrementAndGet(); it.await(10, TimeUnit.SECONDS) }
                 val header = exchange.requestHeaders.getFirst("Range")
                 ranges.add(header)
                 val (start, end) = header.removePrefix("bytes=").split("-").map { it.toInt() }
@@ -364,6 +381,39 @@ class ToolRunsTest {
             assertEquals(1, server.refused.get())
             assertEquals(2, server.addresses.get())
             assertEquals(2, server.ranges.size)
+        }
+    }
+
+    @Test fun aRunCancelledAsTheTailComesStillFetchesThePadding() {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        val size = chunk - 100
+        val plain = ByteArray(size.toInt()) { it.toByte() }
+        val content = Content("11111111-1111-4111-8111-111111111111", "66666666-6666-4666-8666-666666666666", 3u,
+            randomBytes(32u), randomBytes(16u), size.toULong(), 2000u)
+        val layout = contentLayout(3u, size.toULong(), 2000u)
+        assertEquals(2uL, layout.chunkCount)
+        val tail = chunkEncrypt(content, 0uL, plain)
+        // The padding and the trailer are never opened: zeros of the right length do.
+        val stored = tail + ByteArray((layout.ciphertextSize - tail.size.toULong()).toInt())
+        Server(stored).use { server ->
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            val control = RunControl(toolWatchdogMillis(), null)
+            val reader = toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control)
+            val stall = CountDownLatch(1)
+            server.stallAt = 0
+            server.stall = stall
+            val failed = AtomicInteger()
+            val reading = Thread { try { reader.readAt((size - 10).toULong(), 10uL) } catch (_: Exception) { failed.incrementAndGet() } }
+            reading.start()
+            // The tail is on its way when the run is cancelled.
+            eventually { server.stalled.get() == 1 }
+            control.cancel()
+            reading.join(10_000)
+            stall.countDown()
+            assertFalse(reading.isAlive)
+            assertEquals(1, failed.get())
+            // The padding was still asked for, after the cancel, to the object's end.
+            assertTrue(server.asked.toString(), server.asked.contains("bytes=${tail.size}-${layout.ciphertextSize - 1uL}"))
         }
     }
 

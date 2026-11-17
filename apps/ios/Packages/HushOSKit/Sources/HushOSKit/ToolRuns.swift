@@ -247,24 +247,26 @@ public actor ToolRuns {
  */
 public final class StoreSource: ObjectSource, @unchecked Sendable {
     private let control: RunControl?
-    private let fetchRange: @Sendable (ByteRange) async throws -> Data
+    private let fetchRange: @Sendable (ByteRange, Bool) async throws -> Data
 
-    public init(control: RunControl? = nil, _ fetch: @escaping @Sendable (ByteRange) async throws -> Data) {
+    /* `fetch` is told whether the range is a drain (the padding after the file): see ObjectSource. */
+    public init(control: RunControl? = nil, _ fetch: @escaping @Sendable (ByteRange, Bool) async throws -> Data) {
         self.control = control
         fetchRange = fetch
     }
 
-    public func fetch(range: ByteRange) throws -> Data {
+    public func fetch(range: ByteRange, drain: Bool) throws -> Data {
         let box = FetchBox()
         let done = DispatchSemaphore(value: 0)
         let fetchRange = self.fetchRange
         let task = Task.detached {
-            do { box.result = .success(try await fetchRange(range)) } catch { box.result = .failure(error) }
+            do { box.result = .success(try await fetchRange(range, drain)) } catch { box.result = .failure(error) }
             done.signal()
         }
-        // In slices, so a run that ends meanwhile stops waiting (and fetching) within a twentieth of a second.
+        // In slices, so a run that ends meanwhile stops waiting (and fetching) within a twentieth of a
+        // second; a drain is waited for whatever the run does, bounded by the request's own timeout.
         while done.wait(timeout: .now() + .milliseconds(50)) == .timedOut {
-            if control?.isEnded() == true {
+            if !drain, control?.isEnded() == true {
                 task.cancel()
                 throw FetchError.Failed(reason: "Cancelled.")
             }
@@ -305,9 +307,18 @@ public enum ToolReaders {
             return url
         }
         let address = ObjectAddress(try await fresh(), renew: fresh)
-        let source = StoreSource(control: control) { range in
-            try await Resumable.run(onExpired: { try await address.refresh() }) {
-                try await api.range(await address.current, range)
+        let source = StoreSource(control: control) { range, drain in
+            guard drain else {
+                return try await Resumable.run(onExpired: { try await address.refresh() }) {
+                    try await api.range(await address.current, range)
+                }
+            }
+            // The padding: once, an expired address renewed once, and not cut off by the run's end.
+            do {
+                return try await api.range(await address.current, range)
+            } catch DriveAPIError.server(403, _) {
+                try await address.refresh()
+                return try await api.range(await address.current, range)
             }
         }
         return try VersionReader(source: source, content: opened.content, control: control)

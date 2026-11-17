@@ -393,6 +393,24 @@ describe('ending a run', () => {
         }
     });
 
+    test('a result built to hold the page’s thread fails fast', async () => {
+        // A shared reference nested 30 deep: a billion paths through it, and tiny as a message.
+        let shared: unknown = [];
+        for (let i = 0; i < 30; i++) shared = [shared, shared];
+        // A sparse array as long as an array can be.
+        const sparse: unknown[] = [];
+        sparse.length = 2 ** 32 - 1;
+        // Twelve thousand small values, each fine alone.
+        const many = Array.from({ length: 4_000 }, () => [1, 2, 3]);
+        for (const result of [shared, sparse, many, { a: shared }]) {
+            const started = performance.now();
+            const bad = run();
+            bad.worker.send({ type: 'done', result });
+            await expect(bad.handle.result).rejects.toThrow(TOOL_FAILED);
+            expect(performance.now() - started).toBeLessThan(500);
+        }
+    });
+
     test('a refusal is shown in the page’s words, never the worker’s', async () => {
         const refusals = { password: 'This PDF has a password.' };
         const known = run({ refusals });
@@ -530,6 +548,24 @@ describe('one run at a time', () => {
         await expect(second.handle.result).rejects.toBeInstanceOf(ToolCancelled);
         expect(second.made).toBe(0);
         expect(second.handle.getState()).toEqual({ status: 'cancelled' });
+    });
+
+    test('a listener that cancels the run ahead of it as the queue moves starts it once', async () => {
+        const a = run({}, 'A');
+        const b = run({}, 'B');
+        const c = run({}, 'C');
+        // When A ends, C is told it now waits behind B, and cancels B there.
+        c.handle.subscribe((state) => {
+            if (state.status === 'waiting' && state.behind === 'B') b.handle.cancel();
+        });
+        a.worker.send({ type: 'done', result: null });
+        await a.handle.result;
+        await expect(b.handle.result).rejects.toBeInstanceOf(ToolCancelled);
+        expect(b.made).toBe(0);
+        expect(c.made).toBe(1);
+        expect(c.worker.received.filter((m) => m.type === 'start')).toHaveLength(1);
+        c.handle.cancel();
+        expect(c.worker.terminated).toBe(true);
     });
 
     test('a run that ends settles first, whatever the next does when it starts', async () => {

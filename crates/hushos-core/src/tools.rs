@@ -55,14 +55,20 @@ const WATCHDOG_TICK_CAP_MILLIS: u64 = 2_000;
 const BUDGET_WAIT_SLICE: Duration = Duration::from_millis(50);
 
 /// The object store, as the app reaches it: the bytes `range.start` to
-/// `range.end` inclusive of one version's object, exactly as stored. The app
-/// renews an expired address and retries as its downloads do, and gives up as
-/// soon as the run's control has ended ([`RunControl::is_ended`]). It is called
-/// on the run's own thread and may block it; never call a reader from the main
-/// thread or a cooperative pool.
+/// `range.end` inclusive of one version's object, exactly as stored. It is
+/// called on the run's own thread and may block it; never call a reader from
+/// the main thread or a cooperative pool.
+///
+/// An ordinary fetch (`drain` false) is retried as downloads are, the address
+/// renewed when it expires, and given up as soon as the run's control has
+/// ended ([`RunControl::is_ended`]). A `drain` fetch is the padding after the
+/// file, fetched because the file's last chunk was: its bytes are thrown away
+/// unopened, and the app makes it even when the run has ended, once (an
+/// expired address renewed once), so the store sees the object read to its
+/// end whatever stopped the run.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ObjectSource: Send + Sync {
-    fn fetch(&self, range: ByteRange) -> Result<Vec<u8>, FetchError>;
+    fn fetch(&self, range: ByteRange, drain: bool) -> Result<Vec<u8>, FetchError>;
 }
 
 /// Why the store's bytes did not come: the app's words, which the read fails with. Not a
@@ -385,11 +391,12 @@ struct ReaderState {
 /// Random access to one version's plaintext. Each chunk a read touches is
 /// fetched by its own range, opened, and kept while it is one of the last two
 /// read; the file's last chunk is kept for the reader's life. When that chunk
-/// is fetched, the padding chunks after it are fetched too, as the web's reader
-/// does, so the ranges never show the store where the file ends; a padding
-/// chunk that fails to arrive or to open fails the read. Any chunk that fails
-/// to open fails the read. In all a reader fetches at most four times its
-/// object's size, then fails.
+/// is fetched, the padding chunks after it are fetched too, as ciphertext only,
+/// as the web's reader does, so the ranges never show the store where the file
+/// ends, even for a run cancelled meanwhile; a padding chunk that fails to
+/// arrive fails the read. Any chunk that fails to open fails the read. In all a
+/// reader fetches at most four times its object's size (the padding not
+/// counted), then fails.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct VersionReader {
     source: Arc<dyn ObjectSource>,
@@ -458,8 +465,8 @@ impl VersionReader {
         }
     }
 
-    fn fetch_open(&self, index: u64) -> CoreResult<Zeroizing<Vec<u8>>> {
-        self.check()?;
+    /* Chunk `index` as stored. A drain fetch (the padding) is not counted against the fetch limit. */
+    fn fetch_raw(&self, index: u64, drain: bool) -> CoreResult<Vec<u8>> {
         let range = chunk_range(
             self.content.suite,
             self.content.plaintext_size,
@@ -467,19 +474,61 @@ impl VersionReader {
             index,
         )?;
         let length = range.end - range.start + 1;
-        if self.fetched.fetch_add(length, Ordering::SeqCst).saturating_add(length) > self.fetch_limit {
+        if !drain
+            && self.fetched.fetch_add(length, Ordering::SeqCst).saturating_add(length) > self.fetch_limit
+        {
             return Err(input(TOOL_FAILED));
         }
         let ciphertext = {
             let _hold = self.control.as_ref().map(|control| control.hold());
-            self.source.fetch(range).map_err(|FetchError::Failed { reason }| input(reason))?
+            self.source.fetch(range, drain).map_err(|FetchError::Failed { reason }| input(reason))?
         };
         if ciphertext.len() as u64 != length {
             return Err(CoreError::Sealed(DAMAGED.into()));
         }
-        // A cancel while the fetch was out: nothing it brought is opened.
+        Ok(ciphertext)
+    }
+
+    fn open_chunk(&self, index: u64, ciphertext: Vec<u8>) -> CoreResult<Plain> {
+        let plaintext = Zeroizing::new(chunk_decrypt(self.content.clone(), index, ciphertext)?);
+        if plaintext.len() as u64 != chunk_length(self.content.plaintext_size, index) {
+            return Err(CoreError::Sealed(DAMAGED.into()));
+        }
+        Ok(Arc::new(plaintext))
+    }
+
+    /*
+     * The file's last chunk and the padding after it. Once the tail is asked for, every padding
+     * chunk is fetched, as ciphertext only and never opened, even if the run ends meanwhile or
+     * the tail's own fetch fails: a run stopped there would otherwise show the store where the
+     * file ends. If the run ended, every opened chunk goes before the padding is waited for, and
+     * the tail is never opened.
+     */
+    fn tail(&self, index: u64) -> CoreResult<Plain> {
         self.check()?;
-        Ok(Zeroizing::new(chunk_decrypt(self.content.clone(), index, ciphertext)?))
+        let tail = self.fetch_raw(index, false);
+        if self.ended() {
+            self.forget();
+        }
+        let mut drained = Ok(());
+        for padding in self.file_chunks..self.chunk_count {
+            if let Err(error) = self.fetch_raw(padding, true) {
+                drained = drained.and(Err(error));
+            }
+            if self.ended() {
+                self.forget();
+            }
+        }
+        self.check()?;
+        let ciphertext = tail?;
+        drained?;
+        let plaintext = self.open_chunk(index, ciphertext)?;
+        lock(&self.state).tail = Some(Arc::clone(&plaintext));
+        Ok(plaintext)
+    }
+
+    fn ended(&self) -> bool {
+        self.control.as_ref().is_some_and(|control| control.is_ended())
     }
 
     fn chunk(&self, index: u64) -> CoreResult<Plain> {
@@ -497,21 +546,14 @@ impl VersionReader {
                 return Ok(bytes);
             }
         }
-        let plaintext = self.fetch_open(index)?;
-        if plaintext.len() as u64 != chunk_length(self.content.plaintext_size, index) {
-            return Err(CoreError::Sealed(DAMAGED.into()));
-        }
-        let plaintext = Arc::new(plaintext);
         if last {
-            // The padding after the file, once, with its last chunk: opened, giving nothing.
-            for padding in self.file_chunks..self.chunk_count {
-                if !self.fetch_open(padding)?.is_empty() {
-                    return Err(CoreError::Sealed(DAMAGED.into()));
-                }
-            }
-            lock(&self.state).tail = Some(Arc::clone(&plaintext));
-            return Ok(plaintext);
+            return self.tail(index);
         }
+        self.check()?;
+        let ciphertext = self.fetch_raw(index, false)?;
+        // A cancel while the fetch was out: nothing it brought is opened.
+        self.check()?;
+        let plaintext = self.open_chunk(index, ciphertext)?;
         let mut state = lock(&self.state);
         state.cache.push_back((index, Arc::clone(&plaintext)));
         while state.cache.len() > CACHED_CHUNKS {
@@ -707,13 +749,18 @@ mod tests {
     struct Store {
         object: Vec<u8>,
         fetched: Mutex<Vec<ByteRange>>,
+        /* The ranges asked for as drains: the padding, never opened. */
+        drained: Mutex<Vec<u64>>,
         /* Runs before each fetch: moves a clock, fails a range. */
         hook: Option<Hook>,
     }
 
     impl ObjectSource for Store {
-        fn fetch(&self, range: ByteRange) -> Result<Vec<u8>, FetchError> {
+        fn fetch(&self, range: ByteRange, drain: bool) -> Result<Vec<u8>, FetchError> {
             self.fetched.lock().unwrap().push(range.clone());
+            if drain {
+                self.drained.lock().unwrap().push(range.start / SEALED_CHUNK);
+            }
             if let Some(error) = self.hook.as_ref().and_then(|hook| hook(&range)) {
                 return Err(error);
             }
@@ -722,11 +769,21 @@ mod tests {
     }
 
     fn store(object: Vec<u8>) -> Arc<Store> {
-        Arc::new(Store { object, fetched: Mutex::new(Vec::new()), hook: None })
+        Arc::new(Store {
+            object,
+            fetched: Mutex::new(Vec::new()),
+            drained: Mutex::new(Vec::new()),
+            hook: None,
+        })
     }
 
     fn store_with(object: Vec<u8>, hook: Hook) -> Arc<Store> {
-        Arc::new(Store { object, fetched: Mutex::new(Vec::new()), hook: Some(hook) })
+        Arc::new(Store {
+            object,
+            fetched: Mutex::new(Vec::new()),
+            drained: Mutex::new(Vec::new()),
+            hook: Some(hook),
+        })
     }
 
     fn fetched_chunks(store: &Store) -> Vec<u64> {
@@ -853,7 +910,7 @@ mod tests {
     fn a_short_answer_from_the_store_is_refused() {
         struct Short(Vec<u8>);
         impl ObjectSource for Short {
-            fn fetch(&self, range: ByteRange) -> Result<Vec<u8>, FetchError> {
+            fn fetch(&self, range: ByteRange, _drain: bool) -> Result<Vec<u8>, FetchError> {
                 Ok(self.0[range.start as usize..range.end as usize].to_vec())
             }
         }
@@ -893,11 +950,101 @@ mod tests {
         );
         let reader = VersionReader::open(failing, content.clone(), None).unwrap();
         assert_eq!(reader.read_at(0, 10), Err(input("gone")));
-        // The padding chunk damaged.
-        let mut damaged = stored;
-        damaged[(SEALED_CHUNK + 5) as usize] ^= 1;
-        let reader = VersionReader::open(store(damaged), content, None).unwrap();
-        assert!(matches!(reader.read_at(0, 10), Err(CoreError::Sealed(_))));
+        // The padding is fetched as ciphertext and never opened: changed bytes in it don't matter,
+        // the file's own chunks are what is checked (each is bound to the chunk count).
+        let mut changed = stored;
+        changed[(SEALED_CHUNK + 5) as usize] ^= 1;
+        let store = store(changed);
+        let reader = VersionReader::open(store.clone(), content, None).unwrap();
+        assert!(reader.read_at(0, 10).is_ok());
+        assert_eq!(*store.drained.lock().unwrap(), vec![1]);
+    }
+
+    /* A big suite 3 object served without being sealed whole: the file's chunks sealed as asked for, the padding as zeros. */
+    struct Lazy {
+        content: Content,
+        file_chunks: u64,
+        fetched: Mutex<Vec<(u64, bool)>>,
+        hook: Box<dyn Fn(u64) + Send + Sync>,
+    }
+
+    impl ObjectSource for Lazy {
+        fn fetch(&self, range: ByteRange, drain: bool) -> Result<Vec<u8>, FetchError> {
+            let index = range.start / SEALED_CHUNK;
+            self.fetched.lock().unwrap().push((index, drain));
+            (self.hook)(index);
+            let length = (range.end - range.start + 1) as usize;
+            if index >= self.file_chunks {
+                return Ok(vec![0u8; length]);
+            }
+            let plain = plaintext(chunk_length(self.content.plaintext_size, index));
+            Ok(chunk_encrypt(self.content.clone(), index, plain).unwrap())
+        }
+    }
+
+    fn lazy(hook: Box<dyn Fn(u64) + Send + Sync>) -> (Arc<Lazy>, Content, u64) {
+        // Just under 512 MiB with a thumbnail: the bucket runs two whole chunks past the file.
+        let size = 512 * 1024 * 1024 - 100;
+        let content = content(size, 1000);
+        let layout = content_layout(3, size, 1000).unwrap();
+        let file_chunks = size.div_ceil(CHUNK);
+        assert_eq!(layout.chunk_count - file_chunks, 2, "two chunks of padding alone");
+        let store =
+            Arc::new(Lazy { content: content.clone(), file_chunks, fetched: Mutex::new(Vec::new()), hook });
+        (store, content, size)
+    }
+
+    #[test]
+    fn a_run_cancelled_as_the_tail_comes_still_fetches_all_the_padding_unopened() {
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        let cancel = Arc::clone(&control);
+        let tail_index = (512 * 1024 * 1024 - 100u64).div_ceil(CHUNK) - 1;
+        // The cancel lands while the tail is being fetched.
+        let (store, content, size) = lazy(Box::new(move |index| {
+            if index == tail_index {
+                cancel.cancel();
+            }
+        }));
+        let reader = VersionReader::open(store.clone(), content, Some(control)).unwrap();
+        assert_eq!(reader.read_at(size - 10, 10), Err(input(CANCELLED)));
+        assert_eq!(
+            *store.fetched.lock().unwrap(),
+            vec![(tail_index, false), (tail_index + 1, true), (tail_index + 2, true)]
+        );
+        let state = reader.state.lock().unwrap();
+        assert!(state.tail.is_none() && state.cache.is_empty(), "the tail was never opened");
+    }
+
+    #[test]
+    fn a_run_cancelled_between_padding_chunks_still_fetches_the_rest() {
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        let cancel = Arc::clone(&control);
+        let tail_index = (512 * 1024 * 1024 - 100u64).div_ceil(CHUNK) - 1;
+        let (store, content, size) = lazy(Box::new(move |index| {
+            if index == tail_index + 1 {
+                cancel.cancel();
+            }
+        }));
+        let reader = VersionReader::open(store.clone(), content, Some(control)).unwrap();
+        assert_eq!(reader.read_at(size - 10, 10), Err(input(CANCELLED)));
+        assert_eq!(
+            *store.fetched.lock().unwrap(),
+            vec![(tail_index, false), (tail_index + 1, true), (tail_index + 2, true)]
+        );
+    }
+
+    #[test]
+    fn the_padding_is_not_counted_against_the_fetch_limit() {
+        let size = CHUNK - 100;
+        let content = content(size, 2000);
+        let stored = object(&content, &plaintext(size));
+        let store = store(stored);
+        let reader = VersionReader::open(store.clone(), content, None).unwrap();
+        reader.read_at(0, 10).unwrap();
+        let fetched = store.fetched.lock().unwrap().clone();
+        assert_eq!(fetched.len(), 2);
+        // Only the tail counts: a tool that spent its allowance before the tail still drains.
+        assert_eq!(reader.fetched.load(Ordering::SeqCst), fetched[0].end - fetched[0].start + 1);
     }
 
     #[test]

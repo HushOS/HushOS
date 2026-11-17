@@ -96,6 +96,7 @@ type Queued = {
     begin: () => void;
     behind: (label: string) => void;
     fail: () => void;
+    started: () => boolean;
 };
 
 let current: Queued | null = null;
@@ -115,10 +116,13 @@ function countUnreleased(delta: number) {
 }
 
 function advance() {
-    current = queue.shift() ?? null;
-    if (!current) return;
-    for (const waiting of queue) waiting.behind(current.label);
-    const next = current;
+    const next = queue.shift() ?? null;
+    current = next;
+    if (!next) return;
+    for (const waiting of queue) waiting.behind(next.label);
+    // A listener told who is ahead may have cancelled `next`, and advanced past it, meanwhile:
+    // only the run still chosen, and not started yet, is started, and only once.
+    if (current !== next || next.started()) return;
     try {
         next.begin();
     } catch {
@@ -129,31 +133,44 @@ function advance() {
 
 /*
  * Whether a run's result is a plain summary: null, booleans, numbers, strings, arrays and plain
- * objects, nested at most 32 deep, at most DONE_RESULT_MAX_BYTES as JSON. A worker taken over
- * could otherwise hand back plaintext as the result, past the per-result limit and the budget,
- * and the page would keep it after a lock or sign-out.
+ * objects, checked in one bounded walk. A worker taken over could otherwise hand back plaintext
+ * as the result, past the per-result limit and the budget, and the page would keep it after a
+ * lock; or hand back a value built to take the page's own thread for minutes (a shared reference
+ * nested `[v, v]` deep, a sparse array four billion long), which the watchdog could not stop,
+ * since it runs on that thread. So the walk visits at most SUMMARY_NODES values, refuses any
+ * object it meets twice, any array or object with more than SUMMARY_ENTRIES entries and any
+ * nesting past 32, and counts every string and key against DONE_RESULT_MAX_BYTES, before
+ * anything is copied or turned into JSON.
  */
+const SUMMARY_NODES = 10_000;
+const SUMMARY_ENTRIES = 4_096;
 function isSummary(value: unknown) {
-    const plain = (item: unknown, depth: number): boolean => {
-        if (depth > 32) return false;
-        if (item === null || item === undefined) return true;
-        const kind = typeof item;
-        if (kind === 'boolean' || kind === 'number' || kind === 'string') return true;
-        if (kind !== 'object') return false;
-        if (Array.isArray(item)) return item.every((entry) => plain(entry, depth + 1));
+    let nodes = 0;
+    let text = 0;
+    const seen = new Set<object>();
+    const counted = (length: number) => (text += length) <= DONE_RESULT_MAX_BYTES;
+    const walk = (item: unknown, depth: number): boolean => {
+        if (++nodes > SUMMARY_NODES || depth > 32) return false;
+        if (item === null || item === undefined || typeof item === 'boolean') return true;
+        if (typeof item === 'number') return counted(24);
+        if (typeof item === 'string') return counted(item.length);
+        if (typeof item !== 'object' || seen.has(item)) return false;
+        seen.add(item);
+        if (Array.isArray(item)) {
+            if (item.length > SUMMARY_ENTRIES) return false;
+            for (let i = 0; i < item.length; i++) if (!walk(item[i], depth + 1)) return false;
+            return true;
+        }
         const prototype = Object.getPrototypeOf(item);
         if (prototype !== Object.prototype && prototype !== null) return false;
-        return Object.values(item as object).every((entry) => plain(entry, depth + 1));
+        let entries = 0;
+        for (const key in item) {
+            if (++entries > SUMMARY_ENTRIES || !counted(key.length)) return false;
+            if (!walk((item as Record<string, unknown>)[key], depth + 1)) return false;
+        }
+        return true;
     };
-    if (!plain(value, 0)) return false;
-    try {
-        return (
-            new TextEncoder().encode(JSON.stringify(value) ?? '').byteLength <=
-            DONE_RESULT_MAX_BYTES
-        );
-    } catch {
-        return false;
-    }
+    return walk(value, 0);
 }
 
 /* Detaches a buffer, freeing its bytes wherever a reference to it is kept. */
@@ -248,8 +265,10 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
 
     const failed = () => finish({ ok: false, error: new Error(TOOL_FAILED) });
 
+    let started = false;
     function begin() {
-        if (ended) return;
+        if (ended || started) return;
+        started = true;
         set({ status: 'running', done: 0, total: null });
         // A listener told it is running may have cancelled it (or every run): nothing is started.
         if (ended) return;
@@ -410,6 +429,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         begin,
         behind: (label) => set({ status: 'waiting', behind: label }),
         fail: failed,
+        started: () => started,
     };
     const cancel = () => finish({ ok: false, error: new ToolCancelled() });
     /* A lock or sign-out: a run going or waiting is cancelled; one done drops what it still holds. */

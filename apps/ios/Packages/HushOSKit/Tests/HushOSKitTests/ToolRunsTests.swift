@@ -61,7 +61,7 @@ import Testing
     @Test func aRunReadsAcrossAChunkBoundaryThroughAnAsyncStore() async throws {
         let size = Self.chunk + 5000
         let (content, object, plain) = try Self.sealed(size)
-        let source = StoreSource { range in
+        let source = StoreSource { range, _ in
             // The store answers later, on another task, as a URLSession would.
             try await Task.sleep(for: .milliseconds(5))
             return object.subdata(in: Int(range.start) ..< Int(range.end) + 1)
@@ -261,6 +261,34 @@ import Testing
         #expect(StoreStub.state.ranges.count == 2)
     }
 
+    @Test func aRunCancelledAsTheTailComesStillFetchesThePadding() async throws {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        let size = Self.chunk - 100
+        let content = Content(
+            workspaceId: "11111111-1111-4111-8111-111111111111", objectId: "66666666-6666-4666-8666-666666666666",
+            suite: 3, key: try randomBytes(length: 32), nonce: try randomBytes(length: 16), plaintextSize: size, thumbnailBytes: 2000
+        )
+        let layout = try contentLayout(suite: 3, plaintextSize: size, thumbnailBytes: 2000)
+        #expect(layout.chunkCount == 2)
+        let tail = try chunkEncrypt(content: content, index: 0, plaintext: Data(count: Int(size)))
+        // The padding and the trailer are never opened: zeros of the right length do.
+        let object = tail + Data(count: Int(layout.ciphertextSize) - tail.count)
+        let api = Self.stubbedAPI(object)
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control)
+        StoreStub.state.stallAt = 0
+        StoreStub.state.stall = true
+        let reading = Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: size - 10, length: 10); return true } catch { return false }
+        }
+        // The tail is on its way when the run is cancelled.
+        try await eventually { StoreStub.state.stalled == 1 }
+        control.cancel()
+        #expect(await reading.value == false)
+        // The padding was still asked for, after the cancel, to the object's end.
+        #expect(StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)"))
+    }
+
     @Test func aRunThatEndsCancelsItsFetch() async throws {
         let (content, object, _) = try Self.sealed(1000)
         let api = Self.stubbedAPI(object)
@@ -287,7 +315,11 @@ final class StoreStubState: @unchecked Sendable {
     var refused = 0
     var ranges: [String] = []
     var stall = false
+    /* When set, only the range starting here stalls. */
+    var stallAt: Int?
     var stalled = 0
+    /* Ranges every request asked for, stalled or not, in order. */
+    var asked: [String] = []
     var stopped = 0
 }
 
@@ -323,8 +355,11 @@ final class StoreStub: URLProtocol {
             answer(403, Data())
             return
         }
+        let asking = request.value(forHTTPHeaderField: "Range") ?? ""
+        let startsAt = Int(asking.replacingOccurrences(of: "bytes=", with: "").split(separator: "-").first ?? "")
         Self.lock.lock()
-        let stall = state.stall
+        state.asked.append(asking)
+        let stall = state.stall && (state.stallAt == nil || state.stallAt == startsAt)
         if stall { state.stalled += 1 }
         Self.lock.unlock()
         // A stalled store never answers; the request ends only when the client stops it.

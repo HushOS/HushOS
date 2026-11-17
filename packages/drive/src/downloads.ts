@@ -1,5 +1,5 @@
 import type { DownloadChunkProgress, DownloadChunkResult } from '@hushos/crypto';
-import { CHUNK_SIZE, chunkCount, contentLength } from '@hushos/crypto/drive';
+import { CHUNK_SIZE, chunkCount, chunkRange, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi } from './api';
 import {
     contentSize,
@@ -115,7 +115,26 @@ export type DownloadManagerOptions = {
     now?: () => number;
     /* Whether the device has no network: a failed chunk then waits for one without spending a try. Tests stub it. */
     offline?: () => boolean;
+    /*
+     * Fetches bytes `start` to `end` of an object and answers how many came, keeping none: how a
+     * tool's reader fetches the padding after a file, as ciphertext only, without the key. Tests
+     * stub it; the default is the page's fetch with a Range header.
+     */
+    fetchCiphertext?: (
+        url: string,
+        start: number,
+        end: number,
+    ) => Promise<{ status: number; length: number }>;
 };
+
+async function fetchCiphertextRange(url: string, start: number, end: number) {
+    const response = await fetch(url, {
+        headers: { Range: `bytes=${start}-${end}` },
+        cache: 'no-store',
+    });
+    const length = response.ok ? (await response.arrayBuffer()).byteLength : 0;
+    return { status: response.status, length };
+}
 
 /* A tool's reader fetches at most this many times its object's chunks. */
 const TOOL_FETCH_FACTOR = 4;
@@ -386,6 +405,33 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 await new Promise((resolve) => setTimeout(resolve, backoffDelay(attempt)));
             }
         }
+        /*
+         * Chunk `index` fetched as it is stored and thrown away, never opened: needs the address,
+         * not the key, so it can run after the reader let go of its key. An expired address is
+         * renewed once; a short or failed answer fails it.
+         */
+        async function fetchCiphertext(index: number) {
+            const range = chunkRange(
+                version!.contentSuite,
+                plaintextSize,
+                node.content?.thumbnailBytes ?? 0,
+                index,
+            );
+            const fetchRange = options.fetchCiphertext ?? fetchCiphertextRange;
+            for (let attempt = 1; ; attempt++) {
+                const answer = await fetchRange(await freshUrl(), range.start, range.end);
+                if (answer.status === 403 && attempt === 1) {
+                    url = '';
+                    continue;
+                }
+                if (
+                    (answer.status === 206 || answer.status === 200) &&
+                    answer.length === range.end - range.start + 1
+                )
+                    return;
+                throw new Error('The file could not be read to its end.');
+            }
+        }
         async function close() {
             closed = true;
             if (!opened) return;
@@ -395,7 +441,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             await rpc('driveDownloadClose', { reader }).catch(() => {});
             track?.open.delete(reader);
         }
-        return { plaintextSize, total, fileChunks, open, fetchChunk, close };
+        return { plaintextSize, total, fileChunks, open, fetchChunk, fetchCiphertext, close };
     }
 
     /*
@@ -496,20 +542,17 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             return pending;
         }
         /*
-         * Tool readers: the file's last chunk, fetched once and kept. Its padding follows in the
-         * background, once; the read that wanted the tail doesn't wait for it, and if a padding
-         * chunk fails every later read fails (`paddingFailed`).
+         * Tool readers: the file's last chunk, fetched once and kept. The padding after it is
+         * fetched as the tail is asked for, beside it, as ciphertext only (never opened, no key
+         * needed), and always to the end: past the fetch limit, and past a close or a cancel, so
+         * a tool stopped after reading an archive's directory never shows the store where the
+         * file ends. The read that wanted the tail doesn't wait for it; if a padding chunk fails,
+         * every later read fails (`paddingFailed`).
          */
         let tail: Promise<Uint8Array> | null = null;
         let trailing: Promise<void> | null = null;
         let paddingFailed: unknown = null;
         let fetches = 0;
-        /* Waits for the tail, if one was asked for, and its padding, failed or not. */
-        async function settleTail() {
-            if (!tail) return;
-            await tail.catch(() => {});
-            await trailing;
-        }
         function fetchOne(index: number) {
             if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
                 return Promise.reject(
@@ -517,28 +560,24 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 );
             return source.open().then(() => source.fetchChunk(index));
         }
+        function drainPadding() {
+            return (async () => {
+                for (let pad = source.fileChunks; pad < source.total; pad++)
+                    await source.fetchCiphertext(pad);
+            })().catch((error: unknown) => {
+                paddingFailed = error;
+            });
+        }
         function chunk(index: number) {
             if (options.tool && index === source.fileChunks - 1) {
                 if (!tail) {
                     const pending = fetchOne(index);
-                    pending.then(
-                        () => {
-                            // To the end, even if the reader is closed meanwhile (close waits
-                            // for it): a tool cancelled after reading the tail would otherwise
-                            // show the store where the file ends. Ciphertext the size of the
-                            // padding, a few percent of the object at most.
-                            trailing ??= (async () => {
-                                for (let pad = source.fileChunks; pad < source.total; pad++)
-                                    await fetchOne(pad);
-                            })().catch((error: unknown) => {
-                                paddingFailed = error;
-                            });
-                        },
-                        () => {
-                            if (tail === pending) tail = null;
-                        },
-                    );
+                    pending.catch(() => {
+                        if (tail === pending) tail = null;
+                    });
                     tail = pending;
+                    // From the moment the tail is asked for, whatever becomes of it.
+                    trailing ??= drainPadding();
                 }
                 return tail;
             }
@@ -583,8 +622,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             async drain() {
                 if (closed) return;
                 if (options.tool) {
-                    // Only a tail that was read brings its padding; one never asked for stays unasked.
-                    await settleTail();
+                    // Only a tail that was asked for brings its padding; one never asked for stays unasked.
+                    await trailing;
                     if (paddingFailed) throw paddingFailed;
                     return;
                 }
@@ -592,14 +631,16 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 await (padding ??= fetchPadding());
             },
             async close() {
-                // A tool's tail, once asked for, brings all of its padding before the reader goes.
-                if (options.tool) await settleTail();
+                // Plaintext and the key go first; a tool's padding, ciphertext only, is waited
+                // for after, so a lock while offline holds no decrypted bytes meanwhile.
                 closed = true;
                 cache.clear();
                 tail = null;
-                trailing = null;
                 listeners.clear();
+                const draining = trailing;
+                trailing = null;
                 await source.close();
+                await draining;
             },
             watch(listener) {
                 listeners.add(listener);

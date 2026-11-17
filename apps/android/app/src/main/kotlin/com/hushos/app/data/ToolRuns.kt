@@ -197,9 +197,10 @@ class ToolRuns {
  * thread, where blocking on the network is what it is for. A failure reaches the core in its
  * words (FetchError), and the read fails with them.
  */
-class StoreSource(private val fetchRange: (ByteRange) -> ByteArray) : ObjectSource {
-    override fun fetch(range: ByteRange): ByteArray = try {
-        fetchRange(range)
+class StoreSource(private val fetchRange: (ByteRange, Boolean) -> ByteArray) : ObjectSource {
+    /* `drain`: the padding after the file (see ObjectSource in the core). */
+    override fun fetch(range: ByteRange, drain: Boolean): ByteArray = try {
+        fetchRange(range, drain)
     } catch (error: Exception) {
         throw FetchException.Failed(error.message ?: "The file couldn't be read.")
     }
@@ -252,7 +253,17 @@ private fun sleepWhileRunning(control: RunControl, millis: Long) {
  */
 fun toolReaderOf(api: DriveApi, opened: OpenedVersion, workspaceId: String, control: RunControl, online: () -> Boolean = { true }): VersionReader {
     val url = AtomicReference(api.versionUrl(opened.versionId, workspaceId))
-    val source = StoreSource { range ->
+    val source = StoreSource { range, drain ->
+        if (drain) {
+            // The padding: once, an expired address renewed once, and not cut off by the run's end.
+            return@StoreSource try {
+                api.range(url.get(), range)
+            } catch (error: ApiError) {
+                if (error.status != 403) throw error
+                url.set(api.versionUrl(opened.versionId, workspaceId))
+                api.range(url.get(), range)
+            }
+        }
         Resumable.run(
             online = online,
             sleep = { millis -> sleepWhileRunning(control, millis) },
