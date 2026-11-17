@@ -1,12 +1,14 @@
 import type { StepChallenge } from '@hushos/auth/api';
+import { cn } from 'cn';
 import { StepFailure } from '@hushos/auth/client';
 import { useEffect, useRef, useState } from 'react';
 import { AuthNote } from '@/components/auth-layout';
-import { StepFields } from '@/components/two-step-answer';
+import { StepFields, stepAction } from '@/components/two-step-answer';
 import { Button } from '@/components/ui/button';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { whenPageLeaves } from '@/lib/new-phrase';
+import { cancelPasskey } from '@/lib/passkeys';
 import { whenBrowserLocks } from '@/lib/show-new-phrase';
 import { cue } from '@/lib/sounds';
 import {
@@ -28,6 +30,9 @@ import {
  * that never arrived, goes back to the password with the reason (`onOver`): the person is
  * never left on a form that can no longer be answered.
  */
+/* The step whose usual way this page already started: once per step, however often React mounts it. */
+let started = '';
+
 export function SignInStep({
     challenge,
     onSignedIn,
@@ -80,7 +85,41 @@ export function SignInStep({
         // Only when an approval arrives.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [draft.method, draft.device]);
-    async function submit() {
+    /*
+     * The usual way starts by itself as the step opens: a passkey's sheet, or the request to
+     * another device (StepFields' `start`). A sheet that was closed, or that the browser would
+     * not open without a press (Safari), says nothing: Use your passkey asks again.
+     */
+    // The answer the step started by itself, while its sheet is open: the page stays usable
+    // meanwhile. Choosing another way or leaving closes it, and an answer the person sends waits
+    // until it has (the sign-in takes one answer at a time).
+    const auto = useRef<Promise<void> | null>(null);
+    const signedIn = useRef(false);
+    async function settle() {
+        while (auto.current) {
+            // Asked again until it ends: the sheet may not have opened yet when first asked.
+            void cancelPasskey();
+            await Promise.race([auto.current, new Promise((done) => setTimeout(done, 150))]);
+        }
+    }
+    useEffect(() => {
+        if (started !== challenge.token && methods[0] === 'webauthn') {
+            started = challenge.token;
+            const running = submit(true).finally(() => {
+                if (auto.current === running) auto.current = null;
+            });
+            auto.current = running;
+        }
+        return () => {
+            void settle();
+        };
+        // Once, as the step opens.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    useEffect(() => {
+        if (draft.method !== 'webauthn') void settle();
+    }, [draft.method]);
+    async function submit(quiet = false) {
         const invalid = draftError(draft);
         setError(invalid);
         setRefused('');
@@ -88,13 +127,22 @@ export function SignInStep({
             setRefocus((count) => count + 1);
             return;
         }
-        setPending(true);
+        // Opened by itself, the sheet holds nothing else on the page back.
+        if (!quiet) {
+            setPending(true);
+            await settle();
+            // The sheet that opened by itself was answered meanwhile: signed in already.
+            if (signedIn.current) return;
+        }
         try {
             await authClient.answerStep(draftAnswer(draft));
+            signedIn.current = true;
             cue('success');
             // Kept busy while what signing in opens takes over.
             await onSignedIn();
         } catch (cause) {
+            // The sheet the page opened by itself, closed or refused: nothing went wrong yet.
+            if (quiet && cause instanceof StepFailure && cause.reason === 'wrong') return;
             cue('error');
             if (cause instanceof StepFailure && cause.again) {
                 // What is offered and what the draft is for change together: an answer is
@@ -113,10 +161,50 @@ export function SignInStep({
                 onOver(authError(cause));
             }
         } finally {
-            setPending(false);
+            if (!quiet) setPending(false);
         }
     }
     const wide = size === 'lg';
+    const startOver = () => {
+        authClient.cancelStep(owner);
+        onOver('');
+    };
+    const startAgain = wide ? (
+        <button
+            type="button"
+            disabled={pending}
+            onClick={startOver}
+            className={cn(stepAction, 'font-normal text-muted-foreground hover:text-foreground')}
+        >
+            Start again
+        </button>
+    ) : (
+        <Button type="button" variant="outline" disabled={pending} onClick={startOver}>
+            Start again
+        </Button>
+    );
+    /*
+     * Another device has no button of this form's: its approval signs in. Only when that
+     * sign-in got no answer (the approval is still held) is there one, to send the same
+     * approval again.
+     */
+    const submitButton = methods.length > 0 &&
+        (draft.method !== 'device' || pending || draft.device !== '') && (
+            <Button
+                type="submit"
+                size={size}
+                disabled={pending}
+                className={wide ? 'h-11 w-full text-[15px]' : undefined}
+            >
+                {pending
+                    ? 'Checking'
+                    : draft.method === 'webauthn'
+                      ? 'Use your passkey'
+                      : draft.method === 'device'
+                        ? 'Try again'
+                        : 'Continue'}
+            </Button>
+        );
     return (
         <form
             noValidate
@@ -143,59 +231,22 @@ export function SignInStep({
                     reload={challenge.methods.length === 0}
                     note={stepNote(challenge, 'sign-in')}
                     ask={{ token: challenge.token, purpose: 'login' }}
+                    start
+                    // On the sign-in page the button spans the card under the field, with Use
+                    // another way and Start again in one row beneath it.
+                    actions={
+                        wide && submitButton ? (
+                            <div className="mt-1">{submitButton}</div>
+                        ) : undefined
+                    }
+                    aside={wide ? startAgain : undefined}
                 />
-                <div className={wide ? 'mt-1 flex flex-col gap-3' : 'flex justify-end gap-2'}>
-                    {!wide && (
-                        <Button
-                            type="button"
-                            variant="outline"
-                            disabled={pending}
-                            onClick={() => {
-                                authClient.cancelStep(owner);
-                                onOver('');
-                            }}
-                        >
-                            Start again
-                        </Button>
-                    )}
-                    {/*
-                     * Another device has no button of this form's: its approval signs in. Only
-                     * when that sign-in got no answer (the approval is still held) is there
-                     * one, to send the same approval again.
-                     */}
-                    {methods.length > 0 &&
-                        (draft.method !== 'device' || pending || draft.device !== '') && (
-                            <Button
-                                type="submit"
-                                size={size}
-                                disabled={pending}
-                                className={wide ? 'h-11 w-full text-[15px]' : undefined}
-                            >
-                                {pending
-                                    ? 'Checking'
-                                    : draft.method === 'webauthn'
-                                      ? 'Use your passkey'
-                                      : draft.method === 'device'
-                                        ? 'Try again'
-                                        : 'Continue'}
-                            </Button>
-                        )}
-                    {wide && (
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            size="lg"
-                            className="h-11 w-full text-[15px]"
-                            disabled={pending}
-                            onClick={() => {
-                                authClient.cancelStep(owner);
-                                onOver('');
-                            }}
-                        >
-                            Start again
-                        </Button>
-                    )}
-                </div>
+                {!wide && (
+                    <div className="flex justify-end gap-2">
+                        {startAgain}
+                        {submitButton}
+                    </div>
+                )}
             </div>
         </form>
     );

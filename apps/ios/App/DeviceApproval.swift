@@ -156,11 +156,11 @@ struct DeviceAskView: View {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 44)
             case .waiting(let qr):
                 if let qr, approver == nil {
-                    VStack(spacing: Alpine.Space.s4) {
-                        BrandQRCode(text: qr, dots: false, label: StepWords.askCode).frame(width: 208, height: 208)
-                        Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    // What to do first, then the QR code it mentions, in one panel the width of the form, as the web has it.
+                    AskBox {
+                        Text(StepWords.askScan).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                        BrandQRCode(text: qr, dots: false, label: StepWords.askCode).frame(width: 192, height: 192)
                     }
-                    .frame(maxWidth: .infinity)
                 } else {
                     pickUp
                 }
@@ -170,7 +170,11 @@ struct DeviceAskView: View {
                 // The approval is half of it: the sheet asks for the code that device now shows.
                 EmptyView()
             case .code(let code):
-                ShownCode(code: code)
+                // The QR code's place, once a device opened the request: the code, and where things stand.
+                AskBox {
+                    ShownCode(code: code)
+                    Text(StepWords.askPending).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                }
             case .approved:
                 ApprovedLine()
             case .ended(let line):
@@ -184,6 +188,19 @@ struct DeviceAskView: View {
             }
         }
         .padding(.vertical, Alpine.Space.s2)
+    }
+}
+
+/* The asking side's panel: a quiet box the width of the form, its content centred in it. */
+private struct AskBox<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: Alpine.Space.s3) { content }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20).padding(.vertical, Alpine.Space.s6)
+            .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .alpineCardEdge(RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 
@@ -207,7 +224,7 @@ struct ShownCode: View {
 
     var body: some View {
         VStack(spacing: Alpine.Space.s2) {
-            Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+            Text(StepWords.askCode).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
             if capture.active {
                 Label("Hidden while your screen is recorded or shared.", systemImage: "eye.slash")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)

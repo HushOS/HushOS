@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -497,17 +498,23 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
     when (phase) {
         AskPhase.Idle -> {}
         AskPhase.Starting -> Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
-        is AskPhase.Waiting -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+        // What to do first, then the QR code it mentions, in one panel the width of the form, as the web has it.
+        is AskPhase.Waiting -> AskBox {
+            Text(if (open == StepWords.ASK_OPEN) StepWords.ASK_SCAN else open, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
             val bitmap = remember(phase.qr) { runCatching { BrandQr.bitmap(phase.qr, dots = false, side = 624) }.getOrNull() }
             // Dark on white in every theme, with its quiet zone: scanners expect it.
-            if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(AlpineSpace.S3)) {
-                Image(bitmap.asImageBitmap(), contentDescription = "QR code for your other device", modifier = Modifier.size(208.dp))
+            if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(AlpineSpace.S2)) {
+                Image(bitmap.asImageBitmap(), contentDescription = "QR code for your other device", modifier = Modifier.size(192.dp))
             }
-            Text(open, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
         }
         // Turning the method on: no QR code and no code here, only which device to pick up.
         AskPhase.Asked -> Text(open, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite })
-        is AskPhase.Code -> ShownCode(phase.code)
+        // The QR code's place, once a device opened the request: the code, and where things stand.
+        is AskPhase.Code -> AskBox(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+            Text(StepWords.ASK_CODE, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Text(phase.code, style = MaterialTheme.typography.displaySmall.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1)
+            Text(StepWords.ASK_PENDING, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+        }
         AskPhase.Approved -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CheckCircle, null, tint = alpine.success)
             Text(StepWords.APPROVED, style = MaterialTheme.typography.bodyLarge, color = alpine.success, modifier = Modifier.padding(start = AlpineSpace.S2))
@@ -518,6 +525,17 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
             if (inlineAgain) TextButton(onClick = again, enabled = enabled) { Text(StepWords.ASK_AGAIN) }
         }
     }
+}
+
+/* The asking side's panel: a quiet box the width of the form, its content centred in it. */
+@Composable
+private fun AskBox(modifier: Modifier = Modifier, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier.fillMaxWidth().background(alpine.fill, shape).border(1.dp, alpine.rule, shape).padding(horizontal = 20.dp, vertical = AlpineSpace.S6),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3), content = content,
+    )
 }
 
 /* A code for the person to type on their other device, under its label: large and monospaced, read out when it appears. */

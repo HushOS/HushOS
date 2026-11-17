@@ -126,6 +126,11 @@ describe('unlocking an account that asks for a second step', () => {
         login.mockReset();
         login.mockRejectedValueOnce(new TwoStepRequired(asked as typeof challenge));
         answerStep.mockReset();
+        // A passkey first is asked as the step opens: here its sheet is closed, which says nothing.
+        if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
+            answerStep.mockRejectedValueOnce(
+                new StepFailure('wrong', 'Your passkey or security key wasn’t used.'),
+            );
         const user = userEvent.setup();
         render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);
         await user.type(screen.getByLabelText('Password'), 'correct horse');
@@ -180,6 +185,8 @@ describe('unlocking an account that asks for a second step', () => {
         await user.click(screen.getByRole('button', { name: 'Use another way' }));
         expect(screen.getByRole('button', { name: 'Use a backup code' })).toBeEnabled();
         expect(screen.getByRole('button', { name: 'Use your recovery phrase' })).toBeEnabled();
+        // The list of ways puts the form's button away until one is chosen, or Back.
+        await user.click(screen.getByRole('button', { name: 'Back' }));
         answerStep.mockResolvedValueOnce(undefined);
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await vi.waitFor(() => expect(answerStep).toHaveBeenCalledTimes(2));
@@ -201,6 +208,8 @@ describe('unlocking an account that asks for a second step', () => {
         await user.click(screen.getByRole('button', { name: 'Use another way' }));
         expect(screen.getByRole('button', { name: 'Use your recovery phrase' })).toBeEnabled();
         expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
+        // The list of ways puts the form's button away until one is chosen, or Back.
+        await user.click(screen.getByRole('button', { name: 'Back' }));
         answerStep.mockResolvedValueOnce(undefined);
         await user.type(backup, '7KQ2M-9XD4P');
         await user.click(screen.getByRole('button', { name: 'Continue' }));
@@ -345,6 +354,11 @@ describe('the step opens on the account’s usual way', () => {
         login.mockReset();
         login.mockRejectedValueOnce(new TwoStepRequired({ ...base, ...challenge } as never));
         answerStep.mockReset();
+        // A passkey first is asked as the step opens: here its sheet is closed, which says nothing.
+        if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
+            answerStep.mockRejectedValueOnce(
+                new StepFailure('wrong', 'Your passkey or security key wasn’t used.'),
+            );
         const user = userEvent.setup();
         render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);
         await user.type(screen.getByLabelText('Password'), 'correct horse');
@@ -368,7 +382,7 @@ describe('the step opens on the account’s usual way', () => {
         answerStep.mockRejectedValueOnce(
             new StepFailure('offline', 'HushOS couldn’t reach the server. Send your answer again.'),
         );
-        await user.click(await screen.findByRole('button', { name: 'Use another device' }));
+        // The step opens on another device, and asks it without a press.
         await screen.findByText(/couldn’t reach the server/);
         expect(answerStep).toHaveBeenCalledTimes(1);
         expect(answerStep).toHaveBeenLastCalledWith({ kind: 'device', requestId: REQUEST });
@@ -394,11 +408,10 @@ describe('the step opens on the account’s usual way', () => {
             expiresAt: new Date(Date.now() + 300_000).toISOString(),
             poll: async () => ({ state: 'approved', code: '47 river' }),
         });
-        const { user } = await stepWith({ methods: ['device', 'backup', 'phrase'] });
+        await stepWith({ methods: ['device', 'backup', 'phrase'] });
         answerStep.mockRejectedValueOnce(
             new StepFailure('unavailable', 'Your other devices can’t confirm this right now.'),
         );
-        await user.click(await screen.findByRole('button', { name: 'Use another device' }));
         await screen.findByText(/can’t confirm this right now/);
         // Nothing to send again: the approval is not shown as one, and no Try again offers it.
         expect(screen.queryByText('Approved on your other device')).toBeNull();
@@ -406,20 +419,25 @@ describe('the step opens on the account’s usual way', () => {
         expect(answerStep).toHaveBeenCalledTimes(1);
     });
 
-    test('a passkey first is a button: nothing asks the key until it is pressed, and the others wait behind Use another way', async () => {
+    test('a passkey first is asked as the step opens, once; a closed sheet says nothing, and the button asks again', async () => {
         const { user, onUnlocked } = await stepWith({
             methods: ['webauthn', 'totp', 'backup', 'phrase'],
             webauthn,
         });
         const press = await screen.findByRole('button', { name: 'Use your passkey' });
-        // The step is on screen, and the key has not been asked: no sheet on load.
-        expect(answerStep).not.toHaveBeenCalled();
+        // The key was asked once as the step opened. Its sheet was closed (or the browser wanted
+        // a press first): no complaint, and the button is there to ask again.
+        await vi.waitFor(() => expect(answerStep).toHaveBeenCalledTimes(1));
+        expect(answerStep).toHaveBeenLastCalledWith({ kind: 'webauthn' });
+        await vi.waitFor(() => expect(press).toBeEnabled());
+        expect(screen.queryByText(/wasn’t used/)).toBeNull();
+        expect(onUnlocked).not.toHaveBeenCalled();
         // No code field, and no list of other ways until it is asked for.
         expect(screen.queryByLabelText('Code from your authenticator app')).toBeNull();
         expect(screen.queryByRole('button', { name: 'Use your authenticator app' })).toBeNull();
         expect(screen.queryByText('Your usual way isn’t available for this sign-in.')).toBeNull();
 
-        // A sheet that was closed: said here, and the same step takes the press again.
+        // A sheet closed after a press: said here, and the same step takes the press again.
         answerStep.mockRejectedValueOnce(
             new StepFailure(
                 'wrong',
@@ -459,6 +477,8 @@ describe('the step opens on the account’s usual way', () => {
         expect(
             screen.getByRole('button', { name: 'Use your passkey or security key' }),
         ).toBeEnabled();
+        // The list of ways puts the form's button away until one is chosen, or Back.
+        await user.click(screen.getByRole('button', { name: 'Back' }));
         await user.click(screen.getByRole('button', { name: 'Continue' }));
         await vi.waitFor(() =>
             expect(answerStep).toHaveBeenLastCalledWith({ kind: 'backup', code: '7KQ2M-9XD4P' }),

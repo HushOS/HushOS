@@ -430,6 +430,9 @@ object StepWords {
      * request ended without an approval. Never who ended it.
      */
     const val ASK_OPEN = "Open HushOS on another device and choose Answer."
+
+    /* Beside the QR code: the same, and the camera's way. */
+    const val ASK_SCAN = "Choose Answer in HushOS on another device, or scan this with your phone."
     /* Turning the method on: the one device the person chose is the only one asked, and is named. */
     fun askOpen(device: String) = "Open HushOS on $device and choose Answer."
     /* Once that device approved it shows the code, and the person types it here. */
@@ -441,6 +444,9 @@ object StepWords {
     /* Under "Remove my other devices" when another device is the method: it stays signed in. */
     const val OTHERS_BUT_APPROVER = "All but this one and the one that approves. They’ll need to sign in again."
     const val ASK_CODE = "Code for your other device"
+
+    /* Under the code, while the other device has it. */
+    const val ASK_PENDING = "Waiting for approval"
     const val ASK_WAITING = "Waiting for your other device"
     const val ASK_AGAIN = "Ask again"
     const val ASK_REFUSED = "Your other device didn’t approve this."

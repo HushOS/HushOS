@@ -791,7 +791,7 @@ This is authentication, so AGENTS.md's rule for keys applies: repository tests i
     - turn the step on with the QR secret read from the page, and sign in with a computed code;
     - sign in with a backup code, and with the phrase;
     - add and use a security key through Chromium's virtual authenticator;
-    - two browsers on one account (`e2e/two-step-device.spec.ts`): one turns Approve on another device on with the other approving, chosen by the person and never for them, and only once the code that browser shows is typed on this one (a wrong one turns nothing on); a sign-in asks nothing until a press, a wrong code and Deny end the request with nobody signed in and are counted, the right code signs in; a change on devices newer than seven days is not offered the method;
+    - two browsers on one account (`e2e/two-step-device.spec.ts`): one turns Approve on another device on with the other approving, chosen by the person and never for them, and only once the code that browser shows is typed on this one (a wrong one turns nothing on); a sign-in on the device default asks the other device as the step opens, a wrong code and Deny end the request with nobody signed in and are counted, the right code signs in; a change on devices newer than seven days is not offered the method;
     - an old client is told to update.
 
 ### Implementation plan
@@ -854,7 +854,7 @@ The owner asked for passkeys, authenticator codes and device approval to be **al
 - **The first method turned on becomes the default.** Settings shows **Default** beside it and **Make default** on the others. Any session of the account that passed the step may change it; it changes only which method is offered first, so it asks for nothing more. Each change is a line in the security log.
 - **`methods` comes ordered:** what this sign-in can use, default first, then passkey, app, device, backup, phrase. The step screen opens on the first and offers **Use another way** for the rest. The choice is for this sign-in only.
 - **When the default can't be used** for this sign-in (the app frozen for new devices, no other device, a phone that can't use a passkey for this server), it is simply not first, and the screen says one generic line: "Your usual way isn't available for this sign-in." It never says which reason, so someone with only the password learns nothing about the owner's devices from it.
-- **Passkey first** shows **Use your passkey** as a button; the passkey sheet opens on the press, never on page load.
+- **The default starts by itself** at a sign-in: a passkey's sheet opens as the step appears (where a browser wants a press first, as Safari can, it stays shut, quietly, and **Use your passkey** opens it), and another device is asked at once. The other ways stay one press away under **Use another way**; choosing one closes a sheet that is still open. A step inside a dialog that changes the account still waits for a press.
 
 ### Approve on another device, as the step
 

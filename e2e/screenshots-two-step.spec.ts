@@ -249,12 +249,13 @@ test('two-step sign-in: the settings, the step, and a sign-in approved on anothe
     ).newPage();
     await enterPassword(visitor, email);
     await expect(visitor.getByRole('button', { name: 'Use your passkey' })).toBeVisible();
-    await visitor.getByRole('button', { name: 'Use another way' }).click();
-    await expect(visitor.getByRole('button', { name: 'Use another device' })).toBeVisible();
 
-    // Picture 2: the step, opened on the default, with the other ways listed.
+    // Picture 2: the step, opened on the default, with Use another way beneath it. (This browser
+    // has no key: the sheet the step opened by itself waits, and choosing another way closes it.)
     const card = visitor.getByRole('region', { name: 'One more step' });
     await shoot(browser, visitor, card, 'two-step-step', 32);
+    await visitor.getByRole('button', { name: 'Use another way' }).click();
+    await expect(visitor.getByRole('button', { name: 'Use another device' })).toBeVisible();
 
     // It asks another device. The laptop is asked, and opens the request.
     await visitor.getByRole('button', { name: 'Use another device' }).click();
@@ -269,7 +270,9 @@ test('two-step sign-in: the settings, the step, and a sign-in approved on anothe
     await laptop.setViewportSize({ width: VIEWPORT.width, height: 1600 });
     await laptop.goto('/app/trash', { waitUntil: 'networkidle' });
     await laptop.locator('[data-approval-banner]').getByRole('button', { name: 'Answer' }).click();
-    await expect(answer(laptop).getByRole('heading', { name: /^Sign-in on / })).toBeVisible();
+    await expect(
+        answer(laptop).getByRole('heading', { name: 'Approve this sign-in?' }),
+    ).toBeVisible();
     const shown = visitor.locator('[data-device-code]');
     await expect(shown).toHaveText(/^\d{2} [a-z]+$/, { timeout: 30_000 });
     const code = await shown.innerText();

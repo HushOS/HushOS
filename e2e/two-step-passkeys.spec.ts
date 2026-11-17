@@ -127,7 +127,7 @@ function totp(base32: string, step = Math.floor(Date.now() / 30_000)) {
     return String((mac.readUInt32BE(offset) & 0x7fffffff) % 1_000_000).padStart(6, '0');
 }
 
-test('a security key turns the step on, signs in on a press, and is the step for removing itself', async ({
+test('a security key turns the step on, signs in by itself, and is the step for removing itself', async ({
     browser,
 }) => {
     test.setTimeout(420_000);
@@ -167,19 +167,11 @@ test('a security key turns the step on, signs in on a press, and is the step for
         .poll(async () => (await mailSubjects(email)).join('\n'), { timeout: 30_000 })
         .toContain('Two-step sign-in is on');
 
-    // Signing in: the step opens on the key, as a button. Nothing asks the key until it is pressed.
+    // Signing in: the step opens on the key and asks it by itself, with no press. The key
+    // answers, and the app opens.
     await signOut(page);
     const before = (await key.credentials())[0]!.signCount;
     await enterPassword(page, email);
-    await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    const use = page.getByRole('button', { name: 'Use your passkey' });
-    await expect(use).toBeVisible();
-    await expect(page.getByLabel('Code from your authenticator app')).toHaveCount(0);
-    // Long enough for a sheet opened on load to have used the key: it has not been used.
-    await page.waitForTimeout(1_500);
-    expect((await key.credentials())[0]!.signCount).toBe(before);
-    await expect(page).toHaveURL(/\/login/);
-    await use.click();
     await inApp(page);
     expect((await key.credentials())[0]!.signCount).toBeGreaterThan(before);
 
@@ -219,7 +211,7 @@ test('the step opens on the default, the rest wait behind Use another way, and M
 }) => {
     test.setTimeout(480_000);
     const { page, email } = await account(browser);
-    await plugIn(page);
+    const key = await plugIn(page);
 
     // The app first: it is the default.
     await section(page).getByRole('button', { name: 'Add authenticator app' }).click();
@@ -304,14 +296,12 @@ test('the step opens on the default, the rest wait behind Use another way, and M
         section(page).getByRole('list', { name: 'Recent security activity' }),
     ).toContainText('Default changed to passkey or security key');
 
+    // Opened on the key again, which answers by itself.
     await signOut(page);
+    const again = (await key.credentials())[0]!.signCount;
     await enterPassword(page, email);
-    await expect(stepHeading(page)).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByRole('button', { name: 'Use your passkey' })).toBeVisible();
-    await expect(page.getByLabel('Code from your authenticator app')).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Use your passkey' }).click();
     await inApp(page);
+    expect((await key.credentials())[0]!.signCount).toBeGreaterThan(again);
 
     // Removing the key (not the last method) is Remove, and the app is the default again.
     await page.goto('/app/account', { waitUntil: 'networkidle' });

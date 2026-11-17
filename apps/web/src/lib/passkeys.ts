@@ -10,8 +10,9 @@ import type { PasskeyDriver } from '@hushos/auth/client';
  * Passkeys and security keys in the browser (docs/two-step-design.md 3): WebAuthn, through
  * `@simplewebauthn/browser`'s JSON helpers. The library is a chunk of its own, fetched when a
  * step that offers a key comes on screen or a key is about to be added (`preloadPasskeys`),
- * never with the sign-in page itself. Each ceremony starts on the press that asked for it:
- * the browser's sheet never opens on page load.
+ * never with the sign-in page itself. A sign-in's step whose usual way is a key opens the
+ * browser's sheet as the step appears (SignInStep); everywhere else a ceremony starts on the
+ * press that asked for it. A new ceremony ends any one still open (the library's abort service).
  *
  * Only what the server checks is sent back: the credential id, the client data, and the
  * authenticator data with its signature (or the attestation object, which the server asked to
@@ -22,6 +23,13 @@ const library = () => import('@simplewebauthn/browser');
 /* Fetches the library ahead of the press that will need it, so the press goes straight to the key. */
 export function preloadPasskeys() {
     if (passkeys.supported()) void library().catch(() => {});
+}
+
+/* Closes a sheet this page opened by itself, when the person chose another way instead. */
+export function cancelPasskey() {
+    return library()
+        .then(({ WebAuthnAbortService }) => WebAuthnAbortService.cancelCeremony())
+        .catch(() => {});
 }
 
 type Descriptors = Parameters<

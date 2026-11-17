@@ -35,6 +35,32 @@ const WHAT: Record<string, string> = {
 };
 
 /*
+ * The same, in parts, for the prompt's own dialog: what is asked as its title, then the device
+ * and the place as rows. A name that is the device's own word is in quotes under Calls itself,
+ * never under Device, and with the day it was added where it is one of the account's.
+ */
+export function approvalDetails(asked: Parameters<typeof approvalAsks>[0]) {
+    const name = asked.device.name?.trim();
+    const added = addedDay(asked.device.addedAt);
+    const device = !name
+        ? { label: 'Device', value: added ? `Unnamed, added ${added}` : 'New, unnamed' }
+        : !asked.selfNamed
+          ? { label: 'Device', value: name }
+          : {
+                label: 'Calls itself',
+                value: added ? `“${name}”, added ${added}` : `“${name}”, new`,
+            };
+    const place = asked.location?.trim().replace(/^near\s+/, '');
+    return {
+        what:
+            asked.purpose === 'login'
+                ? 'Approve this sign-in?'
+                : (WHAT[asked.purpose] ?? 'A change to your account'),
+        rows: [device, ...(place ? [{ label: 'Near', value: place }] : [])],
+    };
+}
+
+/*
  * What is asked, by which device and roughly from where: "Change your password on Maya’s
  * Laptop", "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France".
  * - `selfNamed`: the name is the asking device's own words, not the account's record of one

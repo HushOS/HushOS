@@ -19,7 +19,7 @@ import {
 import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { approvalAsks, approvalsQueryOptions } from '@/lib/approvals';
+import { approvalAsks, approvalDetails, approvalsQueryOptions } from '@/lib/approvals';
 import { authClient } from '@/lib/auth-client';
 import { authError } from '@/lib/form';
 import { cue } from '@/lib/sounds';
@@ -122,7 +122,7 @@ export function CodeField({
                 value={value}
                 readOnly={readOnly}
                 onChange={(event) => onChange(event.target.value)}
-                className="font-mono text-[15px]"
+                className="h-12 font-mono text-xl tracking-[0.04em] sm:text-xl"
             />
             {words.length > 0 && (
                 <div className="flex flex-wrap gap-1.5" data-approval-words>
@@ -163,6 +163,7 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
     const requestId = asked?.id ?? null;
     // Turning the method on: nothing is typed here. This browser approves, then shows the code.
     const turningOn = asked?.purpose === TURNING_ON;
+    const details = asked ? approvalDetails(asked) : null;
     const wellFormed = turningOn || codes?.normalizeApprovalCode(typed) != null;
     const [shown, setShown] = useState('');
 
@@ -288,8 +289,21 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                     }}
                 >
                     <DialogHeader>
-                        <DialogTitle>{asked ? approvalAsks(asked) : ''}</DialogTitle>
+                        <DialogTitle>{details?.what ?? ''}</DialogTitle>
                     </DialogHeader>
+                    {details && (
+                        <dl
+                            className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm"
+                            data-approval-details
+                        >
+                            {details.rows.map((row) => (
+                                <div key={row.label} className="contents">
+                                    <dt className="text-muted-foreground">{row.label}</dt>
+                                    <dd className="min-w-0 break-words">{row.value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    )}
                     {asked?.chosen && !over && (
                         <p className="text-sm" data-approval-chosen>
                             The other device asked for this device to approve.
@@ -333,7 +347,7 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                             {error}
                         </p>
                     )}
-                    <DialogFooter>
+                    <DialogFooter className="sm:items-center">
                         {over ? (
                             <Button type="button" variant="outline" onClick={onClose}>
                                 Close
@@ -344,14 +358,15 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                             </Button>
                         ) : (
                             <>
-                                <Button
+                                {/* Ends the request and says so in the account's activity: apart from the answer buttons. */}
+                                <button
                                     type="button"
-                                    variant="destructive-outline"
                                     disabled={pending}
                                     onClick={() => void end('not-me')}
+                                    className="h-9 cursor-pointer rounded-sm text-sm font-medium text-destructive underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 sm:mr-auto"
                                 >
                                     This wasn’t me
-                                </Button>
+                                </button>
                                 <Button
                                     type="button"
                                     variant="outline"
