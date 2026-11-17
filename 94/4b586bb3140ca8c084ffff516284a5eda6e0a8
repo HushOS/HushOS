@@ -1,0 +1,49 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_ff4121ba7023c6 506,508-509
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyManage.kt
+  s_c60e24772e04af::t_5f56927162b93d 488-489
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_c60e24772e04af::t_61ccca1596ac41 188-192,195-200,922-923
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_1607a2ec17c9a6 1137,1274,1872,1874-1877,1879
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_6a0afd14bbde4c 487-491
+apps/ios/App/Families.swift
+  s_c60e24772e04af::t_844cca00f7fbb5 569-574,683-684,706
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilyManage.swift
+  s_c60e24772e04af::t_3cd5dd9b9d77da 284-285
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c60e24772e04af::t_a3c5e116621261 238-242,244-246,252-254,257-265,268-269,271,274-275
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ContactGuardTests.swift
+  s_c60e24772e04af::t_2ed20b8d8b4c4b 997-1043,1557-1561
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsReuseTests.swift
+  s_c60e24772e04af::t_9a9abac0f75c02 77-95
+apps/web/src/lib/contacts.settings-reads.test.ts
+  s_c60e24772e04af::t_86926dbc93740d 2,284-301
+apps/web/src/lib/contacts.ts
+  s_c60e24772e04af::t_05343cd042ced5 363,365,376-378,410-411,427
+apps/web/src/lib/family-trust.test.ts
+  s_c60e24772e04af::t_537b1bb44f52ac 149,241-267
+apps/web/src/lib/groups/join.test.ts
+  s_c60e24772e04af::t_eda8dccf1a9d81 759-827
+apps/web/src/lib/groups/outbox.test.ts
+  s_c60e24772e04af::t_b2952d75e9cd57 609-615
+apps/web/src/lib/groups/test-harness.ts
+  s_c60e24772e04af::t_07101c124e2f2f 130-134,308-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "944b586bb3140ca8c084ffff516284a5eda6e0a8",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

@@ -1,0 +1,75 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_2d04527b623dbe 498-508
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySync.kt
+  s_c60e24772e04af::t_0bf90b2e7010a3 3,184,188,190,905-917
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_def11e782ad6e0 642-645
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_c60e24772e04af::t_0bc6b2e93755a3 928-929,931
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_24055797f535a8 76-78,93-102
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_bb52c224d86439 479-492
+apps/ios/App/Families.swift
+  s_c60e24772e04af::t_373040266c59a1 241-246
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c60e24772e04af::t_b4acb4e970fe0c 232-234,236-242,244,246-248,251,253,256
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Settings.swift
+  s_c60e24772e04af::t_b9ac2000a8398d 498,513-518,522,572
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Identity.swift
+  s_c60e24772e04af::t_19f0bf532f9554 235-241,243
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Trust.swift
+  s_c60e24772e04af::t_15b66342777432 212-213
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SettingsReuseTests.swift
+  s_c60e24772e04af::t_a64df4c9ee0ae8 62-70,77-80,82,85-90,141
+apps/web/src/lib/contacts.first-use.test.ts
+  s_68c4aa3f5a3191::t_03d48ee2d36cf6 1343-1499
+apps/web/src/lib/contacts.settings-reads.test.ts
+  s_68c4aa3f5a3191::t_e2276fa702e8d7 56,161-185
+apps/web/src/lib/contacts.ts
+  s_c60e24772e04af::t_0bb2c5a87e3512 375,558-559,2181,2184
+apps/web/src/lib/family-trust.ts
+  s_c60e24772e04af::t_ba585ef5b9dd03 134-135
+apps/web/src/lib/groups/client.ts
+  s_c60e24772e04af::t_94462f144e0896 53
+apps/web/src/lib/groups/context.ts
+  s_c60e24772e04af::t_f82e2a443d3910 120-123,125
+apps/web/src/lib/groups/join.ts
+  s_c60e24772e04af::t_a457c18ad59b1d 52,137,181
+apps/web/src/lib/groups/outbox.test.ts
+  s_c60e24772e04af::t_69d9333986b93b 609-628
+apps/web/src/lib/groups/outbox.ts
+  s_c60e24772e04af::t_c07954a0be5e2c 480,753
+apps/web/src/lib/groups/test-harness.ts
+  s_68c4aa3f5a3191::t_5aef9ae9660ebb 125-129,301,303-307
+apps/web/src/lib/integrity.ts
+  s_c60e24772e04af::t_107fdda538d077 3,50-51
+packages/drive/src/client.test.ts
+  s_c60e24772e04af::t_290896e106b927 405-476
+packages/drive/src/client.ts
+  s_c60e24772e04af::t_9663c1d7d12a11 338-344,1449-1459,1763-1764
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a134e41320b2de3e08e1dbbca5f4a4ba77cb2b35",
+  "prompts": {},
+  "sessions": {
+    "s_68c4aa3f5a3191": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1eadd-caac-75b3-b887-3b283ca8f0cc",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

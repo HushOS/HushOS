@@ -1,0 +1,25 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_1e48dda7f99011 506-507
+apps/android/app/src/main/kotlin/com/hushos/app/data/Integrity.kt
+  s_c60e24772e04af::t_569dca220e6aff 3,293-331
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_ded9256d6acbfd 369,630,964,994,1882-1884,1887-1888,2256
+apps/android/app/src/test/kotlin/com/hushos/app/data/JoinedLoadsTest.kt
+  s_c60e24772e04af::t_e6ad33bf6abbf4 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "776204e259b52c45cf4812faf66b79b96267edd2",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

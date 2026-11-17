@@ -1,0 +1,42 @@
+apps/web/src/lib/contacts.families.test.ts
+  s_c60e24772e04af::t_ce2532d4355fba 162-164,166-175
+apps/web/src/lib/contacts.ts
+  s_c60e24772e04af::t_0a7d7a16e72048 338-398,400-438,1639
+  s_c60e24772e04af::t_801f044f7689ef 110-111
+  s_c60e24772e04af::t_a183c6dc41f23f 320-321
+  s_c60e24772e04af::t_d850b8b83c8164 439-443,448-449,493-496,541,598-600,618,642,645-647,755-756,771,988,1171,1308,1682,1726,1770
+apps/web/src/lib/groups/sync.ts
+  s_c60e24772e04af::t_942a8a17549db3 382-385,391
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_0d766809cf8830 435-440,442
+packages/drive/src/client.ts
+  s_c60e24772e04af::t_d5d490f37179a6 560-563,568
+  s_c60e24772e04af::t_b4bf6b7349e14f 1443,2020-2037,2040
+apps/web/src/lib/contacts.settings-reads.test.ts
+  s_c60e24772e04af::t_f3f0f7de788a65 233-242
+  s_c60e24772e04af::t_bef25430725a3f 1-136,139-142,144-232,243-256
+  s_c60e24772e04af::t_e8406f9e383209 137-138,143
+  s_c60e24772e04af::t_1dd4d853b45ac1 257
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_ee387bdd5e4d81 1135-1137,1139,1143-1144
+apps/web/src/components/drive/drive-shell.tsx
+  s_c60e24772e04af::t_4ff8741ad23d17 21,94-100
+packages/drive/src/client.test.ts
+  s_c60e24772e04af::t_4de3a141658b9d 1,1151-1246
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bf11268d44e6ef4cb008faf059d8fd58201f61cf",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
