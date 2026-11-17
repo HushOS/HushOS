@@ -633,9 +633,60 @@ extension Vault {
         func holds(_ node: NodeView) -> Bool { node.currentVersion?.id == versionId && node.metadataVersion == metadataVersion }
     }
 
-    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
+    /*
+     * Where an upload's bytes are read from: a file on disk, or a result held in memory (the save
+     * path, SaveRuns.swift), which never touches the disk as plaintext.
+     */
+    enum PlainSource {
+        case file(URL)
+        case memory(Data, modified: Date)
+
+        func facts() throws -> (size: UInt64, modified: Date) {
+            switch self {
+            case .file(let url):
+                let onDisk = try FileManager.default.attributesOfItem(atPath: url.path)
+                return ((onDisk[.size] as? NSNumber)?.uint64Value ?? 0, (onDisk[.modificationDate] as? Date) ?? Date())
+            case .memory(let data, let modified):
+                return (UInt64(data.count), modified)
+            }
+        }
+    }
+
+    /* Reads a source's chunks: a file through one handle, kept open while the upload runs. */
+    final class PlainReader {
+        private let handle: FileHandle?
+        private let data: Data?
+
+        init(_ source: PlainSource) throws {
+            switch source {
+            case .file(let url): handle = try FileHandle(forReadingFrom: url); data = nil
+            case .memory(let bytes, _): handle = nil; data = bytes
+            }
+        }
+
+        func read(at offset: UInt64, length: UInt64) throws -> Data {
+            if let data {
+                let start = Int(min(offset, UInt64(data.count)))
+                let end = Int(min(offset + length, UInt64(data.count)))
+                return data.subdata(in: data.startIndex + start ..< data.startIndex + end)
+            }
+            guard let handle else { return Data() }
+            try handle.seek(toOffset: offset)
+            // In its own pool: FileHandle hands back autoreleased data, which would otherwise pile up until the async
+            // caller returns, the whole file in memory (fatal in Save to HushOS, whose limit is about 120 MB).
+            return try autoreleasepool { try handle.read(upToCount: Int(length)) ?? Data() }
+        }
+
+        func close() { try? handle?.close() }
+    }
+
+    /*
+     * `expected`: the version a new version must find current at begin; the replaced file's as
+     * held unless the save path names the one its work started from.
+     */
+    private func begin(source: PlainSource, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
                        signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false,
-                       moveOf: MoveSource? = nil) async throws -> Begun {
+                       moveOf: MoveSource? = nil, expected: String?? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
@@ -653,9 +704,9 @@ extension Vault {
                 replacing = fresh
             }
         }
-        let onDisk = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let plaintextSize = (onDisk[.size] as? NSNumber)?.uint64Value ?? 0
-        let modified = ISO8601DateFormatter().string(from: (onDisk[.modificationDate] as? Date) ?? Date())
+        let facts = try source.facts()
+        let plaintextSize = facts.size
+        let modified = ISO8601DateFormatter().string(from: facts.modified)
         let madeVersion = try mint(.version, in: workspace.workspaceId)
         let madeObject = try mint(.object, in: workspace.workspaceId)
         let (versionId, objectId) = (madeVersion.id, madeObject.id)
@@ -682,8 +733,9 @@ extension Vault {
                 guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
                 nodeKey = key
             }
+            let expectedVersion = expected ?? replacing.node.currentVersion?.id
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
-                         "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
+                         "expectedVersionId": expectedVersion ?? NSNull()]
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
                                  attributes: replacing.metadata.attributes)
@@ -742,12 +794,9 @@ extension Vault {
     }
 
     /* One part's sealed bytes: the chunk's ciphertext, and on the last the thumbnail trailer. */
-    private func sealPart(_ begun: Begun, index: UInt64, from handle: FileHandle, thumbnail: Data?) throws -> Data {
+    private func sealPart(_ begun: Begun, index: UInt64, from reader: PlainReader, thumbnail: Data?) throws -> Data {
         let length = chunkLength(plaintextSize: begun.plaintextSize, index: index)
-        try handle.seek(toOffset: index * begun.chunkBytes)
-        // In its own pool: FileHandle hands back autoreleased data, which would otherwise pile up until the async
-        // caller returns, the whole file in memory (fatal in Save to HushOS, whose limit is about 120 MB).
-        let plaintext = try autoreleasepool { try handle.read(upToCount: Int(length)) ?? Data() }
+        let plaintext = try reader.read(at: index * begun.chunkBytes, length: length)
         if UInt64(plaintext.count) != length { throw DriveAPIError.server(500, "The file changed while uploading.") }
         var sealed = try chunkEncrypt(content: begun.content, index: index, plaintext: plaintext)
         if index == begun.chunkCount - 1, let thumbnail, begun.content.thumbnailBytes > 0 {
@@ -821,12 +870,31 @@ extension Vault {
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), attributes: [String: String] = [:],
         moveOf: MoveSource? = nil, progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
+        try await upload(source: .file(fileURL), name: name, mime: mime, in: parentId, replacing: replacing, thumbnail: thumbnail,
+                         signing: signing, attributes: attributes, moveOf: moveOf, progress: progress)
+    }
+
+    /* The ids a result's upload was begun under, for its run's row (SaveRuns.swift). */
+    public struct BegunIds: Sendable, Equatable {
+        public let workspaceId: String
+        public let uploadId: String
+        public let nodeId: String
+    }
+
+    private func upload(
+        source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
+        thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
+        moveOf: MoveSource?, expected: String?? = nil, onBegun: @Sendable (BegunIds) -> Void = { _ in },
+        progress: @Sendable (Double) -> Void
+    ) async throws -> Opened {
         return try await writing {
-            let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf)
+            let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
+                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf,
+                                        expected: expected)
+            onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
             var urls = begun.urls
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
+            let handle = try PlainReader(source)
+            defer { handle.close() }
             var etags: [Int: String] = [:]
             do {
                 for index in 0 ..< begun.chunkCount {
@@ -881,6 +949,47 @@ extension Vault {
                 guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
                 return item
             }
+        }
+    }
+
+    /*
+     * A result a tool or an editor produced (the save path, SaveRuns.swift), uploaded from memory: its
+     * plaintext is never written to disk, and nothing keeps it to resume. As a new version
+     * (`replacing`) it never becomes a conflict copy: unless `startedFrom` is still the file's current
+     * version, at begin and at completion, it throws `SaveStale` naming the version current now, its
+     * reservation released.
+     */
+    public func uploadResult(
+        _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
+        thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
+        onBegun: @escaping @Sendable (BegunIds) -> Void = { _ in }, progress: @Sendable (Double) -> Void = { _ in }
+    ) async throws -> Opened {
+        if let replacing, replacing.node.currentVersion?.id != startedFrom {
+            throw SaveStale(currentVersionId: replacing.node.currentVersion?.id)
+        }
+        let begun = BegunBox()
+        do {
+            return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
+                                    thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
+                                    expected: replacing == nil ? nil : .some(startedFrom),
+                                    onBegun: { ids in begun.ids = ids; onBegun(ids) }, progress: progress)
+        } catch {
+            guard let replacing else { throw error }
+            let raced: Bool
+            switch error {
+            case DriveAPIError.stale: raced = true
+            case DriveAPIError.conflicted: raced = true
+            default: raced = false
+            }
+            guard raced else { throw error }
+            // Its reservation goes: a conflicted completion keeps it on the server until it expires.
+            if let ids = begun.ids { await api.abortUpload(uploadId: ids.uploadId, workspaceId: ids.workspaceId) }
+            // As the server holds the file now: someone else's version current is stale; the same version is
+            // only the file's key having moved, an error as it was.
+            try? await lookAgain(parentId, in: replacing.node.workspaceId)
+            let current = opened[replacing.ref]?.node.currentVersion?.id
+            if current != startedFrom { throw SaveStale(currentVersionId: current) }
+            throw error
         }
     }
 
@@ -952,12 +1061,12 @@ extension Vault {
 
     private func sealUploadOnce(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
                                 thumbnail: Data?, into directory: URL, waited: Bool) async throws -> SealedUpload {
-        let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
+        let begun = try await begin(source: .file(fileURL), name: name, mime: mime, parentId: parentId, replacing: replacing,
                                     thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: (.own, .own), waited: waited)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
+            let handle = try PlainReader(.file(fileURL))
+            defer { handle.close() }
             for index in 0 ..< begun.chunkCount {
                 try Task.checkCancellation()
                 let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)

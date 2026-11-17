@@ -1013,6 +1013,88 @@ pub fn content_layout(suite: u32, plaintext_size: u64, thumbnail_bytes: u32) -> 
     })
 }
 
+/// One result's room before it is made (the save path,
+/// docs/file-tools-design.md section 2): the Padmé bucket of its bytes with a
+/// full 64 KiB thumbnail trailer and its tag, plus a 16-byte tag per chunk of
+/// that bucket. Never less than what begin reserves for the result
+/// ([`content_layout`]'s `ciphertext_size`) whatever its thumbnail, and the
+/// same number packages/drive's `resultEstimate` gives.
+///
+/// ```
+/// use hushos_core::{content_layout, result_estimate};
+/// let estimate = result_estimate(1000)?;
+/// for thumbnail in [0, 1000, 65_536] {
+///     assert!(content_layout(3, 1000, thumbnail)?.ciphertext_size <= estimate);
+/// }
+/// assert_eq!(estimate, 67_600);
+/// assert!(result_estimate(1 << 53).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn result_estimate(plaintext_size: u64) -> CoreResult<u64> {
+    if plaintext_size > MAX_SAFE_INTEGER {
+        return Err(input("This file is too large."));
+    }
+    let padded = padded_length(plaintext_size + THUMBNAIL_MAX_BYTES as u64 + TAG_BYTES as u64)?;
+    let total = padded + TAG_BYTES as u64 * padded.div_ceil(CHUNK_BYTES).max(1);
+    if total > MAX_SAFE_INTEGER {
+        return Err(input("This file is too large."));
+    }
+    Ok(total)
+}
+
+/// The size a result is taken to have when it cannot be known before it is
+/// made (a conversion, a compress): its sources' total plus 1%, rounded up.
+///
+/// ```
+/// use hushos_core::unknown_result_size;
+/// assert_eq!(unknown_result_size(100)?, 101);
+/// assert_eq!(unknown_result_size(101)?, 103);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn unknown_result_size(sources_size: u64) -> CoreResult<u64> {
+    let size = sources_size
+        .checked_add(sources_size.div_ceil(100))
+        .filter(|size| *size <= MAX_SAFE_INTEGER)
+        .ok_or_else(|| input("This file is too large."))?;
+    Ok(size)
+}
+
+/// A result a save run will make: its bytes when known, or the sources' it is made from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum PlannedResult {
+    Known { size: u64 },
+    FromSources { sources_size: u64 },
+}
+
+/// What a save run's results may take, checked against the destination's
+/// free space before anything is made: each result's [`result_estimate`],
+/// an unknown one's from [`unknown_result_size`], added up.
+///
+/// ```
+/// use hushos_core::*;
+/// let run = run_estimate(vec![PlannedResult::Known { size: 0 }, PlannedResult::FromSources { sources_size: 100 }])?;
+/// assert_eq!(run, result_estimate(0)? + result_estimate(101)?);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn run_estimate(results: Vec<PlannedResult>) -> CoreResult<u64> {
+    let mut total: u64 = 0;
+    for result in results {
+        let size = match result {
+            PlannedResult::Known { size } => size,
+            PlannedResult::FromSources { sources_size } => unknown_result_size(sources_size)?,
+        };
+        total = total
+            .checked_add(result_estimate(size)?)
+            .filter(|total| *total <= MAX_SAFE_INTEGER)
+            .ok_or_else(|| input("This is too large to save."))?;
+    }
+    Ok(total)
+}
+
 /// Inclusive byte offsets, as an HTTP range header wants them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
@@ -2536,5 +2618,44 @@ mod tests {
             NodeKeyContext { workspace_id: ws.to_uppercase(), parent_id: ws.to_uppercase(), ..ctx.clone() };
         assert!(previous_root_key_wrap(upper, area_key.clone(), root_key.clone()).is_err());
         assert!(previous_root_key_wrap(NodeKeyContext { key_epoch: 0, ..ctx }, area_key, root_key).is_err());
+    }
+
+    #[test]
+    fn a_results_estimate_covers_what_begin_reserves_whatever_its_thumbnail_by_at_most_a_tag() {
+        let sizes = [
+            0u64,
+            1,
+            256,
+            257,
+            65_535,
+            65_536,
+            1 << 20,
+            CHUNK_BYTES - 1,
+            CHUNK_BYTES,
+            CHUNK_BYTES + 1,
+            2 * CHUNK_BYTES - 65_552,
+            100_000_000,
+            (1 << 32) + 1,
+            32 * 1024 * 1024 * 1024,
+        ];
+        for size in sizes {
+            let estimate = result_estimate(size).unwrap();
+            let mut largest = 0;
+            for thumbnail in [0u32, 1, 1000, 30_000, THUMBNAIL_MAX_BYTES] {
+                let reserved = content_layout(CONTENT_SUITE, size, thumbnail).unwrap().ciphertext_size;
+                assert!(reserved <= estimate, "{size} bytes, thumbnail {thumbnail}");
+                largest = largest.max(reserved);
+            }
+            assert!(estimate - largest <= TAG_BYTES as u64, "{size} bytes: {estimate} over {largest}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_result_rounds_its_one_percent_up_and_a_run_refuses_what_the_web_cannot_count() {
+        assert_eq!(unknown_result_size(0).unwrap(), 0);
+        assert_eq!(unknown_result_size(1).unwrap(), 2);
+        assert!(unknown_result_size(MAX_SAFE_INTEGER).is_err());
+        assert!(run_estimate(vec![PlannedResult::Known { size: 1 << 52 }; 3]).is_err());
+        assert_eq!(run_estimate(vec![]).unwrap(), 0);
     }
 }

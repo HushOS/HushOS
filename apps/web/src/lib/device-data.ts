@@ -171,6 +171,8 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/lib/spaces.ts': { databases: [] },
     'apps/web/src/lib/drive.ts': { databases: [] },
     'apps/web/src/lib/transfers.ts': { databases: [] },
+    // The save runs' rows, in the upload journal's database (packages/drive/src/journal.ts).
+    'apps/web/src/lib/save-runs.ts': { databases: [] },
     // The store is zustand's persist, which names its key itself ('hushos-device-unlock').
     'packages/auth/src/store.ts': { local: ['hushos-device-unlock'], passThrough: ['local'] },
     'packages/auth/src/client.ts': {

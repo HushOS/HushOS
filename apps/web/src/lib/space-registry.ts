@@ -60,6 +60,10 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         has: (workspaceId: string) => {
             return entries.has(workspaceId) || gone.has(workspaceId);
         },
+        /* The family a folder's workspace is in, or null for this account's own Drive and shares. */
+        groupOf: (workspaceId: string): string | null => {
+            return entries.get(workspaceId)?.groupId ?? null;
+        },
         /* The client of the workspace a node lives in; throws for a family folder forgotten here. */
         clientFor: (workspaceId: string | null | undefined): C => {
             if (!workspaceId) return personal();

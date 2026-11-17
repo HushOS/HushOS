@@ -1,5 +1,6 @@
 import type { DriveClient, DriveNode } from '@hushos/drive/client';
 import { createIndexedDbJournal, type JournalEntry, type QueuedEntry } from '@hushos/drive/journal';
+import { resultsWaiting } from '@hushos/drive/save-runs';
 import {
     createTransferManager,
     type TransferManagerOptions,
@@ -198,13 +199,18 @@ export function useTransfers() {
     return useSyncExternalStore(transfers.subscribe, transfers.getState, () => EMPTY);
 }
 
-/* Leaving the page abandons in-flight uploads; ask before that happens. */
+/*
+ * Leaving the page abandons in-flight uploads; ask before that happens. A tool's
+ * results are never kept to resume (no plaintext on disk), so one still waiting
+ * to upload, even queued behind others, asks too (docs/file-tools-design.md, the
+ * owner's decision on question 4).
+ */
 let guarding = false;
 export function guardUnloadWhileUploading() {
     if (guarding || typeof window === 'undefined') return;
     guarding = true;
     window.addEventListener('beforeunload', (event) => {
-        if (transfers.getState().active > 0) {
+        if (transfers.getState().active > 0 || resultsWaiting()) {
             event.preventDefault();
             // Chrome still requires returnValue to be set for the prompt to show.
             event.returnValue = '';

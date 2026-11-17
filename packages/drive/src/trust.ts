@@ -69,6 +69,35 @@ export function copySignatureForms(
     };
 }
 
+/* Weakest first: a re-sealed record shows Unverified, a saved one "Saved from a link", an ordinary one nothing. */
+const FORM_STRENGTH: Record<SignatureForm, number> = { resealed: 0, saved: 1, ordinary: 2 };
+function weakestForm(forms: SignatureForm[]): SignatureForm {
+    let weakest: SignatureForm = 'ordinary';
+    for (const form of forms) if (FORM_STRENGTH[form] < FORM_STRENGTH[weakest]) weakest = form;
+    return weakest;
+}
+
+/*
+ * What a result made from several sources is signed with (docs/file-tools-design.md,
+ * "Signatures by source"): each record as the weakest of its sources' (copySignatureForms),
+ * so a zip holding one Unverified file is Unverified, and one holding a file saved from a link
+ * is saved from a link. A tool never launders a mark. Nothing to take it from is refused: a
+ * result's signature is never chosen by default.
+ */
+export function sourcesSignatureForms(
+    sources: readonly {
+        node: { kind: 'folder' | 'file'; integrity: NodeIntegrity | null };
+        source: 'link' | 'drive';
+    }[],
+): { metadata: SignatureForm; version: SignatureForm } {
+    if (!sources.length) throw new Error('A result is signed by its sources, and there are none.');
+    const forms = sources.map(({ node, source }) => copySignatureForms(node, source));
+    return {
+        metadata: weakestForm(forms.map((form) => form.metadata)),
+        version: weakestForm(forms.map((form) => form.version)),
+    };
+}
+
 /*
  * A pin after a followed succession, as every client keeps it:
  * `previousSigningKeys`, the signing keys it held before, oldest first

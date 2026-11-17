@@ -11,6 +11,7 @@
         "./api": "./src/api.ts",
         "./client": "./src/client.ts",
         "./transfers": "./src/transfers.ts",
+        "./save-runs": "./src/save-runs.ts",
         "./journal": "./src/journal.ts",
         "./mirror": "./src/mirror.ts",
         "./catalogue": "./src/catalogue.ts",

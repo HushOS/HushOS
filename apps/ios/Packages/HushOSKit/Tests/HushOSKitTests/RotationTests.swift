@@ -337,6 +337,9 @@ final class FakeDrive: @unchecked Sendable {
     var begins: [[String: Any]] = []
     var uploads: [String: [String: Any]] = [:]
     var completed: [String] = []
+    /* Each part's body as PUT to the store, by "<upload id>/<part number>"; and the uploads aborted. */
+    var stored: [String: Data] = [:]
+    var aborted: [String] = []
     private let lock = NSLock()
     private var target: UInt64 = 0
     /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
@@ -513,6 +516,10 @@ final class FakeDrive: @unchecked Sendable {
                   made(.version, sent["versionId"], sent["versionIdSeed"]), made(.object, sent["objectId"], sent["objectIdSeed"]),
                   let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
             else { return Self.notMade }
+            // As packages/db's begin: a new version names the version it replaces, or is `stale`.
+            if (wire["expectedVersionId"] as? String) != nodes[nodeId]?.currentVersion?.id {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
             let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
             guard let versionKind = try statement(version: sent["contentKeyEnvelope"] as? String ?? "", signature: sent["versionSignature"] as? String,
                                                   statement: VersionStatement(workspaceId: workspace, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite))
@@ -546,6 +553,9 @@ final class FakeDrive: @unchecked Sendable {
             let urls = (1 ... max(count, 1)).map { ["partNumber": $0, "length": 0, "url": "https://drive.test/store/\(uploadId)/\($0)"] as [String: Any] }
             return (200, ["upload": ["id": uploadId, "nodeId": nodeId, "versionId": versionId, "status": "pending", "chunkCount": count],
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
+            aborted.append(rest[1])
+            return (200, ["aborted": true])
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
             guard let begun = uploads[rest[1]], let wire = begun["node"] as? [String: Any], let nodeId = wire["id"] as? String,
                   let versionId = begun["versionId"] as? String, let objectId = begun["objectId"] as? String else { return (404, ["message": "No upload"]) }
@@ -589,7 +599,10 @@ final class FakeDrive: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let parts = (request.url?.path ?? "").split(separator: "/").map(String.init) // api, drive, nodes, <id>, …
-        if parts.first == "store", request.httpMethod == "PUT" { return (200, [:]) }
+        if parts.first == "store", request.httpMethod == "PUT" {
+            if parts.count == 3 { stored["\(parts[1])/\(parts[2])"] = body ?? Data() }
+            return (200, [:])
+        }
         if let answer = try answerCreate(request, parts: parts, body: body) { return answer }
         if parts.count == 5, parts[2] == "workspaces", parts[4] == "epochs" {
             target = max(target, 1) + 1

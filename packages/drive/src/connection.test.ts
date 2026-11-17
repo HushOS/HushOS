@@ -107,7 +107,8 @@ describe('the upload journal', () => {
 
     it('tries the open again on the next call after one failed', async () => {
         const name = `journal-${Math.random()}`;
-        await openNewer(name, 3);
+        // Newer than the journal's own version (3, since save runs' rows joined it).
+        await openNewer(name, 4);
         const journal = createIndexedDbJournal(name);
         await expect(journal.listAll()).rejects.toMatchObject({ name: 'VersionError' });
 

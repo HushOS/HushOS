@@ -71,6 +71,8 @@ const spaces = createSpaceRegistry<DriveClient>(() => driveClient);
 export const registerSpace = spaces.register;
 export const clientFor = spaces.clientFor;
 export const clientOfNode = spaces.clientOfNode;
+/* The family a family folder's workspace belongs to; null for this account's own Drive and shares. */
+export const groupOfSpace = spaces.groupOf;
 /* Why nothing may be added to `folder` now, or null: checked before any upload, folder or move into it. */
 export const refuseWrite = spaces.refuseWrite;
 /* Whether that refusal is only a family folder's key change still on its way to `folder`: adds wait. */

@@ -173,7 +173,7 @@ const KEY_CHANGE_GIVE_UP_MS = 10 * 60_000;
  * the walk's target, read afresh) or the walk is over: what a new folder needs
  * before it is wrapped under its key. Any other refusal stops at once.
  */
-async function untilWritable(queryClient: QueryClient, folder: DriveNode) {
+export async function untilWritable(queryClient: QueryClient, folder: DriveNode) {
     let current = folder;
     const giveUpAt = Date.now() + KEY_CHANGE_GIVE_UP_MS;
     for (;;) {

@@ -1275,6 +1275,7 @@ Identity, trust and storage:
 - `SuccessionFollowTests`, `SignedShareTests`, `ReportOperatorTests`.
 - `ContactGuardStoreTests`, `ContactTrustTests` (stub server, `ContactServer`), `ContactSettingsTests`.
 - `AppGroupTests`, `CatalogueFeedTests`, `SharingRefreshTests`, `MarkdownDocumentTests`, `SaveTargetsTests`, `RotationTests`: see their sections above.
+- `SaveRunTests` (the save path, `SaveRuns.swift`, docs/file-tools-design.md section 2): a run refused before anything is made, the core's room estimate, next free names, `stale` versions, clean-up by delete forever or Trash, the row a later launch cleans up from. `OnFakeDrive/SaveResultTests`: a result from memory signed as its weakest source (the fake server reads the statement) and holding its bytes; a version race `stale`, never a version over theirs.
 - `TwoStepTests`, and `PasskeyStepTests` for keys and the default:
     - which server can use a key; the step opening on the server's first method; a key never offered without its request;
     - nothing asks the key before a press, and a closed sheet sends nothing and keeps the step;

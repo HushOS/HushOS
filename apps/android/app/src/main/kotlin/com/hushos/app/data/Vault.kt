@@ -2054,15 +2054,58 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
                attributes: Map<String, String> = emptyMap(), job: String = "", moveOf: MoveOf? = null, progress: (Float) -> Unit = {}): Opened = writing {
-        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, moveOf, progress)
+        uploadInside(Plain.OnDisk(file), name, mime, parentId, replacing, thumbnail, copy, attributes, job, moveOf, progress)
     }
+
+    /* The ids a result's upload was begun under, for its run's row (SaveRuns.kt). */
+    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String)
+
+    /*
+     * A result a tool or an editor produced (the save path, SaveRuns.kt), uploaded from memory: its plaintext is never
+     * written to disk, and nothing keeps it to resume. As a new version (`replacing`) it never becomes a conflict copy:
+     * unless `startedFrom` is still the file's current version, at begin and at completion, it throws SaveStale naming
+     * the version current now, its reservation released.
+     */
+    fun uploadResult(bytes: ByteArray, name: String, mime: String?, parentId: String, replacing: Opened?, startedFrom: String?,
+                     copy: Prior?, thumbnail: ByteArray? = null, modified: Long = System.currentTimeMillis(),
+                     onBegun: (BegunIds) -> Unit = {}, progress: (Float) -> Unit = {}): Opened {
+        if (replacing != null && replacing.node.currentVersion?.id != startedFrom) throw SaveStale(replacing.node.currentVersion?.id)
+        try {
+            return writing {
+                uploadInside(Plain.InMemory(bytes, modified), name, mime, parentId, replacing, thumbnail, copy, emptyMap(), "", null, progress,
+                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun)
+            }
+        } catch (error: ApiError) {
+            // Begin refused `stale`, or completion `conflict` (aborted there, its room released): as the server holds the file now,
+            // someone else's version current is stale; the same version is only the file's key having moved, the error as it was.
+            if (replacing == null || error.status != 409 || (error.code != "stale" && error.code != "conflict")) throw error
+            val current = runCatching { servedNode(parentId, replacing.node.workspaceId, replacing.id) }.getOrNull() ?: throw error
+            if (current.currentVersion?.id != startedFrom) throw SaveStale(current.currentVersion?.id)
+            throw error
+        }
+    }
+
+    /* `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there. */
+    private fun servedNode(folderId: String, workspaceId: String, id: String): NodeView? {
+        var after: String? = null
+        do {
+            val page = api.children(folderId, workspaceId, after)
+            page.children.firstOrNull { it.id == id }?.let { return it }
+            after = page.nextCursor
+        } while (after != null)
+        return null
+    }
+
+    /* The version a new version must find current at begin, when the save path names the one its work started from. */
+    internal data class Expected(val versionId: String?)
 
     /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it (true). */
     private fun abortReserved(uploadId: String, workspaceId: String): Boolean =
         Reservations.aborted(context, uploadId, api.abortUpload(uploadId, workspaceId))
 
-    private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
-                             attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit): Opened {
+    private fun uploadInside(plain: Plain, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
+                             attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit,
+                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
@@ -2072,8 +2115,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
         // family folder as its member list judges it.
         val keptName = replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
-        val size = file.length().toULong()
-        val modified = Instant.ofEpochMilli(file.lastModified()).toString()
+        val size = plain.size.toULong()
+        val modified = Instant.ofEpochMilli(plain.modified).toString()
         val madeVersion = IdField.VERSION.mint(ws)
         val madeObject = IdField.OBJECT.mint(ws)
         val versionId = madeVersion.id
@@ -2091,8 +2134,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             nodeId = replacing.id
             // In a family folder the version goes under the ledger's writable key only, at the epoch it was opened at.
             nodeKey = if (family) writableKey(replacing) else nodes.key(replacing) ?: throw ApiError(500, "Node not opened")
+            val expectedVersion = if (expected != null) expected.versionId else replacing.node.currentVersion?.id
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
-                .put("expectedVersionId", replacing.node.currentVersion?.id ?: JSONObject.NULL)
+                .put("expectedVersionId", expectedVersion ?: JSONObject.NULL)
             metadata = replacing.metadata
         } else {
             val parent = resolve(parentId)
@@ -2157,8 +2201,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             if (!settled) throw Unreachable()
             throw error
         }
+        onBegun(BegunIds(ws, begun.uploadId, nodeId))
         try {
-            return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
+            return uploadReserved(plain, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
                 family, job, moveOf != null, progress)
         } finally {
             Reservations.idle(begun.uploadId)
@@ -2166,7 +2211,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* The upload after its reservation is on record: parts, completion, the name of a new version. */
-    private fun uploadReserved(file: File, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
+    private fun uploadReserved(plain: Plain, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
                                thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
                                moved: Boolean, progress: (Float) -> Unit): Opened {
@@ -2174,17 +2219,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
         try {
-            RandomAccessFile(file, "r").use { raf ->
+            plain.open().use { raf ->
                 for (index in 0uL until layout.chunkCount) {
                     val partNumber = index.toInt() + 1
                     if (!urls.containsKey(partNumber)) for (part in api.partUrls(begun.uploadId, ws, partNumber)) urls[part.partNumber] = part.url
                     // The file's own bytes for this chunk (none in the padding past its end); the core adds the zeros.
                     val length = chunkLength(size, index).toInt()
                     val plaintext = ByteArray(length)
-                    if (length > 0) {
-                        raf.seek((index * layout.chunkBytes).toLong())
-                        raf.readFully(plaintext)
-                    }
+                    if (length > 0) raf.read((index * layout.chunkBytes).toLong(), plaintext)
                     var sealed = chunkEncrypt(content, index, plaintext)
                     if (index == layout.chunkCount - 1uL && thumbnail != null && thumbnailBytes > 0u) sealed += thumbnailEncrypt(content, thumbnail)
                     // A part the network dropped is sent again; an expired address is fetched fresh first.
@@ -2273,6 +2315,45 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }
     }
 }
+
+/*
+ * Where an upload's bytes are read from: a file on disk, or a result held in memory (the save path, SaveRuns.kt), which
+ * never touches the disk as plaintext.
+ */
+internal sealed interface Plain {
+    val size: Long
+    val modified: Long
+    fun open(): Reader
+
+    interface Reader : java.io.Closeable {
+        /* Fills `into` from `offset`; the bytes must be there. */
+        fun read(offset: Long, into: ByteArray)
+    }
+
+    class OnDisk(private val file: File) : Plain {
+        override val size get() = file.length()
+        override val modified get() = file.lastModified()
+        override fun open(): Reader = object : Reader {
+            private val raf = RandomAccessFile(file, "r")
+            override fun read(offset: Long, into: ByteArray) { raf.seek(offset); raf.readFully(into) }
+            override fun close() = raf.close()
+        }
+    }
+
+    class InMemory(private val bytes: ByteArray, override val modified: Long) : Plain {
+        override val size get() = bytes.size.toLong()
+        override fun open(): Reader = object : Reader {
+            override fun read(offset: Long, into: ByteArray) {
+                if (offset < 0 || offset + into.size > bytes.size) throw java.io.EOFException("Past the end of the result.")
+                System.arraycopy(bytes, offset.toInt(), into, 0, into.size)
+            }
+            override fun close() {}
+        }
+    }
+}
+
+/* A new version found someone else's version current: nothing was published (Save on top, Save as a copy, Open theirs). */
+class SaveStale(val currentVersionId: String?) : Exception("Someone else saved a newer version of this file, so this one wasn’t saved.")
 
 /*
  * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the server deletes it in the

@@ -118,6 +118,12 @@ function harness(
         send?: SendHandler;
         journal?: Journal;
         conflict?: boolean;
+        /*
+         * The replaced file's current version as the server holds it now: a begin naming
+         * another is refused `stale`, and a completion that finds it moved since begin is
+         * `conflicted`, naming it, as packages/db does.
+         */
+        serverVersion?: () => string | null;
         stash?: ReturnType<typeof fakeStash>;
         random?: () => number;
         offline?: () => boolean;
@@ -305,7 +311,12 @@ function harness(
     const server = {
         uploads: new Map<
             string,
-            { parts: Map<number, string>; status: string; expiresAt: string }
+            {
+                parts: Map<number, string>;
+                status: string;
+                expiresAt: string;
+                expectedVersionId?: string | null;
+            }
         >(),
         aborted: [] as string[],
         completed: [] as { id: string; parts: number[] }[],
@@ -326,9 +337,21 @@ function harness(
         },
         beginUpload: async (_ws: string, input: Parameters<DriveApi['beginUpload']>[1]) => {
             server.begins.push(input);
+            const expected = input.node.existing ? input.node.expectedVersionId : undefined;
+            if (
+                options.serverVersion &&
+                expected !== undefined &&
+                expected !== options.serverVersion()
+            )
+                throw new DriveApiError('This item changed since you last saw it.', 'stale', 409);
             const id = `up-${++nextUpload}`;
             const expiresAt = new Date(Date.now() + 3600_000).toISOString();
-            server.uploads.set(id, { parts: new Map(), status: 'open', expiresAt });
+            server.uploads.set(id, {
+                parts: new Map(),
+                status: 'open',
+                expiresAt,
+                expectedVersionId: expected,
+            });
             return {
                 upload: {
                     id,
@@ -369,6 +392,20 @@ function harness(
             };
         },
         completeUpload: async (_ws: string, id: string, parts: { partNumber: number }[]) => {
+            const expected = server.uploads.get(id)?.expectedVersionId;
+            if (
+                options.serverVersion &&
+                expected !== undefined &&
+                expected !== options.serverVersion()
+            ) {
+                server.uploads.get(id)!.status = 'conflicted';
+                throw new DriveApiError(
+                    'This file changed while it was uploading.',
+                    'conflict',
+                    409,
+                    { conflicted: true, currentVersionId: options.serverVersion() },
+                );
+            }
             if (options.conflict) {
                 server.uploads.get(id)!.status = 'conflicted';
                 throw new DriveApiError(
@@ -2404,5 +2441,163 @@ describe('in-memory bytes and the person’s own actions', () => {
         // Nothing more happens to the removed copy: no lost event, no server abort.
         expect(events.slice(before)).toEqual([]);
         expect(h.server.aborted).toEqual([]);
+    });
+});
+
+/*
+ * A produced result (the save path, ./save-runs.ts): a tool's or an editor's
+ * bytes from memory. A new version that loses a race to someone else's must
+ * end `stale`, naming the version that won, with nothing published beside it
+ * and its reservation released; it must never be journaled, so it never
+ * resumes after a reload.
+ */
+describe('produced results', () => {
+    const memory = (name: string, size = 1024): MemoryFile => ({
+        kind: 'memory',
+        name,
+        size,
+        type: 'text/plain',
+        lastModified: 1_000,
+        parts: [new Uint8Array(size).fill(7)],
+    });
+    const fileAt = (version: string) => ({
+        ...node('doc'),
+        kind: 'file' as const,
+        name: 'doc.txt',
+        currentVersion: { id: version } as DriveNode['currentVersion'],
+    });
+    /* The file as the server lists it now, for the engine's look before an attach. */
+    const listedAt = (version: () => string) => ({
+        openNodes: async () => ({ parent: node('root', null), replaces: fileAt(version()) }),
+    });
+
+    test('a version race at completion is stale, naming the winner: no conflict copy, the upload aborted', async () => {
+        let current = 'v1';
+        const h = harness({
+            serverVersion: () => current,
+            ...listedAt(() => current),
+            // Someone else saves once this upload has begun, while its bytes are on their way.
+            encryptHold: () => void (current = 'v-theirs'),
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        const item = h.item(id!);
+        expect(item.status).toBe('failed');
+        expect(item.errorCode).toBe('stale');
+        expect(item.stale).toEqual({ currentVersionId: 'v-theirs' });
+        expect(h.server.attached).toEqual([]);
+        expect(h.createdMetadata).toEqual([]);
+        expect(h.published).toEqual([]);
+        expect(h.server.begins).toHaveLength(1);
+        expect(h.server.aborted).toEqual(['up-1']);
+        // Nothing to retry with: a retry must not upload it beside theirs.
+        await h.manager.retry(id!);
+        await settle(5_000);
+        expect(h.server.begins).toHaveLength(1);
+        expect(h.server.attached).toEqual([]);
+    });
+
+    test('the same race, uploaded as a dropped file is, still becomes a conflict copy', async () => {
+        let current = 'v1';
+        const h = harness({
+            serverVersion: () => current,
+            ...listedAt(() => current),
+            encryptHold: () => void (current = 'v-theirs'),
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: fakeFile(CHUNK, 'doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).name).toBe('doc (conflict copy).txt');
+    });
+
+    test('the work started from an older version than the file as held: stale before anything is sealed or begun', async () => {
+        const h = harness({ serverVersion: () => 'v2', ...listedAt(() => 'v2') });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v2'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(2_000);
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v2' });
+        expect(h.server.begins).toEqual([]);
+        expect(h.calls).not.toContain('driveUploadPrepare');
+    });
+
+    test('begin names the version the work started from, and the server refusing it is stale with the version listed now', async () => {
+        // The device's listing is behind: it still shows v1, the version the work started from.
+        const h = harness({ serverVersion: () => 'v3', ...listedAt(() => 'v3') });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(2_000);
+        expect(h.server.begins[0]!.node).toMatchObject({ existing: true, expectedVersionId: 'v1' });
+        expect(h.item(id!).errorCode).toBe('stale');
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v3' });
+        expect(h.server.uploads.size).toBe(0);
+    });
+
+    test('a completion refused only because the file was re-keyed (its version unchanged) attaches to the same file', async () => {
+        const h = harness({ conflict: true, ...listedAt(() => 'v-winner') });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v-winner'),
+                produced: { startedFrom: 'v-winner' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).stale ?? null).toBeNull();
+        expect((h.server.attached[0]!.input as { mode: string }).mode).toBe('same-node');
+    });
+
+    test('a produced new file a key change moved under keeps its own name when attached', async () => {
+        const h = harness({ conflict: true });
+        const [id] = h.manager.enqueue([
+            { file: memory('Extracted.txt'), parent: node('root', null), produced: {} },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).status).toBe('done');
+        expect(h.item(id!).name).toBe('Extracted.txt');
+        expect((h.server.attached[0]!.input as { mode: string }).mode).toBe('sibling');
+    });
+
+    test('is never journaled, queued or begun, and tells its run the ids begin made', async () => {
+        const begun: { uploadId: string; nodeId: string }[] = [];
+        const h = harness({ encryptHold: () => new Promise(() => {}) });
+        h.manager.enqueue([
+            {
+                file: memory('out.txt'),
+                parent: node('root', null),
+                produced: { onBegun: ({ uploadId, nodeId }) => begun.push({ uploadId, nodeId }) },
+            },
+        ]);
+        await settle(1_000);
+        expect(h.server.begins).toHaveLength(1);
+        expect(h.journal.queued.size).toBe(0);
+        expect(h.journal.entries.size).toBe(0);
+        expect(begun).toEqual([{ uploadId: 'up-1', nodeId: h.server.begins[0]!.node.id }]);
     });
 });

@@ -97,6 +97,12 @@ export type UploadItem = {
     origin: UploadOrigin;
     /* A move between the person's workspaces: the file this is a copy of (UploadMove). */
     move?: UploadMove | null;
+    /*
+     * A produced new version that found someone else's version current (errorCode `stale`):
+     * nothing was published, and this is the version that is current now, for the save's
+     * choices (Save on top, Save as a copy, Open theirs).
+     */
+    stale?: { currentVersionId: string | null } | null;
 };
 
 export type TransfersState = {
@@ -154,7 +160,35 @@ export type EnqueueInput = {
      * replaced file's, anything else has none.
      */
     attributes?: NodeAttributes;
+    /*
+     * A result a tool or an editor produced (the save path, ./save-runs.ts), uploaded from
+     * memory. It is never journaled, so it never resumes: an interrupted one is lost and its
+     * run cleans up. As a new version it never becomes a conflict copy: a version race fails it
+     * `stale`. As a new file, a key change that moved under it is attached under its own name.
+     */
+    produced?: Produced;
 };
+
+export type Produced = {
+    /*
+     * For a new version (with `replaces`): the version the work started from, checked against
+     * the file as held before begin, and by the server at begin and at completion.
+     */
+    startedFrom?: string | null;
+    /*
+     * The server's ids once begin lands, before any byte is sent: the run's journal row keeps
+     * them, so a closed tab's next open can abort the upload and delete a node it published.
+     */
+    onBegun?: (ids: { workspaceId: string; uploadId: string; nodeId: string }) => void;
+};
+
+/* A produced new version whose file moved on to `currentVersionId` (UploadItem.stale). */
+export class StaleVersionError extends Error {
+    constructor(readonly currentVersionId: string | null) {
+        super('Someone else saved a newer version of this file, so this one wasn’t saved.');
+        this.name = 'StaleVersionError';
+    }
+}
 
 /* Where the app keeps the bytes of uploads that have no file on disk, by name. */
 /* The stash's bytes are gone or won't open (not merely unreachable for now): the upload is lost. */
@@ -317,6 +351,8 @@ type Internal = {
     keyChangeSince: number | null;
     /* In a pause between looks: the only part of a key-change wait that holds no slot. */
     pausing: boolean;
+    /* A produced result (EnqueueInput.produced): never journaled, a version race is `stale`. */
+    produced: Produced | null;
 };
 
 /*
@@ -610,6 +646,10 @@ export function createTransferManager(options: TransferManagerOptions) {
         return () => listeners.delete(listener);
     }
 
+    /* The journal an upload writes to: none for a produced result, which never resumes. */
+    function journalOf(u: Internal) {
+        return u.produced ? undefined : journal;
+    }
     function set(u: Internal, patch: Partial<UploadItem>) {
         Object.assign(u.item, patch);
         emit();
@@ -694,6 +734,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         part: number,
         patch: Partial<JournalEntry['parts'][string]>,
     ) {
+        const journal = journalOf(u);
         if (!journal || !u.entry) return;
         await journal.update(u.entry.id, (entry) => ({
             ...entry,
@@ -730,6 +771,9 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     /* Drops the begun row only: the upload is starting over and stays queued. */
     async function journalRemove(u: Internal) {
+        // A produced result keeps its row in memory only, and drops it as a journaled one would.
+        const journal = journalOf(u);
+        if (u.produced) u.entry = null;
         if (!journal || !u.entry) return;
         await journal.remove(u.entry.id).catch(() => {});
         u.entry = null;
@@ -793,8 +837,10 @@ export function createTransferManager(options: TransferManagerOptions) {
     async function journalForget(u: Internal) {
         await releaseSource(u);
         await journalRemove(u);
-        if (journal && u.queued) {
-            await journal.removeQueued(u.queued.id).catch(() => {});
+        if (u.queued) {
+            await journalOf(u)
+                ?.removeQueued(u.queued.id)
+                .catch(() => {});
             u.queued = null;
         }
         if (u.stash && options.stash) {
@@ -979,6 +1025,61 @@ export function createTransferManager(options: TransferManagerOptions) {
         if (options.refuseWrite?.(parent)) return waits(parent);
         return replaces ? waits(replaces) : false;
     }
+    /* The version a new version must find current: the one its work started from, for a produced one. */
+    function expectedOf(u: Internal) {
+        if (u.produced && u.produced.startedFrom !== undefined) return u.produced.startedFrom;
+        return u.replaces?.currentVersion?.id ?? null;
+    }
+    /*
+     * A produced version the server refused `stale` at begin, or found moved at completion
+     * (`currentVersionId`, when the server named it): stale when the file's current version is
+     * not the one its work started from. A `stale` that is only the file's key having moved
+     * (its version still the same) is the error as it was.
+     */
+    async function staleOrSame(
+        u: Internal,
+        error: unknown,
+        named?: { currentVersionId?: unknown },
+    ) {
+        if (named && 'currentVersionId' in named) {
+            const current = (named.currentVersionId as string | null) ?? null;
+            return current === expectedOf(u) ? error : new StaleVersionError(current);
+        }
+        const lookup = options.openNodes;
+        const row = u.entry ?? u.queued;
+        if (!lookup || !row) return error;
+        const fresh = await lookup(row).catch(() => null);
+        if (!fresh?.replaces) return error;
+        const current = fresh.replaces.currentVersion?.id ?? null;
+        return current === expectedOf(u) ? error : new StaleVersionError(current);
+    }
+    /*
+     * Ends a produced version that found someone else's current: its reservation released, the
+     * worker's keys and bytes dropped, no conflict copy made. It cannot be retried; the save's
+     * choices start from `stale`.
+     */
+    async function staleOut(u: Internal, error: StaleVersionError) {
+        u.generation++;
+        clearBackoff(u);
+        u.inFlight.clear();
+        if (u.uploadId) await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
+        await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
+        await journalForget(u);
+        u.uploadId = null;
+        u.prepared = false;
+        set(u, {
+            status: 'failed',
+            error: error.message,
+            errorCode: 'stale',
+            stale: { currentVersionId: error.currentVersionId },
+            needsFile: true,
+            hasHandle: false,
+            finishedAt: now(),
+            waitingFor: null,
+        });
+        options.onEvent?.({ type: 'failed', item: u.item });
+        void schedule();
+    }
     function refusalOf(parent: DriveNode, replaces: DriveNode | undefined) {
         return (
             options.refuseWrite?.(parent) ??
@@ -1039,10 +1140,11 @@ export function createTransferManager(options: TransferManagerOptions) {
                     u.lookAgain &&
                     u.replaces &&
                     fresh.replaces &&
-                    (fresh.replaces.currentVersion?.id ?? null) !==
-                        (u.replaces.currentVersion?.id ?? null)
+                    (fresh.replaces.currentVersion?.id ?? null) !== expectedOf(u)
                 )
-                    throw new Error(VERSION_MOVED);
+                    throw u.produced
+                        ? new StaleVersionError(fresh.replaces.currentVersion?.id ?? null)
+                        : new Error(VERSION_MOVED);
                 parent = u.parent = fresh.parent;
                 if (u.replaces && fresh.replaces) u.replaces = fresh.replaces;
                 u.lookAgain = false;
@@ -1069,11 +1171,16 @@ export function createTransferManager(options: TransferManagerOptions) {
             let prepared: CryptoResults['driveUploadPrepare'];
             try {
                 if (u.replaces) {
+                    // A produced version whose file already moved on, as this device holds it, is
+                    // stale before anything is sealed; the server checks again at begin.
+                    const current = u.replaces.currentVersion?.id ?? null;
+                    if (u.produced && current !== expectedOf(u))
+                        throw new StaleVersionError(current);
                     node = {
                         existing: true,
                         id: u.replaces.id,
                         keyEpoch: u.replaces.keyEpoch,
-                        expectedVersionId: u.replaces.currentVersion?.id ?? null,
+                        expectedVersionId: expectedOf(u),
                     };
                     u.keyEpoch = u.replaces.keyEpoch;
                 } else {
@@ -1170,6 +1277,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                 beginning.set(u, { workspaceId, answer });
                 begun = await request;
             } catch (error) {
+                // A produced version the server found stale: named by the version current now.
+                if (u.produced && u.replaces && isStale(error) && u.keyChangePauses === 0)
+                    throw await staleOrSame(u, error);
                 // Without a way to look the folder up again there is nothing to seal afresh from.
                 if (!options.openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;
@@ -1192,6 +1302,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         }
         keyChangeOver(u);
         u.uploadId = begun.upload.id;
+        u.produced?.onBegun?.({ workspaceId, uploadId: begun.upload.id, nodeId: u.nodeId });
         rememberUrls(u, begun.parts, begun.urlExpiresAt);
         u.entry = {
             id: u.item.id,
@@ -1207,7 +1318,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             keyEpoch: u.keyEpoch,
             name: u.item.name,
             newNode: !u.replaces,
-            expectedVersionId: u.replaces?.currentVersion?.id ?? null,
+            expectedVersionId: u.replaces ? expectedOf(u) : null,
             node: nodeEnvelopes,
             contentKeyEnvelope: prepared.contentKeyEnvelope,
             contentNonce: prepared.contentNonce,
@@ -1231,7 +1342,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             createdAt: now(),
             updatedAt: now(),
         };
-        await journal?.put(u.entry);
+        await journalOf(u)?.put(u.entry);
         // A pause during preparation holds here: everything a resume needs is in place, nothing is sent.
         if (u.item.status !== 'paused') set(u, { status: 'uploading' });
     }
@@ -1361,12 +1472,22 @@ export function createTransferManager(options: TransferManagerOptions) {
                 result = await api.completeUpload(workspaceOf(u), u.uploadId, parts);
             } catch (error) {
                 if (!isConflicted(error)) throw error;
+                // A produced version whose file moved on is stale, never attached as a copy.
+                if (u.produced && u.replaces) {
+                    const stale = await staleOrSame(
+                        u,
+                        error,
+                        (error as DriveApiError).data as { currentVersionId?: unknown },
+                    );
+                    if (stale instanceof StaleVersionError) throw stale;
+                }
                 result = await attach(u, generation);
             }
             if (u.generation !== generation) return;
             await published(u, result);
         } catch (error) {
             if (u.generation !== generation) return;
+            if (error instanceof StaleVersionError) return await staleOut(u, error);
             fail(u, error instanceof Error ? error.message : 'The upload could not be finished.');
         } finally {
             void schedule();
@@ -1383,6 +1504,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             await published(u, result);
         } catch (error) {
             if (u.generation !== generation) return;
+            if (error instanceof StaleVersionError) return await staleOut(u, error);
             if (isLockError(error)) return locked();
             fail(u, error instanceof Error ? error.message : 'The upload could not be finished.');
         } finally {
@@ -1407,7 +1529,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 keyChangeOver(u);
                 return result;
             } catch (error) {
-                if (u.generation !== generation) throw error;
+                if (u.generation !== generation || error instanceof StaleVersionError) throw error;
                 // A late `stale` after a pause is the walk reaching the folder or the file between
                 // the look and the attach, as for a begin; the worker refusing a key the change
                 // has not reached yet is the same wait.
@@ -1445,6 +1567,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             replaces !== undefined &&
             entry.expectedVersionId !== undefined &&
             (replaces.currentVersion?.id ?? null) === entry.expectedVersionId;
+        // Rewrapped for a re-keyed file only while the version the work started from is current.
+        if (u.produced && replaces !== undefined && !versionUnchanged)
+            throw new StaleVersionError(replaces.currentVersion?.id ?? null);
         if (versionUnchanged) {
             const { contentKeyEnvelope, versionSignature } = await rpc('driveUploadRewrap', {
                 workspaceId,
@@ -1463,11 +1588,18 @@ export function createTransferManager(options: TransferManagerOptions) {
             } catch (error) {
                 // The version moved between the listing and the attach: keep both.
                 if (!isConflicted(error)) throw error;
+                if (u.produced) {
+                    const data = (error as DriveApiError).data as { currentVersionId?: unknown };
+                    throw new StaleVersionError(
+                        typeof data.currentVersionId === 'string' ? data.currentVersionId : null,
+                    );
+                }
             }
         }
         const from = await takeEpoch(workspaceId);
         const { id: nodeId, seed: nodeIdSeed } = await newId('node', workspaceId);
-        const name = conflictCopyName(u.item.name);
+        // A produced new file was never published under its own node: it keeps the name it was given.
+        const name = u.produced ? u.item.name : conflictCopyName(u.item.name);
         const { nodes } = await holdFolder(rpc, workspaceId, parent, () =>
             rpc('driveCreateNodes', {
                 workspaceId,
@@ -1540,6 +1672,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                         // A run that was discarded or started over meanwhile answers for nothing.
                         if (u.generation !== generation || uploads.get(u.item.id) !== u) return;
                         if (u.item.status === 'cancelled') return;
+                        if (error instanceof StaleVersionError) return void staleOut(u, error);
                         if (isLockError(error)) return locked();
                         fail(
                             u,
@@ -1624,6 +1757,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             keyChangePauses: 0,
             keyChangeSince: null,
             pausing: false,
+            produced: null,
         };
     }
 
@@ -1701,7 +1835,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                 createdAt: now(),
                 updatedAt: now(),
             };
-            void journal?.putQueued(u.queued).catch(() => {});
+            u.produced = input.produced ?? null;
+            void journalOf(u)
+                ?.putQueued(u.queued)
+                .catch(() => {});
             uploads.set(id, u);
             order.push(id);
             ids.push(id);

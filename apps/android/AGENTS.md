@@ -1652,6 +1652,7 @@ Code: `data/SaveTargets.kt`, `ui/SaveToHushOS.kt` (iOS's SaveTargets). Test: `Sa
 - It keeps the settings key (stored once) and the settings document (compare-and-set) as the server does.
     - Why: the vault's sealed rollback marks need a settings key before anything opens.
 - `VaultAttributesTest` uses it for every re-save path.
+- The save path (`data/SaveRuns.kt`, docs/file-tools-design.md section 2): `SaveRunTest` holds a run's decisions against a stand-in drive (refused before anything is made, the core's room estimate, next free names, `stale` versions, clean-up by delete forever or Trash, the row a later launch cleans up from, the weakest-source signature read back); `SaveResultTest` uploads a result from memory to `FakeDrive` (no plaintext file anywhere, the bytes land) and loses a version race (`stale`, the upload aborted).
 - Anything thrown off the test's thread while a `FakeDrive` runs is rethrown by its `close` in the test's @After.
     - That covers a route, a hook a test set, an assertion in one, and any thread's uncaught exception.
     - So a handler assertion never passes silently.

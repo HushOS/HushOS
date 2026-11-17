@@ -126,28 +126,103 @@ export interface UploadJournal {
     listQueued(workspaceId?: string): Promise<QueuedEntry[]>;
     putQueued(entry: QueuedEntry): Promise<void>;
     removeQueued(id: string): Promise<void>;
-    /* Sign-out: every entry and every queued file gone, names and chunk digests with them. */
+    /* Sign-out: every entry and every queued file gone, names and chunk digests with them, and save runs' rows. */
     clear(): Promise<void>;
+}
+
+/*
+ * A save run's row (the save path, ./save-runs.ts): ids only, never a name or a
+ * byte. What a tool or an editor made in one run, so that a closed tab's next
+ * open can abort the run's open uploads and delete what it published. `nodeIds`
+ * are the run's new files and folders that would outlive it (not what sits
+ * inside a folder the run made, which goes with that folder); `uploadIds` its
+ * uploads the server may still hold open.
+ */
+export type RunRow = {
+    id: string;
+    workspaceId: string;
+    nodeIds: string[];
+    uploadIds: string[];
+    at: number;
+};
+
+export interface RunJournal {
+    list(): Promise<RunRow[]>;
+    put(row: RunRow): Promise<void>;
+    remove(id: string): Promise<void>;
 }
 
 interface Schema extends DBSchema {
     uploads: { key: string; value: JournalEntry; indexes: { workspace: string } };
     queued: { key: string; value: QueuedEntry; indexes: { workspace: string } };
+    runs: { key: string; value: RunRow };
+}
+
+/* The upload journal's database: one connection for both journals, every store made at once. */
+const connections = new Map<string, ReturnType<typeof cachedConnection<Schema>>>();
+function connection(name: string) {
+    let open = connections.get(name);
+    if (!open) {
+        open = cachedConnection<Schema>(name, 3, (db) => {
+            if (!db.objectStoreNames.contains('uploads'))
+                db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
+                    'workspace',
+                    'workspaceId',
+                );
+            if (!db.objectStoreNames.contains('queued'))
+                db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
+                    'workspace',
+                    'workspaceId',
+                );
+            if (!db.objectStoreNames.contains('runs'))
+                db.createObjectStore('runs', { keyPath: 'id' });
+        });
+        connections.set(name, open);
+    }
+    return open;
+}
+
+/* Save runs' rows, beside the upload journal: cleared with it at sign-out, deleted with its database. */
+export function createIndexedDbRunJournal(name = 'hushos-drive'): RunJournal {
+    const open = connection(name);
+    return {
+        async list() {
+            const db = await open();
+            return db.getAll('runs');
+        },
+        async put(row) {
+            const db = await open();
+            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+            await tx.store.put(row);
+            await tx.done;
+        },
+        async remove(id) {
+            const db = await open();
+            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+            await tx.store.delete(id);
+            await tx.done;
+        },
+    };
+}
+
+export function createMemoryRunJournal(): RunJournal & { rows: Map<string, RunRow> } {
+    const rows = new Map<string, RunRow>();
+    return {
+        rows,
+        async list() {
+            return [...rows.values()].map((row) => structuredClone(row));
+        },
+        async put(row) {
+            rows.set(row.id, structuredClone(row));
+        },
+        async remove(id) {
+            rows.delete(id);
+        },
+    };
 }
 
 export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
-    const open = cachedConnection<Schema>(name, 2, (db) => {
-        if (!db.objectStoreNames.contains('uploads'))
-            db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
-                'workspace',
-                'workspaceId',
-            );
-        if (!db.objectStoreNames.contains('queued'))
-            db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
-                'workspace',
-                'workspaceId',
-            );
-    });
+    const open = connection(name);
     return {
         async list(workspaceId) {
             const db = await open();
@@ -196,10 +271,13 @@ export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
         },
         async clear() {
             const db = await open();
-            const tx = db.transaction(['uploads', 'queued'], 'readwrite', { durability: 'strict' });
+            const tx = db.transaction(['uploads', 'queued', 'runs'], 'readwrite', {
+                durability: 'strict',
+            });
             await Promise.all([
                 tx.objectStore('uploads').clear(),
                 tx.objectStore('queued').clear(),
+                tx.objectStore('runs').clear(),
             ]);
             await tx.done;
         },
