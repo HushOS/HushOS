@@ -659,6 +659,13 @@ final class FakeDrive: @unchecked Sendable {
         return reply
     }
 
+    /* A request the server takes up after its answer was lost: routed now, with no test hook in the way. */
+    func answerLater(_ method: String, parts: [String], body: Data?) throws -> (Int, Any) {
+        var request = URLRequest(url: URL(string: "https://fake.test/" + parts.joined(separator: "/"))!)
+        request.httpMethod = method
+        return try routed(request, body: body)
+    }
+
     private func routed(_ request: URLRequest, body: Data?) throws -> (Int, Any) {
         lock.lock()
         defer { lock.unlock() }

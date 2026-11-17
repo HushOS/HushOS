@@ -625,6 +625,17 @@ class FakeDrive : AutoCloseable {
     /* The folders above `node`, its parent first. */
     private fun above(node: Node): List<Node> = generateSequence(node.parentId?.let { nodes[it] }) { it.parentId?.let { id -> nodes[id] } }.toList()
 
+    /* The folders a create-folders body names, made as the route makes them. */
+    private fun makeFolders(body: JSONObject): List<Node> = (0 until body.getJSONArray("folders").length()).map { i ->
+        val f = body.getJSONArray("folders").getJSONObject(i)
+        Node(f.getString("id"), body.getString("workspaceId"), f.getString("parentId"), "folder", f.getLong("keyEpoch"), f.getLong("parentKeyEpoch"),
+            f.getString("keyEnvelope"), 1L, f.getString("metadataEnvelope"), userId, f.getString("metadataSignature"), changeSeq = changeSeq++)
+            .also { nodes[it.id] = it }
+    }
+
+    /* A create-folders request the server takes up later (its answer already lost): the folders appear now. */
+    fun createFoldersLate(body: JSONObject) { synchronized(lock) { makeFolders(body) } }
+
     private fun route(method: String, path: String, query: Map<String, String>, body: JSONObject, linkToken: String?): Pair<Int, JSONObject>? {
         val segments = path.trim('/').split("/")
         extraRoutes?.invoke(method, segments, query, body)?.let { return it }
@@ -739,15 +750,7 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "versions", "*", "url") -> versionById(segments[2])?.let { ok(JSONObject().put("url", objectUrl(it.second.objectId))) }
             get && at("drive", "thumbnails") -> ok(JSONObject().put("urls", JSONArray()))
             post && at("drive", "workspaces", "*", "epochs") -> ok(JSONObject().put("from", nextEpoch++))
-            post && at("drive", "folders") -> {
-                val made = (0 until body.getJSONArray("folders").length()).map { i ->
-                    val f = body.getJSONArray("folders").getJSONObject(i)
-                    Node(f.getString("id"), body.getString("workspaceId"), f.getString("parentId"), "folder", f.getLong("keyEpoch"), f.getLong("parentKeyEpoch"),
-                        f.getString("keyEnvelope"), 1L, f.getString("metadataEnvelope"), userId, f.getString("metadataSignature"), changeSeq = changeSeq++)
-                        .also { nodes[it.id] = it }
-                }
-                ok(JSONObject().put("nodes", JSONArray(made.map { it.json() })))
-            }
+            post && at("drive", "folders") -> ok(JSONObject().put("nodes", JSONArray(makeFolders(body).map { it.json() })))
             post && at("drive", "nodes", "*", "metadata") -> {
                 val node = node(segments[2])
                 if (body.getLong("metadataVersion") != node.metadataVersion) return conflict("Changed since you read it")

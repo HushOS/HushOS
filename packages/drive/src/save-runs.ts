@@ -305,6 +305,20 @@ export function abortFateOf(error: unknown): AbortFate | 'finishing' {
     return 'unknown';
 }
 
+/*
+ * A creation the server refused with an answer (a 4xx carrying its reason): nothing was made.
+ * Anything else (no answer, a timeout, a 5xx, an abort, a failure after it was made) may have
+ * made it, and a clean-up that finds nothing yet must look again later.
+ */
+export function refusedOutright(error: unknown) {
+    return (
+        error instanceof DriveApiError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.code !== 'unavailable'
+    );
+}
+
 /* The whole request refused because the workspace is no longer this person's to write. */
 export function deniedWhole(error: unknown) {
     return error instanceof DriveApiError && (error.status === 403 || error.status === 404);
@@ -579,6 +593,12 @@ function createRun(
      * found nothing) is never left behind with its row gone.
      */
     const creating = new Set<Promise<unknown>>();
+    /*
+     * Folders whose creation was sent and failed without a definite refusal (no answer, a
+     * timeout, a 5xx): the server may still be making one, so a clean-up that finds nothing
+     * keeps the row and the next open looks again (refusedOutright).
+     */
+    const mayExist = new Set<string>();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
     /*
@@ -865,6 +885,7 @@ function createRun(
                 versionUploads,
                 completing,
                 published: mayBePublished,
+                mayExist,
                 current,
             });
             keptVersions += result.keptVersions;
@@ -932,6 +953,7 @@ function createRun(
                 // Waited for by a stop only once its creation is sent: a folder still waiting out a
                 // key change (untilWritable) never holds a cancel up.
                 let sent: Promise<unknown> | null = null;
+                let sentId: string | null = null;
                 const making = deps.makeFolder(into, given, signAs, async (id) => {
                     // Its id on disk before its creation is sent, or the creation is not sent.
                     if (stopping || !current()) throw new Error('This save run is stopping.');
@@ -943,9 +965,13 @@ function createRun(
                     await Promise.resolve();
                     if (stopping) throw new Error('This save run is stopping.');
                     mayBePublished.add(id);
+                    if (recordIt) sentId = id;
                     if (sent) creating.add(sent);
                 });
-                sent = making.catch(() => {});
+                // Settled before the stop it causes cleans up: an unanswered creation may exist.
+                sent = making.catch((error: unknown) => {
+                    if (sentId && !refusedOutright(error)) mayExist.add(sentId);
+                });
                 try {
                     made = await making;
                 } finally {
@@ -1083,6 +1109,8 @@ async function cleanUp(
         completing?: Set<string>;
         /* Nodes whose publication was sent; without it (an interrupted run), any may have been. */
         published?: Set<string>;
+        /* Folders whose creation got no definite answer: one not found yet may still be made. */
+        mayExist?: Set<string>;
         current?: () => boolean;
     } = {},
 ): Promise<{
@@ -1124,9 +1152,15 @@ async function cleanUp(
             else othersMayLand = true;
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
-    const discarded = await discard(deps, row.workspaceId, row.nodeIds).catch(
+    const notFound = new Set<string>();
+    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound).catch(
         (): Cleanup => 'left',
     );
+    // A folder whose creation went unanswered, not found now: the server may still make it.
+    if ([...(options.mayExist ?? [])].some((id) => notFound.has(id))) {
+        unsettled = true;
+        othersMayLand = true;
+    }
     let cleanup = discarded;
     if (unsettled) cleanup = 'left';
     else if (denied && (cleanup === 'nothing' || cleanup === 'no-access')) cleanup = 'no-access';
@@ -1176,10 +1210,13 @@ async function discard(
     deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge'>,
     workspaceId: string,
     nodeIds: string[],
+    /* Filled with the ids the server did not find. */
+    notFound?: Set<string>,
 ): Promise<Cleanup> {
     if (!nodeIds.length) return 'nothing';
     const trashed = await deps.trash(workspaceId, nodeIds);
     const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
+    for (const id of nodeIds) if (trashed.get(id) === 'gone') notFound?.add(id);
     if (fates.every((fate) => fate === 'denied')) return 'no-access';
     if (fates.some((fate) => fate === 'refused' || fate === 'denied')) return 'left';
     const inTrash = nodeIds.filter((id) => trashed.get(id) === 'done');

@@ -69,7 +69,8 @@ type Point =
 /*
  * `revoked`: from that wait on the person's access is gone (the share ended), and the server
  * answers 404 as it does for a workspace no longer theirs. `denied`: a whole request refused
- * 403. `slow`: a journal write takes its time and the process dies before it lands. `signout`,
+ * 403. `slow`: a journal write takes its time and the process dies before it lands. `late`: the
+ * answer is cut while the server is still at it, and it acts five seconds later. `signout`,
  * `lock`: the person signs out (the journal goes with the account) or the app locks.
  */
 type Fault =
@@ -83,6 +84,7 @@ type Fault =
     | 'revoked'
     | 'denied'
     | 'slow'
+    | 'late'
     | 'signout'
     | 'lock';
 
@@ -103,7 +105,7 @@ const FAULTS: Record<Point, Fault[]> = {
     hold: ['refused', 'cancel', 'death'],
     listing: ASKING,
     lookup: ASKING,
-    folder: SERVER,
+    folder: [...SERVER, 'late'],
     allocate: ASKING,
     begin: SERVER,
     part: ['network', 'refused', 'outage', 'cancel', 'death'],
@@ -513,6 +515,16 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
         if (fault === 'refused') return refusal();
         if (fault === 'denied')
             throw new DriveApiError('You no longer have access.', 'forbidden', 403);
+        if (fault === 'late') {
+            setTimeout(
+                () =>
+                    void Promise.resolve()
+                        .then(effect)
+                        .catch(() => {}),
+                5_000,
+            );
+            throw offline();
+        }
         const result = await effect();
         if (fault === 'lost' || fault === 'crash') {
             if (fault === 'crash') state.dead = true;

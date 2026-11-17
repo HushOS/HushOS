@@ -1358,6 +1358,49 @@ describe('a save run', () => {
         expect(w.runs.rows.size).toBe(0);
     });
 
+    test('a folder whose creation got no answer and is made after the clean-up looked keeps the row, and the next open removes it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The connection drops while the server is still making it: it commits later.
+            void new Promise<void>((resolve) => {
+                create = resolve;
+            }).then(() => w.server.live.add('slow'));
+            throw new TypeError('Failed to fetch');
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        create();
+        await tick();
+        expect(stopped.reason).toBe('failed');
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).not.toContain('Nothing was saved');
+        expect(stopped.message).toContain('You’ll be asked about it next time.');
+        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        expect(row?.nodeIds).toEqual(['slow']);
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('slow')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder whose creation the server refused with its reason was never made: the row goes', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('refused');
+            throw new DriveApiError('That name is taken.', 'conflict', 409);
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        expect(stopped.cleanup).toBe('nothing');
+        expect(stopped.message).toContain('Nothing was saved');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
     test('two late folders that both can’t be removed are both named by the row', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });

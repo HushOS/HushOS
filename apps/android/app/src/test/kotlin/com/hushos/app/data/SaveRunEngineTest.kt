@@ -35,10 +35,11 @@ class SaveRunEngineTest {
     enum class Point { ROOM, LISTING, ALLOCATE, FOLDER, BEGIN, PART, COMPLETE, ABORT, TRASH, PURGE, JOURNAL }
     /*
      * REVOKED: from that wait on, the share has ended and the server answers 404 for it. SIGNOUT: the person signs out (runs
-     * abandoned, the journal gone). SLOW: a journal write takes its time and the process dies before it lands. (The phone
+     * abandoned, the journal gone). SLOW: a journal write takes its time and the process dies before it lands. LATE: a folder's
+     * creation loses its answer while the server is still at it, and the folder appears a second later. (The phone
      * has no lock of its own to fail: the vault stays open until a sign-out.)
      */
-    enum class Fault { NETWORK, LOST, REFUSED, OUTAGE, CANCEL, CRASH, DEATH, REVOKED, SIGNOUT, SLOW }
+    enum class Fault { NETWORK, LOST, REFUSED, OUTAGE, CANCEL, CRASH, DEATH, REVOKED, SIGNOUT, SLOW, LATE }
     data class Plan(val point: Point, val k: Int, val fault: Fault)
 
     private val asking = listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH, Fault.SIGNOUT)
@@ -47,6 +48,7 @@ class SaveRunEngineTest {
         Point.ROOM, Point.LISTING, Point.ALLOCATE -> asking
         Point.PART -> listOf(Fault.NETWORK, Fault.REFUSED, Fault.OUTAGE, Fault.CANCEL, Fault.DEATH, Fault.SIGNOUT)
         Point.JOURNAL -> listOf(Fault.REFUSED, Fault.CRASH, Fault.CANCEL, Fault.DEATH, Fault.SLOW, Fault.SIGNOUT)
+        Point.FOLDER -> all + Fault.LATE
         else -> all
     }
 
@@ -79,6 +81,8 @@ class SaveRunEngineTest {
         @Volatile var signOut: (() -> Unit)? = null
         /* Runs as the first part arrives: another device acting while the bytes go up. */
         @Volatile var firstPart: (() -> Unit)? = null
+        /* Creations the server takes up late: judged only once they are in. */
+        val late: MutableList<java.util.concurrent.Future<*>> = java.util.Collections.synchronizedList(ArrayList())
         val reached: Map<Point, Int> get() = synchronized(counts) { HashMap(counts) }
         fun fault(point: Point): Fault? {
             if (!live) return null
@@ -139,6 +143,9 @@ class SaveRunEngineTest {
         // A request that never reaches the server is still read whole (a connection dropped before its body is read
         // leaves the client writing it until its timeout): the fake answers nothing in its place and drops the reply.
         val unreached = java.util.Collections.synchronizedSet(HashSet<Thread>())
+        // Folders whose creation lost its answer while the server was still making them.
+        val cut = java.util.Collections.synchronizedSet(HashSet<String>())
+        fun folderIds(body: JSONObject) = body.optJSONArray("folders")?.let { array -> (0 until array.length()).map { array.getJSONObject(it).getString("id") } }.orEmpty()
         server.beforeAnswer = hook@{ method, path ->
             if (path.trimStart('/').startsWith("store/")) return@hook
             val point = pointOf(method, path)
@@ -150,7 +157,7 @@ class SaveRunEngineTest {
         server.dropReply = { _, _ ->
             val fault = synchronized(pending) { pending.remove(Thread.currentThread()) }
             if (fault == Fault.CRASH) world.dead = true
-            unreached.remove(Thread.currentThread()) || fault == Fault.LOST || fault == Fault.CRASH
+            unreached.remove(Thread.currentThread()) || fault == Fault.LOST || fault == Fault.CRASH || fault == Fault.LATE
         }
         server.extraRoutes = { method, segments, _, body ->
             val fault = synchronized(pending) { pending[Thread.currentThread()] }
@@ -159,6 +166,18 @@ class SaveRunEngineTest {
                 // The share ended: every request about it is a 404, as the server answers one no longer theirs.
                 world.live && world.revoked -> 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
                 fault == Fault.REFUSED -> { synchronized(pending) { pending.remove(Thread.currentThread()) }; 403 to JSONObject().put("code", "forbidden").put("message", "Refused.") }
+                // The answer is cut (dropReply) while the server is still making the folder: it appears a second later. The
+                // client's own resend of that request (HttpURLConnection sends a POST again once when its connection drops)
+                // meets the same: the server is still at it.
+                method == "POST" && segments == listOf("drive", "folders") &&
+                    (fault == Fault.LATE || folderIds(body).any { it in cut }) -> {
+                    synchronized(pending) { pending[Thread.currentThread()] = Fault.LATE }
+                    if (fault == Fault.LATE) {
+                        cut += folderIds(body)
+                        world.late += pool.submit { Thread.sleep(1_000); server.createFoldersLate(body) }
+                    }
+                    200 to JSONObject()
+                }
                 // Trash and delete forever, per item, as the batch routes answer.
                 method == "POST" && segments.size == 4 && segments[3] == "trash-batch" -> {
                     val ids = body.getJSONArray("nodeIds")
@@ -273,6 +292,7 @@ class SaveRunEngineTest {
             Outcome.NotStarted
         }
         Thread.sleep(50)
+        for (late in s.world.late.toList()) late.get(10, java.util.concurrent.TimeUnit.SECONDS)
         found += judge(s, file, session, recorded, outcome)
         // A part the store took after its upload was aborted is the fake's own lookup failing (the real store answers 404).
         runCatching { s.server.close() }.exceptionOrNull()?.let { error ->

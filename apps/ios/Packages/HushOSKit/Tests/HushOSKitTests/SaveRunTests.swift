@@ -48,6 +48,15 @@ actor FakeWriter: SaveRunWriter {
     var roomHook: (@Sendable () async -> Void)?
     /* A folder created whose answer never comes back. */
     var loseAnswer = false
+    /* The answer is cut while the server is still making the folder: it lands in `later`, made once the test says. */
+    var createLater = false
+    var later: [String] = []
+    /* A creation the server refuses with its reason. */
+    var refuseCreation: DriveAPIError?
+    /* Parts each upload sends, a few milliseconds apart; one for an upload already aborted is refused, as the store does. */
+    var parts = 1
+    var stopStarted = false
+    var partsAfterStop = 0
     var namesFail = false
     var uploading: (@Sendable () async -> Void)?
     /* Uploads whose parts went out after their begin was taken. */
@@ -88,11 +97,22 @@ actor FakeWriter: SaveRunWriter {
         // Its id heard before the creation is sent, as the vault's createFolder does.
         try minted("made-\(name)")
         await making?()
+        if let refuseCreation { throw refuseCreation }
+        if createLater {
+            later.append("made-\(name)")
+            throw DriveAPIError.transport("The network connection was lost.")
+        }
         live.insert("made-\(name)")
         if loseAnswer { throw DriveAPIError.transport("The network connection was lost.") }
         return opened("made-\(name)", parent: folder.id)
     }
     func set(loseAnswer: Bool) { self.loseAnswer = loseAnswer }
+    func set(createLater: Bool) { self.createLater = createLater }
+    func set(refuseCreation: DriveAPIError) { self.refuseCreation = refuseCreation }
+    func set(parts: Int) { self.parts = parts }
+    func startStop() { stopStarted = true }
+    /* The folders whose creation lost its answer, made now. */
+    func makeLater() { live.formUnion(later) }
     func set(namesFail: Bool) { self.namesFail = namesFail }
     func set(uploading: @escaping @Sendable () async -> Void) { self.uploading = uploading }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
@@ -114,6 +134,11 @@ actor FakeWriter: SaveRunWriter {
             throw error
         }
         // Its parts on their way, the completion not yet sent.
+        for _ in 0 ..< parts {
+            guard open.contains("up-\(n)") else { throw DriveAPIError.notFound("There is no such upload.") }
+            if stopStarted { partsAfterStop += 1 }
+            if parts > 1 { try await Task.sleep(for: .milliseconds(10)) }
+        }
         partsSent += 1
         await uploading?()
         if !answers.isEmpty { try answers.removeFirst()(n) }
@@ -713,6 +738,131 @@ let own = SaveSources.ownWriting
         #expect(rows.list().isEmpty)
     }
 
+    /*
+     * A folder whose creation got no answer, made by the server after the clean-up looked: the row stays and says so,
+     * and the next open removes it. One the server refused with its reason was never made, and the row goes.
+     */
+    @Test func aFolderWhoseCreationGotNoAnswerKeepsItsRowUntilTheNextOpenFindsIt() async throws {
+        let writer = FakeWriter()
+        await writer.set(createLater: true)
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        var stopped: SaveRunStopped?
+        do { _ = try await run.folder("Out", sources: own) } catch let error as SaveRunStopped { stopped = error }
+        await writer.makeLater()
+        #expect(stopped?.cleanup == .left)
+        #expect(stopped?.message.contains("Nothing was saved") == false)
+        #expect(stopped?.message.contains("You’ll be asked about it next time.") == true)
+        let row = try #require(rows.list().first)
+        #expect(row.nodeIds == ["made-Out"])
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: rows) == .deleted)
+        #expect(await writer.purged == ["made-Out"])
+        #expect(rows.list().isEmpty)
+
+        let refused = FakeWriter()
+        await refused.set(refuseCreation: .server(409, "That name is taken."))
+        let other = journal()
+        let second = try await SaveRun.start(writer: refused, targets: [opened("f")], results: [], journal: other)
+        var said: SaveRunStopped?
+        do { _ = try await second.folder("Out", sources: own) } catch let error as SaveRunStopped { said = error }
+        #expect(said?.cleanup == .nothing)
+        #expect(said?.message.hasSuffix("Nothing was saved.") == true)
+        #expect(other.list().isEmpty)
+    }
+
+    /*
+     * The gap between a folder's id going on disk and its creation going out: once recordFolder (or sending) returns,
+     * the creation is already counted, so a stop that seals right then still waits for its answer before it looks.
+     */
+    @Test func aFolderRecordedBeforeTheStopSealedIsWaitedForThoughNotYetSent() async throws {
+        for recorded in [true, false] {
+            let state = RunState(row: SaveRunRow(id: "run", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "now"), journal: journal())
+            if recorded { try state.recordFolder("made") } else { try state.sending("inner") }
+            _ = state.seal()
+            let settled = Task { await state.creationsSettled() }
+            try await Task.sleep(for: .milliseconds(100))
+            let waitedEarly = Locked(false)
+            let early = Task { await settled.value; waitedEarly.value = true }
+            try await Task.sleep(for: .milliseconds(50))
+            #expect(!waitedEarly.value, "a stop looked before the creation it sealed against was answered")
+            state.creationEnded(recorded ? "made" : "inner", mayExist: false)
+            await early.value
+            #expect(waitedEarly.value)
+        }
+    }
+
+    /* A stop waiting for a folder's answer aborts the run's uploads first: none sends a part after the stop began. */
+    @Test func aStopWaitingForAFolderAbortsTheRunsUploadsFirst() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        let begun = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        await writer.set(parts: 200)
+        await writer.set(beginning: { await begun.open() })
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let folder = Task { try await run.folder("Out", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let saving = Task { try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        await begun.wait()
+        try await Task.sleep(for: .milliseconds(50))
+        await writer.startStop()
+        let cancel = Task { await run.cancel() }
+        // The stop waits for the folder; meanwhile the upload would go on sending parts.
+        try await Task.sleep(for: .milliseconds(300))
+        await gate.open()
+        _ = await cancel.value
+        _ = try? await folder.value
+        _ = try? await saving.value
+        // At most the one part already on its way when the stop began.
+        let after = await writer.partsAfterStop
+        #expect(after <= 1, "\(after) parts after the stop began")
+        #expect(rows.list().isEmpty)
+    }
+
+    /*
+     * With nobody signed in, a journal reads nothing and deletes nothing (the same account may sign back in); signed in
+     * again, its rows are there.
+     */
+    @Test func withNobodySignedInTheJournalReadsAndDeletesNothing() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let a = AccountOwner(userId: "a", origin: "https://drive.test")
+        let now = SignedInBox(a)
+        let journal = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { now.value })
+        try journal.put(SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        now.value = nil
+        #expect(journal.list().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        let nobody = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: nil, signedIn: { nil })
+        #expect(nobody.list().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        now.value = a
+        #expect(journal.list().map(\.id) == ["run-a"])
+    }
+
+    /*
+     * Two accounts' journals in one process (A's run still open when B signs in): A's journal neither writes over nor
+     * deletes B's rows, and its run is told its row couldn't be written.
+     */
+    @Test func aJournalWhoseAccountIsNoLongerSignedInNeverTouchesTheNextOnesRows() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let a = AccountOwner(userId: "a", origin: "https://drive.test")
+        let b = AccountOwner(userId: "b", origin: "https://drive.test")
+        let now = SignedInBox(a)
+        let journalA = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: a, signedIn: { now.value })
+        let rowA = SaveRunRow(id: "run-a", workspaceId: "ws-a", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try journalA.put(rowA)
+        now.value = b
+        let journalB = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: b, signedIn: { now.value })
+        let rowB = SaveRunRow(id: "run-b", workspaceId: "ws-b", nodeIds: ["node-b"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try journalB.put(rowB)
+        #expect(throws: SaveUnrecorded.self) { try journalA.put(rowA) }
+        #expect(!journalA.retire(rowA))
+        journalA.dropDone()
+        #expect(journalA.list().isEmpty)
+        #expect(journalB.list().map(\.id) == ["run-b"])
+    }
+
     /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */
     @Test func anOfflineCleanUpOfAFileNeverCompletedSaysNothingRemains() async throws {
         let writer = FakeWriter()
@@ -932,6 +1082,17 @@ let own = SaveSources.ownWriting
 }
 
 /* A gate a test opens when it chooses. */
+/* The signed-in account a journal asks about, changed by the test. */
+final class SignedInBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: AccountOwner?
+    init(_ value: AccountOwner?) { held = value }
+    var value: AccountOwner? {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
+}
+
 actor AsyncGate {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var opened = false

@@ -63,7 +63,7 @@ class SaveRunTest {
         val live = HashSet<String>()
         val trashed = HashSet<String>()
         val purged = HashSet<String>()
-        val open = HashSet<String>()
+        val open: MutableSet<String> = java.util.Collections.synchronizedSet(HashSet())
         val finished = HashSet<String>()
         val aborted = ArrayList<String>()
         val uploads = ArrayList<Triple<String, Opened?, Prior?>>()
@@ -86,6 +86,15 @@ class SaveRunTest {
         var roomHook: (() -> Unit)? = null
         /* A folder created whose answer never comes back. */
         var loseAnswer = false
+        /* The answer is cut while the server is still making the folder: it lands in `later`, made once the test says. */
+        var createLater = false
+        val later = ArrayList<String>()
+        /* A creation the server refuses with its reason. */
+        var refuseCreation: ApiError? = null
+        /* Parts each upload sends, a few milliseconds apart; one for an upload already aborted is refused, as the store does. */
+        var parts = 1
+        @Volatile var stopStarted = false
+        @Volatile var partsAfterStop = 0
         var namesFail = false
         var uploading: (() -> Unit)? = null
         /* Uploads whose parts went out after their begin was taken. */
@@ -105,6 +114,8 @@ class SaveRunTest {
             // Its id heard before the creation is sent, as the vault's createFolder does.
             minted("made-$name")
             making?.invoke()
+            refuseCreation?.let { throw it }
+            if (createLater) { later += "made-$name"; throw Unreachable() }
             live += "made-$name"
             if (loseAnswer) throw Unreachable()
             return Opened(NodeView("made-$name", "ws", folder.id, "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, null, null, null, emptyMap()))
@@ -127,6 +138,11 @@ class SaveRunTest {
                 throw error
             }
             // Its parts on their way, the completion not yet sent.
+            repeat(parts) {
+                if ("up-$n" !in open) throw ApiError(404, "There is no such upload.")
+                if (stopStarted) partsAfterStop++
+                if (parts > 1) Thread.sleep(10)
+            }
             partsSent++
             uploading?.invoke()
             answers.removeFirstOrNull()?.invoke(n)
@@ -652,6 +668,92 @@ class SaveRunTest {
         assertEquals(SaveRunStopped.Reason.FAILED, assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }.reason)
         assertEquals(setOf("made-Out"), writer.purged)
         assertTrue(rows.list().isEmpty())
+    }
+
+    /*
+     * A folder whose creation got no answer, made by the server after the clean-up looked: the row stays and says so, and the
+     * next launch removes it. One the server refused with its reason was never made, and the row goes.
+     */
+    @Test
+    fun aFolderWhoseCreationGotNoAnswerKeepsItsRowUntilTheNextLaunchFindsIt() {
+        val writer = FakeWriter().apply { createLater = true }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }
+        writer.live += writer.later
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertFalse(stopped.message.orEmpty().contains("Nothing was saved"))
+        assertTrue(stopped.message.orEmpty().contains("You’ll be asked about it next time."))
+        val row = rows.list().single()
+        assertEquals(listOf("made-Out"), row.nodeIds)
+        assertEquals(SaveCleanup.DELETED, SaveRuns.cleanUp(row, writer, rows))
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+
+        val refused = FakeWriter().apply { refuseCreation = ApiError(409, "That name is taken.", "conflict") }
+        val other = journal()
+        val second = SaveRun.start(refused, listOf(opened("f")), emptyList(), other)
+        val said = assertThrows(SaveRunStopped::class.java) { second.folder("Out", own) }
+        assertEquals(SaveCleanup.NOTHING, said.cleanup)
+        assertTrue(said.message.orEmpty().endsWith("Nothing was saved."))
+        assertTrue(other.list().isEmpty())
+    }
+
+    /*
+     * A cancel that comes between the folder's id going on disk and its creation going out: the creation is counted in the
+     * same turn, so the cancel waits for it and removes the folder, though its answer is lost.
+     */
+    @Test
+    fun aCancelInTheGapBeforeAFoldersCreationIsSentStillWaitsForIt() {
+        val writer = FakeWriter().apply { loseAnswer = true }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newFixedThreadPool(2)
+        var cancel: java.util.concurrent.Future<SaveRunStopped>? = null
+        run.registered = {
+            cancel = pool.submit<SaveRunStopped> { run.cancel() }
+            // Held open: long enough for a cancel that didn't see the creation to finish its clean-up.
+            runCatching { cancel!!.get(300, TimeUnit.MILLISECONDS) }
+        }
+        val folder = pool.submit<Opened> { run.folder("Out", own) }
+        runCatching { folder.get(5, TimeUnit.SECONDS) }
+        assertEquals(SaveCleanup.DELETED, cancel!!.get(5, TimeUnit.SECONDS).cleanup)
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+        pool.shutdown()
+    }
+
+    /* A stop waiting for a folder's answer aborts the run's uploads first: none sends a part after the stop began. */
+    @Test
+    fun aStopWaitingForAFolderAbortsTheRunsUploadsFirst() {
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply {
+            parts = 200
+            this.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
+        }
+        val begun = CountDownLatch(1)
+        writer.beginning = { begun.countDown() }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newFixedThreadPool(3)
+        val folder = pool.submit<Opened> { run.folder("Out", own) }
+        assertTrue(making.await(5, TimeUnit.SECONDS))
+        val file = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(begun.await(5, TimeUnit.SECONDS))
+        Thread.sleep(50)
+        writer.stopStarted = true
+        val cancel = pool.submit<SaveRunStopped> { run.cancel() }
+        // The stop waits for the folder; meanwhile the upload would go on sending parts.
+        Thread.sleep(300)
+        go.countDown()
+        cancel.get(5, TimeUnit.SECONDS)
+        runCatching { folder.get(5, TimeUnit.SECONDS) }
+        runCatching { file.get(5, TimeUnit.SECONDS) }
+        // At most the one part already on its way when the stop began.
+        assertTrue("${writer.partsAfterStop} parts after the stop began", writer.partsAfterStop <= 1)
+        assertTrue(rows.list().isEmpty())
+        pool.shutdown()
     }
 
     /* A listing that fails after a result landed stops the run and removes it: all or nothing. */

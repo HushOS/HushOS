@@ -19,10 +19,11 @@ import Testing
 enum EnginePoint: String, CaseIterable, Sendable { case listing, allocate, folder, begin, part, complete, abort, trash, purge, journal }
 /*
  * `revoked`: from that wait on, the share has ended and the server answers 404 for it. `signout`: the person signs out
- * (runs abandoned, the journal gone). `slow`: a journal write takes its time and the process dies before it lands. (The
+ * (runs abandoned, the journal gone). `slow`: a journal write takes its time and the process dies before it lands.
+ * `late`: a folder's creation loses its answer while the server is still at it, and the folder appears a second later. (The
  * phone has no lock of its own to fail: the vault stays open until a sign-out.)
  */
-enum EngineFault: String, CaseIterable, Sendable { case network, lost, refused, outage, cancel, crash, death, revoked, signout, slow }
+enum EngineFault: String, CaseIterable, Sendable { case network, lost, refused, outage, cancel, crash, death, revoked, signout, slow, late }
 
 extension EnginePoint {
     var faults: [EngineFault] {
@@ -30,6 +31,7 @@ extension EnginePoint {
         case .listing, .allocate: [.network, .refused, .outage, .cancel, .death, .signout]
         case .part: [.network, .refused, .outage, .cancel, .death, .signout]
         case .journal: [.refused, .crash, .cancel, .death, .slow, .signout]
+        case .folder: [.network, .lost, .refused, .outage, .cancel, .crash, .death, .revoked, .signout, .late]
         default: [.network, .lost, .refused, .outage, .cancel, .crash, .death, .revoked, .signout]
         }
     }
@@ -67,6 +69,10 @@ final class EngineWorld: @unchecked Sendable {
     var cancel: (@Sendable () -> Void)?
     var signOut: (@Sendable () -> Void)?
     var trashed = Set<String>()
+    /* Creations the server takes up late: judged only once they are in. */
+    private var lateHere: [Task<Void, Never>] = []
+    func later(_ work: Task<Void, Never>) { lock.withLock { lateHere.append(work) } }
+    var late: [Task<Void, Never>] { lock.withLock { lateHere } }
 
     init(plan: EnginePlan?) { self.plan = plan }
     var reached: [EnginePoint: Int] { lock.withLock { counts } }
@@ -128,6 +134,15 @@ extension OnFakeDrive {
                 // The share ended: every request about it is a 404, as the server answers one no longer theirs.
                 if world.lostAccess { return (404, ["code": "not-found", "message": "This item no longer exists."]) }
                 if fault == .refused { return (403, ["code": "forbidden", "message": "Refused."]) }
+                // The answer is cut while the server is still making the folder: it appears a second later.
+                if fault == .late {
+                    let sent = try? JSONSerialization.data(withJSONObject: body)
+                    world.later(Task {
+                        try? await Task.sleep(for: .seconds(1))
+                        _ = try? server.answerLater(method, parts: parts, body: sent)
+                    })
+                    throw network
+                }
                 if fault == .lost || fault == .crash { world.drop() }
                 if fault == .crash { world.die() }
                 // Trash and delete forever, per item, as the batch routes answer.
@@ -262,6 +277,7 @@ extension OnFakeDrive {
                 outcome = .notStarted
             }
             try await Task.sleep(for: .milliseconds(20))
+            for late in world.late { await late.value }
             found += await judge(s, url: url, session: session, outcome: outcome)
             return (world, found)
         }
@@ -350,7 +366,9 @@ extension OnFakeDrive {
                     for k in ks { for fault in point.faults { plans.append(EnginePlan(point: point, k: k, fault: fault)) } }
                 }
                 for index in plans.indices.reversed() { plans.swapAt(index, Int(random.next() % UInt64(index + 1))) }
-                for plan in plans.prefix(Self.sample) {
+                // A folder's creation answered late always plays, wherever the sample falls.
+                let late = plans.filter { $0.fault == .late }
+                for plan in late + plans.filter({ $0.fault != .late }).prefix(Self.sample) {
                     tried += 1
                     for violation in try await Self.play(scenario, plan: plan).1 {
                         failures.append("\(name): \(plan.point.rawValue) #\(plan.k) \(plan.fault.rawValue): \(violation)")

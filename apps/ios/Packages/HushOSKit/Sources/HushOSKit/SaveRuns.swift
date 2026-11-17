@@ -35,14 +35,22 @@ public struct SaveRekeyed: Error, Equatable {
     public init() {}
 }
 
-/* Whether a folder's creation was sent, set from its minted closure. */
+/* The id of a folder whose creation was sent, set from its minted closure. */
 final class SentFlag: @unchecked Sendable {
     private let lock = NSLock()
-    private var held = false
-    var value: Bool {
+    private var held: String?
+    var id: String? {
         get { lock.withLock { held } }
         set { lock.withLock { held = newValue } }
     }
+}
+
+/* Ids collected across an await (the clean-up's not-found ones). */
+final class SentIds: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = Set<String>()
+    var ids: Set<String> { lock.withLock { held } }
+    func add(_ more: [String]) { lock.withLock { held.formUnion(more) } }
 }
 
 /* The ids begin made, handed from the upload's closure to the run. */
@@ -108,6 +116,8 @@ public final class SaveRunJournal: @unchecked Sendable {
      * last account's runs to the next one's clean-up.
      */
     let owner: AccountOwner?
+    /* Who is signed in now, asked before every read and write. */
+    private let signedIn: @Sendable () -> AccountOwner?
     private let born: Int
     /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
     private let lock: NSLock
@@ -128,19 +138,23 @@ public final class SaveRunJournal: @unchecked Sendable {
         return support.appendingPathComponent("HushOS", isDirectory: true).appendingPathComponent("save-runs.json")
     }
 
-    public init(owner: AccountOwner? = AccountOwner.signedIn) {
+    public init(owner: AccountOwner? = AccountOwner.signedIn, signedIn: @escaping @Sendable () -> AccountOwner? = { AccountOwner.signedIn }) {
         url = Self.defaultURL
         epoch = Self.account
         self.owner = owner
+        self.signedIn = signedIn
         born = epoch.current
         lock = Self.lock(for: url)
         lock.withLock { Self.dropStaging(url) }
     }
 
-    init(url: URL, epoch: Epoch = SaveRunJournal.account, owner: AccountOwner? = nil) {
+    /* Tests: its own file, and by default an account of its own that stays signed in. */
+    init(url: URL, epoch: Epoch = SaveRunJournal.account, owner: AccountOwner? = AccountOwner(userId: "tests", origin: "https://drive.test"),
+         signedIn: (@Sendable () -> AccountOwner?)? = nil) {
         self.url = url
         self.epoch = epoch
         self.owner = owner
+        self.signedIn = signedIn ?? { owner }
         born = epoch.current
         lock = Self.lock(for: url)
         lock.withLock { Self.dropStaging(url) }
@@ -221,9 +235,24 @@ public final class SaveRunJournal: @unchecked Sendable {
         let rows: [SaveRunRow]
     }
 
-    /* This journal's account's rows; another account's (or an unowned file's) are dropped unread. */
+    /*
+     * Whether this journal's account is the one signed in now: with nobody signed in (the same account may sign back
+     * in), or another, it reads nothing, writes nothing and deletes nothing.
+     */
+    private var signedInHere: Bool {
+        guard let owner else { return false }
+        return signedIn() == owner
+    }
+
+    /* Not this account's journal now: a write is refused (a run stops rather than publish what no row names). */
+    struct NotSignedIn: Error {}
+
+    /*
+     * This journal's account's rows. Another account's (or an unowned file's) are dropped unread, and only when this
+     * account is the one signed in (AccountOwner's rule: nobody signed in waits, another account drops).
+     */
     private func read() -> [SaveRunRow] {
-        guard let data = try? Data(contentsOf: url) else { return [] }
+        guard signedInHere, let data = try? Data(contentsOf: url) else { return [] }
         guard let stored = try? JSONDecoder().decode(Stored.self, from: data), stored.owner == owner else {
             try? FileManager.default.removeItem(at: url)
             return []
@@ -236,6 +265,8 @@ public final class SaveRunJournal: @unchecked Sendable {
      * renamed over it, and the folder flushed so the rename holds (the web's strict durability).
      */
     private func write(_ rows: [SaveRunRow]) throws {
+        // Two accounts' journals in one process never write over each other's rows.
+        guard signedInHere else { throw NotSignedIn() }
         try fault?(rows)
         let folder = url.deletingLastPathComponent()
         if rows.isEmpty {
@@ -495,14 +526,18 @@ public enum SaveRuns {
      * can land after an abort that got no answer. `remains`: new files or folders that may still be there.
      */
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
-                      completing: Set<String>?, published: Set<String>?) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?) {
+                      completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
+                      mayExist: Set<String> = []) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?) {
         var unsettled = false
         var denied = false
         var kept = 0
         var uncertain = 0
         var othersMayLand = false
         for uploadId in row.uploadIds {
-            switch await writer.abortUpload(uploadId, in: row.workspaceId) {
+            let answered = asked[uploadId].flatMap { $0 == .unknown || $0 == .finishing ? nil : $0 }
+            let fate: DriveAPI.AbortFate
+            if let answered { fate = answered } else { fate = await writer.abortUpload(uploadId, in: row.workspaceId) }
+            switch fate {
             case .unknown, .finishing:
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
@@ -522,7 +557,13 @@ public enum SaveRuns {
             default: break
             }
         }
-        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer)
+        let notFound = SentIds()
+        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound)
+        // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
+        if !mayExist.isDisjoint(with: notFound.ids) {
+            unsettled = true
+            othersMayLand = true
+        }
         var cleanup = discarded
         if unsettled { cleanup = .left } else if denied, cleanup == .nothing || cleanup == .noAccess { cleanup = .noAccess }
         // Not removed: only what was sent to be published may still be there.
@@ -533,10 +574,11 @@ public enum SaveRuns {
         return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil)
     }
 
-    static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter) async -> SaveCleanup {
+    static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil) async -> SaveCleanup {
         guard !ids.isEmpty else { return .nothing }
         do {
             let trashed = try await writer.trash(ids, in: workspaceId)
+            notFound?.add(ids.filter { trashed[$0] == .gone })
             let fates = ids.map { trashed[$0] ?? .refused }
             if fates.allSatisfy({ $0 == .denied }) { return .noAccess }
             if fates.contains(where: { $0 == .refused || $0 == .denied }) { return .left }
@@ -547,6 +589,19 @@ public enum SaveRuns {
             return inTrash.allSatisfy { purged[$0] == .done || purged[$0] == .gone } ? .deleted : .left
         } catch {
             return .left
+        }
+    }
+
+    /*
+     * A request that got no answer (no network, a timeout, a 5xx, cancelled on its way): what it asked may still have
+     * been done. Only a refusal the server explained (a 4xx) settles that it wasn't.
+     */
+    static func noAnswer(_ error: Error) -> Bool {
+        switch error {
+        case DriveAPIError.server(let status, _): return status == 0 || status >= 500
+        case DriveAPIError.notAuthenticated, DriveAPIError.notFound, DriveAPIError.trashed, DriveAPIError.rotating, DriveAPIError.stale,
+             DriveAPIError.conflicted, DriveAPIError.forbidden: return false
+        default: return true
         }
     }
 
@@ -599,9 +654,21 @@ final class RunState: @unchecked Sendable {
         }
     }
 
-    /* Folder creations sent and not yet answered: a stop's clean-up waits for them. */
+    /*
+     * Folder creations sent and not yet answered: a stop's clean-up waits for them. Counted in the same locked turn
+     * that checks `sealed` and records the id (recordFolder, sending), so a stop either refuses the creation or sees it.
+     */
     private var creatingHere = 0
-    func creating(_ sent: Bool) { lock.withLock { creatingHere += sent ? 1 : -1 } }
+    /* Folders whose creation got no answer: one the clean-up doesn't find may still be made, so its row stays. */
+    private var mayExistHere = Set<String>()
+    /* A creation's answer came, or none will: one with none may still be made. */
+    func creationEnded(_ id: String, mayExist: Bool) {
+        lock.withLock {
+            if mayExist { mayExistHere.insert(id) }
+            creatingHere -= 1
+        }
+    }
+    var mayExist: Set<String> { lock.withLock { mayExistHere } }
     func creationsSettled() async {
         while lock.withLock({ creatingHere }) > 0 { try? await Task.sleep(for: .milliseconds(5)) }
     }
@@ -636,6 +703,7 @@ final class RunState: @unchecked Sendable {
             row.nodeIds.append(id)
             try journal.put(row)
             publishedHere.insert(id)
+            creatingHere += 1
         }
     }
 
@@ -644,6 +712,7 @@ final class RunState: @unchecked Sendable {
         try lock.withLock {
             guard !sealed else { throw CancellationError() }
             publishedHere.insert(id)
+            creatingHere += 1
         }
     }
 
@@ -857,14 +926,14 @@ public actor SaveRun {
                 do {
                     made = try await writer.makeFolder(in: parentNow, name: given, signing: signing) { id in
                         if recordIt { try state.recordFolder(id) } else if !state.journal.live { throw CancellationError() } else { try state.sending(id) }
-                        state.creating(true)
-                        sent.value = true
+                        sent.id = id
                     }
                 } catch {
-                    if sent.value { state.creating(false) }
+                    // No answer: the server may still be making it (noted before the count drops, so a waiting stop sees it).
+                    if let id = sent.id { state.creationEnded(id, mayExist: recordIt && SaveRuns.noAnswer(error)) }
                     throw error
                 }
-                if sent.value { state.creating(false) }
+                if let id = sent.id { state.creationEnded(id, mayExist: false) }
                 break
             } catch where KeyChangeWait.meets(error, waited: since != nil) {
                 if let stopping { throw await stopping.value }
@@ -1036,11 +1105,16 @@ public actor SaveRun {
         // answers finished, and it is counted there), never dropped from the row after `keptBefore` was taken.
         let row = state.seal()
         let task = Task<SaveRunStopped, Never> {
-            // Folder creations already sent settle first (a lost answer included): one the server creates after the
+            // The run's uploads are aborted first, so none keeps sending parts while the stop waits (one answered here
+            // isn't asked again in the clean-up; one that got no answer is).
+            var asked: [String: DriveAPI.AbortFate] = [:]
+            for uploadId in row.uploadIds { asked[uploadId] = await writer.abortUpload(uploadId, in: row.workspaceId) }
+            // Folder creations already sent settle next (a lost answer included): one the server creates after the
             // clean-up looked would otherwise be left with its row gone.
             await state.creationsSettled()
             let (cleanup, kept, uncertain, remains) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
-                                                                           completing: state.completingUploads, published: state.published)
+                                                                           completing: state.completingUploads, published: state.published,
+                                                                           asked: asked, mayExist: state.mayExist)
             let total = keptBefore + kept
             var done = SaveRunStopped(reason: reason, message: SaveRuns.words(reason, shared: shared, failure: failure, kept: total, uncertain: uncertain,
                                                                               remains: remains),
