@@ -72,6 +72,37 @@ class FamilySyncTest {
     }
 
     /*
+     * One family sync reads the settings once (the pin it accepts against, the pin it settles over, whether this person
+     * vouched for the family), and a pass asks route 25 once however many families it syncs. Fails if a step of the sync
+     * fetches the settings again, or a pass asks for the folders per family.
+     */
+    @Test
+    fun aSyncReadsTheSettingsOnceAndAPassAsksForTheFoldersOnce() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        var now = 1_000_000L
+        phone.vault.memory.clock = { now }
+        accepted(phone)
+        // The next sync, past the reuse window, with nothing to save.
+        now += Vault.SETTINGS_REUSE_MS
+        val reads = server.settingsGets.get()
+        accepted(phone)
+        assertEquals(1, server.settingsGets.get() - reads)
+        family.asked.clear()
+        kotlinx.coroutines.runBlocking {
+            phone.sync.inPass {
+                phone.sync.sync(family.summary)
+                phone.sync.sync(family.summary)
+            }
+        }
+        assertEquals(1, family.asked.count { it == "GET /drive/spaces" })
+        family.asked.clear()
+        phone.sync.sync(family.summary)
+        phone.sync.sync(family.summary)
+        assertEquals(2, family.asked.count { it == "GET /drive/spaces" })
+    }
+
+    /*
      * The record is at roster 3 and the settings pin only at 2 (an older save from another device). A fresh start of the
      * app, and the server serves roster 2 as the head again: the record's own pin is still a mark, so it is a rollback,
      * refused, and nothing opens. Fails if the record isn't held as a mark from version 1.
@@ -858,12 +889,16 @@ class FamilySyncTest {
         family.storePin(family.pin(listOf(family.r1, family.r2)))
         val older = server.settingsSnapshot()
         val phone = family.phone()
+        var now = 1_000_000L
+        phone.vault.memory.clock = { now }
         accepted(phone)
         assertEquals(1, phone.vault.listChildren(family.rootId).size)
         // Another device saves; this phone reads it, then the server serves the copy from before.
         server.editSettings { }
         phone.vault.loadSettings()
         older()
+        // The next sync, past the window one settings read serves (Vault.settingsToLook), reads them afresh.
+        now += Vault.SETTINGS_REUSE_MS
         val state = phone.sync.sync(family.summary)
         assertTrue("$state", state is FamilyState.Failed && state.words != FamilyWords.NO_ANSWER)
         assertThrows("the refused family's folder was listed again", Exception::class.java) { phone.vault.listChildren(family.rootId) }

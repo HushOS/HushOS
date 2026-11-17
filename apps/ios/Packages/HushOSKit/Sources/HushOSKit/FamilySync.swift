@@ -227,6 +227,32 @@ public actor FamilySync: FamilyJudge {
     private var chains: [String: AcceptedRosters] = [:]
     /* Families whose last refusal was a fork (lowercase): a later refusal keeps the core's fork. A commit clears it. */
     private var forked: Set<String> = []
+    /*
+     * One family pass (the app's refreshFamilies: route 2, then every family listed): route 25 answers for every family of
+     * the account at once, so a pass asks for it once rather than once per family. Outside a pass each sync asks.
+     */
+    private var pass: (id: UInt64, spaces: [SpaceList.Entry]?)?
+    private var passes: UInt64 = 0
+
+    /* Opens a pass; `endPass` with the id it returns closes it (a later pass is never closed by an earlier one's end). */
+    public func beginPass() -> UInt64 {
+        passes &+= 1
+        pass = (passes, nil)
+        return passes
+    }
+
+    public func endPass(_ id: UInt64) {
+        if pass?.id == id { pass = nil }
+    }
+
+    /* Route 25, as this pass has it (asked at most once in it). */
+    private func passSpaces() async throws -> [SpaceList.Entry] {
+        guard let current = pass else { return try await api.spaces() }
+        if let spaces = current.spaces { return spaces }
+        let spaces = try await api.spaces()
+        if pass?.id == current.id { pass?.spaces = spaces }
+        return spaces
+    }
     /* Families accepted in this process and not refused, forked or wiped since (lowercase): whose proven folders' copies may stay. */
     private var acceptedFamilies: Set<String> = []
 
@@ -849,7 +875,7 @@ public actor FamilySync: FamilyJudge {
     func accept(_ groupId: String) async throws -> Acceptance {
         var overtaken = 0
         while true {
-            let pinned = try await vault.familyPin(groupId)
+            let pinned = try await vault.familyPin(groupId, look: true)
             let row = records.read(userId: userId, groupId: groupId)
             if row == nil && pinned == nil { return .unchecked }
             let me = try await vault.ownIdentities()
@@ -948,7 +974,7 @@ public actor FamilySync: FamilyJudge {
      * folder that doesn't open says "Couldn't check this folder's keys", as the web's row.
      */
     func openAreas(_ groupId: String, chain: AcceptedRosters) async throws -> [OpenedFolder] {
-        let spaces = try await api.spaces()
+        let spaces = try await passSpaces()
         guard let space = spaces.first(where: { $0.space.kind == "group" && $0.space.groupId?.lowercased() == groupId.lowercased() }) else { return [] }
         // Only folders whose ids are derived under this family count as its own: never the personal drive, never another family's.
         let family = space.areas.filter { area in
@@ -1118,7 +1144,7 @@ public actor FamilySync: FamilyJudge {
         var pin = accepted
         var latest: AcceptedRosters?
         for _ in 0 ..< 4 {
-            let current = try await vault.familyPin(groupId)
+            let current = try await vault.familyPin(groupId, look: true)
             if case .merged(let merged) = try mergePin(groupId: groupId, current: current, next: pin, opened: opened) {
                 if !pinAhead(current: current, next: merged) { return .settled(latest) }
                 if try await vault.saveGroupPin(groupId, over: current, merged, checked: checked, now: Self.checkTime(now())) { return .settled(latest) }

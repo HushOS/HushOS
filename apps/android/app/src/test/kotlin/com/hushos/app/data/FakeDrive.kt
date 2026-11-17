@@ -458,6 +458,10 @@ class FakeDrive : AutoCloseable {
         openSettingsText(userId, key, SettingsEnvelope(doc.getInt("version").toUInt(), doc.getLong("settingsVersion").toULong(), doc.getString("nonce"), doc.getString("ciphertext")))
     }
 
+    /* Settings read (GET) and saves tried (PUT, refused ones too), answered so far. */
+    val settingsGets = java.util.concurrent.atomic.AtomicInteger()
+    val settingsPuts = java.util.concurrent.atomic.AtomicInteger()
+
     /* The settings document and its key, as the server keeps them: the key stored once, the document compare-and-set. */
     private var settingsKey: JSONObject? = null
     private var settingsDocument: JSONObject? = null
@@ -636,6 +640,7 @@ class FakeDrive : AutoCloseable {
                 if (failSettingsOnceWorkListed && workListed) return 500 to JSONObject().put("message", "Settings are unavailable")
                 if (failSettingsReads) return 503 to JSONObject().put("message", "Drive is temporarily unavailable. Please try again.")
                 settingsReadAnswer?.let { return it }
+                settingsGets.incrementAndGet()
                 val answer = settingsJson()
                 onNextSettingsGet?.let { hook -> onNextSettingsGet = null; hook() }
                 ok(answer)
@@ -646,6 +651,7 @@ class FakeDrive : AutoCloseable {
                 ok(JSONObject())
             }
             method == "PUT" && at("auth", "settings") -> {
+                settingsPuts.incrementAndGet()
                 if (body.getLong("expectedVersion") != settingsVersion) return conflict("Settings changed since you read them")
                 settingsVersion++
                 settingsDocument = JSONObject().put("version", body.getInt("version")).put("settingsVersion", settingsVersion)

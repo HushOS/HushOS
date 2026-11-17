@@ -238,6 +238,9 @@ extension DriveStore {
             }
         })
         // Each family checked in turn; a caller that stopped waiting starts no more checks (none of whose outcome is lost).
+        // One pass: route 25 asked once for every family listed.
+        let pass = (try? await inFamily(session) { await $0.beginPass() }) ?? nil
+        defer { if let pass { Task { _ = try? await self.inFamily(session) { await $0.endPass(pass) } } } }
         for summary in found?.listed ?? [] {
             guard current(session), !Task.isCancelled else { return }
             await refreshFamily(summary, session: session)

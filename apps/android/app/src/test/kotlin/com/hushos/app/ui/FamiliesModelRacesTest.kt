@@ -181,6 +181,10 @@ class FamiliesModelRacesTest {
         server.editSettings { }
         host.vault!!.loadSettings()
         older()
+        // The next check reads the settings afresh rather than the copy one read serves for a while (Vault.settingsToLook):
+        // as after any guard write here, which moves the generation, and with no check already under way answering for it.
+        host.vault!!.memory.generation.incrementAndGet()
+        while (model.syncing[family.groupId] == true) Thread.sleep(10)
         runBlocking { model.refreshFamily(family.summary) }
         val refused = model.states[family.groupId]
         assertTrue("$refused", refused is FamilyState.Failed && refused.words != FamilyWords.NO_ANSWER)

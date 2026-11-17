@@ -139,10 +139,12 @@ extension Vault {
     /*
      * The settings read afresh, their family pins handed to the ledger as marks (refused here, not
      * ignored, when they roll back), and this family's pin: nil when there is none, refused when
-     * one is there and doesn't read.
+     * one is there and doesn't read. Every family act reads them so before it sends anything.
+     * `look`: a sync's own acceptance and settle, which one read serves (`settingsToLook`); a save
+     * that lost to another device drops that copy, so the acceptance that follows reads afresh.
      */
-    func familyPin(_ groupId: String) async throws -> GroupPin? {
-        let settings = try await loadSettings()
+    func familyPin(_ groupId: String, look: Bool = false) async throws -> GroupPin? {
+        let settings = look ? try await settingsToLook() : try await loadSettings()
         try useForFamilies(settings)
         return try settings.groupPin(groupId)
     }

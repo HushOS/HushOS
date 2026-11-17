@@ -183,6 +183,31 @@ class FamilySync(
     internal val ledger get() = vault.areaLedger
     internal val userId get() = vault.familyUserId
 
+    /*
+     * One family pass (FamiliesModel.refreshFamilies: route 2, then every family listed): route 25 answers for every family
+     * of the account at once, so a pass asks for it once rather than once per family. Outside a pass each sync asks.
+     */
+    private class Pass {
+        @Volatile var spaces: Map<String, List<SpaceArea>>? = null
+    }
+    @Volatile private var pass: Pass? = null
+
+    suspend fun <T> inPass(block: suspend () -> T): T {
+        val opened = Pass()
+        pass = opened
+        try {
+            return block()
+        } finally {
+            if (pass === opened) pass = null
+        }
+    }
+
+    /* Route 25, as this pass has it (asked at most once in it). */
+    private fun spaces(): Map<String, List<SpaceArea>> {
+        val current = pass ?: return api.spaces()
+        return current.spaces ?: api.spaces().also { current.spaces = it }
+    }
+
 
     /* What kept calls the staging gate sent first came to (family, route, end), for whoever draws the families next to say. */
     internal val keptEnds = java.util.concurrent.ConcurrentLinkedQueue<Triple<String, com.hushos.core.ChainRoute?, CallEnd>>()
@@ -448,7 +473,7 @@ class FamilySync(
                     if (error is NotAuthenticated) throw error
                 }
                 // Read with the settings the pin was just saved into: Verified by the family only when this person vouched for it.
-                vouched[groupId] = runCatching { vault.loadSettings().familyChecked(groupId) }.getOrDefault(false)
+                vouched[groupId] = runCatching { vault.settingsToLook().first.familyChecked(groupId) }.getOrDefault(false)
                 FamilyState.Accepted(view(groupId, settled.latest ?: chain, areas.map { it.first }, reset))
             }
         }
@@ -552,7 +577,7 @@ class FamilySync(
     internal fun accept(groupId: String): Acceptance {
         var overtaken = 0
         while (true) {
-            val pinned = vault.familyPin(groupId)
+            val pinned = vault.familyPin(groupId, look = true)
             val row = records.read(userId, groupId)
             if (row == null && pinned == null) return Acceptance.Unchecked
             val me = vault.ownIdentities()
@@ -634,7 +659,7 @@ class FamilySync(
      * "Couldn't check this folder's keys", as the web's row.
      */
     internal fun openAreas(groupId: String, chain: AcceptedRosters): List<Pair<FamilyArea, OpenedArea?>> {
-        val listed = api.spaces()[groupId.lowercase()].orEmpty()
+        val listed = spaces()[groupId.lowercase()].orEmpty()
         // Only folders whose ids are derived under this family count as its own: never the personal drive, never another family's.
         val family = listed.filter { area -> area.idSeed != null && runCatching { checkId(IdKind.WORKSPACE, groupId, area.idSeed, area.workspaceId) }.isSuccess }
         val proven = family.map { it.workspaceId }.sorted()
@@ -732,7 +757,7 @@ class FamilySync(
         var pin = accepted
         var latest: AcceptedRosters? = null
         repeat(4) {
-            val current = vault.familyPin(groupId)
+            val current = vault.familyPin(groupId, look = true)
             val merge = mergePin(groupId, current, pin, opened)
             if (merge is PinMerge.Merged) {
                 if (!pinAhead(current, merge.pin)) return Settled.Done(latest)

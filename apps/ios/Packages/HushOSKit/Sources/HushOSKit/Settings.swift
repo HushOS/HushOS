@@ -475,6 +475,50 @@ extension Vault {
      * reproduces): it reads as empty settings, and the next save starts afresh at version 2.
      */
     func loadSettings() async throws -> Settings {
+        // Taken before the read: a guard write or a save while it runs leaves its copy unused (settingsToLook).
+        let generation = settingsCopyGeneration()
+        do {
+            let settings = try await readSettingsNow()
+            settingsCopy = SettingsCopy(generation: generation, at: settingsNow(), settings: settings)
+            return settings
+        } catch {
+            // Refused (a rollback) or unreadable: no reader goes on with an earlier copy, each reads, and is refused, itself.
+            settingsCopy = nil
+            throw error
+        }
+    }
+
+    /*
+     * One settings read serves the readers that only look, for a short while, as on the web (lib/contacts.ts): a family
+     * sync's steps (the pin it accepts against, the pin it settles over, whether this person vouched), whether a family
+     * was checked, the sharing ledger the upgrade pass reads and the contacts list. What is reused is only ever what a
+     * fresh read (loadSettings) checked against the marks, and Settings is a value, so each reader has its own. Never
+     * reused: a read in the guard's turn (trust, an act on a contact, a family's verdicts), a save's base
+     * (updateSettings), a rotation, a push's names: those call loadSettings and read now. The copy is dropped by any
+     * save from this vault and any guard write in this process, and after `settingsReuse`; a copy older than the marks
+     * every process of this phone raises (the Files app's, a share's) is read again. A save over a copy another device
+     * moved past is refused by the server's compare-and-set, and the retry reads afresh.
+     */
+    static let settingsReuse: Duration = .seconds(10)
+
+    func settingsToLook() async throws -> Settings {
+        if let held = settingsCopy, held.generation == settingsCopyGeneration(),
+           held.at.duration(to: settingsNow()) < Self.settingsReuse,
+           try await RollbackMarkStore.shared(session: session.token).read(userId: session.userId, keys: marksKeys(served: held.settings.keyEnvelope)).settings <= held.settings.version {
+            return held.settings
+        }
+        return try await loadSettings()
+    }
+
+    /* Tests: the clock the reuse window is measured on. */
+    func useSettingsClock(_ now: @escaping @Sendable () -> ContinuousClock.Instant) { settingsNow = now }
+
+    /* What moves on whenever a copy must not be reused: this vault's saves, and the guard's writes in this process. */
+    func settingsCopyGeneration() -> SettingsCopy.Generation {
+        SettingsCopy.Generation(writes: settingsWrites, guardWrites: contactGuard.generation.value)
+    }
+
+    private func readSettingsNow() async throws -> Settings {
         let marks = RollbackMarkStore.shared(session: session.token)
         let reply = try await Auth.settings(as: session)
         let document = reply.envelope?.version == 2
@@ -518,6 +562,8 @@ extension Vault {
     func updateSettings(_ change: (inout Settings) throws -> Void, beforeSend: ((_ base: UInt64) throws -> Void)? = nil) async throws -> Settings {
         var attempt = 0
         while true {
+            // Landed, refused or unknown: whatever copy there was is not reused after this attempt.
+            defer { settingsWrites &+= 1; settingsCopy = nil }
             var settings = try await loadSettings()
             try change(&settings)
             // Removals count against the room the document has: the oldest go first (docs/optional-verification.md 2.7).
@@ -555,5 +601,16 @@ extension Vault {
     }
 
     /* What this account shared, by its own record. */
-    public func sharingLedger() async throws -> SharingLedger { try await loadSettings().ledger }
+    public func sharingLedger() async throws -> SharingLedger { try await settingsToLook().ledger }
+}
+
+/* A settings read kept for the readers that only look (Vault.settingsToLook). */
+struct SettingsCopy {
+    struct Generation: Equatable, Sendable {
+        let writes: UInt64
+        let guardWrites: UInt64
+    }
+    let generation: Generation
+    let at: ContinuousClock.Instant
+    let settings: Settings
 }

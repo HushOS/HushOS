@@ -75,8 +75,13 @@ extension OnFakeDrive {
             // Another device saves; this phone reads it, then the server serves the copy from before.
             let older = server.settingsSnapshot()
             try server.editSettings { _ in }
+            let clock = OnFakeDrive.SettingsReuseTests.Clock()
+            await phone.vault.useSettingsClock { clock.instant }
+            // Each sync past the window one settings read serves (Vault.settingsToLook), so each reads them afresh.
+            clock.pass(Vault.settingsReuse)
             guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("the newer settings weren't read"); return }
             older()
+            clock.pass(Vault.settingsReuse)
             guard case .failed(let words) = await phone.sync.sync(family.summary), words != FamilyWords.noAnswer else {
                 Issue.record("a settings rollback wasn't refused")
                 return

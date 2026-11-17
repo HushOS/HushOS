@@ -232,9 +232,11 @@ extension Vault {
         let requested = ResealTo.requests
         // The keys this pass seals under, read first: a key replacement begun while it runs is left for its own pass.
         let keys = try await identityKeys()
-        let reply = try await api.performPublic(try api.requestPublic("/shares/mine"), as: SharedByMeResponse.self)
+        // The sharing listing's request when one is on its way (both ask as Drive opens): this pass re-seals only what
+        // was there already, and a share it misses is found on the next.
+        let reply = try await sharedByMeAnswer(join: true)
         if reply.shares.isEmpty && requested.isEmpty { ResealPending.clear(for: keys.signingPublicKey); return outcome }
-        let settings = try await loadSettings()
+        let settings = try await settingsToLook()
         let ledger = settings.ledger
         let pending = ResealPending.isSet(for: keys.signingPublicKey)
         var looked: [String: Contact] = [:]

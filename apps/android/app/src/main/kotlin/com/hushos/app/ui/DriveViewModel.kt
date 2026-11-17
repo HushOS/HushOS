@@ -1871,6 +1871,20 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      */
     suspend fun refreshTrust() {
         val vault = vault ?: return
+        // A load already under way for the same vault, started since the last guard write or settings save, answers this
+        // ask too (the app's start asks from two places at once). One started before such a write is not joined.
+        val generation = vault.memory.generation.get()
+        trustRun?.let { (run, owner, at) ->
+            if (run.isActive && owner === vault && at == generation) return run.join()
+        }
+        val run = viewModelScope.launch { loadTrust(vault) }
+        trustRun = Triple(run, vault, generation)
+        run.join()
+    }
+
+    private var trustRun: Triple<kotlinx.coroutines.Job, com.hushos.app.data.Vault, Long>? = null
+
+    private suspend fun loadTrust(vault: com.hushos.app.data.Vault) {
         val load = trustLoads.begin()
         val result = withContext(Dispatchers.IO) { runCatching { vault.trust() } }
         trustLoads.land(load) {
