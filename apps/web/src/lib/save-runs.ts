@@ -1,3 +1,4 @@
+import { DriveApiError } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import {
     createIndexedDbRunJournal,
@@ -135,6 +136,24 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                     staleTime: 0,
                 })
             ).children.find((child) => child.id === id) ?? null,
+        // How many items a folder holds now, every page counted; null when it isn't there. Only looks.
+        lookFolder: async (workspaceId, id) => {
+            let items = 0;
+            let after: string | undefined;
+            try {
+                do {
+                    const page = await driveApi.children(workspaceId, id, after);
+                    items += page.children.length;
+                    after = page.nextCursor ?? undefined;
+                } while (after);
+            } catch (error) {
+                if (error instanceof DriveApiError && error.status === 404) return null;
+                // In the Trash: there, and the person decides what goes.
+                if (error instanceof DriveApiError && error.code === 'trashed') return 0;
+                throw error;
+            }
+            return items;
+        },
         // An upload still finishing is asked about again for about ten seconds (askAbort).
         abortUpload: (workspaceId, uploadId) =>
             askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),

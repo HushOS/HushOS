@@ -107,6 +107,8 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
      * still be made: later opens apply it quietly, never asking again.
      */
     public var chosen: String?
+    /* How many items the folders it names held when a later look found them: the row is offered again with it. */
+    public var holds: Int?
 }
 
 /*
@@ -377,6 +379,11 @@ public protocol SaveRunWriter: Sendable {
                       onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened
     /* `file` as the server lists its folder now (its keys after a key change), or nil when it is no longer there. */
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened?
+    /*
+     * How many items the folder `id` holds now, or nil when it isn't there; throws when there was no answer. Only looks:
+     * an answered "delete" waiting for a folder never deletes one found.
+     */
+    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int?
     /* `id` as the server lists it in `folder` now, or nil: a creation answered 409 for its own id. */
     func listed(_ id: String, in folder: Opened) async throws -> Opened?
     /* `folder` and the chain above it as the server holds them now (a family's checked again first), to seal afresh under. */
@@ -535,24 +542,72 @@ public enum SaveRuns {
         // A finished run whose row couldn't be removed is never offered, and goes now.
         journal.dropDone()
         var offered: [SaveRunRow] = []
+        var quiet: [SaveRunRow] = []
         for row in journal.list() where row.launch != launch && row.done != true {
-            if row.nodeIds.isEmpty {
-                var left: [String] = []
-                for uploadId in row.uploadIds {
-                    if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
-                }
-                if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
-                    var next = row
-                    next.uploadIds = left
-                    try? journal.put(next)
-                }
-            } else if row.chosen == "delete" {
-                _ = await cleanUp(row, writer: writer, journal: journal, now: now)
+            if row.nodeIds.isEmpty, row.uploadIds.isEmpty {
+                journal.retire(row)
+            } else if row.nodeIds.isEmpty || row.chosen == "delete" {
+                quiet.append(row)
             } else {
                 offered.append(row)
             }
         }
+        // In the background: the rows to offer come back now, never after the network.
+        if !quiet.isEmpty {
+            let before = quietWork.task
+            quietWork.task = Task.detached {
+                await before?.value
+                for row in quiet { await settleQuietly(row, writer: writer, journal: journal, now: now) }
+            }
+        }
         return offered
+    }
+
+    /* The background work of the interrupted rows asked for so far (tests wait for it). */
+    static let quietWork = QuietWork()
+    final class QuietWork: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: Task<Void, Never>?
+        var task: Task<Void, Never>? {
+            get { lock.withLock { held } }
+            set { lock.withLock { held = newValue } }
+        }
+    }
+    static func quietlySettled() async { await quietWork.task?.value }
+
+    /*
+     * A row with nothing made: its uploads aborted, and it goes once none is left without an answer. An answered "delete"
+     * waiting for folders that may still land: only looked for. One found is never deleted unasked, days later and perhaps
+     * filled since: the answer goes and the row is offered again with what it holds. None found once creationSettle has
+     * passed: never made, and the row goes. No answer: looked for again at the next open.
+     */
+    private static func settleQuietly(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Date) async {
+        if row.nodeIds.isEmpty {
+            var left: [String] = []
+            for uploadId in row.uploadIds {
+                if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
+            }
+            if left.isEmpty { journal.retire(row) } else if left.count < row.uploadIds.count {
+                var next = row
+                next.uploadIds = left
+                try? journal.put(next)
+            }
+            return
+        }
+        var holds: Int?
+        for id in row.nodeIds {
+            let items: Int?
+            do { items = try await writer.lookFolder(id, in: row.workspaceId) } catch { return }
+            if let items { holds = (holds ?? 0) + items }
+        }
+        if let holds {
+            var again = row
+            again.chosen = nil
+            again.holds = holds
+            try? journal.put(again)
+            return
+        }
+        if (row.uncertain ?? [:]).values.allSatisfy({ now.timeIntervalSince($0) >= creationSettle }) { journal.retire(row) }
     }
 
     /*
@@ -571,11 +626,15 @@ public enum SaveRuns {
                                now: Date = Date()) async -> SaveCleanup {
         let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationSettle }.keys)
         let cleaned = await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist)
-        // Kept only to wait for a folder that may still land: the person's answer stays with the row, and later opens
-        // apply it quietly (interrupted) rather than ask again.
-        if cleaned.cleanup == .left, cleaned.waiting, row.chosen == nil {
+        // Kept only to wait for folders that may still land, all else done: the row names just those, with the person's
+        // answer, and later opens only look for them (interrupted).
+        if cleaned.cleanup == .left, let waitingOn = cleaned.onlyWaitingOn {
             var answered = row
+            answered.nodeIds = waitingOn
+            answered.uploadIds = []
+            answered.uncertain = (row.uncertain ?? [:]).filter { waitingOn.contains($0.key) }
             answered.chosen = "delete"
+            answered.holds = nil
             try? journal.put(answered)
         }
         return cleaned.cleanup
@@ -599,7 +658,8 @@ public enum SaveRuns {
      */
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
                       completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
-                      mayExist: Set<String> = []) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool) {
+                      mayExist: Set<String> = []) async
+        -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool, onlyWaitingOn: [String]?) {
         var unsettled = false
         var denied = false
         var kept = 0
@@ -632,7 +692,10 @@ public enum SaveRuns {
         let notFound = SentIds()
         let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
-        let waiting = !mayExist.isDisjoint(with: notFound.ids)
+        let waitingOn = mayExist.intersection(notFound.ids).sorted()
+        let waiting = !waitingOn.isEmpty
+        // Those folders, when they are all that keeps the row: everything else was settled.
+        let onlyWaitingOn = waiting && !unsettled && discarded != .left && discarded != .noAccess ? waitingOn : nil
         if waiting {
             unsettled = true
             othersMayLand = true
@@ -644,7 +707,7 @@ public enum SaveRuns {
         let someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if cleanup != .left, !journal.retire(row) { cleanup = .left }
-        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting)
+        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting, onlyWaitingOn)
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil) async -> SaveCleanup {
@@ -992,6 +1055,9 @@ public actor SaveRun {
         try await open()
         let signing = try SaveRuns.signing(sources)
         let into = parent ?? first
+        // On its way until it returns: finish waits for it as for a result (waiting()).
+        inFlight += 1
+        defer { inFlight -= 1 }
         do {
             return try await makeFolder(name, into: into, signing: signing.metadata)
         } catch {
@@ -1240,7 +1306,7 @@ public actor SaveRun {
             // Folder creations already sent settle next (a lost answer included): one the server creates after the
             // clean-up looked would otherwise be left with its row gone.
             await state.creationsSettled()
-            let (cleanup, kept, uncertain, remains, _) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
+            let (cleanup, kept, uncertain, remains, _, _) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
                                                                            completing: state.completingUploads, published: state.published,
                                                                            asked: asked, mayExist: state.mayExist)
             let total = keptBefore + kept
@@ -1372,6 +1438,17 @@ extension Vault: SaveRunWriter {
     }
 
     /* From the server itself, never the catalogue (which may not have heard of a key change or another device's save yet). */
+    public func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? {
+        do {
+            return try await listChildren(of: id, in: workspaceId).children.count
+        } catch DriveAPIError.notFound {
+            return nil
+        } catch DriveAPIError.trashed {
+            // In the Trash: there, and the person decides what goes.
+            return 0
+        }
+    }
+
     public func listed(_ id: String, in folder: Opened) async throws -> Opened? {
         let listing = try await listChildren(of: folder.id, in: folder.node.workspaceId)
         guard let row = listing.children.first(where: { $0.id == id }) else { return nil }

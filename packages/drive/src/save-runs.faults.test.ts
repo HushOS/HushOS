@@ -10,6 +10,7 @@ import {
     CREATION_SETTLE_MS,
     cleanUpInterrupted,
     interruptedRuns,
+    quietlySettled,
     startRun,
     type ItemFate,
     type SaveRun,
@@ -398,6 +399,18 @@ function processOf(
                 return 'unknown';
             }
         },
+        // Only looks: how many items the folder holds, or null when it isn't there.
+        lookFolder: (_ws, id) =>
+            call(
+                'listing',
+                () =>
+                    srv.gone(id)
+                        ? null
+                        : [...srv.nodes.values()].filter(
+                              (n) => n.parent === id && n.state !== 'purged',
+                          ).length,
+                refuse,
+            ),
         trash: (_ws, ids) =>
             call(
                 'trash',
@@ -570,11 +583,8 @@ async function violations(scenario: string, plan: Plan) {
             if (!published.includes(id)) found.push(`a saved result ${id} isn't there`);
         if (srv.versions() < outcome.made.versions) found.push('a saved version is not there');
         const reopened = processOf(srv, disk, null);
-        const offered = await interruptedRuns({
-            runs: reopened.deps.runs,
-            isLive: async () => false,
-            abortUpload: reopened.deps.abortUpload,
-        });
+        const offered = await interruptedRuns({ ...reopened.deps, isLive: async () => false });
+        await quietlySettled();
         if (offered.length) found.push('a finished save is offered for deletion');
     } else if (signedOut) {
         // The journal went with the account: only what it said may remain may be there.
@@ -592,11 +602,9 @@ async function violations(scenario: string, plan: Plan) {
         const reopen = async () => {
             const reopened = processOf(srv, disk, null);
             reopened.deps.now = () => clock;
-            for (const row of await interruptedRuns({
-                ...reopened.deps,
-                isLive: async () => false,
-            }))
-                await cleanUpInterrupted(reopened.deps, row);
+            const offered = await interruptedRuns({ ...reopened.deps, isLive: async () => false });
+            await quietlySettled();
+            for (const row of offered) await cleanUpInterrupted(reopened.deps, row);
             await settle();
         };
         await reopen();

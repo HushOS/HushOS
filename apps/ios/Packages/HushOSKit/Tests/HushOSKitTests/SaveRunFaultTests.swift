@@ -176,6 +176,8 @@ final class FaultWorld: @unchecked Sendable {
         return nodes[node.parent] != nil ? gone(node.parent) : false
     }
     var published: [String] { lock.withLock { nodes.keys.filter { !gone($0) }.sorted() } }
+    /* How many items folder `id` holds, or nil when it isn't there. */
+    func holds(_ id: String) -> Int? { lock.withLock { gone(id) ? nil : nodes.values.filter { $0.parent == id }.count } }
     func lineage(_ id: String) -> [String] {
         lock.withLock {
             var out: [String] = []
@@ -241,6 +243,7 @@ struct FaultyDrive: SaveRunWriter {
     }
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened? { file }
     func listed(_ id: String, in folder: Opened) async throws -> Opened? { nil }
+    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? { try await call(.listing, { world.holds(id) }, refused: refuse) }
     func refreshFolder(_ folder: Opened) async throws -> Opened { folder }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {

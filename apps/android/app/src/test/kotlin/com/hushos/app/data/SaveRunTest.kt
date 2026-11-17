@@ -91,6 +91,9 @@ class SaveRunTest {
         val later = ArrayList<String>()
         /* A creation the server refuses with its reason. */
         var refuseCreation: ApiError? = null
+        /* Items in a folder, for lookFolder; and a hook that runs before each look. */
+        val items = HashMap<String, Int>()
+        var looking: (() -> Unit)? = null
         /* Parts each upload sends, a few milliseconds apart; one for an upload already aborted is refused, as the store does. */
         var parts = 1
         @Volatile var stopStarted = false
@@ -159,6 +162,11 @@ class SaveRunTest {
             finished += "up-$n"
             if (replacing == null) live += nodeId
             return Opened(NodeView(nodeId, "ws", folder.id, "file", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, null, null, null, emptyMap()))
+        }
+        override fun lookFolder(id: String, workspaceId: String): Int? {
+            looking?.invoke()
+            if (offline) throw Unreachable()
+            return if (id in live || id in trashed) items[id] ?: 0 else null
         }
         override fun fresh(file: Opened, folder: Opened): Opened? {
             val look = fresh ?: return file
@@ -830,15 +838,63 @@ class SaveRunTest {
         assertEquals(listOf(left.id), SaveRuns.interrupted(later, writer, now = 2_000L).map { it.id })
         assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(left, writer, later, now = 2_000L))
         assertTrue(later.list().single().chosenDelete)
-        // Later launches never ask again: the answer is applied quietly while the folder isn't there, then once it is.
+        // Later launches never ask again while the folder isn't there: they only look for it.
         assertTrue(SaveRuns.interrupted(later, writer, now = 2_500L).isEmpty())
+        SaveRuns.quietlySettled()
         assertEquals(1, later.list().size)
+        // It lands, and someone fills it: the next launch deletes nothing unasked. The answer goes, and the launch after
+        // offers the row again with what the folder holds now.
         writer.live += "made-Out"
+        writer.items["made-Out"] = 2
         assertTrue(SaveRuns.interrupted(later, writer, now = 3_000L).isEmpty())
-        assertEquals(setOf("made-Out"), writer.purged)
+        SaveRuns.quietlySettled()
+        assertTrue(writer.purged.isEmpty() && writer.trashed.isEmpty())
+        val again = SaveRuns.interrupted(later, writer, now = 3_500L).single()
+        assertEquals(listOf("made-Out"), again.nodeIds)
+        assertEquals(2, again.holds)
+        assertFalse(again.chosenDelete)
+        // Not found once CREATION_SETTLE_MS has passed: never made, and the row goes quietly.
+        writer.live -= "made-Out"
+        later.put(again.copy(chosenDelete = true))
+        assertTrue(SaveRuns.interrupted(later, writer, now = 1_000L + SaveRuns.CREATION_SETTLE_MS).isEmpty())
+        SaveRuns.quietlySettled()
         assertTrue(later.list().isEmpty())
-        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(left.copy(id = "again"), writer, journal(), now = 1_000L + SaveRuns.CREATION_SETTLE_MS))
         hold.countDown()
+        pool.shutdown()
+    }
+
+    /* The rows to offer come back at once: the quiet looks run on their own thread, after. */
+    @Test
+    fun theRowsToOfferComeBackBeforeAnyQuietLook() {
+        val answer = CountDownLatch(1)
+        val writer = FakeWriter().apply { looking = { answer.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        rows.put(SaveRunRow("asked", "ws", listOf("n"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true))
+        val began = System.nanoTime()
+        assertEquals(listOf("asked"), SaveRuns.interrupted(rows, writer, now = 2L).map { it.id })
+        assertTrue("interrupted waited for a look", System.nanoTime() - began < 1_000_000_000L)
+        answer.countDown()
+        SaveRuns.quietlySettled()
+    }
+
+    /* finish waits for a folder still being made: the row stays until its creation settles. */
+    @Test
+    fun finishWaitsForAFolderStillBeingMade() {
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newSingleThreadExecutor()
+        val folder = pool.submit<Opened> { run.folder("Out", own) }
+        assertTrue(making.await(5, TimeUnit.SECONDS))
+        assertThrows(SaveRunRefusal::class.java) { run.finish() }
+        assertEquals(listOf("made-Out"), rows.list().single().nodeIds)
+        go.countDown()
+        folder.get(5, TimeUnit.SECONDS)
+        run.finish()
+        assertTrue(rows.list().isEmpty())
         pool.shutdown()
     }
 

@@ -36,6 +36,7 @@ import {
     askAbort,
     cleanUpInterrupted,
     interruptedRuns,
+    quietlySettled,
     keepInterrupted,
     lockRuns,
     resultEstimate,
@@ -444,6 +445,8 @@ function world(
         busy: new Set<string>(),
         offline: false,
         denied: false,
+        /* Items in a folder, for lookFolder. */
+        items: new Map<string, number>(),
     };
     let session = true;
     const madeFolders: { parent: string; name: string; signAs: string }[] = [];
@@ -529,6 +532,10 @@ function world(
         },
         mayPurge: async () => options.member ?? true,
         findChild: async (_parent, id) => (server.live.has(id) ? folder(id) : null),
+        lookFolder: async (_ws, id) => {
+            if (server.offline) throw new Error('offline');
+            return server.live.has(id) || server.trash.has(id) ? (server.items.get(id) ?? 0) : null;
+        },
         current: () => session,
     };
     /* The queue began an upload: the server holds it open, and the run's row learns of it. */
@@ -851,6 +858,7 @@ describe('a save run', () => {
             abortUpload: w.deps.abortUpload,
         });
         expect(offered).toEqual([]);
+        await quietlySettled();
         expect(w.server.aborted).toContain('up-1');
         expect(w.runs.rows.size).toBe(0);
     });
@@ -1485,20 +1493,100 @@ describe('a save run', () => {
         const [row] = await reopen();
         expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
         expect(w.runs.rows.get(row!.id)?.chosen).toBe('delete');
-        // Later opens never ask again: the answer is applied quietly while the folder isn't there.
+        // Later opens never ask again while the folder isn't there: they only look for it.
         expect(await reopen()).toEqual([]);
+        await quietlySettled();
         expect(w.runs.rows.size).toBe(1);
-        // It lands; the open after that removes it and the row goes.
+        // It lands, and someone fills it: the next open deletes nothing unasked. The answer goes,
+        // and the open after offers the row again with what the folder holds now.
         w.server.live.add('slow');
+        w.server.items.set('slow', 2);
         expect(await reopen()).toEqual([]);
-        expect(w.server.purged.has('slow')).toBe(true);
-        expect(w.runs.rows.size).toBe(0);
+        await quietlySettled();
+        expect(w.server.trash.has('slow') || w.server.purged.has('slow')).toBe(false);
+        const [again] = await reopen();
+        expect(again).toMatchObject({ id: row!.id, nodeIds: ['slow'], holds: 2 });
+        expect(again!.chosen).toBeUndefined();
 
-        // Past CREATION_SETTLE_MS a folder still not there was never made: the row goes.
-        await w.runs.put(row!);
+        // Not found once CREATION_SETTLE_MS has passed: never made, and the row goes quietly.
+        w.server.live.delete('slow');
+        await w.runs.put({ ...again!, chosen: 'delete' });
         clock += CREATION_SETTLE_MS;
-        w.server.purged.clear();
-        expect(await cleanUpInterrupted(w.deps, row!)).toBe('nothing');
+        expect(await reopen()).toEqual([]);
+        await quietlySettled();
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('the rows to offer come back at once: the quiet ones are settled after, never before', async () => {
+        const w = world();
+        let answer: () => void = () => {};
+        w.deps.lookFolder = () =>
+            new Promise<number | null>((resolve) => {
+                answer = () => resolve(null);
+            });
+        await w.runs.put({
+            id: 'asked',
+            workspaceId: 'ws-own',
+            nodeIds: ['n'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        });
+        await w.runs.put({
+            id: 'answered',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        });
+        // The look never answers until told: the listing is back regardless.
+        const offered = await interruptedRuns({ ...w.deps, isLive: async () => false });
+        expect(offered.map((row) => row.id)).toEqual(['asked']);
+        answer();
+        await quietlySettled();
+    });
+
+    test('finish waits for a folder still being made: the row stays until its creation settles', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = (parent, name, signAs, minted) =>
+            make(parent, name, signAs, async (id) => {
+                await minted(id);
+                await new Promise<void>((resolve) => {
+                    create = resolve;
+                });
+            });
+        const making = run.folder('Out', own);
+        await tick();
+        await tick();
+        await expect(run.finish()).rejects.toThrow('still has results on their way');
+        expect(w.runs.rows.get(run.id)!.nodeIds).toEqual(['made-1']);
+        create();
+        await making;
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('made-1')).toBe(true);
+    });
+
+    test('a folder inside one the run made, answered 409 for its own id, is found too: the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const out = await run.folder('Out', own);
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = async (parent, name, signAs, minted) => {
+            if (parent.id !== out.id) return make(parent, name, signAs, minted);
+            await minted('inner');
+            w.server.live.add('inner');
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const inner = await run.folder('In', { into: out, ...own });
+        expect(inner.id).toBe('inner');
+        await run.finish();
         expect(w.runs.rows.size).toBe(0);
     });
 

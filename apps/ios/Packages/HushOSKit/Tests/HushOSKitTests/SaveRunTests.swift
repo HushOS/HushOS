@@ -169,6 +169,17 @@ actor FakeWriter: SaveRunWriter {
         return file
     }
     func listed(_ id: String, in folder: Opened) async throws -> Opened? { live.contains(id) ? opened(id, parent: folder.id) : nil }
+    /* Items in a folder, for lookFolder; and a hook that runs before each look. */
+    var items: [String: Int] = [:]
+    var looking: (@Sendable () async -> Void)?
+    func set(items count: Int, in id: String) { items[id] = count }
+    func set(looking: @escaping @Sendable () async -> Void) { self.looking = looking }
+    func makeGone(_ id: String) { live.remove(id) }
+    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? {
+        await looking?()
+        if offline { throw DriveAPIError.transport("offline") }
+        return live.contains(id) || trashed.contains(id) ? items[id] ?? 0 : nil
+    }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
         if offline { return .unknown }
@@ -444,6 +455,7 @@ let own = SaveSources.ownWriting
         try rows.put(SaveRunRow(id: "empty", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
         try rows.put(SaveRunRow(id: "made", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
         #expect(await SaveRuns.interrupted(writer: writer, journal: rows).map(\.id) == ["made"])
+        await SaveRuns.quietlySettled()
         #expect(await writer.aborted == ["up-x"])
         #expect(rows.list().map(\.id) == ["made"])
     }
@@ -911,14 +923,28 @@ let own = SaveSources.ownWriting
         #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(60), launch: "a-later-launch").map(\.id) == [row.id])
         #expect(await SaveRuns.cleanUp(row, writer: writer, journal: later, now: start.addingTimeInterval(60)) == .left)
         #expect(later.list().first?.chosen == "delete")
-        // Later opens never ask again: the answer is applied quietly while the folder isn't there, then once it is.
+        // Later opens never ask again while the folder isn't there: they only look for it.
         #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(90), launch: "a-later-launch").isEmpty)
+        await SaveRuns.quietlySettled()
         #expect(later.list().count == 1)
+        // It lands, and someone fills it: the next open deletes nothing unasked. The answer goes, and the open after
+        // offers the row again with what the folder holds now.
         await writer.makeLive("made-Out")
+        await writer.set(items: 2, in: "made-Out")
         #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(120), launch: "a-later-launch").isEmpty)
-        #expect(await writer.purged == ["made-Out"])
+        await SaveRuns.quietlySettled()
+        #expect(await writer.purged.isEmpty)
+        #expect(await writer.trashed.isEmpty)
+        let again = try #require(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(150), launch: "a-later-launch").first)
+        #expect(again.nodeIds == ["made-Out"] && again.holds == 2 && again.chosen == nil)
+        // Not found once creationSettle has passed: never made, and the row goes quietly.
+        await writer.makeGone("made-Out")
+        var answered = again
+        answered.chosen = "delete"
+        try later.put(answered)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: later, now: start.addingTimeInterval(SaveRuns.creationSettle), launch: "a-later-launch").isEmpty)
+        await SaveRuns.quietlySettled()
         #expect(later.list().isEmpty)
-        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: journal(), now: start.addingTimeInterval(SaveRuns.creationSettle)) == .nothing)
         await gate.open()
         _ = try? await making.value
     }
@@ -942,7 +968,60 @@ let own = SaveSources.ownWriting
         #expect(left.nodeIds.isEmpty && left.uploadIds == ["up-1"])
         await writer.set(offline: false)
         #expect(await SaveRuns.interrupted(writer: writer, journal: rows, launch: "a-later-launch").isEmpty)
+        await SaveRuns.quietlySettled()
         #expect(await writer.aborted.contains("up-1"))
+        #expect(rows.list().isEmpty)
+    }
+
+    /* The rows to offer come back at once: the quiet looks run after, in the background. */
+    @Test func theRowsToOfferComeBackBeforeAnyQuietLook() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(looking: { await gate.wait() })
+        let rows = journal()
+        try rows.put(SaveRunRow(id: "asked", workspaceId: "ws", nodeIds: ["n"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        try rows.put(SaveRunRow(id: "answered", workspaceId: "ws", nodeIds: ["slow"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                                uncertain: ["slow": Date()], chosen: "delete"))
+        // The look answers only two seconds from now: the listing is back long before.
+        let opener = Task {
+            try? await Task.sleep(for: .seconds(2))
+            await gate.open()
+        }
+        let began = Date()
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).map(\.id) == ["asked"])
+        #expect(Date().timeIntervalSince(began) < 1, "interrupted waited for a look")
+        await opener.value
+        await SaveRuns.quietlySettled()
+    }
+
+    /* finish waits for a folder still being made: the row stays until its creation settles. */
+    @Test func finishWaitsForAFolderStillBeingMade() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let making = Task { try await run.folder("Out", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        await #expect(throws: SaveRunRefusal.self) { try await run.finish() }
+        #expect(rows.list().first?.nodeIds == ["made-Out"])
+        await gate.open()
+        _ = try await making.value
+        try await run.finish()
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A folder inside one the run made, answered 409 for its own id, is found too: the run goes on. */
+    @Test func aNestedCreationAnswered409ForItsOwnIdIsFoundToo() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let out = try await run.folder("Out", sources: own)
+        await writer.set(refuseCreation: .server(409, "An item with this id already exists."))
+        await writer.set(making: { await writer.makeLive("made-In") })
+        let inner = try await run.folder("In", in: out, sources: own)
+        #expect(inner.id == "made-In")
+        try await run.finish()
         #expect(rows.list().isEmpty)
     }
 

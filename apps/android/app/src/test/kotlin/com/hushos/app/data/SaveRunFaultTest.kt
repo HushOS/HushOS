@@ -143,6 +143,8 @@ class SaveRunFaultTest {
             return if (nodes.containsKey(node.parent)) gone(node.parent) else false
         }
         val published: List<String> get() = synchronized(lock) { nodes.keys.filter { !gone(it) }.sorted() }
+        /* How many items folder `id` holds, or null when it isn't there. */
+        fun holds(id: String): Int? = synchronized(lock) { if (gone(id)) null else nodes.values.count { it.parent == id } }
         fun lineage(id: String): List<String> = synchronized(lock) { generateSequence(id) { nodes[it]?.parent }.toList() }
         val versions: Int get() = synchronized(lock) { uploads.values.count { it.version && it.status == "completed" } }
         val openReservations: List<String> get() = synchronized(lock) { uploads.filter { it.value.status == "open" }.keys.toList() }
@@ -193,6 +195,7 @@ class SaveRunFaultTest {
             return opened(call(Point.COMPLETE, { world.complete(uploadId) }, ::refuse), folder.id)
         }
         override fun fresh(file: Opened, folder: Opened): Opened? = file
+        override fun lookFolder(id: String, workspaceId: String): Int? = call(Point.LISTING, { world.holds(id) }, ::refuse)
         override fun refreshFolder(folder: Opened): Opened = folder
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate =
             runCatching { call(Point.ABORT, { world.abort(uploadId) }, { SaveAbortFate.DENIED }) }.getOrDefault(SaveAbortFate.UNKNOWN)

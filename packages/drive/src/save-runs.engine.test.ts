@@ -13,6 +13,7 @@ import {
     CREATION_SETTLE_MS,
     cleanUpInterrupted,
     interruptedRuns,
+    quietlySettled,
     startRun,
     type ItemFate,
     type SaveRun,
@@ -459,6 +460,7 @@ function serverOf(options: { storeMs?: number; editor?: boolean; busy?: number; 
             othersSaved = true;
         },
         othersSaved: () => othersSaved,
+        gone,
         /*
          * New files and folders this run made that are still there: live, or (for a member whose
          * clean-up could delete forever) in the Trash. One that could only trash leaves them there.
@@ -715,6 +717,18 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
             }
             return fates;
         },
+        // Only looks: how many items the folder holds, or null when it isn't there.
+        lookFolder: (_ws, id) =>
+            call(
+                'lookup',
+                () =>
+                    srv.gone(id)
+                        ? null
+                        : [...srv.nodes.values()].filter(
+                              (n) => n.parent === id && n.state !== 'purged',
+                          ).length,
+                forbidden,
+            ),
         mayPurge: () =>
             call(
                 'may-purge',
@@ -999,13 +1013,12 @@ async function violations(name: string, plan: Plan) {
             found.push('another device’s version was saved over');
         abandonRuns();
         const finishedOpen = processOf(srv, disk, null);
-        const listing = interruptedRuns({
-            runs: finishedOpen.deps.runs,
-            isLive: async () => false,
-            abortUpload: finishedOpen.deps.abortUpload,
-        });
+        const listing = interruptedRuns({ ...finishedOpen.deps, isLive: async () => false });
         await vi.advanceTimersByTimeAsync(SETTLE_MS);
         if ((await listing).length) found.push('a finished save is offered for deletion');
+        const settling = quietlySettled();
+        await vi.advanceTimersByTimeAsync(SETTLE_MS);
+        await settling;
     } else if (signedOut) {
         // The journal went with the account: what is there must have been said to remain.
         if (!dead && !excused)
@@ -1025,6 +1038,9 @@ async function violations(name: string, plan: Plan) {
             const reopened = processOf(srv, disk, null);
             const listing = interruptedRuns({ ...reopened.deps, isLive: async () => false });
             await vi.advanceTimersByTimeAsync(SETTLE_MS);
+            const settling = quietlySettled();
+            await vi.advanceTimersByTimeAsync(SETTLE_MS);
+            await settling;
             for (const row of await listing) {
                 const cleaning = cleanUpInterrupted(reopened.deps, row);
                 await vi.advanceTimersByTimeAsync(SETTLE_MS);

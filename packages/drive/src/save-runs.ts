@@ -377,6 +377,11 @@ export type SaveRunDeps = {
     ) => Promise<DriveNode>;
     /* `id` as listed in `parent` now (asked fresh), or null: a creation answered 409 for its own id. */
     findChild?: (parent: DriveNode, id: string) => Promise<DriveNode | null>;
+    /*
+     * How many items the folder `id` holds now, or null when it isn't there; throws when there was
+     * no answer. Only looks: an answered "delete" waiting for a folder never deletes one found.
+     */
+    lookFolder?: (workspaceId: string, id: string) => Promise<number | null>;
     /* Never throws: what the server said, or `unknown`. */
     abortUpload: (workspaceId: string, uploadId: string) => Promise<AbortFate>;
     /*
@@ -618,6 +623,8 @@ function createRun(
     const mayExist = new Set<string>();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
+    /* folder() calls not yet returned: finish waits for them as for results. */
+    let folderCalls = 0;
     /*
      * A creation answered (made, or refused with a reason): no longer uncertain in the row, written
      * while the run may still write (after a stop sealed it the mark stays, which only keeps a row
@@ -972,81 +979,98 @@ function createRun(
         liveRuns.delete(run);
     }
 
+    async function makeFolder(
+        name: string,
+        { into = plan.targets[0]!, sources }: { into?: DriveNode; sources: ResultSources },
+    ): Promise<DriveNode> {
+        await open();
+        const signAs = resultSignatures(sources).metadata;
+        // A folder inside one the run made goes with it and needs no row of its own.
+        const recordIt = !madeFolders.has(into.id);
+        let made: DriveNode;
+        try {
+            const given = claim(await namesTaken(into), name);
+            await open();
+            // Waited for by a stop only once its creation is sent: a folder still waiting out a
+            // key change (untilWritable) never holds a cancel up.
+            let sent: Promise<unknown> | null = null;
+            // Uncertain in the row (a folder the row names) only when recorded; kept either way
+            // to tell its own 409 from another refusal.
+            let sentId: string | null = null;
+            let mintedId: string | null = null;
+            const making = deps.makeFolder(into, given, signAs, async (id) => {
+                // Its id on disk before its creation is sent, or the creation is not sent.
+                if (stopping || !current()) throw new Error('This save run is stopping.');
+                if (recordIt) {
+                    row.nodeIds.push(id);
+                    // Uncertain until answered: a restart before the answer finds it so.
+                    row.uncertain = [...(row.uncertain ?? []), { id, at: now() }];
+                    void persist();
+                    await recorded();
+                }
+                await Promise.resolve();
+                if (stopping) throw new Error('This save run is stopping.');
+                mayBePublished.add(id);
+                mintedId = id;
+                if (recordIt) sentId = id;
+                if (sent) creating.add(sent);
+            });
+            // Settled before the stop it causes cleans up: an unanswered creation may exist.
+            // An answer settles it in the row too (written with the row's next write).
+            sent = making.then(
+                () => answered(sentId),
+                (error: unknown) => {
+                    if (sentId && !refusedOutright(error)) mayExist.add(sentId);
+                    else answered(sentId);
+                },
+            );
+            try {
+                made = await making;
+            } catch (error) {
+                // Answered 409 for its own id: an earlier send of the same request made it
+                // (the browser sent it again by itself). There, it is the folder asked for.
+                const found =
+                    mintedId && ownIdTaken(error)
+                        ? await deps.findChild?.(into, mintedId).catch(() => null)
+                        : null;
+                if (!found) throw error;
+                mayExist.delete(found.id);
+                answered(found.id);
+                made = found;
+            } finally {
+                creating.delete(sent);
+            }
+        } catch (error) {
+            return failed(error);
+        }
+        if (!current() && !stopping) run.abandon();
+        if (stopping) {
+            const done = await stopping;
+            // Signed out meanwhile: nothing is asked of the server or written for that account.
+            if (abandoned) throw done;
+            // Made while the run stopped: it goes the way the rest of the run went, and if it
+            // cannot, a row names it for the next open (keepLate).
+            const fate = await discard(deps, row.workspaceId, [made.id]).catch(
+                (): Cleanup => 'left',
+            );
+            if (fate === 'left') await keepLate(made.id, done.cleanup === 'left');
+            throw done;
+        }
+        madeFolders.add(made.id);
+        claimed.set(made.id, Promise.resolve(new Set()));
+        return made;
+    }
+
     const run: LiveRun = {
         id: row.id,
-        async folder(name, { into = plan.targets[0]!, sources }) {
-            await open();
-            const signAs = resultSignatures(sources).metadata;
-            // A folder inside one the run made goes with it and needs no row of its own.
-            const recordIt = !madeFolders.has(into.id);
-            let made: DriveNode;
+        async folder(name, options) {
+            // On its way until it returns: finish waits for it (waiting()).
+            folderCalls += 1;
             try {
-                const given = claim(await namesTaken(into), name);
-                await open();
-                // Waited for by a stop only once its creation is sent: a folder still waiting out a
-                // key change (untilWritable) never holds a cancel up.
-                let sent: Promise<unknown> | null = null;
-                let sentId: string | null = null;
-                const making = deps.makeFolder(into, given, signAs, async (id) => {
-                    // Its id on disk before its creation is sent, or the creation is not sent.
-                    if (stopping || !current()) throw new Error('This save run is stopping.');
-                    if (recordIt) {
-                        row.nodeIds.push(id);
-                        // Uncertain until answered: a restart before the answer finds it so.
-                        row.uncertain = [...(row.uncertain ?? []), { id, at: now() }];
-                        void persist();
-                        await recorded();
-                    }
-                    await Promise.resolve();
-                    if (stopping) throw new Error('This save run is stopping.');
-                    mayBePublished.add(id);
-                    if (recordIt) sentId = id;
-                    if (sent) creating.add(sent);
-                });
-                // Settled before the stop it causes cleans up: an unanswered creation may exist.
-                // An answer settles it in the row too (written with the row's next write).
-                sent = making.then(
-                    () => answered(sentId),
-                    (error: unknown) => {
-                        if (sentId && !refusedOutright(error)) mayExist.add(sentId);
-                        else answered(sentId);
-                    },
-                );
-                try {
-                    made = await making;
-                } catch (error) {
-                    // Answered 409 for its own id: an earlier send of the same request made it
-                    // (the browser sent it again by itself). There, it is the folder asked for.
-                    const found =
-                        sentId && ownIdTaken(error)
-                            ? await deps.findChild?.(into, sentId).catch(() => null)
-                            : null;
-                    if (!found) throw error;
-                    mayExist.delete(found.id);
-                    answered(found.id);
-                    made = found;
-                } finally {
-                    creating.delete(sent);
-                }
-            } catch (error) {
-                return failed(error);
+                return await makeFolder(name, options);
+            } finally {
+                folderCalls -= 1;
             }
-            if (!current() && !stopping) run.abandon();
-            if (stopping) {
-                const done = await stopping;
-                // Signed out meanwhile: nothing is asked of the server or written for that account.
-                if (abandoned) throw done;
-                // Made while the run stopped: it goes the way the rest of the run went, and if it
-                // cannot, a row names it for the next open (keepLate).
-                const fate = await discard(deps, row.workspaceId, [made.id]).catch(
-                    (): Cleanup => 'left',
-                );
-                if (fate === 'left') await keepLate(made.id, done.cleanup === 'left');
-                throw done;
-            }
-            madeFolders.add(made.id);
-            claimed.set(made.id, Promise.resolve(new Set()));
-            return made;
         },
         async file(result) {
             await open();
@@ -1083,7 +1107,8 @@ function createRun(
         },
         async finish() {
             if (stopping) throw await stopping;
-            if (pending.size) throw new Error('This save run still has results on their way.');
+            if (pending.size || folderCalls)
+                throw new Error('This save run still has results on their way.');
             finished = true;
             sealed = true;
             await writing;
@@ -1117,7 +1142,7 @@ function createRun(
             return stop('cancelled');
         },
         waiting() {
-            return pending.size;
+            return pending.size + folderCalls;
         },
         lock() {
             return stop('locked');
@@ -1185,6 +1210,8 @@ async function cleanUp(
     remains: 'left' | 'no-access' | null;
     /* Kept for a folder whose creation may still land (mayExist), not found yet. */
     waiting: boolean;
+    /* Those folders, when they are all that kept the row: everything else was settled. */
+    onlyWaitingOn: string[] | null;
 }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
@@ -1223,7 +1250,12 @@ async function cleanUp(
         (): Cleanup => 'left',
     );
     // A folder whose creation went unanswered, not found now: the server may still make it.
-    const waiting = [...(options.mayExist ?? [])].some((id) => notFound.has(id));
+    const waitingOn = [...(options.mayExist ?? [])].filter((id) => notFound.has(id));
+    const waiting = waitingOn.length > 0;
+    const onlyWaitingOn =
+        waiting && !unsettled && discarded !== 'left' && discarded !== 'no-access'
+            ? waitingOn
+            : null;
     if (waiting) {
         unsettled = true;
         othersMayLand = true;
@@ -1244,7 +1276,7 @@ async function cleanUp(
         if ((options.current?.() ?? true) && !(await retire(deps.runs, row))) cleanup = 'left';
     }
     const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
-    return { cleanup, keptVersions, uncertainVersions, remains, waiting };
+    return { cleanup, keptVersions, uncertainVersions, remains, waiting, onlyWaitingOn };
 }
 
 /*
@@ -1308,6 +1340,7 @@ export async function interruptedRuns(
     const live = new Set([...liveRuns].map((run) => run.id));
     const rows = await deps.runs.list();
     const left: RunRow[] = [];
+    const quiet: RunRow[] = [];
     for (const row of rows) {
         // A finished run whose row couldn't be removed: never offered, dropped now.
         if (row.done) {
@@ -1318,24 +1351,67 @@ export async function interruptedRuns(
         if (deps.isLive) {
             if (await deps.isLive(row.id)) continue;
         } else if (now() - (row.beat ?? row.at) < STALE_BEAT_MS) continue;
-        // Nothing made to ask about, only reservations to let go (a finished run's stale version,
-        // or a version run that ended mid-upload): settled quietly, never offered.
-        if (!row.nodeIds.length) {
-            if (!row.uploadIds.length) await retire(deps.runs, row);
-            else if (deps.abortUpload)
-                await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
-            continue;
-        }
-        // Already answered "delete" and waiting for a folder that may still land: applied again,
-        // quietly, until the folder is found or CREATION_SETTLE_MS has passed.
-        if (row.chosen === 'delete') {
-            if (deps.trash && deps.purge && deps.mayPurge && deps.abortUpload && deps.transfers)
-                await cleanUpInterrupted(deps as SaveRunDeps, row);
-            continue;
-        }
-        left.push(row);
+        // Nothing made to ask about: one with no uploads either goes; one with reservations to let
+        // go (a finished run's stale version, or a version run that ended mid-upload) and one
+        // already answered "delete" that waits for a folder are settled quietly, never offered.
+        if (!row.nodeIds.length && !row.uploadIds.length) await retire(deps.runs, row);
+        else if (!row.nodeIds.length || row.chosen === 'delete') quiet.push(row);
+        else left.push(row);
+    }
+    // In the background: the rows to offer come back now, never after the network.
+    if (quiet.length) {
+        const work = settleQuietly(deps, quiet, now);
+        quietWork = quietWork.then(() => work);
     }
     return left;
+}
+
+/* The background work of the interrupted rows asked for so far (tests wait for it). */
+let quietWork: Promise<void> = Promise.resolve();
+export function quietlySettled() {
+    return quietWork;
+}
+
+async function settleQuietly(
+    deps: Pick<SaveRunDeps, 'runs'> & Partial<SaveRunDeps>,
+    rows: RunRow[],
+    now: () => number,
+) {
+    for (const row of rows) {
+        try {
+            if (row.chosen === 'delete') await lookAgain(deps, row, now());
+            else if (deps.abortUpload)
+                await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
+        } catch {
+            // No answer: asked again at the next open.
+        }
+    }
+}
+
+/*
+ * An answered "delete" waiting for folders that may still land: only looked for. One found is
+ * never deleted unasked, days later and perhaps filled since: the answer goes and the row is
+ * offered again with what it holds. None found once CREATION_SETTLE_MS has passed: never made,
+ * and the row goes.
+ */
+async function lookAgain(
+    deps: Pick<SaveRunDeps, 'runs'> & Partial<SaveRunDeps>,
+    row: RunRow,
+    now: number,
+) {
+    if (!deps.lookFolder) return;
+    let holds: number | null = null;
+    for (const id of row.nodeIds) {
+        const items = await deps.lookFolder(row.workspaceId, id);
+        if (items !== null) holds = (holds ?? 0) + items;
+    }
+    if (holds !== null) {
+        const { chosen: _answer, ...rest } = row;
+        await deps.runs.put({ ...rest, holds });
+        return;
+    }
+    const settled = (row.uncertain ?? []).every((held) => now - held.at >= CREATION_SETTLE_MS);
+    if (settled) await retire(deps.runs, row);
 }
 
 /*
@@ -1351,10 +1427,21 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
             .map((held) => held.id),
     );
     const result = await cleanUp(deps, row, [], { mayExist });
-    // Kept only to wait for a folder that may still land: the person's answer stays with the row,
-    // and later opens apply it quietly (interruptedRuns) rather than ask again.
-    if (result.cleanup === 'left' && result.waiting && !row.chosen)
-        await deps.runs.put({ ...row, chosen: 'delete' }).catch(() => {});
+    // Kept only to wait for folders that may still land, all else done: the row names just those,
+    // with the person's answer, and later opens only look for them (interruptedRuns).
+    const waitingOn = result.onlyWaitingOn;
+    if (result.cleanup === 'left' && waitingOn) {
+        const { holds: _seen, ...rest } = row;
+        await deps.runs
+            .put({
+                ...rest,
+                nodeIds: waitingOn,
+                uploadIds: [],
+                uncertain: (row.uncertain ?? []).filter((held) => waitingOn.includes(held.id)),
+                chosen: 'delete',
+            })
+            .catch(() => {});
+    }
     return result.cleanup;
 }
 

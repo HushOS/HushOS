@@ -162,10 +162,13 @@ export type RunRow = {
      */
     uncertain?: { id: string; at: number }[];
     /*
-     * The person's answer to "Delete what was made?" when it couldn't be carried out yet because a
-     * folder may still be made: later opens apply it quietly, never asking again.
+     * The person's answer to "Delete what was made?" when all of it was carried out but a folder
+     * that may still be made: the row then names only those folders, and later opens only look
+     * for them, quietly. One found is never deleted unasked: the answer is cleared and the row
+     * offered again, with `holds`, how many items it held when seen.
      */
     chosen?: 'delete';
+    holds?: number;
 };
 
 export interface RunJournal {

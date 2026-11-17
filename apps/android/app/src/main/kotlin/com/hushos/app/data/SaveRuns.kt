@@ -35,18 +35,21 @@ import java.util.concurrent.atomic.AtomicInteger
  * clean-up doesn't find may still be made, so the row stays until a later look finds it or CREATION_SETTLE_MS has passed.
  */
 data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List<String>, val uploadIds: List<String>, val at: Long, val launch: String,
-                      val done: Boolean = false, val uncertain: Map<String, Long> = emptyMap(), val chosenDelete: Boolean = false) {
+                      val done: Boolean = false, val uncertain: Map<String, Long> = emptyMap(), val chosenDelete: Boolean = false,
+                      val holds: Int? = null) {
     fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("nodeIds", JSONArray(nodeIds))
         .put("uploadIds", JSONArray(uploadIds)).put("at", at).put("launch", launch).also { if (done) it.put("done", true) }
         .also { if (uncertain.isNotEmpty()) it.put("uncertain", JSONObject(uncertain)) }
         .also { if (chosenDelete) it.put("chosen", "delete") }
+        .also { holds?.let { count -> it.put("holds", count) } }
 
     companion object {
         fun from(json: JSONObject): SaveRunRow {
             fun list(name: String) = json.getJSONArray(name).let { array -> (0 until array.length()).map(array::getString) }
             val uncertain = json.optJSONObject("uncertain")?.let { held -> held.keys().asSequence().associateWith { held.getLong(it) } }.orEmpty()
             return SaveRunRow(json.getString("id"), json.getString("workspaceId"), list("nodeIds"), list("uploadIds"), json.getLong("at"), json.getString("launch"),
-                json.optBoolean("done", false), uncertain, json.optString("chosen") == "delete")
+                json.optBoolean("done", false), uncertain, json.optString("chosen") == "delete",
+                if (json.has("holds")) json.getInt("holds") else null)
         }
     }
 }
@@ -235,6 +238,11 @@ interface SaveRunWriter {
                      thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened
     /* `file` as the server lists its folder now (its keys after a key change), or null when it is no longer there. */
     fun fresh(file: Opened, folder: Opened): Opened?
+    /*
+     * How many items the folder `id` holds now, or null when it isn't there; throws when there was no answer. Only looks: an
+     * answered "delete" waiting for a folder never deletes one found.
+     */
+    fun lookFolder(id: String, workspaceId: String): Int?
     /* `folder` and the chain above it as the server holds them now (a family's synced again first), to seal afresh under. */
     fun refreshFolder(folder: Opened): Opened
     /* Never FINISHING: an upload still completing is asked about again, then UNKNOWN (it may land yet). */
@@ -362,22 +370,51 @@ object SaveRuns {
     }
 
     /*
-     * Runs another launch left behind, for the next open to offer to delete or keep what they made. Settled here and never
-     * offered: a row with nothing made (its uploads are the reservations ledger's, which lets them go: Reservations), and one
-     * the person already answered "delete" for that waits for a folder that may still land (applied again quietly).
+     * Runs another launch left behind, for the next open to offer to delete or keep what they made. Never offered: a row with
+     * nothing made (it goes; its uploads are the reservations ledger's, which lets them go: Reservations), and one the person
+     * already answered "delete" for that waits for a folder that may still land (only looked for, on a quiet thread of its
+     * own: lookAgain). Call it off the main thread: it reads and writes the journal on disk. It never waits on the network.
      */
     fun interrupted(journal: SaveRunJournal, writer: SaveRunWriter, now: Long = System.currentTimeMillis()): List<SaveRunRow> {
         // A finished run whose row couldn't be removed is never offered, and goes now.
         journal.dropDone()
         val offered = ArrayList<SaveRunRow>()
+        val answered = ArrayList<SaveRunRow>()
         for (row in journal.list().filter { it.launch != launch && !it.done }) {
             when {
                 row.nodeIds.isEmpty() -> journal.retire(row)
-                row.chosenDelete -> cleanUp(row, writer, journal, now)
+                row.chosenDelete -> answered += row
                 else -> offered += row
             }
         }
+        // On the quiet thread: the rows to offer come back now, never after the network.
+        if (answered.isNotEmpty()) synchronized(quietLock) {
+            quietWork = quiet.submit { for (row in answered) runCatching { lookAgain(row, writer, journal, now) } }
+        }
         return offered
+    }
+
+    /* Where interrupted's quiet looks run, one after another; never the caller's thread. */
+    private val quiet = java.util.concurrent.Executors.newSingleThreadExecutor { work -> Thread(work, "save-runs-quiet").apply { isDaemon = true } }
+    private val quietLock = Any()
+    private var quietWork: java.util.concurrent.Future<*>? = null
+
+    /* Tests only: waits for the quiet looks asked for so far. */
+    internal fun quietlySettled() { synchronized(quietLock) { quietWork }?.get() }
+
+    /*
+     * An answered "delete" waiting for folders that may still land: only looked for. One found is never deleted unasked, days
+     * later and perhaps filled since: the answer goes and the row is offered again with what it holds (`holds`). None found
+     * once CREATION_SETTLE_MS has passed: never made, and the row goes. No answer: looked for again next launch.
+     */
+    private fun lookAgain(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long) {
+        var holds: Int? = null
+        for (id in row.nodeIds) writer.lookFolder(id, row.workspaceId)?.let { holds = (holds ?: 0) + it }
+        if (holds != null) {
+            journal.put(row.copy(chosenDelete = false, holds = holds))
+            return
+        }
+        if (row.uncertain.values.all { now - it >= CREATION_SETTLE_MS }) journal.retire(row)
     }
 
     /*
@@ -394,9 +431,12 @@ object SaveRuns {
      */
     fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long = System.currentTimeMillis()): SaveCleanup {
         val cleaned = clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_SETTLE_MS }.keys)
-        // Kept only to wait for a folder that may still land: the person's answer stays with the row, and later launches
-        // apply it quietly (interrupted) rather than ask again.
-        if (cleaned.cleanup == SaveCleanup.LEFT && cleaned.waiting && !row.chosenDelete) runCatching { journal.put(row.copy(chosenDelete = true)) }
+        // Kept only to wait for folders that may still land, all else done: the row names just those, with the person's answer,
+        // and later launches only look for them (interrupted).
+        val waitingOn = cleaned.onlyWaitingOn
+        if (cleaned.cleanup == SaveCleanup.LEFT && waitingOn != null)
+            runCatching { journal.put(row.copy(nodeIds = waitingOn, uploadIds = emptyList(), uncertain = row.uncertain.filterKeys { it in waitingOn },
+                chosenDelete = true, holds = null)) }
         return cleaned.cleanup
     }
 
@@ -419,7 +459,8 @@ object SaveRuns {
      * What a clean-up did, how many new versions it found landed, how many may have, and whether new files or folders may
      * still be there (`remains`: LEFT with the row kept, NO_ACCESS out of reach).
      */
-    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null, val waiting: Boolean = false)
+    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null, val waiting: Boolean = false,
+                                val onlyWaitingOn: List<String>? = null)
 
     /*
      * Aborts every upload the row names, removes its nodes; the row goes unless something is left. `completing`: the uploads
@@ -456,7 +497,10 @@ object SaveRuns {
         val notFound = HashSet<String>()
         val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
-        val waiting = mayExist.any { it in notFound }
+        val waitingOn = mayExist.filter { it in notFound }
+        val waiting = waitingOn.isNotEmpty()
+        // Those folders, when they are all that keeps the row: everything else was settled.
+        val onlyWaitingOn = if (waiting && !unsettled && discarded != SaveCleanup.LEFT && discarded != SaveCleanup.NO_ACCESS) waitingOn else null
         if (waiting) { unsettled = true; othersMayLand = true }
         var cleanup = discarded
         if (unsettled) cleanup = SaveCleanup.LEFT
@@ -466,7 +510,8 @@ object SaveRuns {
         val someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if (cleanup != SaveCleanup.LEFT && !journal.retire(row)) cleanup = SaveCleanup.LEFT
-        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS, waiting)
+        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS, waiting,
+            onlyWaitingOn)
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null): SaveCleanup {
@@ -670,10 +715,16 @@ class SaveRun private constructor(
         open()
         val copy = SaveRuns.signing(sources)
         val into = parent ?: first
-        return try {
-            makeFolder(name, into, copy)
-        } catch (error: Exception) {
-            throw failed(error)
+        // On its way until it returns: finish waits for it as for a result (waiting()).
+        synchronized(lock) { inFlight++ }
+        try {
+            return try {
+                makeFolder(name, into, copy)
+            } catch (error: Exception) {
+                throw failed(error)
+            }
+        } finally {
+            synchronized(lock) { inFlight-- }
         }
     }
 
@@ -1053,6 +1104,25 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
     /* A row as the server serves it now, opened afresh (through the family's ledger in a family folder). */
     private fun openServed(node: NodeView): Opened =
         if (vault.isFamilyWorkspace(node.workspaceId)) vault.openListed(node) else vault.open(node, replace = true)
+
+    override fun lookFolder(id: String, workspaceId: String): Int? {
+        var items = 0
+        var after: String? = null
+        try {
+            do {
+                val page = vault.api.children(id, workspaceId, after)
+                items += page.children.size
+                after = page.nextCursor
+            } while (after != null)
+        } catch (_: NotFound) {
+            return null
+        } catch (error: ApiError) {
+            // In the Trash: there, and the person decides what goes.
+            if (error.status == 409 && error.code == "trashed") return 0
+            throw error
+        }
+        return items
+    }
 
     override fun fresh(file: Opened, folder: Opened): Opened? {
         var after: String? = null
