@@ -22,7 +22,8 @@ import { createWatchdog } from './watchdog';
  * that ends any way but done also drops every result the save path has not released (each
  * buffer is detached, so a reference kept anywhere holds nothing, and its room in the budget
  * goes back) and revokes the blob URLs it made. A run that is done leaves its results with
- * the save path, counted in the budget until released.
+ * the save path, counted in the budget until released, and stays known until then: a lock or
+ * sign-out drops them as it would a cancelled run's (`cancelAllToolRuns`).
  *
  * Chromium lets a worker busy in a loop run for up to two seconds after terminate(); the
  * next run's worker may start meanwhile, so two heaps can overlap for that long.
@@ -53,6 +54,13 @@ export type ToolRunOptions<I> = {
     input: I;
     /* The run owns them: each is closed when the run ends. */
     sources: RangeReader[];
+    /*
+     * WebAssembly the worker needs, compiled on the page (compileWasm), and data files: the
+     * worker's policy lets it fetch and load nothing, so the page hands over all it uses.
+     * Files are copied, not moved, so one fetched once can serve every run.
+     */
+    modules?: Record<string, WebAssembly.Module>;
+    files?: Record<string, ArrayBuffer>;
     /* The save path. Without one, each result is dropped as it arrives. */
     onOutput?: (output: ToolOutput) => void;
     /* The tab's budget unless a test brings its own. */
@@ -154,10 +162,23 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         }
     }
 
+    /*
+     * Every result the save path has not released goes: its buffer detached, so a reference kept
+     * anywhere holds nothing, and its room in the budget back. Then the run is forgotten.
+     */
+    function dropOutputs() {
+        for (const output of outputs.values()) {
+            drop(output.buffer);
+            budget.release(output.size);
+        }
+        countUnreleased(-outputs.size);
+        outputs.clear();
+        untrack();
+    }
+
     function finish(outcome: { ok: true; value: R } | { ok: false; error: Error }) {
         if (ended) return;
         ended = true;
-        untrack();
         // Its own clean-up and settling first; only then the next run.
         try {
             teardown?.();
@@ -169,15 +190,14 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 .then(() => source.close?.())
                 .catch(() => {});
         if (!outcome.ok) {
-            for (const output of outputs.values()) {
-                drop(output.buffer);
-                budget.release(output.size);
-            }
-            countUnreleased(-outputs.size);
-            outputs.clear();
+            dropOutputs();
             for (const url of urls) URL.revokeObjectURL(url);
             urls.clear();
+        } else if (outputs.size === 0) {
+            untrack();
         }
+        // Done with results still waiting for upload: the run stays known until the last is
+        // released, so a lock or sign-out meanwhile still drops them (endForAccount).
         if (outcome.ok) {
             set({ status: 'done' });
             settle.resolve(outcome.value);
@@ -280,6 +300,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                     if (!outputs.delete(msg.id)) return;
                     countUnreleased(-1);
                     budget.release(size);
+                    if (ended && outputs.size === 0) untrack();
                 },
             };
             try {
@@ -329,7 +350,13 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
             failed();
         };
         worker.onmessageerror = failed;
-        const start: ToWorker = { type: 'start', input: options.input, sources: ports };
+        const start: ToWorker = {
+            type: 'start',
+            input: options.input,
+            sources: ports,
+            modules: options.modules ?? {},
+            files: options.files ?? {},
+        };
         try {
             worker.postMessage(
                 start,
@@ -348,7 +375,9 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
         fail: failed,
     };
     const cancel = () => finish({ ok: false, error: new ToolCancelled() });
-    const untrack = trackToolRun(cancel);
+    /* A lock or sign-out: a run going or waiting is cancelled; one done drops what it still holds. */
+    const endForAccount = () => (ended ? dropOutputs() : cancel());
+    const untrack = trackToolRun(endForAccount);
     if (current) {
         queue.push(entry);
         set({ status: 'waiting', behind: current.label });

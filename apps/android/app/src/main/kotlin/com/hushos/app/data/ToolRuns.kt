@@ -16,10 +16,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -90,33 +88,42 @@ class ToolRuns {
         // This run's own claim on the slot: unlocked here unless the thread took it over.
         val token = Any()
         var handedOver = false
+        val control = RunControl(watchdogMillis.toULong(), clock)
+        val outcome = CompletableDeferred<Result<T>>()
+        // One cancellation for the run's whole life, in place before anything is announced: a
+        // sign-out reaches it waiting, being let in, or running. The control is the latch.
+        val waiting = AtomicReference<kotlinx.coroutines.Job?>(null)
+        val untrack = track {
+            control.cancel()
+            outcome.complete(Result.failure(CancellationException("Cancelled.")))
+            waiting.get()?.cancel(CancellationException("Cancelled."))
+        }
         try {
             try {
                 coroutineScope {
-                    val waiting = coroutineContext[kotlinx.coroutines.Job]!!
-                    val untrack = track { waiting.cancel(CancellationException("Cancelled.")) }
+                    waiting.set(coroutineContext[kotlinx.coroutines.Job]!!)
+                    // Ended before it could wait (a sign-out from the state callback of another run).
+                    if (control.isEnded()) throw CancellationException("Cancelled.")
                     // Fair: first come, first run. While waiting, told whenever the run ahead changes.
                     val watch = launch { current.collect { ahead -> if (ahead != null) state(ToolRunState.Waiting(ahead)) } }
                     try {
                         slot.lock(token)
                     } finally {
                         watch.cancel()
-                        untrack()
+                        waiting.set(null)
                     }
                 }
                 // Mutex's fast path takes a free slot without looking: a caller already cancelled stops here.
                 currentCoroutineContext().ensureActive()
+                if (control.isEnded()) throw CancellationException("Cancelled.")
+                current.value = label
+                state(ToolRunState.Running)
+                // A sign-out from the Running callback, or any time until the thread starts: nothing starts.
+                if (control.isEnded()) throw CancellationException("Cancelled.")
             } catch (error: CancellationException) {
+                untrack()
                 state(ToolRunState.Cancelled)
                 throw error
-            }
-            current.value = label
-            state(ToolRunState.Running)
-            val control = RunControl(watchdogMillis.toULong(), clock)
-            val outcome = CompletableDeferred<Result<T>>()
-            val untrack = track {
-                control.cancel()
-                outcome.complete(Result.failure(CancellationException("Cancelled.")))
             }
             val thread = Thread(null, {
                 try {
@@ -144,21 +151,14 @@ class ToolRuns {
                 throw ToolFailed(cause = error)
             }
             try {
-                val value = coroutineScope {
-                    val watchdog = launch(Dispatchers.Default) {
-                        while (true) {
-                            delay(pollMillis)
-                            if (control.checkWatchdog()) {
-                                outcome.complete(Result.failure(ToolFailed()))
-                                return@launch
-                            }
-                        }
-                    }
-                    try {
-                        outcome.await().getOrThrow()
-                    } finally {
-                        watchdog.cancel()
-                    }
+                // On a timer thread of its own: a watchdog on a shared pool waits behind whatever else runs there.
+                val watchdog = Timers.every(pollMillis) {
+                    if (control.checkWatchdog()) outcome.complete(Result.failure(ToolFailed()))
+                }
+                val value = try {
+                    outcome.await().getOrThrow()
+                } finally {
+                    watchdog.cancel(false)
                 }
                 state(ToolRunState.Done)
                 return value
@@ -199,12 +199,18 @@ class StoreSource(private val fetchRange: (ByteRange) -> ByteArray) : ObjectSour
     }
 }
 
+/* The harness's own timer thread: the watchdogs and the cut-offs, never behind a shared pool. */
+private object Timers {
+    private val timer = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "tool-timers").apply { isDaemon = true } }
+
+    fun every(millis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
+        timer.scheduleWithFixedDelay({ runCatching(task) }, millis, millis, TimeUnit.MILLISECONDS)
+}
+
 /* Cuts off a connection whose run has ended, within a tenth of a second. */
 private object Cutoff {
-    private val timer = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "tool-cutoff").apply { isDaemon = true } }
-
     fun <T> whileRunning(control: RunControl, connection: HttpURLConnection, block: () -> T): T {
-        val watch = timer.scheduleWithFixedDelay({ if (control.isEnded()) connection.disconnect() }, 100, 100, TimeUnit.MILLISECONDS)
+        val watch = Timers.every(100) { if (control.isEnded()) connection.disconnect() }
         try {
             return block()
         } finally {

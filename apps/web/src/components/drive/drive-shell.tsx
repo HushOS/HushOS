@@ -83,7 +83,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         closeSpaces();
         forgetThumbnails();
         forgetPreviews();
-        // No tool goes on parsing decrypted bytes, nor its results wait for upload, past the lock.
+        // No tool goes on parsing decrypted bytes past the lock, and no result of one, finished
+        // or not, stays in memory waiting for upload.
         cancelAllToolRuns();
         void queryClient.resetQueries({ queryKey: driveKeys.all });
         // The worker forgot every family's chain and folder keys too: each family is checked again.

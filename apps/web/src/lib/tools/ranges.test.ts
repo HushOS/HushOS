@@ -133,7 +133,7 @@ function runTool<R>(
         return { size: reader.size, port: channel.port2 };
     });
     scope.onmessage!({
-        data: { type: 'start', input: null, sources: channels },
+        data: { type: 'start', input: null, sources: channels, modules: {}, files: {} },
     } as MessageEvent<ToWorker>);
     const finished = new Promise<ToPage>((resolve) => {
         const check = () => {

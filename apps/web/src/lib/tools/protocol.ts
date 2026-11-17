@@ -7,7 +7,8 @@
  *
  * The page does not trust the worker to keep to any of this: the worker parses files anyone
  * could have uploaded, and a parser bug could hand it to them. Every limit here is enforced
- * by the page, and a worker that breaks one fails its run.
+ * by the page, and a worker that breaks one fails its run. The page is also the worker's only
+ * way in or out: its policy lets it fetch nothing and load nothing (apps/web/server/csp.ts).
  */
 
 /* Produced plaintext waiting for upload, across every run of the tab, before producing pauses (section 3, "Memory"). */
@@ -32,6 +33,9 @@ export type ToWorker =
           input: unknown;
           /* One per source file, in order: its size, and the port its ranges are read over. */
           sources: { size: number; port: MessagePort }[];
+          /* WebAssembly the page compiled, and data files it fetched: a tools worker may fetch nothing itself. */
+          modules: Record<string, WebAssembly.Module>;
+          files: Record<string, ArrayBuffer>;
       }
     /* The output `id` was taken and the budget has room: the worker may produce the next. */
     | { type: 'accepted'; id: number };

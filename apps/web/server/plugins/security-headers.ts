@@ -45,7 +45,7 @@ export default definePlugin((nitroApp) => {
         response.headers.set(
             'Content-Security-Policy',
             isToolWorkerScript(pathname)
-                ? buildToolWorkerCsp(appEnv.APP_ORIGIN)
+                ? buildToolWorkerCsp()
                 : buildCsp({
                       nonce: typeof nonce === 'string' ? nonce : null,
                       dev,

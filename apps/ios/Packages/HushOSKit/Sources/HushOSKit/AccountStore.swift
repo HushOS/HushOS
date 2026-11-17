@@ -109,8 +109,10 @@ public struct AccountStore: Sendable {
      * a join's escalation on this phone (docs/groups-mobile-plan.md).
      */
     public func wipe() {
-        // No file tool goes on reading the account's files, nor its results wait for upload.
+        // No file tool goes on reading the account's files, and none starts. The results runs
+        // handed on are the save path's to drop; the budget they were counted in starts empty.
         ToolRuns.shared.cancelAll()
+        ToolRuns.budget.clear()
         let files = FileManager.default
         // First: every download of the session, family or personal, stops writing before its folder goes.
         TemporaryCopies.endAccount(copies)

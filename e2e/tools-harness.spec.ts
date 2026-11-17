@@ -15,7 +15,8 @@ import { newPage } from './helpers';
  * stops one producing and drops what the page held, the budget holds producing back, and a
  * range read across the source arrives byte for byte. The policy reports nothing throughout.
  *
- * A tools worker runs under its own narrower policy and cannot call the API. The last test is
+ * A tools worker runs under a policy of its own that names no source: no attempt to reach the
+ * server leaves it, and WebAssembly reaches it compiled by the page. The last test is
  * against the app itself: a worker script a build serves carries the policy.
  */
 
@@ -47,13 +48,31 @@ async function buildFixture() {
     });
 }
 
+/* Every request the server saw, path and query: where a leak would show. */
+const requests: string[] = [];
+
+/* (module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add)) */
+const ADD_WASM = Uint8Array.from([
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 7, 1, 96, 2, 127, 127, 1, 127, 3, 2, 1, 0, 7, 7, 1, 3, 97, 100,
+    100, 0, 0, 10, 9, 1, 7, 0, 32, 0, 32, 1, 106, 11,
+]);
+
 function serve() {
     const types: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript' };
     return createServer((request, response) => {
+        requests.push(request.url ?? '');
         const path = new URL(request.url ?? '/', 'http://x').pathname;
-        // The API a worker taken over would want: answered, so a refusal is the policy's doing.
+        // The API a worker taken over would want: answered, so only the policy can keep it out.
         if (path === '/api/health') {
             response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"status":"ok"}');
+            return;
+        }
+        if (path === '/add.wasm') {
+            response.writeHead(200, {
+                'Content-Type': 'application/wasm',
+                'Content-Security-Policy': POLICY,
+            });
+            response.end(ADD_WASM);
             return;
         }
         const file = normalize(join(OUT, path === '/' ? 'index.html' : path));
@@ -64,9 +83,7 @@ function serve() {
         response.writeHead(200, {
             'Content-Type': types[extname(file)] ?? 'application/octet-stream',
             // As the app's server does: a tools worker's script gets the narrower policy.
-            'Content-Security-Policy': isToolWorkerScript(path)
-                ? buildToolWorkerCsp(origin)
-                : POLICY,
+            'Content-Security-Policy': isToolWorkerScript(path) ? buildToolWorkerCsp() : POLICY,
         });
         response.end(readFileSync(file));
     });
@@ -75,7 +92,8 @@ function serve() {
 type Tools = {
     violations(): string[];
     clearViolations(): void;
-    reach(): Promise<{ ok: boolean; value?: unknown }>;
+    escape(): Promise<{ ok: boolean; value?: unknown }>;
+    wasm(): Promise<{ ok: boolean; value?: unknown }>;
     lastBeat(): number;
     now(): number;
     state(): { status: string } | null;
@@ -191,14 +209,22 @@ test('cancel terminates the worker, empties what the page held and revokes the r
     await expectStopped(100);
 });
 
-test('a tools worker cannot reach the API, only the files the build emitted', async () => {
-    const outcome = await tools((t) => t.reach());
-    expect(outcome).toEqual({ ok: true, value: { api: false, own: true } });
-    // Refused by the worker's own policy, and the worker said so.
-    expect(await tools((t) => t.violations())).toEqual([
-        expect.stringMatching(/^worker: connect-src .*\/api\/health$/),
-    ]);
+test('a tools worker taken over reaches nothing: no import, fetch, socket or worker leaves the page', async () => {
+    const before = requests.length;
+    const outcome = await tools((t) => t.escape());
+    expect(outcome.ok).toBe(true);
+    // What counts is the server: none of the attempts arrived, with or without the cookie.
+    const arrived = requests
+        .slice(before)
+        .filter((url) => url.includes('PLAINTEXT') || url.startsWith('/api'));
+    expect(arrived).toEqual([]);
+    // Refused by the worker's own policy, which the worker reported.
+    expect((await tools((t) => t.violations())).some((v) => v.startsWith('worker: '))).toBe(true);
     await tools((t) => t.clearViolations());
+});
+
+test('WebAssembly compiled on the page instantiates and runs in a tools worker', async () => {
+    expect(await tools((t) => t.wasm())).toEqual({ ok: true, value: 5 });
 });
 
 test('the app serves its worker scripts under the same policy', async ({ browser }) => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { scanSource, scanWorkers, workerUrls } from './worker-code';
+import { scanSource, scanWorkers, toolWorkerImports, workerUrls } from './worker-code';
 
 /*
  * The build's check for dynamic code in workers. A guard that stops seeing a form of eval
@@ -117,5 +117,18 @@ describe('what a worker reaches', () => {
                 'U=new Worker(new URL(`/assets/json.worker-DSHp7M8s.js`,``+import.meta.url),{type:`module`});V=new Worker("/assets/x-1.js")',
             ),
         ).toEqual(['/assets/json.worker-DSHp7M8s.js', '/assets/x-1.js']);
+    });
+});
+
+describe('a tools worker', () => {
+    test('must load nothing at run time: every kind of import is listed', () => {
+        const file = '/assets/archive.tool-worker-a1.js';
+        expect(toolWorkerImports(file, 'const x=1;self.onmessage=()=>{}')).toEqual([]);
+        expect(
+            toolWorkerImports(
+                file,
+                'import{a}from"./chunk-b.js";export*from"/assets/c.js";await import(`./d.js`);await import(u);importScripts("/assets/e.js")',
+            ),
+        ).toEqual(['./chunk-b.js', '/assets/c.js', './d.js', '/assets/e.js', 'u']);
     });
 });

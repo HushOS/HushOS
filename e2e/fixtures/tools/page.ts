@@ -1,5 +1,6 @@
 import { PlaintextBudget } from '../../../apps/web/src/lib/tools/budget';
 import { memoryReader } from '../../../apps/web/src/lib/tools/ranges';
+import { compileWasm } from '../../../apps/web/src/lib/tools/wasm';
 import { startToolRun, type ToolOutput, type ToolRun } from '../../../apps/web/src/lib/tools/run';
 
 /*
@@ -127,13 +128,25 @@ const tools = {
         autoRelease = true;
         for (const output of held) output.release();
     },
-    /* What the worker could reach: this origin's API (with the person's cookie), and its own assets. */
-    async reach() {
+    /* Every way out a worker taken over might try; the spec reads the server's log. */
+    async escape() {
         current = startToolRun({
-            label: 'Reach',
+            label: 'Escape',
             worker: probe,
-            input: { mode: 'reach' },
+            input: { mode: 'escape' },
             sources: [],
+        });
+        return settled(current);
+    },
+    /* WebAssembly compiled here and instantiated in the worker, which may fetch nothing. */
+    async wasm() {
+        const add = await compileWasm('/add.wasm');
+        current = startToolRun({
+            label: 'Wasm',
+            worker: probe,
+            input: { mode: 'wasm' },
+            sources: [],
+            modules: { add },
         });
         return settled(current);
     },

@@ -396,17 +396,32 @@ describe('ending a run', () => {
         expect(revoked).toHaveBeenCalledWith('blob:late');
     });
 
-    test('a finished run keeps its results with the save path', async () => {
+    test('a finished run keeps its results with the save path until a lock or sign-out drops them', async () => {
+        const budget = new PlaintextBudget();
         const taken: ToolOutput[] = [];
-        const { handle, worker } = run({ onOutput: (o) => void taken.push(o) });
+        const { handle, worker } = run({ budget, onOutput: (o) => void taken.push(o) });
         worker.send(output(0, 100));
-        worker.send({ type: 'done', result: { files: 1 } });
-        await expect(handle.result).resolves.toEqual({ files: 1 });
+        worker.send(output(1, 50));
+        worker.send({ type: 'done', result: { files: 2 } });
+        await expect(handle.result).resolves.toEqual({ files: 2 });
         expect(worker.terminated).toBe(true);
+        // A cancel after done changes nothing: the results are the save path's.
         handle.cancel();
         expect(handle.getState()).toEqual({ status: 'done' });
         expect(taken[0]!.bytes.byteLength).toBe(100);
         taken[0]!.release();
+        expect(budget.waiting).toBe(50);
+
+        // Then the tab locks, before the second result was uploaded.
+        cancelAllToolRuns();
+        expect(taken[1]!.bytes.byteLength).toBe(0);
+        expect(budget.waiting).toBe(0);
+        const event = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        // The save path's late release takes nothing more.
+        taken[1]!.release();
+        expect(budget.waiting).toBe(0);
     });
 
     test('while a result waits for upload, leaving the page asks first', () => {

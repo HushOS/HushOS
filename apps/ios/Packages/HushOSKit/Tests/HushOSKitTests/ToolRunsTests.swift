@@ -177,6 +177,35 @@ import Testing
         #expect(log.items.isEmpty)
     }
 
+    @Test func aSignOutAsARunStartsWaitingEndsIt() async throws {
+        // cancelAll from the .waiting callback: the waiting run is reached, not only the running one.
+        let runs = ToolRuns()
+        let gate = DispatchSemaphore(value: 0)
+        let log = Log()
+        let first = Task { try await runs.run("First") { _ in gate.wait(); return 0 } }
+        try await eventually { await runs.running == "First" }
+        let second = Task {
+            try await runs.run("Second", state: { if case .waiting = $0 { runs.cancelAll() } }) { _ in log.add("second ran"); return 0 }
+        }
+        await #expect(throws: ToolCancelled.self) { try await second.value }
+        await #expect(throws: ToolCancelled.self) { try await first.value }
+        gate.signal()
+        try await eventually { await runs.running == nil }
+        #expect(log.items.isEmpty)
+    }
+
+    @Test func aSignOutAsARunIsLetInStartsNothing() async throws {
+        // cancelAll from the .running callback: after the slot is taken, before the thread starts.
+        let runs = ToolRuns()
+        let log = Log()
+        await #expect(throws: ToolCancelled.self) {
+            try await runs.run("Let in", state: { if case .running = $0 { runs.cancelAll() } }) { _ in log.add("ran"); return 0 }
+        }
+        #expect(log.items.isEmpty)
+        try await eventually { await runs.running == nil }
+        #expect(try await runs.run("Next") { _ in 3 } == 3)
+    }
+
     @Test func theWatchdogFailsARunThatReportsNoProgress() async throws {
         let runs = ToolRuns()
         let log = Log()

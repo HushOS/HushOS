@@ -67,10 +67,13 @@ export function buildCsp(input: CspInput) {
 /*
  * A tools worker (`*.tool-worker.ts`, emitted as `/assets/<name>.tool-worker-<hash>.js`) parses
  * files anyone could have uploaded, and a parser bug could hand it to them. Holding no keys is
- * not enough: a same-origin worker could call the API with the person's session cookie. Its
- * script is served with a policy of its own, which a dedicated worker runs under: scripts and
- * WebAssembly from this origin, fetches only under /assets/ (WebAssembly and data files the
- * build emits), and nothing else: no API, no store, no other origin, no workers of its own.
+ * not enough: a same-origin worker could reach this server with the person's session cookie,
+ * and carry decrypted bytes there in a URL. Its script is served with a policy of its own,
+ * which a dedicated worker runs under, and which names no source at all: no fetch, no import()
+ * or importScripts (a `'self'` script source would let `import('/api/…?q=…')` through), no
+ * workers of its own. Only WebAssembly may be compiled, and the page hands it the compiled
+ * Modules and data files it needs: the page is the worker's only way out. A tools worker is
+ * therefore one self-contained file (check-worker-code.ts fails the build otherwise).
  * IndexedDB and the other storage APIs are not governed by any policy; docs/file-tools-design.md
  * (section 3) records what that leaves.
  */
@@ -78,12 +81,10 @@ export function isToolWorkerScript(pathname: string) {
     return /^\/assets\/[\w.-]+\.tool-worker-[\w-]+\.js$/.test(pathname);
 }
 
-export function buildToolWorkerCsp(origin: string) {
-    const assets = `${new URL(origin).origin}/assets/`;
+export function buildToolWorkerCsp() {
     const directives: [string, string[]][] = [
         ['default-src', ["'none'"]],
-        ['script-src', ["'self'", "'wasm-unsafe-eval'"]],
-        ['connect-src', [assets]],
+        ['script-src', ["'wasm-unsafe-eval'"]],
         ['worker-src', ["'none'"]],
         ['base-uri', ["'none'"]],
         ['form-action', ["'none'"]],

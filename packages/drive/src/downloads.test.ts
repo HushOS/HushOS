@@ -621,12 +621,22 @@ describe('download manager', () => {
         await reader.close();
     });
 
-    test('a tool’s read fails when the padding fails; a viewer’s does not', async () => {
+    test('a tool’s tail arrives without waiting for the padding; once that fails, reads fail', async () => {
         const size = CHUNK - 10;
         const sealed = { 'o-pf': { plaintextSize: size, thumbnailBytes: 1000 } };
+        let failPadding: (() => void) | null = null;
         const decide = (_object: string, index: number) =>
             index === 1
-                ? { ok: false as const, status: 404, retryable: false, message: 'gone' }
+                ? new Promise<{ ok: false; status: number; retryable: boolean; message: string }>(
+                      (resolve) =>
+                          (failPadding = () =>
+                              resolve({
+                                  ok: false,
+                                  status: 404,
+                                  retryable: false,
+                                  message: 'gone',
+                              })),
+                  )
                 : null;
         const tool = harness({ sealed, decide }).manager.openReader(
             paddedFile('pf', size, 1000),
@@ -635,13 +645,22 @@ describe('download manager', () => {
                 tool: true,
             },
         );
-        const failing = expect(tool.read(0, 10)).rejects.toThrow();
+        // The padding is still on its way, and the tail is already here.
+        const first = tool.read(size - 10, 10);
         await settle(100);
-        await failing;
-        const viewer = harness({ sealed, decide }).manager.openReader(
-            paddedFile('pf', size, 1000),
-            1,
-        );
+        expect((await first).byteLength).toBe(10);
+        expect(failPadding).not.toBeNull();
+        failPadding!();
+        await settle(10);
+        await expect(tool.read(0, 10)).rejects.toThrow();
+        // A viewer ignores a padding failure, as before.
+        const viewer = harness({
+            sealed,
+            decide: (_o: string, index: number) =>
+                index === 1
+                    ? { ok: false as const, status: 404, retryable: false, message: 'gone' }
+                    : null,
+        }).manager.openReader(paddedFile('pf', size, 1000), 1);
         const read = viewer.read(0, 10);
         await settle(100);
         expect((await read).byteLength).toBe(10);

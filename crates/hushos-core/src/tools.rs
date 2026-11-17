@@ -277,8 +277,15 @@ impl RunControl {
 #[derive(Debug)]
 pub struct ToolBudget {
     limit: u64,
-    waiting: Mutex<u64>,
+    waiting: Mutex<Waiting>,
     room: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct Waiting {
+    bytes: u64,
+    /* Producers waiting for room now: what a test waits on instead of sleeping. */
+    producers: u32,
 }
 
 #[cfg_attr(feature = "uniffi", uniffi::export)]
@@ -286,44 +293,66 @@ impl ToolBudget {
     /// The apps pass [`tool_budget_bytes`]; tests pass less.
     #[cfg_attr(feature = "uniffi", uniffi::constructor)]
     pub fn new(limit_bytes: u64) -> Arc<Self> {
-        Arc::new(ToolBudget { limit: limit_bytes.max(1), waiting: Mutex::new(0), room: Condvar::new() })
+        Arc::new(ToolBudget {
+            limit: limit_bytes.max(1),
+            waiting: Mutex::new(Waiting::default()),
+            room: Condvar::new(),
+        })
     }
 
     /// Before the run under `control` hands on a result of `bytes`: waits while
     /// the budget is full, then counts it. The result that crosses the line
     /// goes through; the next waits until releases bring the total under it.
     /// The wait stops the watchdog's clock (a paused upload is no hang) and
-    /// ends, failing, when the run does. Counts as progress.
+    /// ends, failing, when the run does. Counts as progress. It fails only
+    /// before counting: once it answers Ok the bytes are counted, and the
+    /// caller hands the result on so whoever takes it releases them.
     pub fn produce(&self, bytes: u64, control: Arc<RunControl>) -> CoreResult<()> {
         control.check()?;
         let mut waiting = lock(&self.waiting);
-        if *waiting >= self.limit {
+        if waiting.bytes >= self.limit {
             let _hold = control.hold();
-            while *waiting >= self.limit {
-                control.check()?;
+            waiting.producers += 1;
+            while waiting.bytes >= self.limit && !control.is_ended() {
                 waiting = self
                     .room
                     .wait_timeout(waiting, BUDGET_WAIT_SLICE)
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .0;
             }
+            waiting.producers -= 1;
         }
-        control.check()?;
-        *waiting = waiting.saturating_add(bytes);
-        drop(waiting);
-        control.progress()
+        // The last chance to fail, and nothing is counted yet.
+        control.progress()?;
+        waiting.bytes = waiting.bytes.saturating_add(bytes);
+        Ok(())
     }
 
     /// A result of `bytes` was uploaded or dropped: its room goes back.
     pub fn release(&self, bytes: u64) {
         let mut waiting = lock(&self.waiting);
-        *waiting = waiting.saturating_sub(bytes);
+        waiting.bytes = waiting.bytes.saturating_sub(bytes);
+        self.room.notify_all();
+    }
+
+    /// Sign-out: every result is gone with the account, uploaded or not, so
+    /// nothing is counted any more. A release that arrives later takes nothing.
+    pub fn clear(&self) {
+        let mut waiting = lock(&self.waiting);
+        waiting.bytes = 0;
         self.room.notify_all();
     }
 
     /// Produced plaintext waiting for upload now.
     pub fn waiting(&self) -> u64 {
-        *lock(&self.waiting)
+        lock(&self.waiting).bytes
+    }
+}
+
+#[cfg(test)]
+impl ToolBudget {
+    fn producers(&self) -> u32 {
+        lock(&self.waiting).producers
     }
 }
 
@@ -694,6 +723,17 @@ mod tests {
         store.fetched.lock().unwrap().iter().map(|range| range.start / SEALED_CHUNK).collect()
     }
 
+    /* Waits, without guessing at a sleep, until a producer is blocked on the budget. */
+    fn until_waiting(budget: &ToolBudget, producers: u32) {
+        for _ in 0..5_000 {
+            if budget.producers() == producers {
+                return;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        panic!("no producer started waiting");
+    }
+
     fn control(clock: &Arc<Manual>, watchdog: u64) -> Arc<RunControl> {
         RunControl::new(watchdog, Some(Arc::clone(clock) as Arc<dyn ToolClock>))
     }
@@ -946,11 +986,12 @@ mod tests {
             let (budget, control) = (Arc::clone(&budget), Arc::clone(&control));
             thread::spawn(move || budget.produce(10, control))
         };
-        thread::sleep(Duration::from_millis(100));
+        until_waiting(&budget, 1);
         assert!(!producer.is_finished(), "a full budget holds the next result back");
         budget.release(10);
-        thread::sleep(Duration::from_millis(100));
+        assert_eq!(budget.waiting(), 110);
         assert!(!producer.is_finished(), "110 is still over 100");
+        assert_eq!(budget.producers(), 1);
         budget.release(60);
         producer.join().unwrap().unwrap();
         assert_eq!(budget.waiting(), 60);
@@ -967,7 +1008,7 @@ mod tests {
             let (budget, next) = (Arc::clone(&budget), Arc::clone(&next));
             thread::spawn(move || budget.produce(1, next))
         };
-        thread::sleep(Duration::from_millis(100));
+        until_waiting(&budget, 1);
         assert!(!producer.is_finished());
         budget.release(150);
         producer.join().unwrap().unwrap();
@@ -983,12 +1024,28 @@ mod tests {
             let (budget, control) = (Arc::clone(&budget), Arc::clone(&control));
             thread::spawn(move || budget.produce(1, control))
         };
-        thread::sleep(Duration::from_millis(50));
+        until_waiting(&budget, 1);
         control.cancel();
         assert_eq!(producer.join().unwrap(), Err(input(CANCELLED)));
         assert!(control.progress().is_err());
         assert_eq!(budget.waiting(), 10, "what was produced stays until the save path releases it");
         assert!(!control.check_watchdog(), "a cancelled run does not time out as well");
+    }
+
+    #[test]
+    fn a_produce_that_fails_counts_nothing_and_sign_out_clears_the_rest() {
+        let budget = ToolBudget::new(100);
+        let control = RunControl::new(60_000, None);
+        budget.produce(40, Arc::clone(&control)).unwrap();
+        control.cancel();
+        assert!(budget.produce(30, Arc::clone(&control)).is_err());
+        assert_eq!(budget.waiting(), 40, "a refused result is not counted");
+        // The 40 belonged to a run whose result the save path never released: sign-out clears it.
+        budget.clear();
+        assert_eq!(budget.waiting(), 0);
+        budget.release(40);
+        assert_eq!(budget.waiting(), 0, "a release after the clear takes nothing");
+        assert!(budget.produce(100, RunControl::new(60_000, None)).is_ok());
     }
 
     #[test]
@@ -1047,7 +1104,7 @@ mod tests {
             let (budget, control) = (Arc::clone(&budget), Arc::clone(&control));
             thread::spawn(move || budget.produce(1, control))
         };
-        thread::sleep(Duration::from_millis(50));
+        until_waiting(&budget, 1);
         for _ in 0..120 {
             clock.advance(1_000);
             assert!(!control.check_watchdog(), "uploads paused for two minutes");

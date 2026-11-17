@@ -73,14 +73,15 @@ describe('csp', () => {
         expect(parseOrigins(undefined)).toEqual([]);
     });
 
-    test('a tools worker may fetch only what the build emitted, never the API or the store', () => {
-        const policy = buildToolWorkerCsp('https://hushos.com');
-        expect(policy).toContain('connect-src https://hushos.com/assets/');
-        expect(policy).not.toMatch(/connect-src[^;]*'self'/);
-        expect(policy).toContain("script-src 'self' 'wasm-unsafe-eval'");
-        expect(policy).not.toContain("'unsafe-eval'");
-        expect(policy).toContain("worker-src 'none'");
+    test('a tools worker’s policy names no source: no fetch, no import, no workers', () => {
+        const policy = buildToolWorkerCsp();
         expect(policy).toContain("default-src 'none'");
+        // WebAssembly the page compiled may be instantiated; no script may be loaded at all.
+        expect(policy).toContain("script-src 'wasm-unsafe-eval'");
+        expect(policy).not.toMatch(/'self'|https?:|\*/);
+        expect(policy).not.toContain("'unsafe-eval'");
+        expect(policy).not.toContain('connect-src');
+        expect(policy).toContain("worker-src 'none'");
     });
 
     test('only a tools worker’s script gets the narrower policy', () => {

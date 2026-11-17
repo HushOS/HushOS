@@ -9,13 +9,15 @@ import {
 } from './protocol';
 
 /*
- * The worker's side of a tool run: imported by each tools worker (archive, PDF, image),
- * which calls `serveTool` once with its work. A tools worker's file is named
- * `*.tool-worker.ts`, which the server answers with the narrower policy of
- * apps/web/server/csp.ts. The worker holds no keys and reads its sources only through the
- * page, at most READS_IN_FLIGHT reads at a time (more wait their turn here); whatever it
- * produces is transferred to the page, and the next result waits until the page has room
- * for it. It never ends itself: the page terminates it when the run is over.
+ * The worker's side of a tool run: imported by each tools worker (archive, PDF, image), which
+ * calls `serveTool` once with its work. A tools worker's file is named `*.tool-worker.ts`, which
+ * the server answers with a policy that names no source (apps/web/server/csp.ts): it can fetch
+ * nothing, import nothing at run time and start no worker. So it is bundled as one file (no
+ * `import()`; check-worker-code.ts fails the build otherwise), and the WebAssembly and data it
+ * needs arrive from the page in the start message. It holds no keys and reads its sources only
+ * through the page, at most READS_IN_FLIGHT reads at a time (more wait their turn here);
+ * whatever it produces is transferred to the page, and the next result waits until the page
+ * has room for it. It never ends itself: the page terminates it when the run is over.
  */
 
 /* A refusal the tool understood, by a code the page has words for. Any other error becomes TOOL_FAILED. */
@@ -32,6 +34,9 @@ export type RangeSource = {
 
 export type ToolContext = {
     sources: RangeSource[];
+    /* WebAssembly compiled on the page, to instantiate here; and data files. Nothing else comes in. */
+    modules: Record<string, WebAssembly.Module>;
+    files: Record<string, ArrayBuffer>;
     progress: (done: number, total?: number | null) => void;
     /* Hands a result to the page, transferred; settles once the page has room for the next. */
     produce: (name: string, bytes: Uint8Array, mime?: string | null) => Promise<void>;
@@ -131,6 +136,8 @@ export function serveTool<I, R>(
         const take = turns();
         const context: ToolContext = {
             sources: msg.sources.map((source) => rangeSource(source.size, source.port, take)),
+            modules: msg.modules ?? {},
+            files: msg.files ?? {},
             progress(done, total = null) {
                 scope.postMessage({ type: 'progress', done, total });
             },

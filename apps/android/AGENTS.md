@@ -640,8 +640,8 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 - `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
 - A thread can't be killed: cancel and the watchdog end the run for the caller at once, a connection in flight is disconnected and a retry's wait cut short, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns; a caller cancelled before the thread starts gives the slot back itself.
 - `ToolRuns.budget` is the process's one `ToolBudget`: tools produce into it with their run's control, and whoever takes a result releases it when uploaded or dropped.
-- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()`: nothing runs past a sign-out.
-- The watchdog's clock is injectable (`clock =`); tests use one that moves a second per read.
+- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()` and `ToolRuns.budget.clear()`: nothing runs past a sign-out, and the budget starts empty. A run holds one cancellation from before it is announced until its thread ends, so a sign-out reaches it waiting, being let in or running.
+- The watchdog's clock is injectable (`clock =`); tests use one that moves a second per read. The watchdog and the connection cut-offs run on the harness's own timer thread (`Timers`), never a shared dispatcher: a watchdog on `Dispatchers.Default` with `delay` once never fired in the full JVM test run.
 - `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the connection to cut off).
 - Tests: `ToolRunsTest`.
 

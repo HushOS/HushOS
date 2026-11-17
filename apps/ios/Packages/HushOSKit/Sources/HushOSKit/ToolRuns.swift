@@ -127,22 +127,32 @@ public actor ToolRuns {
         work: @escaping @Sendable (RunControl) throws -> T
     ) async throws -> T {
         let id = UUID()
-        try await enter(id, label, state: state)
         let millis = UInt64(watchdog.components.seconds) * 1000 + UInt64(watchdog.components.attoseconds / 1_000_000_000_000_000)
         let control = RunControl(watchdogMillis: millis, clock: clock)
         let outcome = Outcome<T>()
+        // One cancellation for the run's whole life, in place before anything is announced: a
+        // sign-out reaches it waiting, being let in, or running. The control is the latch.
         live.track(id) {
             control.cancel()
             outcome.finish(.failure(ToolCancelled()))
+            Task { await self.drop(id) }
         }
-        // The handler is in place before the thread starts: a task cancelled already ends here.
+        do {
+            try await enter(id, label, state: state)
+        } catch {
+            live.untrack(id)
+            throw error
+        }
+        // The handler is in place before the thread starts: a task cancelled already, or a run
+        // ended while it waited or was being let in, ends here and never starts its work.
         let result = await withTaskCancellationHandler {
+            state(.running)
+            // Checked after the announcement too: a sign-out from the .running callback starts nothing.
             if Task.isCancelled || control.isEnded() {
                 live.untrack(id)
                 leave()
                 return Result<T, Error>.failure(ToolCancelled())
             }
-            state(.running)
             let watcher = Task.detached {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: poll)
@@ -192,8 +202,6 @@ public actor ToolRuns {
             return
         }
         state(.waiting(behind: ahead))
-        live.track(id) { Task { await self.drop(id) } }
-        defer { live.untrack(id) }
         do {
             try await withTaskCancellationHandler {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in

@@ -203,8 +203,9 @@ class ToolRunsTest {
             runs.run("Running") { control -> while (true) { control.check(); Thread.sleep(5) } }
         }
         eventually { runs.running.value == "Running" }
-        val waiting = async(Dispatchers.Default) { runs.run("Waiting") { log.add("waiting ran") } }
-        Thread.sleep(100)
+        val states = Collections.synchronizedList(ArrayList<ToolRunState>())
+        val waiting = async(Dispatchers.Default) { runs.run("Waiting", state = { states.add(it) }) { log.add("waiting ran") } }
+        eventually { states.contains(ToolRunState.Waiting("Running")) }
         runs.cancelAll()
         for (job in listOf(running, waiting)) {
             try {
@@ -215,6 +216,41 @@ class ToolRunsTest {
         }
         eventually { runs.running.value == null }
         assertTrue(log.isEmpty())
+    }
+
+    @Test fun aSignOutAsARunIsLetInStartsNothing() = runBlocking {
+        // cancelAll from the Running callback: after the slot is taken, before the thread starts.
+        val runs = ToolRuns()
+        val ran = AtomicInteger()
+        try {
+            runs.run("Let in", state = { if (it == ToolRunState.Running) runs.cancelAll() }) { ran.incrementAndGet() }
+            fail("the run started after the sign-out")
+        } catch (_: CancellationException) {
+        }
+        assertEquals(0, ran.get())
+        assertEquals(3, withTimeout(5_000) { runs.run("Next") { 3 } })
+    }
+
+    @Test fun aSignOutAsARunStartsWaitingEndsIt() = runBlocking {
+        // cancelAll from the Waiting callback: the waiting run is reached, not only the running one.
+        val runs = ToolRuns()
+        val gate = CountDownLatch(1)
+        val ran = AtomicInteger()
+        val first = async(Dispatchers.Default) { runs.run("First") { gate.await(5, TimeUnit.SECONDS); 0 } }
+        eventually { runs.running.value == "First" }
+        val second = async(Dispatchers.Default) {
+            runs.run("Second", state = { if (it is ToolRunState.Waiting) runs.cancelAll() }) { ran.incrementAndGet() }
+        }
+        for (job in listOf(first, second)) {
+            try {
+                job.await()
+                fail("a run outlived the sign-out")
+            } catch (_: CancellationException) {
+            }
+        }
+        gate.countDown()
+        eventually { runs.running.value == null }
+        assertEquals(0, ran.get())
     }
 
     @Test fun theWatchdogFailsARunThatReportsNoProgress() = runBlocking {

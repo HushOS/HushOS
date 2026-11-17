@@ -495,8 +495,14 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             });
             return pending;
         }
-        /* Tool readers: the file's last chunk, with its padding, fetched once. */
+        /*
+         * Tool readers: the file's last chunk, fetched once and kept. Its padding follows in the
+         * background, once; the read that wanted the tail doesn't wait for it, and if a padding
+         * chunk fails every later read fails (`paddingFailed`).
+         */
         let tail: Promise<Uint8Array> | null = null;
+        let trailing: Promise<void> | null = null;
+        let paddingFailed: unknown = null;
         let fetches = 0;
         function fetchOne(index: number) {
             if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
@@ -508,17 +514,22 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         function chunk(index: number) {
             if (options.tool && index === source.fileChunks - 1) {
                 if (!tail) {
-                    const pending = (async () => {
-                        const plaintext = await fetchOne(index);
-                        for (let pad = source.fileChunks; pad < source.total; pad++) {
-                            if (closed) throw new Error('The preview was closed.');
-                            await fetchOne(pad);
-                        }
-                        return plaintext;
-                    })();
-                    pending.catch(() => {
-                        if (tail === pending) tail = null;
-                    });
+                    const pending = fetchOne(index);
+                    pending.then(
+                        () => {
+                            trailing ??= (async () => {
+                                for (let pad = source.fileChunks; pad < source.total; pad++) {
+                                    if (closed) return;
+                                    await fetchOne(pad);
+                                }
+                            })().catch((error: unknown) => {
+                                paddingFailed = error;
+                            });
+                        },
+                        () => {
+                            if (tail === pending) tail = null;
+                        },
+                    );
                     tail = pending;
                 }
                 return tail;
@@ -542,6 +553,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             size: source.plaintextSize,
             async read(offset, length) {
                 if (closed) throw new Error('The preview was closed.');
+                if (paddingFailed) throw paddingFailed;
                 const end = Math.min(source.plaintextSize, offset + length);
                 if (offset < 0 || end <= offset) return new Uint8Array(0);
                 const first = Math.floor(offset / CHUNK_SIZE);
@@ -564,6 +576,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (closed) return;
                 if (options.tool) {
                     await chunk(source.fileChunks - 1);
+                    await trailing;
+                    if (paddingFailed) throw paddingFailed;
                     return;
                 }
                 // A read that reached the file's end already fetched the padding.
@@ -573,6 +587,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 closed = true;
                 cache.clear();
                 tail = null;
+                trailing = null;
                 listeners.clear();
                 await source.close();
             },

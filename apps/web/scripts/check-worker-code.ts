@@ -7,7 +7,7 @@
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { scanWorkers, workerUrls } from './worker-code';
+import { scanWorkers, toolWorkerImports, workerUrls } from './worker-code';
 
 const root = join(import.meta.dir, '..', '.output', 'public');
 const assets = join(root, 'assets');
@@ -70,6 +70,20 @@ const read = (path: string) => {
     const file = join(root, path);
     return file.startsWith(root) && existsSync(file) ? readFileSync(file, 'utf8') : null;
 };
+// A tools worker runs under a policy that lets it load nothing: it must be one file.
+const loading = [...entries]
+    .filter((entry) => /\.tool-worker-[\w-]+\.js$/.test(entry))
+    .flatMap((entry) =>
+        toolWorkerImports(entry, read(entry) ?? '').map((spec) => `${entry}: ${spec}`),
+    );
+if (loading.length) {
+    console.error(
+        'A tools worker loads code at run time, which its policy refuses; bundle it as one file:',
+    );
+    for (const line of loading) console.error(`  ${line}`);
+    process.exit(1);
+}
+
 const { scanned, findings, missing } = scanWorkers([...entries], read);
 
 if (missing.length) {

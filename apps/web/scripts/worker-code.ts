@@ -20,6 +20,16 @@ import { parseAst } from 'vite';
  * The one known exception is the import shim wasm-bindgen writes for js-sys's `Function`
  * (`__wbg_new_no_args_*`), which OPAQUE's WebAssembly imports to detect the global object and
  * never calls.
+ *
+ * Accepted as unflagged, because no parse can see them: the constructor of a function reached
+ * through a variable (`f.constructor`, `[].filter.constructor`), `this.eval`, a destructured
+ * `Function`, a string timer whose string is in a variable. None needs to be caught here: no
+ * policy this app sends carries `'unsafe-eval'`, so the browser refuses each at run time. This
+ * check exists so such code fails the build rather than a person's run.
+ *
+ * Tools workers (`*.tool-worker-*.js`) run under a policy that names no source, so they can't
+ * load anything at run time: `toolWorkerImports` lists what one would try to, which must be
+ * nothing.
  */
 
 /* `code`: dynamic code. `unfollowed`: an import this cannot follow, which a reviewed list may allow when its target is scanned another way. */
@@ -213,6 +223,15 @@ export function scanSource(file: string, source: string) {
     };
     visit(program, null, '', false);
     return { findings, imports };
+}
+
+/* Everything a tools worker would load at run time: imports of any kind, static, dynamic or importScripts. */
+export function toolWorkerImports(file: string, source: string) {
+    const { findings, imports } = scanSource(file, source);
+    return [
+        ...imports,
+        ...findings.filter((finding) => finding.kind === 'unfollowed').map((f) => f.excerpt),
+    ];
 }
 
 /* Worker scripts the page starts: `new Worker(new URL("/assets/x.js", ...))` or `new Worker("/assets/x.js")`, in any chunk. */
