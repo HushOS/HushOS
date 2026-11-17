@@ -228,6 +228,48 @@ fn large(name: &str) -> Vec<u8> {
             }
             write_zip(&[deflated_text("compressible.txt", &text)], false)
         }
+        "front-loaded.zip" => {
+            // make.ts's frontLoadedFixture: 12 MiB of zeros, then 1 MiB of noise (about 12:1 in all).
+            let mut data = vec![0u8; 13 * MIB as usize];
+            let mut x: u32 = 4242;
+            for byte in &mut data[12 * MIB as usize..] {
+                x ^= x << 13;
+                x ^= x >> 17;
+                x ^= x << 5;
+                *byte = x as u8;
+            }
+            let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::best());
+            encoder.write_all(&data).unwrap();
+            let packed = encoder.finish().unwrap();
+            write_zip(
+                &[Spec {
+                    name: "front-loaded.bin".into(),
+                    method: 8,
+                    packed,
+                    size: data.len() as u64,
+                    crc: crc32fast::hash(&data),
+                    zip64: false,
+                    comment: vec![],
+                }],
+                false,
+            )
+        }
+        "flat-budget.zip" => {
+            // make.ts's flatBudgetFixture: 4,000 entries of 256 parts.
+            let folders: Vec<String> = (0..255).map(|d| format!("p{d}")).collect();
+            let folders = folders.join("/");
+            write_zip(
+                &(0..4_000)
+                    .map(|i| Spec {
+                        packed: b"x".to_vec(),
+                        size: 1,
+                        crc: crc32fast::hash(b"x"),
+                        ..stored(&format!("{folders}/f{i}"))
+                    })
+                    .collect::<Vec<_>>(),
+                false,
+            )
+        }
         other => panic!("no large fixture {other}"),
     }
 }
@@ -283,6 +325,21 @@ fn every_fixture_as_expected_json_says() {
         }
         let zip = Zip::open(source).unwrap();
         let list = zip.listing().unwrap();
+        // Every listing stays within the parts the page accepts, the last entries listed flat.
+        assert!(
+            list.listed.iter().map(|item| item.parts.len()).sum::<usize>() <= LIST_PARTS_MAX,
+            "{name}: parts"
+        );
+        if let Some(count) = expected["count"].as_u64() {
+            assert_eq!(list.listed.len() as u64, count, "{name}: count");
+            let flat = list.listed.iter().position(|item| item.parts.len() == 1);
+            assert_eq!(flat.map(|at| at as u64), expected["flatFrom"].as_u64(), "{name}: flat from");
+            assert!(
+                list.listed[flat.unwrap()..].iter().all(|item| item.parts.len() == 1),
+                "{name}: flat after"
+            );
+            continue;
+        }
         let wanted = expected["entries"].as_array().unwrap();
         let paths: Vec<&str> = list.entries.iter().map(|entry| entry.path.as_str()).collect();
         let want_paths: Vec<&str> = wanted.iter().map(|entry| entry["path"].as_str().unwrap()).collect();
@@ -686,4 +743,58 @@ fn a_sibling_reads_beside_the_archive_with_its_password_and_closes_on_its_own() 
     assert!(session.preview(0, 1024, RunControl::new(30_000, None)).is_ok());
     session.close_archive();
     assert!(session.sibling().is_err());
+}
+
+#[test]
+fn hmac_sha1_and_pbkdf2_meet_their_published_vectors() {
+    // RFC 2202, test cases 1 and 2; RFC 6070, PBKDF2-HMAC-SHA1.
+    let hex = |bytes: &[u8]| bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let mut mac = HmacSha1::new(&[0x0b; 20]);
+    mac.update(b"Hi There");
+    assert_eq!(hex(&mac.finalize()[..]), "b617318655057264e28bc0b6fb378c8ef146be00");
+    let mut mac = HmacSha1::new(b"Jefe");
+    mac.update(b"what do ya want for nothing?");
+    assert_eq!(hex(&mac.finalize()[..]), "effcdf6ae5eb2fa2d27416d5f184df9c259a7c79");
+    // A key longer than a block is hashed first (RFC 2202, test case 6).
+    let mut mac = HmacSha1::new(&[0xaa; 80]);
+    mac.update(b"Test Using Larger Than Block-Size Key - Hash Key First");
+    assert_eq!(hex(&mac.finalize()[..]), "aa4ae5e15272d00e95705637ce8a3b55ed402112");
+    assert_eq!(
+        hex(&pbkdf2_sha1_rounds(b"password", b"salt", 1, 20)),
+        "0c60c80f961f0e71f3a9b524af6012062fe037a6"
+    );
+    assert_eq!(
+        hex(&pbkdf2_sha1_rounds(b"password", b"salt", 4096, 20)),
+        "4b007901b765489abead49d926f721d065a429c1"
+    );
+    assert_eq!(
+        hex(&pbkdf2_sha1_rounds(
+            b"passwordPASSWORDpassword",
+            b"saltSALTsaltSALTsaltSALTsaltSALTsalt",
+            4096,
+            25
+        )),
+        "3d2eec4fe41c849b80c8d83662c0e44a8b291a964cf2f07038"
+    );
+}
+
+#[test]
+fn a_try_of_a_password_goes_no_further_than_three_entries() {
+    // aes-tampered.zip: the two smallest are tampered (a bad code says nothing certain of the
+    // password: the next is tried), and ok.txt, the third, opens.
+    let source = bytes_of("aes-tampered.zip", false);
+    let zip = Zip::open(source.as_ref()).unwrap();
+    assert!(zip.unlock(source.as_ref(), PASSWORD.as_bytes(), None).unwrap());
+    // Asked first for ae1-bad-crc (a bad CRC, the 4th entry), the try then has two left: the two
+    // tampered ones, and gives up before ok.txt.
+    let zip = Zip::open(source.as_ref()).unwrap();
+    assert!(!zip.unlock(source.as_ref(), PASSWORD.as_bytes(), Some(3)).unwrap());
+}
+
+#[test]
+fn a_zip_entry_is_held_to_its_declared_ratio_not_a_running_one() {
+    assert!(declares_too_much(MIB + 1, (MIB + 1) / 201));
+    assert!(!declares_too_much(MIB, 1));
+    assert!(!declares_too_much(200 * MIB, MIB));
+    assert!(declares_too_much(200 * MIB + 1, MIB));
 }

@@ -1,5 +1,5 @@
 {
-    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (the ratio counter on); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as.",
+    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (the ratio counter on); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as. `check` holds an entry to its declared ratio (at most 200:1 once it declares over 1 MiB), not a running one. `count` and `flatFrom` say, for a listing too large to spell out, how many entries it has and from which one on they are listed flat.",
     "password": "correct horse battery",
     "fixtures": {
         "basic.zip": {
@@ -643,6 +643,253 @@
                     "withoutPassword": "password"
                 }
             ]
+        },
+        "trailing.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "trailing.txt",
+                    "check": "damaged",
+                    "download": "damaged"
+                }
+            ]
+        },
+        "truncated.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "truncated.txt",
+                    "check": "damaged",
+                    "download": "damaged"
+                }
+            ]
+        },
+        "utf8-flag.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "local-only.txt",
+                    "check": "local",
+                    "download": "local"
+                },
+                {
+                    "path": "central-only.txt",
+                    "check": "local",
+                    "download": "local"
+                },
+                {
+                    "path": "both.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "ambiguous.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "ambiguous.bin",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                }
+            ]
+        },
+        "ciphers.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "zc-descriptor.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "zipcrypto"
+                },
+                {
+                    "path": "zc-stored.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "zipcrypto"
+                },
+                {
+                    "path": "aes1-ae1-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes1-ae1-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes1-ae2-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes1-ae2-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes2-ae1-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes2-ae1-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes2-ae2-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes2-ae2-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes3-ae1-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes3-ae1-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes3-ae2-m0.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "aes3-ae2-m8.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                }
+            ]
+        },
+        "aes-tampered.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "flipped-deflated.txt",
+                    "check": "auth",
+                    "download": "auth",
+                    "lock": "aes"
+                },
+                {
+                    "path": "flipped-stored.txt",
+                    "check": "auth",
+                    "download": "auth",
+                    "lock": "aes"
+                },
+                {
+                    "path": "ok.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "lock": "aes"
+                },
+                {
+                    "path": "ae1-bad-crc.txt",
+                    "check": "crc",
+                    "download": "crc",
+                    "lock": "aes"
+                },
+                {
+                    "path": "other-password.txt",
+                    "check": "wrong-password",
+                    "download": "wrong-password",
+                    "lock": "aes"
+                },
+                {
+                    "path": "local-no-aes-field.txt",
+                    "check": "local",
+                    "download": "local",
+                    "lock": "aes"
+                }
+            ]
+        },
+        "sizes.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "stored-longer.txt",
+                    "check": "size",
+                    "download": "size",
+                    "stored": true
+                },
+                {
+                    "path": "stored-shorter.txt",
+                    "check": "short",
+                    "download": "short",
+                    "stored": true
+                },
+                {
+                    "path": "empty-deflated.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "one-more.txt",
+                    "check": "short",
+                    "download": "short"
+                },
+                {
+                    "path": "one-less.txt",
+                    "check": "size",
+                    "download": "size"
+                }
+            ]
+        },
+        "front-loaded.zip": {
+            "generated": true,
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "front-loaded.bin",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "flat-budget.zip": {
+            "generated": true,
+            "listing": "ok",
+            "hidden": 0,
+            "count": 4000,
+            "flatFrom": 3905
         },
         "zeros-1g.zip": {
             "generated": true,

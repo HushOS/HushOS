@@ -52,9 +52,10 @@ unicode-normalization = "0.1"
 crc32fast = "1.5.0"
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 deflate64 = "0.1.12"
-aes = "0.8.4"
-hmac = "0.12.1"
-sha1 = "0.10.6"
+# The aes crate wipes its key schedules when dropped; SHA-1's block function alone, so the
+# HMAC state is ours to wipe (archive.rs).
+aes = { version = "0.8.4", features = ["zeroize"] }
+sha1 = { version = "0.10.6", features = ["compress"] }
 
 [dev-dependencies]
 rand = "0.8"

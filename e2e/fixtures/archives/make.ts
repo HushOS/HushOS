@@ -997,6 +997,342 @@ function compressibleFixture() {
     return writeZip([{ name: 'compressible.txt', data: utf8(lines.join('')) }]);
 }
 
+// Round 2 of the review: Fable's shapes (scratchpad make_r2.ts), written by a second, looser writer
+// that sets every field by hand, with fixed salts so a rewrite gives the same bytes.
+
+type Raw = {
+    name: string;
+    packed: Uint8Array;
+    size: number;
+    crc: number;
+    method: number;
+    flags?: number;
+    localFlags?: number;
+    centralExtra?: Uint8Array;
+    localExtra?: Uint8Array;
+};
+
+function writeRaw(specs: Raw[]) {
+    const body: Uint8Array[] = [];
+    const directory: Uint8Array[] = [];
+    let at = 0;
+    for (const spec of specs) {
+        const name = utf8(spec.name);
+        const flags = spec.flags ?? 0;
+        const localFlags = spec.localFlags ?? flags;
+        const centralExtra = spec.centralExtra ?? new Uint8Array(0);
+        const localExtra = spec.localExtra ?? centralExtra;
+        // A data descriptor in the local header's flags: zeros there, the values after the data.
+        const descriptor = (localFlags & 8) !== 0;
+        const local = new Bytes();
+        local.u32(0x04034b50);
+        local.u16(20);
+        local.u16(localFlags);
+        local.u16(spec.method);
+        local.u16(0x6000);
+        local.u16(0x5821);
+        local.u32(descriptor ? 0 : spec.crc);
+        local.u32(descriptor ? 0 : spec.packed.length);
+        local.u32(descriptor ? 0 : spec.size);
+        local.u16(name.length);
+        local.u16(localExtra.length);
+        local.push(name);
+        local.push(localExtra);
+        local.push(spec.packed);
+        if (descriptor) {
+            local.u32(0x08074b50);
+            local.u32(spec.crc);
+            local.u32(spec.packed.length);
+            local.u32(spec.size);
+        }
+        const bytes = local.done();
+        const central = new Bytes();
+        central.u32(0x02014b50);
+        central.u16(20);
+        central.u16(20);
+        central.u16(flags);
+        central.u16(spec.method);
+        central.u16(0x6000);
+        central.u16(0x5821);
+        central.u32(spec.crc);
+        central.u32(spec.packed.length);
+        central.u32(spec.size);
+        central.u16(name.length);
+        central.u16(centralExtra.length);
+        central.u16(0);
+        central.u16(0);
+        central.u16(0);
+        central.u32(0);
+        central.u32(at);
+        central.push(name);
+        central.push(centralExtra);
+        directory.push(central.done());
+        body.push(bytes);
+        at += bytes.length;
+    }
+    const dir = concat(directory);
+    const end = new Bytes();
+    end.u32(0x06054b50);
+    end.u16(0);
+    end.u16(0);
+    end.u16(specs.length);
+    end.u16(specs.length);
+    end.u32(dir.length);
+    end.u32(at);
+    end.u16(0);
+    return concat([...body, dir, end.done()]);
+}
+
+/* WinZip AES at any strength, the salt fixed by `seed`. */
+function aesAt(data: Uint8Array, strength: 1 | 2 | 3, seed: number, password = PASSWORD) {
+    const keyLength = [16, 24, 32][strength - 1]!;
+    const salt = fixed(seed, [8, 12, 16][strength - 1]!);
+    const derived = pbkdf2Sync(password, salt, 1000, keyLength * 2 + 2, 'sha1');
+    const cipher = createCipheriv(
+        `aes-${keyLength * 8}-ecb`,
+        derived.subarray(0, keyLength),
+        null,
+    ).setAutoPadding(false);
+    const out = new Uint8Array(data.length);
+    const counter = new Uint8Array(16);
+    for (let at = 0, block = 1; at < data.length; at += 16, block++) {
+        let value = block;
+        for (let i = 0; i < 8; i++) {
+            counter[i] = value % 256;
+            value = Math.floor(value / 256);
+        }
+        const stream = cipher.update(counter);
+        for (let i = 0; i < 16 && at + i < data.length; i++)
+            out[at + i] = data[at + i]! ^ stream[i]!;
+    }
+    const mac = createHmac('sha1', derived.subarray(keyLength, keyLength * 2))
+        .update(out)
+        .digest()
+        .subarray(0, 10);
+    return {
+        bytes: concat([salt, derived.subarray(keyLength * 2), out, mac]),
+        dataAt: salt.length + 2,
+    };
+}
+
+function aesFieldAt(version: number, strength: number, method: number) {
+    return field(
+        0x9901,
+        Uint8Array.of(version, 0, 0x41, 0x45, strength, method & 0xff, method >> 8),
+    );
+}
+
+const FOX = utf8('The quick brown fox jumps over the lazy dog. '.repeat(40) + '\n');
+const FOX_PACKED = () => new Uint8Array(deflateRawSync(FOX, { level: 9 }));
+
+/* Bytes after a deflate stream's end, inside the entry's declared size: refused on every client. */
+function trailingFixture() {
+    return writeRaw([
+        {
+            name: 'trailing.txt',
+            packed: concat([FOX_PACKED(), utf8('JUNK AFTER THE END')]),
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 8,
+        },
+    ]);
+}
+
+/* A deflate stream cut before its final block. */
+function truncatedFixture() {
+    const p = utf8('cut before the end of the stream\n');
+    const block = Uint8Array.of(
+        0,
+        p.length & 0xff,
+        p.length >> 8,
+        ~p.length & 0xff,
+        (~p.length >> 8) & 0xff,
+    );
+    return writeRaw([
+        {
+            name: 'truncated.txt',
+            packed: concat([block, p]),
+            size: p.length,
+            crc: crc32(p),
+            method: 8,
+        },
+    ]);
+}
+
+/* The UTF-8 flag only in the local header, and only in the central record: both refused. */
+function utf8FlagFixture() {
+    const packed = FOX_PACKED();
+    return writeRaw([
+        {
+            name: 'local-only.txt',
+            packed,
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 8,
+            flags: 0,
+            localFlags: 0x800,
+        },
+        {
+            name: 'central-only.txt',
+            packed,
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 8,
+            flags: 0x800,
+            localFlags: 0,
+        },
+        { name: 'both.txt', packed, size: FOX.length, crc: crc32(FOX), method: 8, flags: 0x800 },
+    ]);
+}
+
+/* 12 MiB of zeros, then 1 MiB of noise: about 12:1 in all, 1,000:1 at the start. Opens: only the declared ratio counts. */
+function frontLoadedFixture() {
+    const data = new Uint8Array(13 * MiB);
+    data.set(fixed(4242, MiB), 12 * MiB);
+    return writeRaw([
+        {
+            name: 'front-loaded.bin',
+            packed: new Uint8Array(deflateRawSync(data, { level: 9 })),
+            size: data.length,
+            crc: crc32(data),
+            method: 8,
+        },
+    ]);
+}
+
+/* Stored data that ends in an end record whose comment reaches the end of a one-entry archive: opens as the stored bytes it is. */
+function ambiguousFixture() {
+    const name = 'ambiguous.bin';
+    const tail = 46 + name.length + 22;
+    const body = utf8('ordinary bytes before a planted end record ');
+    const span = 30 + name.length + body.length + 22;
+    const fake = new Bytes();
+    fake.u32(0x06054b50);
+    fake.u16(0);
+    fake.u16(0);
+    fake.u16(1);
+    fake.u16(1);
+    fake.u32(46 + name.length);
+    fake.u32(span);
+    fake.u16(tail);
+    const data = concat([body, fake.done()]);
+    return writeRaw([{ name, packed: data, size: data.length, crc: crc32(data), method: 0 }]);
+}
+
+/* ZipCrypto with a data descriptor's check byte (from the time) and stored; AES at every strength, AE-1 and AE-2, stored and deflated. */
+function ciphersFixture() {
+    const packed = FOX_PACKED();
+    const specs: Raw[] = [
+        {
+            name: 'zc-descriptor.txt',
+            packed: zipCryptoEncrypt(packed, PASSWORD, 0x60, fixed(301, 12)),
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 8,
+            flags: 9,
+            localFlags: 9,
+        },
+        {
+            name: 'zc-stored.txt',
+            packed: zipCryptoEncrypt(FOX, PASSWORD, crc32(FOX) >>> 24, fixed(302, 12)),
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 0,
+            flags: 1,
+        },
+    ];
+    let seed = 400;
+    for (const strength of [1, 2, 3] as const)
+        for (const version of [1, 2])
+            for (const method of [0, 8]) {
+                const encrypted = aesAt(method ? packed : FOX, strength, seed++);
+                specs.push({
+                    name: `aes${strength}-ae${version}-m${method}.txt`,
+                    packed: encrypted.bytes,
+                    size: FOX.length,
+                    crc: version === 1 ? crc32(FOX) : 0,
+                    method: 99,
+                    flags: 1,
+                    centralExtra: aesFieldAt(version, strength, method),
+                });
+            }
+    return writeRaw(specs);
+}
+
+/* AES gone wrong: a flipped byte (deflated and stored), AE-1 with a wrong CRC, another password, no AES field in the local header. */
+function aesTamperedFixture() {
+    const flippedDeflated = aesAt(FOX_PACKED(), 3, 501);
+    flippedDeflated.bytes[flippedDeflated.dataAt + 5]! ^= 1;
+    const flippedStored = aesAt(FOX, 3, 502);
+    flippedStored.bytes[flippedStored.dataAt + 5]! ^= 1;
+    const ok = aesAt(FOX, 3, 503);
+    const entry = (name: string, packed: Uint8Array, extra: Partial<Raw> = {}): Raw => ({
+        name,
+        packed,
+        size: FOX.length,
+        crc: 0,
+        method: 99,
+        flags: 1,
+        centralExtra: aesFieldAt(2, 3, 0),
+        ...extra,
+    });
+    return writeRaw([
+        // An unlock tries the two tampered ones first (smallest, then first listed) and must go past
+        // them to ok.txt, the third and the last it may try.
+        entry('flipped-deflated.txt', flippedDeflated.bytes, { centralExtra: aesFieldAt(2, 3, 8) }),
+        entry('flipped-stored.txt', flippedStored.bytes),
+        entry('ok.txt', ok.bytes),
+        entry('ae1-bad-crc.txt', aesAt(FOX, 3, 504).bytes, {
+            crc: 0x12345678,
+            centralExtra: aesFieldAt(1, 3, 0),
+        }),
+        entry('other-password.txt', aesAt(FOX, 3, 505, 'another password').bytes),
+        entry('local-no-aes-field.txt', ok.bytes, { localExtra: new Uint8Array(0) }),
+    ]);
+}
+
+/* Sizes that disagree with the data: stored longer and shorter, an empty deflated entry, deflated one byte more and one less. */
+function sizesFixture() {
+    const packed = FOX_PACKED();
+    return writeRaw([
+        {
+            name: 'stored-longer.txt',
+            packed: FOX,
+            size: FOX.length - 10,
+            crc: crc32(FOX.subarray(0, FOX.length - 10)),
+            method: 0,
+        },
+        {
+            name: 'stored-shorter.txt',
+            packed: FOX,
+            size: FOX.length + 10,
+            crc: crc32(FOX),
+            method: 0,
+        },
+        { name: 'empty-deflated.txt', packed: Uint8Array.of(3, 0), size: 0, crc: 0, method: 8 },
+        { name: 'one-more.txt', packed, size: FOX.length + 1, crc: crc32(FOX), method: 8 },
+        {
+            name: 'one-less.txt',
+            packed,
+            size: FOX.length - 1,
+            crc: crc32(FOX.subarray(0, FOX.length - 1)),
+            method: 8,
+        },
+    ]);
+}
+
+/* 4,000 entries of 256 parts: more than the listing's million parts, so the last ones are listed flat, every one of them. */
+function flatBudgetFixture() {
+    const specs: Spec[] = [];
+    for (let i = 0; i < 4_000; i++)
+        specs.push({
+            name: `${Array.from({ length: 255 }, (_, d) => `p${d}`).join('/')}/f${i}`,
+            data: utf8('x'),
+            method: 0,
+        });
+    return writeZip(specs);
+}
+
 export type Fixture = { name: string; large: boolean; build: () => Uint8Array };
 
 export const FIXTURES: Fixture[] = [
@@ -1026,6 +1362,15 @@ export const FIXTURES: Fixture[] = [
     { name: 'local-overrun.zip', large: false, build: localOverrunFixture },
     { name: 'ratio.zip', large: false, build: ratioFixture },
     { name: 'zipcrypto-empty.zip', large: false, build: zipCryptoEmptyFixture },
+    { name: 'trailing.zip', large: false, build: trailingFixture },
+    { name: 'truncated.zip', large: false, build: truncatedFixture },
+    { name: 'utf8-flag.zip', large: false, build: utf8FlagFixture },
+    { name: 'ambiguous.zip', large: false, build: ambiguousFixture },
+    { name: 'ciphers.zip', large: false, build: ciphersFixture },
+    { name: 'aes-tampered.zip', large: false, build: aesTamperedFixture },
+    { name: 'sizes.zip', large: false, build: sizesFixture },
+    { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
+    { name: 'flat-budget.zip', large: true, build: flatBudgetFixture },
     { name: 'compressible.zip', large: true, build: compressibleFixture },
     { name: 'zeros-1g.zip', large: true, build: zeros1GiB },
     { name: 'zip64-5g.zip', large: true, build: zip64FiveGiB },

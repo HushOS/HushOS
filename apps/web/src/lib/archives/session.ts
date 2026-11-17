@@ -343,8 +343,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         /* Whether `password` opens the archive's locked entries; kept in the worker if it does. */
         async unlock(password: string, entry: ArchiveEntry | null = null) {
             await listing;
-            // The worker decrypts at most 16 MiB of an entry to be sure, trying the next on damage.
-            grant(16 * MiB + (entry?.packed ?? 0));
+            // One try reads at most three entries and 32 MiB in all (zip-archive.ts), plus their headers.
+            grant(32 * MiB + 3 * 65_536);
             const asked = ask((id) => ({
                 type: 'unlock',
                 id,

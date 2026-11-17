@@ -20,6 +20,9 @@ public struct ArchiveFailure: Error, Equatable, LocalizedError {
     public let message: String
     public var errorDescription: String? { message }
 
+    /* A call on an archive that closed, in the core's words for it. */
+    static let closed = ArchiveFailure(code: nil, message: "The archive was closed.")
+
     static func from(_ error: Error, control: RunControl, scope: ArchiveWords.Scope = .archive) -> ArchiveFailure {
         if control.isCancelled() { return ArchiveFailure(code: nil, message: "Cancelled.") }
         if control.timedOut() { return ArchiveFailure(code: nil, message: toolFailedMessage()) }
@@ -194,23 +197,61 @@ final class KeptCopy: LocalSource, @unchecked Sendable {
     }
 }
 
-/* The calls in flight on one archive, so closing it cancels them first. */
+/*
+ * The calls in flight on one archive, so closing it cancels them first. Once closed it takes no
+ * more: a call that starts while (or after) the archive closes is cancelled as it is added, so
+ * none runs on past the close.
+ */
 final class ArchiveCalls: @unchecked Sendable {
     private let lock = NSLock()
     private var controls: [UUID: RunControl] = [:]
-    func add(_ id: UUID, _ control: RunControl) { lock.withLock { controls[id] = control } }
+    private var closed = false
+    /* False (and the control cancelled) once the archive closed. */
+    @discardableResult func add(_ id: UUID, _ control: RunControl) -> Bool {
+        let taken = lock.withLock { () -> Bool in
+            guard !closed else { return false }
+            controls[id] = control
+            return true
+        }
+        if !taken { control.cancel() }
+        return taken
+    }
     func remove(_ id: UUID) { _ = lock.withLock { controls.removeValue(forKey: id) } }
-    func cancelAll() { for control in lock.withLock({ Array(controls.values) }) { control.cancel() } }
+    func cancelAll() {
+        let all = lock.withLock { () -> [RunControl] in
+            closed = true
+            return Array(controls.values)
+        }
+        for control in all { control.cancel() }
+    }
     var count: Int { lock.withLock { controls.count } }
 }
 
-/* The archive's siblings open for downloads: closed with it, by its close or a sign-out. */
+/*
+ * The archive's siblings open for downloads: closed with it, by its close or a sign-out. Once the
+ * archive closed it keeps none: a sibling made while it closes is refused here, and its maker
+ * closes it at once.
+ */
 final class ArchiveSiblings: @unchecked Sendable {
     private let lock = NSLock()
     private var open: [UUID: ZipArchiveSession] = [:]
-    func add(_ id: UUID, _ session: ZipArchiveSession) { lock.withLock { open[id] = session } }
+    private var closed = false
+    /* False once the archive closed: the caller closes `session` itself. */
+    func add(_ id: UUID, _ session: ZipArchiveSession) -> Bool {
+        lock.withLock {
+            guard !closed else { return false }
+            open[id] = session
+            return true
+        }
+    }
     func remove(_ id: UUID) -> ZipArchiveSession? { lock.withLock { open.removeValue(forKey: id) } }
-    func takeAll() -> [ZipArchiveSession] { lock.withLock { defer { open.removeAll() }; return Array(open.values) } }
+    func takeAll() -> [ZipArchiveSession] {
+        lock.withLock {
+            closed = true
+            defer { open.removeAll() }
+            return Array(open.values)
+        }
+    }
     var count: Int { lock.withLock { open.count } }
 }
 
@@ -220,6 +261,8 @@ public final class OpenArchive: @unchecked Sendable {
     public let hidden: Int
     /* Opened from the copy this phone keeps, not the network. */
     public let kept: Bool
+    /* The row it was opened from: for a family's file, the vault's current row, which may be newer than the one tapped. */
+    public private(set) var row: Opened?
     private let session: ZipArchiveSession
     private let turns = ArchiveTurns()
     private let calls = ArchiveCalls()
@@ -255,7 +298,7 @@ public final class OpenArchive: @unchecked Sendable {
     }
 
     /* The core's close, never on the main thread: it doesn't wait on a read, but it is still the core's work. */
-    private static func closeOffMain(_ session: ZipArchiveSession) {
+    static func closeOffMain(_ session: ZipArchiveSession) {
         ArchiveSessions.closeQueue.async { session.closeArchive() }
     }
 
@@ -269,13 +312,36 @@ public final class OpenArchive: @unchecked Sendable {
             return try await open(local: copy, watchdog: watchdog, poll: poll)
         }
         try await vault.holdForCopy(item)
-        let opened = try await vault.openVersion(item)
-        let source = archiveSource(api: vault.api, versionId: opened.versionId, workspaceId: item.node.workspaceId)
+        let current = try await currentRow(item, vault: vault)
+        let opened = try await vault.openVersion(current)
+        let source = archiveSource(api: vault.api, versionId: opened.versionId, workspaceId: current.node.workspaceId)
         let content = opened.content
         let session = try await call(watchdog: watchdog, poll: poll) { control in
             try ZipArchiveSession.open(source: source, content: content, control: control)
         }
-        return OpenArchive(session: session, watchdog: watchdog, poll: poll)
+        let archive = OpenArchive(session: session, watchdog: watchdog, poll: poll)
+        archive.row = current
+        return archive
+    }
+
+    /*
+     * The file as it is now, not as the tapped row drew it: a family folder has no change feed, so
+     * its folder is listed again first (another member may have replaced the zip, or its keys
+     * moved), then the vault's row of the same workspace is taken unless it is older. Any other
+     * file opens as tapped.
+     */
+    static func currentRow(_ item: Opened, vault: Vault) async throws -> Opened {
+        guard await vault.isFamilyWorkspace(item.node.workspaceId) else { return item }
+        if let parent = item.node.parentId { _ = try await vault.listChildren(of: parent, in: item.node.workspaceId) }
+        guard let held = await vault.item(item.ref), !held.node.isOlder(than: item.node) else { return item }
+        return held
+    }
+
+    /* A zip this phone keeps with only its offline record (kept from a share this session hasn't opened): its copy, read by range. */
+    public static func openKept(_ url: URL, watchdog: Duration = .milliseconds(Int(toolWatchdogMillis())), poll: Duration = .seconds(1)) async throws -> OpenArchive {
+        let copy: KeptCopy
+        do { copy = try KeptCopy(url: url) } catch { throw ArchiveFailure(code: nil, message: ErrorWords.generic) }
+        return try await open(local: copy, watchdog: watchdog, poll: poll)
     }
 
     /* An archive over any source (the tests' sealed fixtures). */
@@ -324,7 +390,11 @@ public final class OpenArchive: @unchecked Sendable {
         let key = UUID()
         let sibling: ZipArchiveSession
         do { sibling = try session.sibling() } catch { throw ArchiveFailure.from(error, control: RunControl(watchdogMillis: 1, clock: nil), scope: .entry) }
-        siblings.add(key, sibling)
+        // The archive closed while the sibling was made: nothing would close it, so it goes now.
+        guard siblings.add(key, sibling) else {
+            OpenArchive.closeOffMain(sibling)
+            throw ArchiveFailure.closed
+        }
         defer { if let done = siblings.remove(key) { OpenArchive.closeOffMain(done) } }
         try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
             try sibling.download(index: entry.index, sink: sink, control: control)
@@ -358,8 +428,9 @@ public final class OpenArchive: @unchecked Sendable {
         let control = RunControl(watchdogMillis: millis, clock: nil)
         let id = UUID()
         let outcome = CallOutcome<T>()
+        // On an archive closed already (or closing) nothing starts: no thread, no read.
+        if let calls, !calls.add(id, control) { throw ArchiveFailure.closed }
         if registered { ArchiveSessions.track(call: id, control) }
-        calls?.add(id, control)
         let result = await withTaskCancellationHandler {
             if Task.isCancelled { control.cancel() }
             let watcher = DispatchSource.makeTimerSource(queue: ArchiveSessions.watchdogQueue)

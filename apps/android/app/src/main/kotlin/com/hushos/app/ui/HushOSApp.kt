@@ -172,7 +172,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         },
         confirmButton = { TextButton(onClick = model::clearSignedOut) { Text("Sign in") } },
     )
-    state.archive?.let { item -> model.archiveBrowse?.takeIf { it.item.id == item.id }?.let { browse -> ArchiveScreen(model, browse, close = model::closeArchive) } }
+    state.archive?.let { item -> model.archiveBrowse?.takeIf { it.id == item.id }?.let { browse -> ArchiveScreen(model, browse, close = model::closeArchive) } }
     state.reading?.let { reading ->
         val context = LocalContext.current
         // Open with leaves the viewer first: with no app for the type, the notice offering Send a copy is drawn

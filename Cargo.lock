@@ -21,6 +21,7 @@ dependencies = [
  "cfg-if",
  "cipher",
  "cpufeatures 0.2.17",
+ "zeroize",
 ]
 
 [[package]]
@@ -1195,7 +1196,6 @@ dependencies = [
  "flate2",
  "generic-array",
  "hkdf",
- "hmac",
  "hushos-core",
  "ml-dsa",
  "ml-kem",

@@ -332,6 +332,9 @@ final class AppModel {
     private func sessionClosed() {
         // Before the vault goes: no download of the session, family or personal, writes again (TemporaryCopies.endAccount).
         TemporaryCopies.endAccount()
+        // Every zip open in a viewer closes with the session, its downloads and reads stopped and its password wiped:
+        // a 401 that keeps the account's files on the phone (no wipe) still leaves nothing of the archive running.
+        ArchiveSessions.closeAll()
         // The session's family check goes with it: nothing of it runs for the next one.
         FamilyWalkTasks.cancel()
         driveStore?.resetFamilies()

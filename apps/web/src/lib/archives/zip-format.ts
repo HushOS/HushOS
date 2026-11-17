@@ -224,9 +224,9 @@ function crc32Table() {
     return table;
 }
 let table: Uint32Array | null = null;
-export function crc32(bytes: Uint8Array) {
+export function crc32(bytes: Uint8Array, crc = 0) {
     table ??= crc32Table();
-    let c = 0xffffffff;
+    let c = ~crc >>> 0;
     for (let i = 0; i < bytes.length; i++) c = table[(c ^ bytes[i]!) & 0xff]! ^ (c >>> 8);
     return ~c >>> 0;
 }
@@ -414,7 +414,9 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     const nameLength = data.getUint16(26, true);
     const extraLength = data.getUint16(28, true);
     // What the fixed part says first: the method, and the encryption and data-descriptor flags.
-    if (method !== entry.method || (flags & 9) !== (entry.flags & 9)) throw new ZipError('local');
+    // (encryption 0x1, data descriptor 0x8, UTF-8 names 0x800: each must say the same in both places)
+    if (method !== entry.method || (flags & 0x809) !== (entry.flags & 0x809))
+        throw new ZipError('local');
     // Then the whole span: a header whose name and extra field run past the next entry overlaps it.
     const start = entry.offset + LOCAL_LENGTH + nameLength + extraLength;
     if (start + entry.packed + ((flags & 8) !== 0 ? 12 : 0) > entry.bound)
@@ -426,6 +428,8 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     const fields = extraFields(
         header.subarray(LOCAL_LENGTH + nameLength, LOCAL_LENGTH + nameLength + extraLength),
     );
+    // A WinZip AES entry says so in both places: a local header without its AES field is another entry.
+    if (entry.lock === 'aes' && !fields.has(0x9901)) throw new ZipError('local');
     if (size === MAX32 || packed === MAX32) {
         const wide = fields.get(0x0001);
         if (!wide) throw new ZipError('local');
@@ -639,11 +643,14 @@ export function saveName(name: string) {
  */
 export function listEntries(entries: ZipEntry[]): Listed[] {
     let budget = LIST_PARTS_MAX;
-    const listed: Listed[] = entries.map((entry) => {
+    const listed: Listed[] = entries.map((entry, at) => {
+        const remaining = entries.length - at - 1;
         let parts = pathParts(entry.path);
         if (parts.length === 0) parts = entry.directory ? [] : [entry.path || '_'];
         // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
-        if (parts.length > LIST_DEPTH_MAX || parts.length > budget) parts = [entry.path || '_'];
+        // Each entry still to come is owed at least one part, so the last ones list flat, never past the cap.
+        if (parts.length > LIST_DEPTH_MAX || parts.length + remaining > budget)
+            parts = [entry.path || '_'];
         budget -= parts.length;
         const name = parts[parts.length - 1] ?? '';
         const support = supportOf(entry);
@@ -734,6 +741,16 @@ export class InflateCounter {
         if (this.produced > this.declared) throw new ZipError('size');
         if (this.produced < this.declared) throw new ZipError('short');
     }
+}
+
+/*
+ * Whether the entry declares more than 200 times what it packs, once it declares over 1 MiB: a
+ * preview refuses it before reading a byte. Nothing more is needed while inflating: what comes out
+ * is held to the declared size at the byte past it, so the declared ratio bounds the real one. A
+ * running ratio would only refuse honest files that start blank (a scanned page, a disk image).
+ */
+export function declaresTooMuch(entry: { size: number; packed: number }) {
+    return entry.size > ZIP_LIMITS.ratioFrom && entry.size > ZIP_LIMITS.ratio * entry.packed;
 }
 
 /* Whether downloading the entry asks first: over 4 GiB declared, at more than 200 to 1. */

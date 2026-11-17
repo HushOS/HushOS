@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import table from '../../../../../e2e/fixtures/archives/expected.json';
 import { FIXTURE_DIR, FIXTURES } from '../../../../../e2e/fixtures/archives/make';
 import { ZipArchive } from './zip-archive';
+import { readListing } from './session';
 import { asksFirst, ZipError } from './zip-format';
 
 /*
@@ -21,6 +22,8 @@ type Expected = {
     unlock?: { right: boolean; wrong: boolean };
     parts?: Record<string, string[]>;
     partsLength?: Record<string, number>;
+    count?: number;
+    flatFrom?: number;
     saveNames?: Record<string, string>;
     entries?: {
         path: string;
@@ -87,6 +90,62 @@ describe('every fixture, as expected.json says', () => {
                 expect(listing).toBe(expected.listing);
                 if (expected.listing !== 'ok') return;
                 const archive = await open(name);
+                // Every listing stays within the parts the page accepts, the last entries listed flat.
+                expect(
+                    archive.listed.reduce((sum, item) => sum + item.parts.length, 0),
+                ).toBeLessThanOrEqual(1_000_000);
+                if (expected.count !== undefined) {
+                    expect(archive.listed).toHaveLength(expected.count);
+                    const flat = archive.listed.findIndex((item) => item.parts.length === 1);
+                    expect(flat).toBe(expected.flatFrom);
+                    expect(
+                        archive.listed.slice(flat).every((item) => item.parts.length === 1),
+                    ).toBe(true);
+                    expect(
+                        readListing(
+                            {
+                                entries: archive.listed.map(
+                                    ({
+                                        index,
+                                        path,
+                                        parts,
+                                        directory,
+                                        size,
+                                        packed,
+                                        dos,
+                                        mtime,
+                                        lock,
+                                        support,
+                                        link,
+                                        nested,
+                                        hidden,
+                                        stored,
+                                        saveName,
+                                    }) => ({
+                                        index,
+                                        path,
+                                        parts,
+                                        directory,
+                                        size,
+                                        packed,
+                                        dos,
+                                        mtime,
+                                        lock,
+                                        support,
+                                        link,
+                                        nested,
+                                        hidden,
+                                        stored,
+                                        saveName,
+                                    }),
+                                ),
+                                hidden: archive.hidden,
+                            },
+                            bytesOf(name).length,
+                        ),
+                    ).not.toBeNull();
+                    return;
+                }
                 const wanted = expected.entries!;
                 expect(archive.entries.map((entry) => entry.path)).toEqual(
                     wanted.map((entry) => entry.path),

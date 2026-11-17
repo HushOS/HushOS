@@ -142,7 +142,7 @@ data class DriveState(
     /* A Markdown file open in the app's own viewer (MarkdownViewer), over every screen. */
     val reading: Reading? = null,
     /* A zip open as its list (ArchiveScreen), over every screen: never decrypted to a file, nor handed to another app. */
-    val archive: com.hushos.app.data.Opened? = null,
+    val archive: ArchiveSubject? = null,
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
@@ -633,6 +633,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         link = null
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
     }
 
@@ -966,6 +967,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         families.reset()
         trustJoins.clear()
         notices.clear()
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -997,6 +999,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         link = null
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
         // Ended because this phone was removed from the account: everything of the account goes too,
         // unless someone has signed in since (the generation moved), and a sign-in started after the
@@ -2260,6 +2263,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         filesAppChanged()
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
     }
 
@@ -2500,16 +2504,51 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* A zip opens as its list in the app (ArchiveScreen); false for anything else, which opens as before. */
     fun showArchive(item: Opened): Boolean {
         if (item.isFolder || !com.hushos.app.data.ArchiveTree.isZip(item.name, item.metadata.mime)) return false
+        // A family file as it is now (another member may have replaced it): read again before the
+        // session opens, and the screen then names and sends that row, never the stale one tapped.
+        return showArchive(ArchiveSubject.of(item)) { resolved ->
+            val current = currentOpened(item)
+            resolved(ArchiveSubject.of(current))
+            openArchive(current)
+        }
+    }
+
+    /*
+     * A zip kept on this phone, by its record alone ("On this phone"): opened from the kept copy, read
+     * by range into memory, offline included; never handed to another app.
+     */
+    fun showKeptArchive(entry: Offline.Entry): Boolean {
+        if (!com.hushos.app.data.ArchiveTree.isZip(entry.name, entry.mime)) return false
+        val file = Offline.file(context, entry)
+        return showArchive(ArchiveSubject(entry.id, entry.name, kept = file)) {
+            com.hushos.app.data.ArchiveSessions.shared.openLocal(com.hushos.app.data.FileLocalSource(file))
+        }
+    }
+
+    private fun showArchive(subject: ArchiveSubject, open: suspend (resolved: (ArchiveSubject) -> Unit) -> com.hushos.app.data.OpenArchive): Boolean {
         archiveBrowse?.close()
         // Held here, not by the screen: a rotation keeps the session, its password, the folder and the downloads.
-        archiveBrowse = ArchiveBrowse(item, viewModelScope) { openArchive(item) }
-        _state.update { it.copy(archive = item) }
+        archiveBrowse = ArchiveBrowse(subject, viewModelScope, open)
+        _state.update { it.copy(archive = subject) }
         return true
     }
     fun closeArchive() {
+        endArchive()
+        _state.update { it.copy(archive = null) }
+    }
+
+    /* Every path that ends a session ends the archive open in it: its sessions closed, its downloads stopped, nothing kept. */
+    private fun endArchive() {
         archiveBrowse?.close()
         archiveBrowse = null
-        _state.update { it.copy(archive = null) }
+    }
+
+    /* The kept copy of an archive, to another app: what Send a copy does for a drive row. */
+    fun sendKept(name: String, file: java.io.File) {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.shared", file)
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("application/zip").putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { context.startActivity(shareChooser(context, send, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
     /* The archive open now, for the screen; none once it is closed. */

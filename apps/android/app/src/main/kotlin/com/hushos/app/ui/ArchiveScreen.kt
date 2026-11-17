@@ -115,7 +115,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
     val alpine = Alpine.colors
     val context = LocalContext.current
     val state by model.state.collectAsState()
-    val item = browse.item
+    val item = browse.subject
     val current = browse.archive
     val tree = browse.tree
     var sending by remember(item.id) { mutableStateOf(false) }
@@ -194,7 +194,15 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
             )
         }
         // The archive itself, for an item HushOS can't open: the drive's own Send a copy.
-        if (sending) SendCopy(model, state, listOf(item)) { sending = false }
+        if (sending) {
+            val row = item.item
+            val kept = item.kept
+            when {
+                row != null -> SendCopy(model, state, listOf(row)) { sending = false }
+                kept != null -> LaunchedEffect(kept) { model.sendKept(item.name, kept); sending = false }
+                else -> LaunchedEffect(Unit) { sending = false }
+            }
+        }
     }
 }
 
@@ -346,6 +354,8 @@ private fun EntryPane(
     val kind = remember(name) { ArchiveTree.previewKind(name) }
     val limits = remember(kind) { zipEntryPreviewLimits(kind, deviceMemory(context).toULong()) }
     var continued by remember(entry.index) { mutableStateOf(false) }
+    // Download asked for on a locked archive inside the archive: its password first.
+    var askFor by remember(entry.index) { mutableStateOf(false) }
     // Each password typed for this item opens it afresh.
     var attempt by remember(entry.index) { mutableStateOf(0) }
     val size = entry.size.toLong()
@@ -361,7 +371,14 @@ private fun EntryPane(
                 // What can't be read at all says so first: a password would change nothing.
                 entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
-                entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
+                // An archive inside is never previewed; downloading a locked one asks for its password first.
+                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, if (reprompt) entry.index else null) {
+                    attempt++
+                    askFor = false
+                    onUnlocked()
+                    onDownload()
+                }
+                entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) askFor = true else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
                 locked -> PasswordCard(archive, name, if (reprompt) entry.index else null) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }

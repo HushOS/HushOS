@@ -19,6 +19,8 @@ import {
     listEntries,
     LOCAL_HEADER_READ,
     readDirectory,
+    declaresTooMuch,
+    crc32,
     supportOf,
     ZipError,
     type Listed,
@@ -27,13 +29,12 @@ import {
 } from './zip-format';
 
 /*
- * One open zip: its listing from zip-format.ts, and its entries' data through zip.js, which
- * runs inside the archive's tools worker with its own workers off (it is in one already) and
- * the native DecompressionStream for Deflate, its JavaScript inflater for Deflate64. zip.js
- * parses the directory a second time, once, when the first entry is opened; every entry it
- * hands back is checked against ours (offset, sizes, method, name bytes), so the two readers
- * can never be reading different files. A password the person typed is held here, and only
- * here, for as long as the archive is open.
+ * One open zip: its listing from zip-format.ts, and its entries' data through zip.js, which runs
+ * inside the archive's tools worker with its own workers off (it is in one already) and its own
+ * JavaScript inflater on every browser. zip.js never reads the archive's directory: each entry is
+ * handed to it as an archive of its own, whose directory is written here from our listing record,
+ * so the two can't read different files. A password the person typed is held here, and only here,
+ * for as long as the archive is open.
  */
 
 /*
@@ -54,6 +55,13 @@ export type Source = { size: number; read: Read };
  * listed, and an entry it would have parsed differently (a duplicate name, an odd extra field)
  * is read as listed.
  */
+/*
+ * Zeros between the entry and the directory written for it: more than the 64 KiB + 22 bytes zip.js
+ * scans from the end for an end record, so the scan never reaches the entry's data, and an end
+ * record planted there (whose comment would reach the end) is never seen at all.
+ */
+const GAP = 65_557 + 64;
+
 class EntryReader extends Reader<Source> {
     #tail: Uint8Array;
     #span: number;
@@ -65,14 +73,14 @@ class EntryReader extends Reader<Source> {
     ) {
         super(source);
         this.#span = dataStart - entry.offset + entry.packed;
-        this.#tail = directoryFor(entry, this.#span);
-        this.size = this.#span + this.#tail.length;
+        this.#tail = directoryFor(entry, this.#span + GAP);
+        this.size = this.#span + GAP + this.#tail.length;
         this.dataFrom = dataStart - entry.offset;
     }
     readonly dataFrom: number;
 
     override async init() {
-        this.size = this.#span + this.#tail.length;
+        this.size = this.#span + GAP + this.#tail.length;
     }
 
     override async readUint8Array(index: number, length: number) {
@@ -80,26 +88,27 @@ class EntryReader extends Reader<Source> {
         const out = new Uint8Array(Math.max(0, end - index));
         if (index < this.#span) {
             const stop = Math.min(end, this.#span);
-            const bytes = await this.source.read(this.entry.offset + index, stop - index);
-            out.set(bytes, 0);
-            // What the inflater reads of the data: the ratio counter's input.
-            const overlap =
-                Math.min(stop, this.dataFrom + this.entry.packed) - Math.max(index, this.dataFrom);
-            // Counted by how far into the data the reads have reached, so a range read twice counts once.
-            if (overlap > 0)
-                this.counter.reached(
-                    Math.min(stop, this.dataFrom + this.entry.packed) - this.dataFrom,
-                );
+            out.set(await this.source.read(this.entry.offset + index, stop - index), 0);
+            {
+                // What the inflater reads of the data: the ratio counter's input, by how far it reached.
+                const reach = Math.min(stop, this.dataFrom + this.entry.packed) - this.dataFrom;
+                if (reach > 0 && stop > this.dataFrom) this.counter.reached(reach);
+            }
         }
-        if (end > this.#span) {
-            const from = Math.max(index, this.#span);
-            out.set(this.#tail.subarray(from - this.#span, end - this.#span), from - index);
+        // The gap reads as the zeros `out` starts as; then the directory and end record.
+        const tailStart = this.#span + GAP;
+        if (end > tailStart) {
+            const from = Math.max(index, tailStart);
+            out.set(this.#tail.subarray(from - tailStart, end - tailStart), from - index);
         }
         return out;
     }
 }
 
-/* The central directory record and end records of a one-entry archive whose local header is at 0. */
+/* What zip.js is told an entry inflates to (2^52): never reached, never past a safe integer. */
+const TOLD_SIZE = 2 ** 52;
+
+/* The central directory record and end records of a one-entry archive whose local header is at 0 and whose directory starts at `span`. */
 function directoryFor(entry: ZipEntry, span: number) {
     const parts: number[] = [];
     const u16 = (n: number) => parts.push(n & 0xff, (n >>> 8) & 0xff);
@@ -110,11 +119,16 @@ function directoryFor(entry: ZipEntry, span: number) {
         u32(n % 2 ** 32);
         u32(Math.floor(n / 2 ** 32));
     };
-    const wide = entry.size >= 0xffffffff || entry.packed >= 0xffffffff;
+    // The size zip.js is told is far past any real one, so its own size check never stops a stream
+    // before the counter (which holds the entry to its declared size, at the byte past it) sees
+    // it; it then always ends saying the size was wrong, once its CRC or authentication code has
+    // passed, and the counter says whether it was short.
+    const told = { ...entry, size: TOLD_SIZE };
+    const wide = true;
     const extra: number[] = [];
     if (wide) {
         extra.push(0x01, 0x00, 16, 0);
-        for (const value of [entry.size, entry.packed])
+        for (const value of [told.size, entry.packed])
             for (let i = 0; i < 8; i++) extra.push(Math.floor(value / 2 ** (8 * i)) & 0xff);
     }
     if (entry.lock === 'aes' && entry.aes)
@@ -140,7 +154,7 @@ function directoryFor(entry: ZipEntry, span: number) {
     u16(entry.dos >>> 16);
     u32(entry.crc);
     u32(wide ? 0xffffffff : entry.packed);
-    u32(wide ? 0xffffffff : entry.size);
+    u32(wide ? 0xffffffff : told.size);
     u16(entry.raw.length);
     u16(extra.length);
     u16(0);
@@ -201,6 +215,9 @@ function refusalOf(error: unknown): ZipError {
 
 /* The most an unlock decrypts in full to be sure of a password: more than the two-byte check AES and ZipCrypto give. */
 const UNLOCK_CHECK_BYTES = 16 * 1024 * 1024;
+/* How far one try of a password goes: at most three entries and 32 MiB read, however many are locked. */
+export const UNLOCK_ENTRIES_MAX = 3;
+export const UNLOCK_READ_MAX = 32 * 1024 * 1024;
 
 export class ZipArchive {
     #source: Source;
@@ -274,6 +291,9 @@ export class ZipArchive {
     ) {
         const start = await this.dataStart(entry);
         if (entry.lock !== 'none' && options.password === null) throw new ZipError('password');
+        // Stored and plain, the bytes are the entry: more or fewer than declared is known at once.
+        if (entry.method === 0 && entry.lock === 'none' && entry.packed !== entry.size)
+            throw new ZipError(entry.packed > entry.size ? 'size' : 'short');
         const counter = new InflateCounter(entry.size, options.ratio);
         let found: FileEntry;
         try {
@@ -290,32 +310,54 @@ export class ZipArchive {
             throw error instanceof ZipError ? error : new ZipError('damaged');
         }
         const closed = () => this.#closed;
+        /*
+         * The CRC is ours too, over what reaches the counter: zip.js would check it at the end of
+         * its stream, before the last piece reaches here, and an entry one byte over would read
+         * as a bad CRC rather than as too large (the core says "size"). AE-2 carries none.
+         */
+        const checkCrc = entry.lock !== 'aes' || entry.aes?.version === 1;
+        let crc = 0;
         const writable = new WritableStream<Uint8Array>({
             async write(chunk) {
                 if (closed()) throw new ZipError('damaged');
                 counter.wrote(chunk.length);
+                if (checkCrc) crc = crc32(chunk, crc);
                 await options.write(chunk);
             },
         });
+        // At the end, as the core: the authentication code (zip.js, already), the CRC, then short.
+        const finish = () => {
+            if (options.checkOnly) return;
+            if (checkCrc && crc !== entry.crc) throw new ZipError('crc');
+            counter.finish();
+        };
         try {
             await found.getData(writable, {
                 password: options.password ?? undefined,
-                checkSignature: true,
-                checkCrc32: true,
+                checkSignature: false,
+                checkCrc32: false,
                 checkAuthenticationCode: true,
                 checkPasswordOnly: options.checkOnly,
+                // Our parser has checked the local header against the listing; the size zip.js is told is ours to lie about.
+                checkLocalDirectory: false,
+                checkLocalFilename: false,
                 signal: options.signal,
                 useWebWorkers: false,
                 // zip.js's own inflater, on every browser: WebKit's DecompressionStream hands back a
                 // write's whole output at once, and its gzip path reports a short entry as a bad CRC.
                 useCompressionStream: false,
             } as Parameters<FileEntry['getData']>[1]);
-            if (!options.checkOnly) counter.finish();
+            // zip.js can't end without its size complaint (see TOLD_SIZE); finishing here is a stream it cut short.
+            finish();
         } catch (error) {
             const refusal = refusalOf(error);
-            // zip.js says the size was wrong without saying which way; the counter knows.
-            if (refusal.code === 'size' && counter.produced < entry.size)
-                throw new ZipError('short');
+            // Told a size no stream reaches, zip.js ends every stream that passed its checks this way:
+            // done, and the counter says whether it came up short.
+            // (Our own refusal, the counter's, can come back wrapped as the stream's reason: never this.)
+            const ours =
+                error instanceof ZipError ||
+                (error as { cause?: unknown } | null)?.cause instanceof ZipError;
+            if (refusal.code === 'size' && !ours && counter.produced <= entry.size) return finish();
             throw refusal;
         }
     }
@@ -329,10 +371,11 @@ export class ZipArchive {
         const entry = this.#entry(index);
         if (this.#nested.has(index)) throw new ZipError('nested');
         if (entry.size > limit) throw new ZipError('too-large');
+        if (declaresTooMuch(entry)) throw new ZipError('ratio');
         const out = new Uint8Array(entry.size);
         let at = 0;
         await this.#inflate(entry, {
-            ratio: true,
+            ratio: false,
             password: this.#password,
             signal,
             write: (chunk) => {
@@ -350,7 +393,8 @@ export class ZipArchive {
     async check(index: number, password: string | null = this.#password) {
         const entry = this.#entry(index);
         if (this.#nested.has(index)) throw new ZipError('nested');
-        await this.#inflate(entry, { ratio: true, password, write: () => {} });
+        if (declaresTooMuch(entry)) throw new ZipError('ratio');
+        await this.#inflate(entry, { ratio: false, password, write: () => {} });
     }
 
     /* Where a stored, unencrypted entry's bytes are in the archive, checked against its local header. */
@@ -379,8 +423,9 @@ export class ZipArchive {
      * 16 MiB (its CRC or authentication code then proves the password), otherwise to its password
      * check. An empty entry proves nothing (ZipCrypto's one check byte passes 1 in 256 wrong
      * passwords), so it is never the probe. A wrong password ends it; an entry that fails for
-     * another reason (damage, a bomb) says nothing of the password, and the next is tried. Kept
-     * only if it opens one.
+     * another reason (damage, tampering: a bad authentication code or CRC) says nothing certain
+     * of the password, and the next is tried, at most three entries and 32 MiB read in all; past
+     * that a try reads only an entry's password check. Kept only if an entry opens with it.
      */
     async unlock(password: string, index?: number, signal?: AbortSignal) {
         const candidates = this.entries
@@ -395,19 +440,23 @@ export class ZipArchive {
             .sort((a, b) => a.packed - b.packed || a.index - b.index);
         const first = candidates.findIndex((entry) => entry.index === index);
         if (first > 0) candidates.unshift(...candidates.splice(first, 1));
-        for (const entry of candidates) {
+        let read = 0;
+        for (const entry of candidates.slice(0, UNLOCK_ENTRIES_MAX)) {
             if (this.#closed) return false;
+            const checkOnly =
+                entry.packed > UNLOCK_CHECK_BYTES || read + entry.packed > UNLOCK_READ_MAX;
+            read += checkOnly ? 0 : entry.packed;
             try {
                 await this.#inflate(entry, {
-                    ratio: true,
+                    ratio: false,
                     password,
                     signal,
                     write: () => {},
-                    checkOnly: entry.packed > UNLOCK_CHECK_BYTES,
+                    checkOnly,
                 });
             } catch (error) {
                 const code = error instanceof ZipError ? error.code : 'damaged';
-                if (code === 'wrong-password' || code === 'auth' || code === 'crc') return false;
+                if (code === 'wrong-password') return false;
                 continue;
             }
             if (this.#closed) return false;

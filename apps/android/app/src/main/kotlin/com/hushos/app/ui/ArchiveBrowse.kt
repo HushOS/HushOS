@@ -10,6 +10,7 @@ import com.hushos.app.data.ArchiveTree
 import com.hushos.app.data.OpenArchive
 import com.hushos.app.data.Opened
 import com.hushos.core.ArchiveEntry
+import com.hushos.core.ArchiveException
 import com.hushos.core.EntrySink
 import com.hushos.core.FetchException
 import kotlinx.coroutines.CoroutineScope
@@ -30,11 +31,31 @@ import kotlin.coroutines.cancellation.CancellationException
  * item's download included. The sibling is closed when the download ends, with the archive, and by
  * a sign-out.
  */
+/*
+ * What an archive screen is open on: its id and name, and the drive's row when there is one (a zip
+ * opened from "On this phone" by its record alone has none), for Send a copy of the archive.
+ */
+data class ArchiveSubject(val id: String, val name: String, val item: Opened? = null, val kept: java.io.File? = null) {
+    companion object {
+        fun of(item: Opened) = ArchiveSubject(item.id, item.name, item)
+    }
+}
+
 class ArchiveBrowse(
-    val item: Opened,
+    subject: ArchiveSubject,
     private val scope: CoroutineScope,
-    private val open: suspend () -> OpenArchive,
+    /*
+     * Opens the archive. `resolved` hears the subject as it is now (a family file another member
+     * replaced, read again before opening), which the screen then names and sends.
+     */
+    private val open: suspend (resolved: (ArchiveSubject) -> Unit) -> OpenArchive,
+    /* Builds the folder tree, off the main thread; the tests stop it part-way. */
+    private val build: suspend (List<ArchiveEntry>) -> ArchiveTree = { entries -> withContext(Dispatchers.Default) { ArchiveTree(entries) } },
 ) {
+    /* The id it was opened for: the app's state names it, and a later resolution never changes it. */
+    val id = subject.id
+    var subject by mutableStateOf(subject)
+        private set
     var archive by mutableStateOf<OpenArchive?>(null)
         private set
     var tree by mutableStateOf<ArchiveTree?>(null)
@@ -71,16 +92,21 @@ class ArchiveBrowse(
         unlocked = false
         reprompt.clear()
         loading = scope.launch {
+            var opened: OpenArchive? = null
             try {
-                val opened = open()
-                if (closed) { opened.close(); return@launch }
-                tree = withContext(Dispatchers.Default) { ArchiveTree(opened.entries) }
+                opened = open { now -> if (!closed) subject = now }
+                if (closed) return@launch
+                tree = build(opened.entries)
                 hidden = opened.hidden
                 archive = opened
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 failure = archiveFailure(error)
+            } finally {
+                // Opened but never handed over (Back while the tree was building, a close, a failure):
+                // closed here, or nothing would close it before a sign-out.
+                if (opened != null && archive !== opened) opened.close()
             }
         }
     }
@@ -119,12 +145,27 @@ class ArchiveBrowse(
             result.exceptionOrNull()?.let { error ->
                 discard(resolver, uri)
                 if (error is CancellationException) { downloads.remove(record); throw error }
-                record.error.value = archiveFailure(error, entry = true)
+                downloadFailed(record, error)
             } ?: run {
                 downloads.remove(record)
                 done()
             }
         }
+    }
+
+    /*
+     * A download that failed. One refused for its password (the item has one of its own, not the one
+     * held) goes to the item, which asks for it and unlocks by its index; anything else stays on the
+     * download's bar in its words.
+     */
+    internal fun downloadFailed(record: EntryDownload, error: Throwable) {
+        if (error is ArchiveException.Refused && error.code == "wrong-password") {
+            downloads.remove(record)
+            if (record.entry.index !in reprompt) reprompt.add(record.entry.index)
+            opened = record.entry
+            return
+        }
+        record.error.value = archiveFailure(error, entry = true)
     }
 
     /* A picked file the download won't fill: gone, not left empty where the person put it. */

@@ -164,6 +164,44 @@ import Testing
         #expect(archive.downloading == 0)
     }
 
+    @Test func aDownloadStartedWhileTheArchiveClosesGetsNoSiblingAndReadsNothing() async throws {
+        let kept = Kept(try Data(contentsOf: Self.fixtures.appendingPathComponent("basic.zip")))
+        let archive = try await OpenArchive.open(local: kept, watchdog: .seconds(30), poll: .milliseconds(50), registered: false)
+        let readme = try #require(archive.entries.first { $0.path == "docs/readme.txt" })
+        // The core's close waits on its queue: the session is still open, as it is in the moment after close() returns.
+        ArchiveSessions.closeQueue.suspend()
+        archive.close()
+        let before = kept.reads
+        final class Collected: @unchecked Sendable { var bytes = 0 }
+        let collected = Collected()
+        await #expect(throws: ArchiveFailure.self) {
+            try await archive.download(readme, into: ArchiveSink { collected.bytes += $0.count })
+        }
+        // No sibling left open, nothing read for it, nothing written.
+        #expect(archive.downloading == 0)
+        #expect(kept.reads == before)
+        #expect(collected.bytes == 0)
+        ArchiveSessions.closeQueue.resume()
+        ArchiveSessions.closeQueue.sync {}
+    }
+
+    @Test func aZipKeptOnThePhoneOpensFromItsCopyAlone() async throws {
+        // The copy as Offline keeps it: a file on the phone, read by range, with no vault and no store.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("aes.zip")
+        try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: file)
+        let archive = try await OpenArchive.openKept(file)
+        defer { archive.close() }
+        #expect(archive.kept)
+        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+        #expect(try await archive.unlock("correct horse battery", entry: secret))
+        #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("AES-256, AE-2."))
+        // Nothing beside the copy: the folder holds the zip and no plaintext of its entries.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["aes.zip"])
+    }
+
     @Test func anEntrysOwnPasswordIsTriedOnThatEntryFirst() async throws {
         let archive = try await Self.open("zipcrypto-empty.zip")
         let secret = try #require(archive.entries.first { $0.path == "secret.txt" })

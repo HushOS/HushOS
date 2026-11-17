@@ -121,6 +121,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     const [unlocked, setUnlocked] = useState(false);
     const [downloads, setDownloads] = useState<Download[]>([]);
     const [asking, setAsking] = useState<ArchiveEntry | null>(null);
+    // An entry whose password is asked for so it can be downloaded.
+    const [askFor, setAskFor] = useState<ArchiveEntry | null>(null);
     const versionId = node.currentVersion?.id ?? node.id;
 
     useEffect(() => {
@@ -164,38 +166,62 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         // name made safe in the worker: no bidi override can make "…exe" read as "…txt".
         const sink = openSink({ name: entry.saveName, size: entry.size });
         let handle: { done: Promise<void>; stop: () => void } | null = null;
-        const record: Download = { entry, written: 0, stop: () => handle?.stop(), error: null };
+        // Stop can come before the sink is open: it is remembered, and a sink opened after it is let go.
+        let stopped = false;
+        const record: Download = {
+            entry,
+            written: 0,
+            stop: () => {
+                stopped = true;
+                handle?.stop();
+            },
+            error: null,
+        };
         setDownloads((list) => [...list.filter((item) => item.entry !== entry), record]);
         const update = (patch: Partial<Download>) =>
             setDownloads((list) =>
                 list.map((item) => (item.entry === entry ? { ...item, ...patch } : item)),
             );
+        const drop = () => setDownloads((list) => list.filter((item) => item.entry !== entry));
         void sink
-            .then((opened) => {
+            .then(async (opened) => {
+                if (stopped) {
+                    await opened.abort().catch(() => {});
+                    throw new Error('Stopped.');
+                }
                 handle = session.download(entry, opened, (written) => update({ written }));
                 return handle.done;
             })
-            .then(
-                () => setDownloads((list) => list.filter((item) => item.entry !== entry)),
-                (cause: unknown) =>
-                    cause instanceof Error && cause.message === 'Stopped.'
-                        ? setDownloads((list) => list.filter((item) => item.entry !== entry))
-                        : update({
-                              error: cause instanceof Error ? cause.message : viewerWords.broken,
-                          }),
-            );
+            .then(drop, (cause: unknown) => {
+                if (cause instanceof Error && cause.message === 'Stopped.') return drop();
+                // The entry has a password of its own: asked for, then downloaded.
+                if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password') {
+                    drop();
+                    setAskFor(entry);
+                    setOpened(entry);
+                    return;
+                }
+                update({ error: cause instanceof Error ? cause.message : viewerWords.broken });
+            });
     }
 
-    function download(entry: ArchiveEntry) {
-        if (entry.lock !== 'none' && !unlocked) {
-            setOpened(entry);
-            return;
-        }
+    /* After a password has opened it, or when none is needed. */
+    function downloadNow(entry: ArchiveEntry) {
         if (asksFirst(entry)) {
             setAsking(entry);
             return;
         }
         startDownload(entry);
+    }
+
+    function download(entry: ArchiveEntry) {
+        if (entry.lock !== 'none' && !unlocked) {
+            // The entry's pane asks for the password, then downloads.
+            setAskFor(entry);
+            setOpened(entry);
+            return;
+        }
+        downloadNow(entry);
     }
 
     if (failure)
@@ -221,6 +247,7 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
 
     const go = (to: string[]) => {
         setOpened(null);
+        setAskFor(null);
         setPath(to);
     };
 
@@ -260,6 +287,11 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     unlocked={unlocked}
                     onUnlocked={() => setUnlocked(true)}
                     onDownload={() => download(opened)}
+                    downloadAfterPassword={askFor === opened}
+                    onDownloadNow={() => {
+                        setAskFor(null);
+                        downloadNow(opened);
+                    }}
                     onDownloadArchive={onDownload}
                 />
             ) : (
@@ -518,6 +550,8 @@ function EntryPane({
     onUnlocked,
     onDownload,
     onDownloadArchive,
+    downloadAfterPassword,
+    onDownloadNow,
 }: {
     archive: DriveNode;
     entry: ArchiveEntry;
@@ -526,6 +560,9 @@ function EntryPane({
     onUnlocked: () => void;
     onDownload: () => void;
     onDownloadArchive: () => void;
+    /* The password is asked for so the entry can be downloaded (its own, or one a preview can't use). */
+    downloadAfterPassword: boolean;
+    onDownloadNow: () => void;
 }) {
     const name = entry.parts.at(-1)!;
     const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
@@ -563,22 +600,28 @@ function EntryPane({
                 onDownload={onDownloadArchive}
             />
         );
-    else if (entry.nested)
-        body = (
-            <Notice icon={icon} title={name} text={archiveWords.nested} onDownload={onDownload} />
-        );
-    else if ((entry.lock !== 'none' && !unlocked) || reprompt)
+    // A locked archive inside the archive is never previewed, but its Download asks for the password.
+    else if (
+        entry.lock !== 'none' &&
+        (!unlocked || reprompt || downloadAfterPassword) &&
+        (!entry.nested || downloadAfterPassword)
+    )
         body = (
             <PasswordCard
                 name={name}
                 session={session}
-                entry={reprompt ? entry : null}
+                entry={reprompt || downloadAfterPassword ? entry : null}
                 onUnlocked={() => {
                     setReprompt(false);
                     setAttempt((value) => value + 1);
                     onUnlocked();
+                    if (downloadAfterPassword) onDownloadNow();
                 }}
             />
+        );
+    else if (entry.nested)
+        body = (
+            <Notice icon={icon} title={name} text={archiveWords.nested} onDownload={onDownload} />
         );
     // An unknown kind is no preview at any size (the viewer looks at small ones as text).
     else if (!entry.stored && kind !== 'none' && entry.size > entryLimit(kind))

@@ -20,21 +20,24 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::tools::{FetchError, ObjectSource, RunControl, VersionReader};
 use crate::{Content, CoreError};
 
 const MIB: u64 = 1024 * 1024;
 /// The largest central directory read.
-pub const ZIP_DIRECTORY_MAX_BYTES: u64 = 64 * MIB;
+pub const ZIP_DIRECTORY_MAX_BYTES: u64 = 16 * MIB;
 /// The most entries listed.
-pub const ZIP_ENTRIES_MAX: u64 = 100_000;
+pub const ZIP_ENTRIES_MAX: u64 = 50_000;
 const RATIO: u64 = 200;
 const RATIO_FROM: u64 = MIB;
 const ASK_ABOVE: u64 = 4 * 1024 * MIB;
 /// An unlock decrypts the smallest locked entry in full when it is at most this large.
 const UNLOCK_CHECK_BYTES: u64 = 16 * MIB;
+/// How far one try of a password goes: at most three entries and 32 MiB read, however many are locked.
+const UNLOCK_ENTRIES_MAX: usize = 3;
+const UNLOCK_READ_MAX: u64 = 32 * MIB;
 /// Whether this build decodes Deflate64 (method 9): the `deflate64` crate does, as zip.js does on the web.
 const DEFLATE64: bool = true;
 /// How much of a download is handed to the app at a time.
@@ -571,8 +574,9 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
     let mut size = u32_at(header, 22);
     let name_length = u16_at(header, 26) as usize;
     let extra_length = u16_at(header, 28) as usize;
-    // What the fixed part says first: the method, and the encryption and data-descriptor flags.
-    if method != entry.method as u64 || (flags & 9) != (entry.flags as u64 & 9) {
+    // What the fixed part says first: the method, and the encryption (0x1), data-descriptor (0x8)
+    // and UTF-8 (0x800) flags, each of which must say the same in both places.
+    if method != entry.method as u64 || (flags & 0x809) != (entry.flags as u64 & 0x809) {
         return refused(Refusal::Local);
     }
     // Then the whole span: a header whose name and extra field run past the next entry overlaps it.
@@ -587,6 +591,10 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
         return refused(Refusal::Local);
     }
     let fields = extra_fields(&header[LOCAL_LENGTH + name_length..LOCAL_LENGTH + name_length + extra_length]);
+    // A WinZip AES entry says so in both places: a local header without its AES field is another entry.
+    if entry.lock == Lock::Aes && !fields.contains_key(&0x9901) {
+        return refused(Refusal::Local);
+    }
     if size == MAX32 || packed == MAX32 {
         let Some(wide) = fields.get(&0x0001) else { return refused(Refusal::Local) };
         let mut p = 0usize;
@@ -683,23 +691,41 @@ pub const LIST_PARTS_MAX: usize = 1_000_000;
 
 /// Names as a tree, each node a number and each child found by its parent and name: memory grows
 /// with the parts, never with their prefixes.
-#[derive(Default)]
 pub(crate) struct NameTree {
-    children: HashMap<(u32, String), u32>,
+    /*
+     * Each child by its parent and a keyed hash of its name: 24 bytes or so a node, where a
+     * name kept as a String cost three times that for a million parts. The hash's keys are this
+     * process's own (RandomState), so a crafted archive can't aim two names at one node; and a
+     * collision could only hide or show a Mac resource file, nothing more.
+     */
+    children: HashMap<(u32, u64), u32>,
+    keys: std::collections::hash_map::RandomState,
     next: u32,
 }
 
+impl Default for NameTree {
+    fn default() -> Self {
+        NameTree { children: HashMap::new(), keys: std::collections::hash_map::RandomState::new(), next: 0 }
+    }
+}
+
 impl NameTree {
+    fn key(&self, parent: u32, name: &str) -> (u32, u64) {
+        use std::hash::BuildHasher;
+        (parent, self.keys.hash_one(name))
+    }
+
     /// The child `name` of `parent` (0 is the top), made if asked; 0 when absent.
     pub fn child(&mut self, parent: u32, name: &str, make: bool) -> u32 {
-        if let Some(&found) = self.children.get(&(parent, name.to_owned())) {
+        let key = self.key(parent, name);
+        if let Some(&found) = self.children.get(&key) {
             return found;
         }
         if !make {
             return 0;
         }
         self.next += 1;
-        self.children.insert((parent, name.to_owned()), self.next);
+        self.children.insert(key, self.next);
         self.next
     }
 
@@ -816,15 +842,19 @@ pub fn save_name(name: &str) -> String {
 
 pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
     let mut budget = LIST_PARTS_MAX;
+    let count = entries.len();
     let mut listed: Vec<ArchiveEntry> = entries
         .iter()
-        .map(|entry| {
+        .enumerate()
+        .map(|(at, entry)| {
+            let remaining = count - at - 1;
             let mut parts = path_parts(&entry.path);
             if parts.is_empty() && !entry.directory {
                 parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
             }
             // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
-            if parts.len() > LIST_DEPTH_MAX || parts.len() > budget {
+            // Each entry still to come is owed at least one part, so the last ones list flat, never past the cap.
+            if parts.len() > LIST_DEPTH_MAX || parts.len() + remaining > budget {
                 parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
             }
             budget = budget.saturating_sub(parts.len());
@@ -876,6 +906,14 @@ pub(crate) fn list_entries(entries: &[Entry]) -> Vec<ArchiveEntry> {
     }
     listed.retain(|item| !item.parts.is_empty() || !item.directory);
     listed
+}
+
+/// Whether an entry declares more than 200 times what it packs, once it declares over 1 MiB: a
+/// preview refuses it before reading a byte. Nothing more is needed while inflating: what comes
+/// out is held to the declared size at the byte past it, so the declared ratio bounds the real one.
+/// A running ratio would only refuse honest files that start blank (a scanned page, a disk image).
+pub(crate) fn declares_too_much(size: u64, packed: u64) -> bool {
+    size > RATIO_FROM && size > RATIO.saturating_mul(packed)
 }
 
 /// Whether downloading an entry asks first: over 4 GiB declared, at more than 200 to 1.
@@ -984,8 +1022,14 @@ fn crc_byte(crc: u32, byte: u8) -> u32 {
     CRC_TABLE[((crc ^ byte as u32) & 0xff) as usize] ^ (crc >> 8)
 }
 
-/// The traditional PKWARE cipher's three keys.
+/// The traditional PKWARE cipher's three keys, wiped when dropped.
 struct ZipCrypto([u32; 3]);
+
+impl Drop for ZipCrypto {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl ZipCrypto {
     fn new(password: &[u8]) -> Self {
@@ -1016,31 +1060,152 @@ enum AesKey {
     A256(Box<aes::Aes256>),
 }
 
-/// WinZip AES: CTR with a little-endian counter from 1, HMAC-SHA1 over the ciphertext.
+/*
+ * SHA-1 and HMAC-SHA1 over state of our own, so every byte of it (the keyed midstates included,
+ * which are as good as the MAC key) is wiped when it is dropped: the `hmac` and `sha1` crates'
+ * own state can't be, without unsafe code this crate forbids. Only the block function is sha1's.
+ */
+#[derive(Clone)]
+struct Sha1State {
+    h: [u32; 5],
+    block: [u8; 64],
+    filled: usize,
+    total: u64,
+}
+
+impl Drop for Sha1State {
+    fn drop(&mut self) {
+        self.h.zeroize();
+        self.block.zeroize();
+        self.filled = 0;
+        self.total = 0;
+    }
+}
+
+impl Sha1State {
+    fn new() -> Self {
+        Sha1State {
+            h: [0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0],
+            block: [0; 64],
+            filled: 0,
+            total: 0,
+        }
+    }
+
+    fn compress(h: &mut [u32; 5], block: &[u8; 64]) {
+        let mut wrapped = sha1::digest::generic_array::GenericArray::from(*block);
+        sha1::compress(h, std::slice::from_ref(&wrapped));
+        wrapped.zeroize();
+    }
+
+    fn update(&mut self, mut bytes: &[u8]) {
+        self.total = self.total.wrapping_add(bytes.len() as u64);
+        while !bytes.is_empty() {
+            let take = (64 - self.filled).min(bytes.len());
+            self.block[self.filled..self.filled + take].copy_from_slice(&bytes[..take]);
+            self.filled += take;
+            bytes = &bytes[take..];
+            if self.filled == 64 {
+                Self::compress(&mut self.h, &self.block);
+                self.filled = 0;
+            }
+        }
+    }
+
+    fn finalize(mut self) -> Zeroizing<[u8; 20]> {
+        let bits = self.total.wrapping_mul(8);
+        self.update(&[0x80]);
+        while self.filled != 56 {
+            self.update(&[0]);
+        }
+        self.update(&bits.to_be_bytes());
+        let mut out = Zeroizing::new([0u8; 20]);
+        for (i, word) in self.h.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        out
+    }
+}
+
+/// HMAC-SHA1 (RFC 2104): the inner state keyed with the key and ipad, and the key with opad for the outer.
+#[derive(Clone)]
+struct HmacSha1 {
+    inner: Sha1State,
+    outer_key: Zeroizing<[u8; 64]>,
+}
+
+impl HmacSha1 {
+    fn new(key: &[u8]) -> Self {
+        let mut padded = Zeroizing::new([0u8; 64]);
+        if key.len() > 64 {
+            let mut hash = Sha1State::new();
+            hash.update(key);
+            padded[..20].copy_from_slice(&hash.finalize()[..]);
+        } else {
+            padded[..key.len()].copy_from_slice(key);
+        }
+        let mut inner_key = Zeroizing::new([0u8; 64]);
+        let mut outer_key = Zeroizing::new([0u8; 64]);
+        for i in 0..64 {
+            inner_key[i] = padded[i] ^ 0x36;
+            outer_key[i] = padded[i] ^ 0x5c;
+        }
+        let mut inner = Sha1State::new();
+        inner.update(&inner_key[..]);
+        HmacSha1 { inner, outer_key }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        self.inner.update(bytes);
+    }
+
+    fn finalize(self) -> Zeroizing<[u8; 20]> {
+        let HmacSha1 { inner, outer_key } = self;
+        let inner = inner.finalize();
+        let mut outer = Sha1State::new();
+        outer.update(&outer_key[..]);
+        outer.update(&inner[..]);
+        outer.finalize()
+    }
+}
+
+/// WinZip AES: CTR with a little-endian counter from 1, HMAC-SHA1 over the ciphertext. The block
+/// cipher wipes its key schedule when dropped (the aes crate's `zeroize`); the rest is wiped here.
 struct WinZipAes {
     key: AesKey,
     counter: u128,
     stream: [u8; 16],
     used: usize,
-    mac: hmac::Hmac<sha1::Sha1>,
+    mac: Option<HmacSha1>,
 }
 
-/// PBKDF2-HMAC-SHA1 (RFC 8018), as WinZip AES derives its keys: 1,000 iterations.
+impl Drop for WinZipAes {
+    fn drop(&mut self) {
+        self.counter.zeroize();
+        self.stream.zeroize();
+    }
+}
+
+/// PBKDF2-HMAC-SHA1 (RFC 8018), as WinZip AES derives its keys: 1,000 iterations; every block
+/// and keyed state wiped as it goes.
 fn pbkdf2_sha1(password: &[u8], salt: &[u8], length: usize) -> Zeroizing<Vec<u8>> {
-    use hmac::Mac;
-    let prf = <hmac::Hmac<sha1::Sha1> as Mac>::new_from_slice(password).expect("HMAC takes any key");
+    pbkdf2_sha1_rounds(password, salt, 1000, length)
+}
+
+fn pbkdf2_sha1_rounds(password: &[u8], salt: &[u8], rounds: u32, length: usize) -> Zeroizing<Vec<u8>> {
+    let prf = HmacSha1::new(password);
     let mut out = Zeroizing::new(Vec::with_capacity(length));
     let mut block = 1u32;
     while out.len() < length {
         let mut u = prf.clone();
         u.update(salt);
         u.update(&block.to_be_bytes());
-        let mut last: [u8; 20] = u.finalize().into_bytes().into();
-        let mut total = last;
-        for _ in 1..1000 {
+        let mut last = u.finalize();
+        let mut total = Zeroizing::new(*last);
+        for _ in 1..rounds {
             let mut u = prf.clone();
-            u.update(&last);
-            last = u.finalize().into_bytes().into();
+            u.update(&last[..]);
+            last = u.finalize();
             for (t, l) in total.iter_mut().zip(last.iter()) {
                 *t ^= l;
             }
@@ -1056,7 +1221,6 @@ impl WinZipAes {
     /// The keys from the password and salt, or None when the two-byte verifier says the password is wrong.
     fn new(strength: u8, password: &[u8], salt: &[u8], verifier: &[u8]) -> Option<Self> {
         use aes::cipher::KeyInit;
-        use hmac::Mac;
         let length = match strength {
             1 => 16,
             2 => 24,
@@ -1072,14 +1236,15 @@ impl WinZipAes {
             2 => AesKey::A192(Box::new(aes::Aes192::new_from_slice(key).ok()?)),
             _ => AesKey::A256(Box::new(aes::Aes256::new_from_slice(key).ok()?)),
         };
-        let mac = <hmac::Hmac<sha1::Sha1> as Mac>::new_from_slice(&derived[length..length * 2]).ok()?;
-        Some(WinZipAes { key, counter: 0, stream: [0; 16], used: 16, mac })
+        let mac = HmacSha1::new(&derived[length..length * 2]);
+        Some(WinZipAes { key, counter: 0, stream: [0; 16], used: 16, mac: Some(mac) })
     }
 
     fn decrypt(&mut self, bytes: &mut [u8]) {
         use aes::cipher::BlockEncrypt;
-        use hmac::Mac;
-        self.mac.update(bytes);
+        if let Some(mac) = self.mac.as_mut() {
+            mac.update(bytes);
+        }
         for byte in bytes {
             if self.used == 16 {
                 self.counter = self.counter.wrapping_add(1);
@@ -1098,9 +1263,9 @@ impl WinZipAes {
     }
 
     /// Whether the stored code (10 bytes) is the HMAC of everything decrypted, compared in constant time.
-    fn verify(self, code: &[u8]) -> bool {
-        use hmac::Mac;
-        let digest = self.mac.finalize().into_bytes();
+    fn verify(mut self, code: &[u8]) -> bool {
+        let Some(mac) = self.mac.take() else { return false };
+        let digest = mac.finalize();
         code.len() == 10 && digest[..10].iter().zip(code).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
     }
 }
@@ -1139,7 +1304,6 @@ impl Inflater {
             Inflater::Stored => out(input),
             Inflater::Deflate(inflate, ended) => {
                 let mut at = 0;
-                // Bytes after the stream's end are left alone, as zip.js leaves them.
                 while !*ended {
                     let (before_in, before_out) = (inflate.total_in(), inflate.total_out());
                     let status = inflate
@@ -1158,6 +1322,10 @@ impl Inflater {
                         break;
                     }
                 }
+                // Bytes after the stream's end, inside the entry's packed size: refused, as on the web.
+                if *ended && at < input.len() {
+                    return refused(Refusal::Damaged);
+                }
                 Ok(())
             }
             Inflater::Deflate64(inflate) => {
@@ -1174,6 +1342,9 @@ impl Inflater {
                     if result.bytes_consumed == 0 && result.bytes_written == 0 {
                         break;
                     }
+                }
+                if inflate.finished() && at < input.len() {
+                    return refused(Refusal::Damaged);
                 }
                 Ok(())
             }
@@ -1307,8 +1478,9 @@ impl Zip {
         listing.listed.iter().any(|item| item.index == index && item.nested)
     }
 
-    /// The entry's bytes through `write`, each piece counted: never past its declared size, and
-    /// with `ratio` never past 200 times the data reached once 1 MiB has come out. The AES code,
+    /// The entry's bytes through `write`, each piece counted: never past its declared size (with
+    /// `ratio`, a running 200:1 too, which zip entries never ask for: their declared size and
+    /// declared ratio bound them, `declares_too_much`). The AES code,
     /// then the CRC, then the size are checked at the end. With `check_only`, only the password's
     /// check at the start of the data.
     fn inflate(
@@ -1327,6 +1499,10 @@ impl Zip {
         let start = check_local_header(entry, &header)?;
         if entry.lock != Lock::None && password.is_none() {
             return refused(Refusal::Password);
+        }
+        // Stored and plain, the bytes are the entry: more or fewer than declared is known at once.
+        if entry.method == 0 && entry.lock == Lock::None && entry.packed != entry.size {
+            return refused(if entry.packed > entry.size { Refusal::Size } else { Refusal::Short });
         }
         let end = start + entry.packed;
         let mut at = start;
@@ -1438,8 +1614,8 @@ impl Zip {
         Ok(())
     }
 
-    /// For the viewer: the entry decoded whole, at most `limit` bytes declared, under the ratio,
-    /// checked to its end (the CRC included for a stored one).
+    /// For the viewer: the entry decoded whole, at most `limit` bytes declared and at most 200:1
+    /// declared, checked to its end (the CRC included for a stored one).
     pub fn preview(
         &self,
         source: &dyn RangeRead,
@@ -1455,8 +1631,11 @@ impl Zip {
         if entry.size > limit {
             return refused(Refusal::TooLarge);
         }
+        if declares_too_much(entry.size, entry.packed) {
+            return refused(Refusal::Ratio);
+        }
         let mut out = Vec::with_capacity(entry.size as usize);
-        self.inflate(source, entry, true, password, false, &mut |chunk| {
+        self.inflate(source, entry, false, password, false, &mut |chunk| {
             out.extend_from_slice(chunk);
             Ok(())
         })?;
@@ -1471,7 +1650,10 @@ impl Zip {
         if Self::nested(&listing, index) {
             return refused(Refusal::Nested);
         }
-        self.inflate(source, entry, true, password, false, &mut |_| Ok(()))
+        if declares_too_much(entry.size, entry.packed) {
+            return refused(Refusal::Ratio);
+        }
+        self.inflate(source, entry, false, password, false, &mut |_| Ok(()))
     }
 
     /// For a download or an export: every piece as it comes, held to the declared size only.
@@ -1491,7 +1673,9 @@ impl Zip {
     /// for), then on the locked entries with bytes, smallest first: in full when at most 16 MiB,
     /// otherwise to its password check. An empty entry proves nothing (ZipCrypto's one check byte
     /// passes 1 in 256 wrong passwords), so it is never the probe. A wrong password ends it; an
-    /// entry that fails for another reason says nothing of the password, and the next is tried.
+    /// entry that fails for another reason (damage, a bad authentication code or CRC, which may be
+    /// tampering) says nothing certain of the password, and the next is tried: at most three
+    /// entries and 32 MiB read in all, past which a try reads only an entry's password check.
     /// Kept only if it opens one, and never once the archive is closed.
     pub fn unlock(&self, source: &dyn RangeRead, password: &[u8], index: Option<u32>) -> Result<bool> {
         let listing = self.listing()?;
@@ -1512,18 +1696,16 @@ impl Zip {
             let entry = candidates.remove(first);
             candidates.insert(0, entry);
         }
-        for entry in candidates {
+        let mut read = 0u64;
+        for entry in candidates.into_iter().take(UNLOCK_ENTRIES_MAX) {
             if self.is_closed() {
                 return Err(closed_error());
             }
-            let outcome = self.inflate(
-                source,
-                entry,
-                true,
-                Some(password),
-                entry.packed > UNLOCK_CHECK_BYTES,
-                &mut |_| Ok(()),
-            );
+            let check_only = entry.packed > UNLOCK_CHECK_BYTES || read + entry.packed > UNLOCK_READ_MAX;
+            if !check_only {
+                read += entry.packed;
+            }
+            let outcome = self.inflate(source, entry, false, Some(password), check_only, &mut |_| Ok(()));
             match outcome {
                 Ok(()) => {
                     let mut life = lock(&self.life);
@@ -1533,11 +1715,8 @@ impl Zip {
                     life.password = Some(Zeroizing::new(password.to_vec()));
                     return Ok(true);
                 }
-                Err(ArchiveError::Refused { code })
-                    if code == "wrong-password" || code == "auth" || code == "crc" =>
-                {
-                    return Ok(false)
-                }
+                // Only the password check says the password is wrong; a bad code or CRC may be tampering.
+                Err(ArchiveError::Refused { code }) if code == "wrong-password" => return Ok(false),
                 Err(ArchiveError::Refused { .. }) => continue,
                 Err(error) => return Err(error),
             }

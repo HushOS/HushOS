@@ -219,15 +219,14 @@ Why these numbers:
 
 ### Zip bombs
 
-- **Declared sizes first.** Before anything is created, the central directory's sums must be under the caps: total, count, per entry, and a declared compression ratio of at most 200:1 per entry.
+- **Declared sizes first.** Before anything is created, the central directory's sums must be under the caps: total, count, per entry, and a declared compression ratio of at most 200:1 per entry once it declares over 1 MiB. A preview of an entry declaring more is refused before a byte is read.
 - **Real bytes always.** Every entry is inflated through a counter.
-    - Producing more than the entry declared is an error at that byte, not at the end.
-    - Producing more than 200 times the compressed bytes consumed so far is refused, once the entry has produced 1 MiB. Deflate's ceiling is about 1,032:1, and ordinary files rarely pass 200:1.
+    - Producing more than the entry declared is an error at that byte, not at the end. With the declared ratio capped, that bounds what an entry can produce; there is no running ratio for zip entries (owner, round 2 of the (a) review). A running one would only refuse honest files that start blank, such as a scanned page or a disk image, and adds nothing the declared size doesn't already bound.
     - The run's total and count are enforced on what was actually produced.
     - The CRC-32 (or AES authentication code) must match at the end of each entry, or the entry and the run fail.
 - **Overlapping entries are refused.** Every entry's span, from its local header to the end of its data, must not overlap another's, and each local header's name and sizes must agree with the central directory's. This stops the non-recursive overlapping-file bomb and the parser confusion where two readers see different files.
 - **Nested archives** are never opened by extraction or browsing; they are files.
-- **tar.gz** is held to the same 200:1 ratio on the gzip stream as a whole (after 1 MiB) and to 32 GiB decompressed for listing.
+- **tar.gz** has no declared sizes to hold it, so it keeps a running ratio: 200:1 on the gzip stream as a whole, once 1 MiB has come out, and 32 GiB decompressed for listing.
 - **Downloading one entry** is held to its declared size (an entry that produces more fails). An entry whose declared size is over 4 GiB at more than 200:1 asks first: "This item expands to 40 GB from 20 MB."
 
 ### Paths
@@ -373,7 +372,7 @@ iOS and Android come later, on the same rules, limits and save contract.
 - **One set of rules, held by fixtures.** The fixtures of section 7 and a table of their expected outcomes are shared, so the Rust port is held to the web's behaviour byte for byte. Moving the web onto the Rust rules through WebAssembly is possible later; it is not this milestone.
 - **Images.** The phones' own decoders (ImageIO on iOS, ImageDecoder on Android 9 and later) read HEIC, so neither app ships libheif.
 - **PDF.** iOS has PDFKit for merge, split and rotate. Android renders with `PdfRenderer` but needs a writer, such as the Rust `lopdf` crate (MIT) in the core.
-- **Limits** are lower on phones where memory is: the large-file card's thresholds take the device's memory into account.
+- **Limits** are lower on phones where memory is: the large-file card's thresholds take the device's memory into account. A zip's listing on a phone is capped at a 16 MiB central directory and 50,000 entries (the web: 64 MiB and 100,000). Listing at that cap peaks at about 250 MB (Fable's widest archive, 11,000 to 12,000 entries of 255 parts, measured 2026-11-17), most of it the million listed parts the shared rules allow.
 - **The run harness** (built with step 3): the core's `VersionReader` (`crates/hushos-core/src/tools.rs`) reads a version by range through the app's `ObjectSource`, keeping two chunks and the file's last in memory, with the same fetch limit and padding rule as the web. `RunControl` holds cancel and the watchdog's clock; `ToolBudget`, one per process, holds the 512 MiB, so a finished run's results count until the save path releases them. `ToolRuns` in each app (`HushOSKit/ToolRuns.swift`, `data/ToolRuns.kt`) runs one run at a time on a thread of its own. A thread cannot be terminated: a cancel or a timeout ends the run for the caller at once, cancels a request in flight and fails the work's next read, produce or progress call, and the next run starts only once that thread has returned. A sign-out ends every run (`ToolRuns.cancelAll`). When a run's thread returns, the app calls `RunControl.finish()`: a run not already cancelled or timed out is marked finished (not cancelled), and every reader made under it drops its chunks and key, again if an earlier end already did, since a read that passed its check just before the end refuses to cache what it opened once the run has ended.
 
 ## 7. Tests and verification

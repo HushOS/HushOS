@@ -340,7 +340,8 @@ fun OnThisPhoneScreen(model: DriveViewModel, state: DriveState, onBack: () -> Un
     val looseFiles = state.offline.filter { it.via == null }
     val open = { entry: Offline.Entry ->
         val file = Offline.file(context, entry)
-        if (file.exists()) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime, model, entry.name, entry.id, entry.workspaceId)
+        // A kept zip opens as its list, from the kept copy, never in another app.
+        if (file.exists() && !model.showKeptArchive(entry)) openWith(context, androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file), entry.mime, model, entry.name, entry.id, entry.workspaceId)
     }
     Column(Modifier.fillMaxSize()) {
         DestinationBar("On this phone", onBack = onBack)

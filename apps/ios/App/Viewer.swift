@@ -114,7 +114,9 @@ struct FileViewer: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             if version != nil { versionFoot }
         }
-        .background(Alpine.ground)
+        // Under the keyboard too: an archive's password field shrinks the page while the keyboard is up, and as it goes
+        // the space it leaves showed the cover's own white until the page grew back (the band under the password card).
+        .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }

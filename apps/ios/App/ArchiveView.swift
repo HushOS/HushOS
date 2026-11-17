@@ -16,7 +16,10 @@ import UniformTypeIdentifiers
  */
 struct ArchiveScreen: View {
     @Environment(DriveStore.self) private var store
-    let item: Opened
+    /* The zip in Drive, or (`kept`) the copy of one this phone keeps with only its offline record. */
+    let item: Opened?
+    let kept: URL?
+    let name: String
     @State private var archive: OpenArchive?
     @State private var tree: ArchiveTree?
     @State private var failure: String?
@@ -29,8 +32,28 @@ struct ArchiveScreen: View {
     @State private var saving: ArchiveEntry?
     @State private var picking = false
     @State private var asking: ArchiveEntry?
+    /* An entry whose Download waits on its password: asked for in its pane, then the download goes on. */
+    @State private var passwordFor: UInt32?
     /* Every download running or failed, a row each: a second never hides the first. */
     @State private var downloads: [ArchiveDownload] = []
+
+    init(item: Opened) {
+        self.item = item
+        kept = nil
+        name = item.name
+    }
+
+    init(kept url: URL, name: String) {
+        item = nil
+        kept = url
+        self.name = name
+    }
+
+    private var title: String { archive?.row?.name ?? name }
+    private var key: String {
+        if let item { return "\(item.id)-\(item.node.currentVersion?.id ?? "")-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)" }
+        return "kept-\(kept?.path ?? "")-\(attempt)"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +69,8 @@ struct ArchiveScreen: View {
                     Divider().overlay(Alpine.rule)
                 }
                 if let opened {
-                    ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, onDownload: { start(opened) })
+                    ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, askPassword: passwordFor == opened.index,
+                                     onDownload: { start(opened) })
                         .id(opened.index)
                 } else {
                     list(tree.rows(at: path), hidden: archive.hidden)
@@ -54,29 +78,40 @@ struct ArchiveScreen: View {
                 ForEach(downloads) { downloadBar($0) }
             } else {
                 VStack(spacing: Alpine.Space.s3) {
-                    FileMark(item: item, box: 72)
-                    Text(item.name).font(Theme.Text.headline).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
+                    if let item { FileMark(item: item, box: 72) } else {
+                        PageGlyph(label: "ZIP", name: name).frame(width: 48, height: 48 * 54 / 44)
+                    }
+                    Text(name).font(Theme.Text.headline).foregroundStyle(Alpine.ink).multilineTextAlignment(.center)
                     ProgressView().tint(Alpine.primary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .background(Alpine.ground)
-        .task(id: "\(item.id)-\(item.node.currentVersion?.id ?? "")-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
+        .background(Alpine.ground.ignoresSafeArea())
+        .task(id: key) {
             archive?.close()
             archive = nil
             tree = nil
             path = []
             opened = nil
             unlocked = false
+            passwordFor = nil
+            let open: OpenArchive
             do {
-                let open = try await OpenArchive.open(item, vault: store.vault)
-                guard !Task.isCancelled else { open.close(); return }
-                tree = ArchiveTree(open.entries)
-                archive = open
+                if let item { open = try await OpenArchive.open(item, vault: store.vault) } else if let kept {
+                    open = try await OpenArchive.openKept(kept)
+                } else { return }
             } catch {
                 if !Task.isCancelled { failure = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic) }
+                return
             }
+            // The tree off the main thread (a 50,000-entry list takes a moment), and the archive closed if the viewer is left
+            // meanwhile: until it is shown, nothing else would close it.
+            let entries = open.entries
+            let built = await Task.detached(priority: .userInitiated) { ArchiveTree(entries) }.value
+            guard !Task.isCancelled else { open.close(); return }
+            tree = built
+            archive = open
         }
         // Leaving the viewer stops its downloads and closes the archive (its calls cancelled, the password wiped).
         .onDisappear {
@@ -103,7 +138,7 @@ struct ArchiveScreen: View {
     private var crumbs: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Alpine.Space.s1) {
-                crumb(item.name, current: path.isEmpty && opened == nil) { go([]) }
+                crumb(title, current: path.isEmpty && opened == nil) { go([]) }
                 ForEach(Array(path.enumerated()), id: \.offset) { index, part in
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
                     crumb(part, current: index == path.count - 1 && opened == nil) { go(Array(path.prefix(index + 1))) }
@@ -178,10 +213,13 @@ struct ArchiveScreen: View {
 
     /* Download: a locked entry asks for its password first; a large one past 200:1 asks first; then a place to save it. */
     private func start(_ entry: ArchiveEntry) {
+        // Locked: its pane asks for the password, and the download goes on once it opens.
         if entry.lock != "none" && !unlocked {
             opened = entry
+            passwordFor = entry.index
             return
         }
+        passwordFor = nil
         if zipEntryAsksFirst(size: entry.size, packed: entry.packed) {
             asking = entry
             return
@@ -218,7 +256,12 @@ struct ArchiveScreen: View {
             } catch {
                 if let target { try? FileManager.default.removeItem(at: target) }
                 await MainActor.run {
-                    if Task.isCancelled { downloads.removeAll { $0 === progress } } else {
+                    if Task.isCancelled { downloads.removeAll { $0 === progress } } else if (error as? ArchiveFailure)?.code == "wrong-password" {
+                        // The entry has a password of its own: asked for in its pane, tried on it first, then it downloads.
+                        downloads.removeAll { $0 === progress }
+                        opened = entry
+                        passwordFor = entry.index
+                    } else {
                         progress.error = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
                     }
                 }
@@ -335,17 +378,22 @@ private struct ArchiveEntryPane: View {
     let entry: ArchiveEntry
     let archive: OpenArchive
     @Binding var unlocked: Bool
+    /* A Download is waiting on this entry's password (one held didn't open it, or none is held yet). */
+    let askPassword: Bool
     let onDownload: () -> Void
     @State private var bytes: Data?
     @State private var failure: String?
     @State private var continued = false
     /* The entry has a password of its own (the one held didn't open it): asked for again, for this entry. */
     @State private var reprompt = false
+    /* Download pressed on an entry that only downloads (an archive inside the archive) and is locked. */
+    @State private var passwordToDownload = false
     @State private var attempt = 0
 
     private var name: String { entry.parts.last ?? entry.path }
     private var kind: ArchiveEntries.Kind { ArchiveEntries.kind(of: name) }
     private var limits: PreviewLimits { ArchiveEntries.limits(kind) }
+    private var locked: Bool { entry.lock != "none" && !unlocked }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -353,7 +401,7 @@ private struct ArchiveEntryPane: View {
                 Text([formatBytes(Int64(entry.size)), changedLabel(ArchiveEntries.date(entry))].compactMap { $0 }.joined(separator: " · "))
                     .font(Theme.Text.footnote).foregroundStyle(Alpine.inkMuted)
                 Spacer(minLength: 0)
-                if entry.support == "ok", entry.lock == "none" || unlocked {
+                if entry.support == "ok", !locked {
                     Button(ArchiveWords.download, systemImage: "arrow.down.circle", action: onDownload)
                         .buttonStyle(SecondaryCapsuleStyle())
                 }
@@ -369,9 +417,19 @@ private struct ArchiveEntryPane: View {
         // What can't be read at all says so first: a password would change nothing.
         if entry.support != "ok" {
             card(title: name, message: entry.support == "method" ? ArchiveWords.method : ArchiveWords.encryption)
+        } else if askPassword || passwordToDownload {
+            // A download waits on the password: asked for, tried on this entry first, then the download goes on.
+            ArchivePasswordCard(name: name, archive: archive, entry: entry) {
+                unlocked = true
+                passwordToDownload = false
+                onDownload()
+            }
         } else if entry.nested {
-            card(title: name, message: ArchiveWords.nested, download: true)
-        } else if (entry.lock != "none" && !unlocked) || reprompt {
+            // Never opened in place; Download still works, asking for the password first when it is locked.
+            card(title: name, message: ArchiveWords.nested, download: true) {
+                if locked { passwordToDownload = true } else { onDownload() }
+            }
+        } else if locked || reprompt {
             ArchivePasswordCard(name: name, archive: archive, entry: reprompt ? entry : nil) {
                 unlocked = true
                 reprompt = false
@@ -410,48 +468,74 @@ private struct ArchiveEntryPane: View {
         }
     }
 
-    private func card(title: String, message: String, download: Bool = false) -> some View {
+    private func card(title: String, message: String, download: Bool = false, action: (() -> Void)? = nil) -> some View {
         EmptyStateView(title: title, message: message) {
-            if download { Button(ArchiveWords.download, action: onDownload).buttonStyle(PrimaryCapsuleStyle()) }
+            if download { Button(ArchiveWords.download, action: action ?? onDownload).buttonStyle(PrimaryCapsuleStyle()) }
         }
         .padding(Alpine.Space.s6)
     }
 }
 
-/* The entry from memory: a picture, a PDF through PDFKit, Markdown drawn, or text. */
+/*
+ * The entry from memory: a picture, a PDF through PDFKit, Markdown drawn, or text. A picture is
+ * decoded and text cut into pieces in a task, off the view's body: a body runs on every redraw,
+ * and decoding a 100 MB image there held the main thread each time.
+ */
 private struct ArchiveEntryView: View {
     let kind: ArchiveEntries.Kind
     let name: String
     let bytes: Data
+    @State private var image: UIImage?
+    @State private var pieces: [String]?
+    @State private var broken = false
 
     var body: some View {
         switch kind {
         case .image:
-            if let image = ArchiveImages.decode(bytes) {
-                // Fitted to the space, as QuickLook shows a picture; a picture smaller than the screen is enlarged, never smoothed.
-                Image(uiImage: image).resizable().interpolation(image.size.width < 64 ? .none : .high).scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(Alpine.Space.s4)
-                    .accessibilityLabel(name)
-            } else {
-                EmptyStateView(title: ArchiveWords.broken, message: nil) { EmptyView() }
+            Group {
+                if let image {
+                    // Fitted to the space, as QuickLook shows a picture; a picture smaller than the screen is enlarged, never smoothed.
+                    Image(uiImage: image).resizable().interpolation(image.size.width < 64 ? .none : .high).scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(Alpine.Space.s4)
+                        .accessibilityLabel(name)
+                } else if broken {
+                    EmptyStateView(title: ArchiveWords.broken, message: nil) { EmptyView() }
+                } else {
+                    ProgressView().tint(Alpine.primary)
+                }
+            }
+            .task(id: bytes.count) {
+                let data = bytes
+                let decoded = await Task.detached(priority: .userInitiated) { ArchiveImages.decode(data) }.value
+                if let decoded { image = decoded } else { broken = true }
             }
         case .pdf:
             InMemoryPDF(data: bytes)
         case .markdown where bytes.count <= MarkdownDocument.limit:
             MarkdownView(data: bytes)
         default:
-            // In pieces of at most 200 lines and 16 KB each, laid out as they scroll in: never one view of 8 MB of text.
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(ArchiveText.pieces(bytes).enumerated()), id: \.offset) { _, piece in
-                        Text(piece)
-                            .font(.system(.footnote, design: .monospaced)).foregroundStyle(Alpine.ink)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if let pieces {
+                    // In pieces of at most 200 lines and 16 KB each, laid out as they scroll in: never one view of 8 MB of text.
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(pieces.enumerated()), id: \.offset) { _, piece in
+                                Text(piece)
+                                    .font(.system(.footnote, design: .monospaced)).foregroundStyle(Alpine.ink)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(Alpine.Space.s4)
                     }
+                } else {
+                    ProgressView().tint(Alpine.primary)
                 }
-                .padding(Alpine.Space.s4)
+            }
+            .task(id: bytes.count) {
+                let data = bytes
+                pieces = await Task.detached(priority: .userInitiated) { ArchiveText.pieces(data) }.value
             }
         }
     }
