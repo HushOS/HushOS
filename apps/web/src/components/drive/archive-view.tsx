@@ -320,7 +320,11 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     unlocked={unlocked}
                     hidden={listing.hidden}
                     onFolder={(id) => go([...path, id])}
-                    onOpen={setOpened}
+                    // Opened to look at it: a download waiting on another entry's password is let go of.
+                    onOpen={(entry) => {
+                        setAskFor(null);
+                        setOpened(entry);
+                    }}
                     onDownload={download}
                 />
             )}

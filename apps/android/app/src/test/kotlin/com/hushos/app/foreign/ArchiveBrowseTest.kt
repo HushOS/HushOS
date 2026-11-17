@@ -16,6 +16,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -72,6 +73,38 @@ class ArchiveBrowseTest {
         browse.downloads.add(other)
         browse.downloadFailed(other, ArchiveException.Refused("crc"))
         assertEquals("This item is damaged, or isn’t something HushOS can read.", other.error.value)
+        browse.close()
+        scope.cancel()
+    }
+
+    @Test fun aDownloadThatAskedForAPasswordGoesOnOnceItUnlocksAndAPreviewDoesNot() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })
+        withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
+        val (secret, other) = browse.archive!!.entries.filter { it.lock != "none" }.take(2)
+        // Download on a locked item: its pane opens on the password, and the download waits on it.
+        browse.downloadOnceUnlocked(secret)
+        assertEquals(secret, browse.opened)
+        assertEquals(secret.index, browse.downloadAfterPassword)
+        // Unlocked: the download goes on, once.
+        assertTrue(browse.unlockedFor(secret))
+        assertTrue(browse.unlocked)
+        assertEquals(null, browse.downloadAfterPassword)
+        assertFalse(browse.unlockedFor(secret))
+        // Opened to look at it, an item's password opens a preview, never a download.
+        browse.passwordLost(doubt = false)
+        browse.show(secret)
+        assertFalse(browse.unlockedFor(secret))
+        // A download waiting on one item is let go of when another is opened to look at.
+        browse.downloadOnceUnlocked(secret)
+        browse.show(other)
+        assertFalse(browse.unlockedFor(secret))
+        // A download refused for the password held goes back to the item, and goes on once it unlocks.
+        val record = EntryDownload(other)
+        browse.downloads.add(record)
+        browse.downloadFailed(record, ArchiveException.Refused("password-unproven"))
+        assertEquals(other, browse.opened)
+        assertTrue(browse.unlockedFor(other))
         browse.close()
         scope.cancel()
     }

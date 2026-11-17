@@ -90,6 +90,35 @@ class ArchiveBrowse(
         unlocked = false
         doubted = doubt
     }
+    /*
+     * The item a Download waits on a password for (its own, or the archive's): kept apart from the
+     * item merely shown, and across a rotation, so once it unlocks the download goes on (its
+     * confirmation, then the Save dialog) rather than a preview.
+     */
+    var downloadAfterPassword by mutableStateOf<UInt?>(null)
+        private set
+
+    /* An item opened to look at it: a Download waiting on another item's password is let go of. */
+    fun show(entry: ArchiveEntry?) {
+        opened = entry
+        if (downloadAfterPassword != entry?.index) downloadAfterPassword = null
+    }
+
+    /* An item opened to download it, which first asks for its password. */
+    fun downloadOnceUnlocked(entry: ArchiveEntry) {
+        opened = entry
+        downloadAfterPassword = entry.index
+    }
+
+    /* `entry` opened with the password typed: true, once, if a Download waits on it (the caller goes on to it). */
+    fun unlockedFor(entry: ArchiveEntry): Boolean {
+        unlocked = true
+        doubted = false
+        reprompt.remove(entry.index)
+        if (downloadAfterPassword != entry.index) return false
+        downloadAfterPassword = null
+        return true
+    }
     var asking by mutableStateOf<ArchiveEntry?>(null)
     /* The download whose place the Save dialog is choosing: kept across a rotation. */
     var waitingFor by mutableStateOf<ArchiveEntry?>(null)
@@ -187,14 +216,14 @@ class ArchiveBrowse(
         if (error is ArchiveException.Refused && error.code == "wrong-password") {
             downloads.remove(record)
             if (record.entry.index !in reprompt) reprompt.add(record.entry.index)
-            opened = record.entry
+            downloadOnceUnlocked(record.entry)
             return
         }
         // No password held for it any more (the held one, maybe wrong, let go of): asked for again.
         if (error is ArchiveException.Refused && (error.code == "password-unproven" || error.code == "password")) {
             downloads.remove(record)
             passwordLost(doubt = error.code == "password-unproven")
-            opened = record.entry
+            downloadOnceUnlocked(record.entry)
             return
         }
         record.error.value = failed(error, entry = true)

@@ -139,14 +139,15 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         picker.launch(entry.saveName)
     }
     fun download(entry: ArchiveEntry) {
-        if (entry.lock != "none" && !browse.unlocked) { browse.opened = entry; return }
+        // Its password first, then this download goes on (browse.unlockedFor).
+        if (entry.lock != "none" && !browse.unlocked) { browse.downloadOnceUnlocked(entry); return }
         if (zipEntryAsksFirst(entry.size, entry.packed)) { browse.asking = entry; return }
         pick(entry)
     }
 
     fun back() {
         when {
-            browse.opened != null -> browse.opened = null
+            browse.opened != null -> browse.show(null)
             browse.path.isNotEmpty() -> browse.path = browse.path.dropLast(1)
             else -> close()
         }
@@ -171,21 +172,24 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                         val entry = browse.opened
                         // At the top the bar already names the archive: the trail shows only inside it.
                         if (path.isNotEmpty() || entry != null) {
-                            Crumbs(item.name, path.map(tree::name), entry) { depth -> browse.opened = null; browse.path = path.take(depth) }
+                            Crumbs(item.name, path.map(tree::name), entry) { depth -> browse.show(null); browse.path = path.take(depth) }
                             HorizontalDivider(color = alpine.rule)
                         }
                         Box(Modifier.weight(1f)) {
                             if (entry != null) EntryPane(
                                 current, entry, browse.unlocked, reprompt = entry.index in browse.reprompt,
                                 doubted = browse.doubted,
-                                onUnlocked = { browse.unlocked = true; browse.doubted = false; browse.reprompt.remove(entry.index) },
+                                downloadWaiting = browse.downloadAfterPassword == entry.index,
+                                onAskToDownload = { browse.downloadOnceUnlocked(entry) },
+                                // A Download that waited on this password goes on: its confirmation, then the Save dialog.
+                                onUnlocked = { if (browse.unlockedFor(entry)) download(entry) },
                                 onWrongPassword = { if (entry.index !in browse.reprompt) browse.reprompt.add(entry.index) },
                                 onPasswordLost = browse::passwordLost,
                                 onDownload = { download(entry) },
                                 onDownloadArchive = { sending = true },
                                 failed = browse::failed,
                             )
-                            else EntryList(tree.rows(path.lastOrNull() ?: 0), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = { browse.opened = it }, onDownload = ::download)
+                            else EntryList(tree.rows(path.lastOrNull() ?: 0), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = browse::show, onDownload = ::download)
                         }
                         for (record in browse.downloads) DownloadBar(record) { browse.stop(record) }
                     }
@@ -352,6 +356,9 @@ private fun EntryPane(
     reprompt: Boolean,
     /* The password held was let go of, maybe wrong: the card says so. */
     doubted: Boolean,
+    /* A Download waits on this item's password: its card shows at once, and the download goes on after. */
+    downloadWaiting: Boolean,
+    onAskToDownload: () -> Unit,
     onUnlocked: () -> Unit,
     onWrongPassword: () -> Unit,
     onPasswordLost: (Boolean) -> Unit,
@@ -366,8 +373,6 @@ private fun EntryPane(
     val kind = remember(name) { ArchiveTree.previewKind(name) }
     val limits = remember(kind) { zipEntryPreviewLimits(kind, deviceMemory(context).toULong()) }
     var continued by remember(entry.index) { mutableStateOf(false) }
-    // Download asked for on a locked archive inside the archive: its password first.
-    var askFor by remember(entry.index) { mutableStateOf(false) }
     // Each password typed for this item opens it afresh.
     var attempt by remember(entry.index) { mutableStateOf(0) }
     val size = entry.size.toLong()
@@ -384,13 +389,11 @@ private fun EntryPane(
                 entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 // An archive inside is never previewed; downloading a locked one asks for its password first.
-                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index, note, failed) {
+                entry.nested && (downloadWaiting || reprompt) && locked -> PasswordCard(archive, name, entry.index, note, failed) {
                     attempt++
-                    askFor = false
                     onUnlocked()
-                    onDownload()
                 }
-                entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) askFor = true else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
+                entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) onAskToDownload() else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
                 locked -> PasswordCard(archive, name, entry.index, note, failed) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }

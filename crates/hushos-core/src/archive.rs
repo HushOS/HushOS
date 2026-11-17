@@ -2174,8 +2174,16 @@ impl ZipArchiveSession {
                 return Ok(());
             }
             control.progress()?;
-            sink.write(std::mem::take(pending))
-                .map_err(|FetchError::Failed { reason }| ArchiveError::Failed { reason })
+            // A wait on the app's destination (a slow disk, a provider over the network): the
+            // watchdog's clock stops for it, as for a fetch. A cancel meanwhile ends it the
+            // moment the write returns.
+            let written = {
+                let _waiting = control.hold();
+                sink.write(std::mem::take(pending))
+            };
+            written.map_err(|FetchError::Failed { reason }| ArchiveError::Failed { reason })?;
+            control.progress()?;
+            Ok(())
         };
         let used = password.as_deref().map(Vec::as_slice);
         let result = self.reader(&control).and_then(|source| {

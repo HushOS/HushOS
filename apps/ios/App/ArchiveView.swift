@@ -244,7 +244,8 @@ struct ArchiveScreen: View {
     private func open(_ row: ArchiveRow) {
         switch row {
         case .folder(let id, _, _): path.append(id)
-        case .file(let entry): if !entry.link { opened = entry }
+        // Opened to look at it: a download waiting on another entry's password is let go of.
+        case .file(let entry): if !entry.link { opened = entry; passwordFor = nil }
         }
     }
 

@@ -1002,3 +1002,73 @@ fn a_re_accepted_password_stays_as_proven_as_it_was() {
     assert_eq!(outcome(zip.unproven(empty, Some(password), damaged)), "crc");
     assert!(zip.password().is_some());
 }
+
+/* A sink that waits on its destination past the watchdog: held, it isn't the archive's stall. */
+#[test]
+fn a_download_waits_on_a_slow_sink_past_the_watchdog_and_a_cancel_still_ends_it() {
+    struct Manual(std::sync::atomic::AtomicU64);
+    impl crate::tools::ToolClock for Manual {
+        fn now_millis(&self) -> u64 {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    struct Kept(Vec<u8>);
+    impl LocalSource for Kept {
+        fn size(&self) -> u64 {
+            self.0.len() as u64
+        }
+        fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+            let start = (offset as usize).min(self.0.len());
+            Ok(self.0[start..(start + length as usize).min(self.0.len())].to_vec())
+        }
+    }
+    /* Each write: the destination takes a minute (the clock moved on, the app's poll asks the watchdog), then `after`. */
+    struct Slow {
+        clock: Arc<Manual>,
+        control: Mutex<Option<Arc<RunControl>>>,
+        cancel: bool,
+        writes: Mutex<u32>,
+        fired: Mutex<bool>,
+    }
+    impl EntrySink for Slow {
+        fn write(&self, _chunk: Vec<u8>) -> std::result::Result<(), FetchError> {
+            *self.writes.lock().unwrap() += 1;
+            let control = self.control.lock().unwrap().clone().unwrap();
+            // A minute, the app asking the watchdog each second as it does.
+            for _ in 0..60 {
+                self.clock.0.fetch_add(1_000, std::sync::atomic::Ordering::SeqCst);
+                *self.fired.lock().unwrap() |= control.check_watchdog();
+            }
+            if self.cancel {
+                control.cancel();
+            }
+            Ok(())
+        }
+    }
+    let bytes = large("compressible.zip");
+    for cancel in [false, true] {
+        let clock = Arc::new(Manual(std::sync::atomic::AtomicU64::new(0)));
+        let open = RunControl::new(30_000, Some(clock.clone()));
+        let session = ZipArchiveSession::open_local(Arc::new(Kept(bytes.clone())), open).unwrap();
+        let control = RunControl::new(30_000, Some(clock.clone()));
+        let sink = Arc::new(Slow {
+            clock: clock.clone(),
+            control: Mutex::new(Some(control.clone())),
+            cancel,
+            writes: Mutex::new(0),
+            fired: Mutex::new(false),
+        });
+        let result = session.download(0, sink.clone(), control.clone());
+        assert!(!*sink.fired.lock().unwrap(), "the watchdog never fires on a wait for the sink");
+        if cancel {
+            assert!(
+                matches!(result, Err(ArchiveError::Failed { .. })),
+                "a cancel during the wait ends it: {result:?}"
+            );
+            assert_eq!(*sink.writes.lock().unwrap(), 1, "and nothing more is written");
+        } else {
+            assert_eq!(result, Ok(()), "twenty slow writes, each a minute, and the download is whole");
+            assert_eq!(*sink.writes.lock().unwrap(), 20);
+        }
+    }
+}

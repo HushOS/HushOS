@@ -173,7 +173,7 @@ impl std::fmt::Debug for RunControl {
 }
 
 /* A wait on someone else; the watchdog's clock runs on from where it stopped when it ends. */
-struct Hold<'a>(&'a RunControl);
+pub(crate) struct Hold<'a>(&'a RunControl);
 
 impl Drop for Hold<'_> {
     fn drop(&mut self) {
@@ -194,7 +194,7 @@ impl RunControl {
         clock.last = now;
     }
 
-    fn hold(&self) -> Hold<'_> {
+    pub(crate) fn hold(&self) -> Hold<'_> {
         let mut clock = lock(&self.clock);
         self.bring_up(&mut clock);
         clock.holds += 1;
