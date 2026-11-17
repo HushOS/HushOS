@@ -480,9 +480,11 @@ class SaveRunTest {
         writer.offline = true
         assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(other, writer, rows))
         assertTrue(rows.list().any { it.id == "other" })
-        // Keep with no answer (offline, an older server): the row goes all the same; the server lets an open upload expire.
-        SaveRuns.keep(other, writer, rows)
-        assertFalse(rows.list().any { it.id == "other" })
+        // Keep with no answer (offline, an older server): kept all the same (a done mark, never offered); the server lets an
+        // open upload expire.
+        assertEquals(SaveKeep.KEPT, SaveRuns.keep(other, writer, rows))
+        assertFalse(rows.list().any { it.id == "other" && !it.done })
+        assertTrue(SaveRuns.interrupted(rows, writer).none { it.id == "other" })
         writer.offline = false
         rows.put(other)
         writer.denied = true
@@ -490,9 +492,9 @@ class SaveRunTest {
         assertFalse(rows.list().any { it.id == "other" })
         writer.denied = false
         rows.put(other)
-        SaveRuns.keep(other, writer, rows)
+        assertEquals(SaveKeep.KEPT, SaveRuns.keep(other, writer, rows))
         assertTrue("up-x" in writer.aborted)
-        assertFalse(rows.list().any { it.id == "other" })
+        assertFalse(rows.list().any { it.id == "other" && !it.done })
         run.cancel()
     }
 
@@ -1012,7 +1014,57 @@ class SaveRunTest {
         SaveRuns.interrupted(rows, writer, now = 2L)
         SaveRuns.quietlySettled()
         rows.between = null
+        // Only the Keep's mark is left: never offered, dropped at the next launch's look.
+        assertEquals(listOf(true), rows.list().map { it.kept && it.done })
+        assertTrue(SaveRuns.interrupted(rows, writer, now = 3L).isEmpty())
         assertTrue(rows.list().isEmpty())
+    }
+
+    /* Keep on one screen, then Delete from another screen's older read: nothing is trashed or purged, and it says kept. */
+    @Test
+    fun aDeleteFromAReadBeforeAKeepSendsNothingAndSaysKept() {
+        val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
+        val epoch = SaveRunJournal.Epoch()
+        val first = SaveRunJournal(file, epoch)
+        val second = SaveRunJournal(file, epoch)
+        val made = SaveRunRow("made", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch")
+        first.put(made)
+        val writer = FakeWriter().apply { live += "node-x"; open += "up-x" }
+        val stale = SaveRuns.interrupted(second, writer).single()
+        assertEquals(SaveKeep.KEPT, SaveRuns.keep(made, writer, first))
+        assertEquals(SaveCleanup.KEPT, SaveRuns.cleanUp(stale, writer, second))
+        assertEquals(emptyList<String>(), writer.sent.toList())
+        assertTrue("node-x" in writer.live)
+        // Asked again: still kept, nothing more sent.
+        assertEquals(SaveKeep.KEPT, SaveRuns.keep(stale, writer, second))
+        assertEquals(emptyList<String>(), writer.sent.toList())
+    }
+
+    /* Keep while another screen's Delete is under way waits for it, and never says kept of what went. */
+    @Test
+    fun aKeepWhileADeleteIsUnderWayWaitsAndNeverSaysKeptOfWhatWent() {
+        val rows = journal()
+        val made = SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        rows.put(made)
+        val trashing = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val writer = FakeWriter().apply { live += "node-x"; afterTrash = { trashing.countDown(); release.await(10, TimeUnit.SECONDS) } }
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val deleting = pool.submit<SaveCleanup> { SaveRuns.cleanUp(made, writer, rows) }
+            assertTrue(trashing.await(10, TimeUnit.SECONDS))
+            val keeping = pool.submit<SaveKeep> { SaveRuns.keep(made, writer, rows) }
+            // Held behind the Delete's lock while its trash request is on its way.
+            Thread.sleep(200)
+            assertFalse(keeping.isDone)
+            release.countDown()
+            assertEquals(SaveCleanup.DELETED, deleting.get(10, TimeUnit.SECONDS))
+            assertEquals(SaveKeep.GONE, keeping.get(10, TimeUnit.SECONDS))
+            assertTrue(rows.list().isEmpty())
+        } finally {
+            release.countDown()
+            pool.shutdownNow()
+        }
     }
 
     /* A replace that fails (the rename refused) leaves the old journal as it was, never deleted: its rows are still there. */
@@ -1489,6 +1541,59 @@ class SaveResultTest {
         assertEquals(version, server.node(id).metadataVersion)
         assertEquals(envelope, server.node(id).metadataEnvelope)
         assertFalse(server.requests.drop(sent).any { it.contains("/nodes/$id/metadata") })
+    }
+
+    /* A sign-out during the first of two trash batches sends no second; a purge or an abort sends nothing after it either. */
+    @Test
+    fun aSignOutBetweenBatchesOrTriesSendsNothingMore() {
+        val epoch = SaveRunJournal.Epoch()
+        val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
+        val ids = List(VaultSaveWriter.MAX_TRASH_BATCH + 1) { "node-$it" }
+        server.extraRoutes = { method, segments, _, body ->
+            when {
+                method == "POST" && segments.lastOrNull() == "trash-batch" -> {
+                    epoch.end()
+                    val sent = body.getJSONArray("nodeIds")
+                    200 to JSONObject().put("results", org.json.JSONArray((0 until sent.length()).map { i ->
+                        JSONObject().put("id", sent.getString(i)).put("status", "trashed").put("trashedAt", "now").put("changeSeq", 1)
+                    }))
+                }
+                else -> null
+            }
+        }
+        val fates = writer.trash(ids, vault.workspaceId)
+        assertEquals(1, server.requests.count { it.endsWith("/trash-batch") })
+        assertEquals(SaveItemFate.DONE, fates["node-0"])
+        assertEquals(SaveItemFate.REFUSED, fates[ids.last()])
+        // The one more after a lost answer is a send too: none after a sign-out.
+        val later = SaveRunJournal.Epoch()
+        val again = VaultSaveWriter(vault, later) { throw IllegalStateException("not asked") }
+        server.extraRoutes = null
+        server.dropReply = { method, path -> (method == "POST" && path.endsWith("/trash-batch")).also { if (it) later.end() } }
+        assertThrows(SessionEnded::class.java) { again.trash(listOf("node-y"), vault.workspaceId) }
+        assertEquals(2, server.requests.count { it.endsWith("/trash-batch") })
+        server.dropReply = null
+        // Purge: one request per id, none after the sign-out.
+        val purging = SaveRunJournal.Epoch()
+        val purger = VaultSaveWriter(vault, purging) { throw IllegalStateException("not asked") }
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "DELETE" && segments.size == 3 && segments[1] == "nodes") { purging.end(); 200 to JSONObject() } else null
+        }
+        val purged = purger.purge(listOf("node-a", "node-b"), vault.workspaceId)
+        assertEquals(1, server.requests.count { it.startsWith("DELETE ") && it.contains("/nodes/node-") })
+        assertEquals(SaveItemFate.REFUSED, purged["node-b"])
+        // An abort still finishing: no next try after the sign-out.
+        val aborting = SaveRunJournal.Epoch()
+        val aborter = VaultSaveWriter(vault, aborting) { throw IllegalStateException("not asked") }
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "abort") {
+                aborting.end()
+                409 to JSONObject().put("code", "conflict").put("message", "finishing").put("data", JSONObject().put("upload", "completing"))
+            } else null
+        }
+        assertEquals(SaveAbortFate.UNKNOWN, aborter.abortUpload("up", vault.workspaceId, 0L))
+        assertEquals(1, server.requests.count { it.contains("/uploads/up/abort") })
+        server.extraRoutes = null
     }
 
     /* An abort answered "still finishing" is asked again, and settles as the server then says. */

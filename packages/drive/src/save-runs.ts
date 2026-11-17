@@ -284,12 +284,19 @@ export type ItemFate = 'done' | 'gone' | 'refused' | 'denied' | 'held';
  */
 export async function askAbort(
     abort: () => Promise<unknown>,
-    options: { tries?: number; pauseMs?: number; pause?: (ms: number) => Promise<void> } = {},
+    options: {
+        tries?: number;
+        pauseMs?: number;
+        pause?: (ms: number) => Promise<void>;
+        /* Asked before every try: after a sign-out nothing more is sent (no answer, as offline). */
+        stillOn?: () => boolean;
+    } = {},
 ): Promise<AbortFate> {
     const tries = options.tries ?? 5;
     const pause =
         options.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let asked = 1; ; asked++) {
+        if (!(options.stillOn?.() ?? true)) return 'unknown';
         try {
             await abort();
             return 'aborted';
@@ -336,6 +343,44 @@ export function refusedOutright(error: unknown) {
         error.code !== 'unavailable' &&
         error.code !== 'conflict'
     );
+}
+
+/*
+ * Ids to the Trash in requests of `size`, each sent only while `stillOn` (the session the clean-up
+ * began in): after a sign-out the rest go unsent, left `refused` for a later clean-up.
+ */
+export async function trashInBatches(
+    ids: string[],
+    size: number,
+    stillOn: () => boolean,
+    send: (batch: string[]) => Promise<Map<string, ItemFate>>,
+) {
+    const fates = new Map<string, ItemFate>();
+    for (let at = 0; at < ids.length; at += size) {
+        const batch = ids.slice(at, at + size);
+        if (!stillOn()) {
+            for (const id of batch) fates.set(id, 'refused');
+            continue;
+        }
+        for (const [id, fate] of await send(batch)) fates.set(id, fate);
+    }
+    return fates;
+}
+
+/* A request refused here, unsent, because the session it belonged to ended (a sign-out). */
+export class SignedOutError extends Error {
+    constructor() {
+        super('Signed out: nothing more is sent for that session.');
+        this.name = 'SignedOutError';
+    }
+}
+
+/* `request`, sent only while `stillOn`: every call (each retry too) checks first. */
+export function whileSignedIn<A extends unknown[], R>(
+    stillOn: () => boolean,
+    request: (...args: A) => Promise<R>,
+) {
+    return (...args: A) => (stillOn() ? request(...args) : Promise.reject(new SignedOutError()));
 }
 
 /* The whole request refused because the workspace is no longer this person's to write. */
@@ -422,6 +467,11 @@ export type SaveRunDeps = {
      * the row's heartbeat says whether it runs.
      */
     hold?: (runId: string) => Promise<() => void> | (() => void);
+    /*
+     * Runs `work` holding a lock of this run's recovery shared by every tab (a Web Lock), so two
+     * tabs' Keep, Delete and quiet settling of one row never interleave. Without it, in turn here.
+     */
+    exclusive?: <T>(runId: string, work: () => Promise<T>) => Promise<T>;
     isLive?: (runId: string) => Promise<boolean>;
     /* The session generation the caller's work began in (the transfer manager's enqueue `from`). */
     from?: { generation: number };
@@ -1490,10 +1540,14 @@ async function settleQuietly(
 ) {
     for (const row of rows) {
         try {
-            if (!(await stillSo(deps, row))) continue;
-            if (row.chosen === 'delete') await lookAgain(deps, row, now());
-            else if (deps.abortUpload)
-                await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
+            // Under the run's recovery lock, as Keep and Delete are: never between another tab's
+            // read and its write.
+            await recovering(deps, row.id, async () => {
+                if (!(await stillSo(deps, row))) return;
+                if (row.chosen === 'delete') await lookAgain(deps, row, now());
+                else if (deps.abortUpload)
+                    await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
+            });
         } catch {
             // No answer: asked again at the next open.
         }
@@ -1563,7 +1617,22 @@ function stable(value: unknown): string {
  * the row still holds uncertain, and that isn't found, may still be made: the row stays, until a
  * later open finds it or CREATION_SETTLE_MS has passed since it was sent.
  */
-export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
+export async function cleanUpInterrupted(
+    deps: SaveRunDeps,
+    row: RunRow,
+): Promise<Cleanup | 'kept' | 'gone' | 'changed'> {
+    return recovering(deps, row.id, async () => {
+        // Under the run's recovery lock, from the row as the journal holds it now: kept in another
+        // tab, or already gone, or changed since this snapshot was read (the person decides again).
+        const held = await readRow(deps.runs, row.id);
+        if (!held) return 'gone';
+        if (held.chosen === 'keep') return 'kept';
+        if (stable(held) !== stable(row)) return 'changed';
+        return cleanUpNow(deps, row);
+    });
+}
+
+async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     const now = deps.now?.() ?? Date.now();
     const mayExist = new Set(
         (row.uncertain ?? [])
@@ -1606,23 +1675,55 @@ async function settleUploads(
 
 /*
  * "Keep what was made": an interrupted run's files and folders stay, and its
- * row always goes. Its open uploads are still asked to abort (they are not
+ * row is marked kept. Its open uploads are still asked to abort (they are not
  * files, only reserved room); one with no answer is left to the server, which
  * lets an open upload go once it expires, and one still finishing lands and
  * is kept, as asked.
  */
 export async function keepInterrupted(
-    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'> &
+        Partial<Pick<SaveRunDeps, 'current' | 'exclusive'>>,
     row: RunRow,
-): Promise<'kept' | 'not-recorded' | 'signed-out'> {
-    // Signed out meanwhile: nothing more asked of the server or changed in that account's journal.
-    const stillOn = () => signedIn(deps);
-    for (const uploadId of row.uploadIds) {
+): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone'> {
+    return recovering(deps, row.id, async () => {
+        // Signed out meanwhile: nothing more asked of the server or changed in that account's journal.
+        const stillOn = () => signedIn(deps);
         if (!stillOn()) return 'signed-out';
-        await deps.abortUpload(row.workspaceId, uploadId);
-    }
-    if (!stillOn()) return 'signed-out';
-    // The journal refusing to let it go: still offered, and Keep may be asked again.
-    if (await retire(deps.runs, row, stillOn)) return 'kept';
-    return stillOn() ? 'not-recorded' : 'signed-out';
+        // As the journal holds it now, under the run's recovery lock: a Delete another tab finished
+        // (gone), or a Keep already made.
+        const held = await readRow(deps.runs, row.id);
+        if (!held) return 'gone';
+        if (held.chosen === 'keep') return 'kept';
+        for (const uploadId of held.uploadIds) {
+            if (!stillOn()) return 'signed-out';
+            await deps.abortUpload(held.workspaceId, uploadId);
+        }
+        // A mark, not a removal: a Delete chosen from an older snapshot finds it kept (the next
+        // open drops it, as any `done` row). The journal refusing it twice: still offered.
+        const kept: RunRow = { ...held, chosen: 'keep', done: true };
+        for (let tries = 0; tries < 2; tries++) {
+            if (!stillOn()) return 'signed-out';
+            try {
+                if (await swapRow(deps, held, kept)) return 'kept';
+                break;
+            } catch {
+                // Asked again.
+            }
+        }
+        return stillOn() ? 'not-recorded' : 'signed-out';
+    });
+}
+
+/* The row as the journal holds it now. */
+async function readRow(runs: RunJournal, id: string) {
+    return (await runs.list()).find((row) => row.id === id);
+}
+
+/* A recovery row's work under its lock (exclusive), or in turn here without one. */
+function recovering<T>(
+    deps: Partial<Pick<SaveRunDeps, 'exclusive'>>,
+    runId: string,
+    work: () => Promise<T>,
+) {
+    return deps.exclusive ? deps.exclusive(runId, work) : work();
 }

@@ -197,8 +197,12 @@ actor FakeWriter: SaveRunWriter {
     var sent: [String] = []
     var afterTrash: (@Sendable () -> Void)?
     func set(afterTrash: @escaping @Sendable () -> Void) { self.afterTrash = afterTrash }
+    /* Awaited once a trash is sent, before it is answered (a request on its way). */
+    var trashing: (@Sendable () async -> Void)?
+    func set(trashing: @escaping @Sendable () async -> Void) { self.trashing = trashing }
     func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
         sent.append("trash")
+        await trashing?()
         if offline { throw DriveAPIError.transport("offline") }
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
@@ -486,9 +490,11 @@ let own = SaveSources.ownWriting
         await writer.set(offline: true)
         #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .left)
         #expect(rows.list().contains { $0.id == "other" })
-        // Keep with no answer (offline, an older server): the row goes all the same; the server lets an open upload expire.
-        try await SaveRuns.keep(other, writer: writer, journal: rows)
-        #expect(!rows.list().contains { $0.id == "other" })
+        // Keep with no answer (offline, an older server): kept all the same (a done mark, never offered); the server lets an
+        // open upload expire.
+        #expect(try await SaveRuns.keep(other, writer: writer, journal: rows) == .kept)
+        #expect(!rows.list().contains { $0.id == "other" && $0.done != true })
+        #expect(!(await SaveRuns.interrupted(writer: writer, journal: rows)).contains { $0.id == "other" })
         await writer.set(offline: false)
         try rows.put(other)
         await writer.set(denied: true)
@@ -496,9 +502,9 @@ let own = SaveSources.ownWriting
         #expect(!rows.list().contains { $0.id == "other" })
         await writer.set(denied: false)
         try rows.put(other)
-        try await SaveRuns.keep(other, writer: writer, journal: rows)
+        #expect(try await SaveRuns.keep(other, writer: writer, journal: rows) == .kept)
         #expect(await writer.aborted == ["up-x"])
-        #expect(!rows.list().contains { $0.id == "other" })
+        #expect(!rows.list().contains { $0.id == "other" && $0.done != true })
         _ = await run.cancel()
     }
 
@@ -1090,6 +1096,55 @@ let own = SaveSources.ownWriting
         #expect(await writer.purged.isEmpty)
     }
 
+    /* Keep on one screen, then Delete from another screen's older read: nothing is trashed or purged, and it says kept. */
+    @Test func aDeleteFromAReadBeforeAKeepSendsNothingAndSaysKept() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let session = SaveRunJournal.Epoch()
+        let first = SaveRunJournal(url: url, epoch: session)
+        let second = SaveRunJournal(url: url, epoch: session)
+        let made = SaveRunRow(id: "made", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try first.put(made)
+        let writer = FakeWriter()
+        await writer.makeLive("node-x")
+        let stale = try #require(await SaveRuns.interrupted(writer: writer, journal: second).first)
+        #expect(try await SaveRuns.keep(made, writer: writer, journal: first) == .kept)
+        #expect(await SaveRuns.cleanUp(stale, writer: writer, journal: second) == .kept)
+        #expect(await writer.sent.isEmpty)
+        // Asked again: still kept, nothing more sent.
+        #expect(try await SaveRuns.keep(stale, writer: writer, journal: second) == .kept)
+        #expect(await writer.sent.isEmpty)
+    }
+
+    /* Keep while another screen's Delete is under way waits for it, and never says kept of what went. */
+    @Test func aKeepWhileADeleteIsUnderWayWaitsAndNeverSaysKeptOfWhatWent() async throws {
+        let rows = journal()
+        let made = SaveRunRow(id: "made", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try rows.put(made)
+        let writer = FakeWriter()
+        await writer.makeLive("node-x")
+        let gate = AsyncGate()
+        let reached = Locked(false)
+        await writer.set(trashing: {
+            reached.value = true
+            await gate.wait()
+        })
+        let deleting = Task { await SaveRuns.cleanUp(made, writer: writer, journal: rows) }
+        while !reached.value { try await Task.sleep(for: .milliseconds(2)) }
+        let keepDone = Locked(false)
+        let keeping = Task {
+            let kept = try await SaveRuns.keep(made, writer: writer, journal: rows)
+            keepDone.value = true
+            return kept
+        }
+        // Held behind the Delete's turn while its trash request is on its way.
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(!keepDone.value)
+        await gate.open()
+        #expect(await deleting.value == .deleted)
+        #expect(try await keeping.value == .gone)
+        #expect(rows.list().isEmpty)
+    }
+
     /* A Keep that comes between a quiet look and its write is never undone: compared and written in one hold of the lock. */
     @Test func aKeepBetweenAQuietLookAndItsWriteIsNeverUndone() async throws {
         let rows = journal()
@@ -1572,6 +1627,50 @@ extension OnFakeDrive {
             #expect(after.metadataVersion == before.metadataVersion)
             #expect(after.metadataEnvelope == before.metadataEnvelope)
             #expect(landed.name == g.name)
+        }
+
+        /* A sign-out during the first of two trash batches sends no second; a purge or an abort sends nothing after it either. */
+        @Test func aSignOutBetweenBatchesOrTriesSendsNothingMore() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let on = Locked(true)
+            let batches = Locked(0)
+            let ids = (0 ... TrashBatch.maxBatch).map { "node-\($0)" }
+            server.intercept = { method, parts, body in
+                guard method == "POST", parts.last == "trash-batch" else { return nil }
+                batches.value += 1
+                on.value = false
+                let sent = body["nodeIds"] as? [String] ?? []
+                return (200, ["results": sent.map { ["id": $0, "status": "trashed", "trashedAt": "2026-01-01T00:00:00Z", "changeSeq": 1] }])
+            }
+            let fates = try await vault.trash(ids, in: server.workspace, while: { on.value })
+            #expect(batches.value == 1)
+            #expect(fates["node-0"] == .done)
+            #expect(fates[ids.last!] == .refused)
+            // Purge: one request per id, none after the sign-out.
+            on.value = true
+            let purges = Locked(0)
+            server.intercept = { method, parts, _ in
+                guard method == "DELETE", parts.contains("nodes") else { return nil }
+                purges.value += 1
+                on.value = false
+                return (200, ["purged": true])
+            }
+            let purged = try await vault.purge(["node-a", "node-b"], in: server.workspace, while: { on.value })
+            #expect(purges.value == 1)
+            #expect(purged["node-b"] == .refused)
+            // An abort still finishing: no next try after the sign-out.
+            on.value = true
+            let aborts = Locked(0)
+            server.intercept = { method, parts, _ in
+                guard method == "POST", parts.last == "abort" else { return nil }
+                aborts.value += 1
+                on.value = false
+                return (409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]])
+            }
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { on.value }) == .unknown)
+            #expect(aborts.value == 1)
+            server.intercept = nil
         }
 
         /* An abort answered "still finishing" is asked again, and settles as what the server then says. */

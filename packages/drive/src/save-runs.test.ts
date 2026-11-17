@@ -47,12 +47,16 @@ import {
     resultsWaiting,
     roomOf,
     runEstimate,
+    SignedOutError,
     startRun,
+    trashInBatches,
     unknownResultSize,
+    whileSignedIn,
     type ItemFate,
     type Room,
     type SaveRunDeps,
 } from './save-runs';
+import { MAX_TRASH_BATCH } from './protocol';
 import type { EnqueueInput, TransferManagerOptions, UploadItem } from './transfers';
 import { sourcesSignatureForms } from './trust';
 
@@ -1184,7 +1188,7 @@ describe('a save run', () => {
         expect(w.runs.rows.size).toBe(0);
     });
 
-    test('keep what was made: the row goes and the files stay, its open uploads still aborted', async () => {
+    test('keep what was made: the files stay, its open uploads still aborted, the row never offered again', async () => {
         const w = world();
         w.server.live.add('node-a');
         w.server.open.add('up-b');
@@ -1200,12 +1204,16 @@ describe('a save run', () => {
         expect(await keepInterrupted(w.deps, left)).toBe('kept');
         expect(w.server.live.has('node-a')).toBe(true);
         expect(w.server.aborted).toEqual(['up-b']);
+        // Kept as a done mark (another tab's Delete finds it kept), never offered: the next open drops it.
+        expect(w.runs.rows.get('r')).toMatchObject({ chosen: 'keep', done: true });
+        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
         expect(w.runs.rows.size).toBe(0);
         // With no answer to the abort (offline, an older server), the row goes all the same:
         // an open upload expires on the server, and Keep never leaves a row it can't clear.
         await w.runs.put({ ...left, id: 'r2' });
         w.server.offline = true;
         expect(await keepInterrupted(w.deps, { ...left, id: 'r2' })).toBe('kept');
+        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
         expect(w.runs.rows.size).toBe(0);
     });
 
@@ -1755,6 +1763,10 @@ describe('a save run', () => {
             ...w.runs,
             remove: async (id: string) => void changes.push(`remove ${id}`),
             put: async (r: RunRow) => void changes.push(`put ${r.id}`),
+            update: async (id: string) => {
+                changes.push(`update ${id}`);
+                return true;
+            },
         };
         expect(await keepInterrupted({ ...w.deps, runs }, row)).toBe('signed-out');
         expect(asked).toEqual(['up-1']);
@@ -1764,19 +1776,66 @@ describe('a save run', () => {
         let refusals = 0;
         const refusing = {
             ...w.runs,
-            remove: async () => {
+            update: async () => {
                 refusals += 1;
                 session = false;
                 throw new Error('refused');
             },
+            remove: async (id: string) => void changes.push(`remove ${id}`),
             put: async (r: RunRow) => void changes.push(`put ${r.id}`),
         };
         w.deps.abortUpload = abort;
-        expect(
-            await keepInterrupted({ ...w.deps, runs: refusing }, { ...row, uploadIds: [] }),
-        ).toBe('signed-out');
+        expect(await keepInterrupted({ ...w.deps, runs: refusing }, row)).toBe('signed-out');
         expect(refusals).toBe(1);
         expect(changes).toEqual([]);
+    });
+
+    test(`a sign-out during the first of two trash batches (${MAX_TRASH_BATCH + 1} ids) sends no second`, async () => {
+        const ids = Array.from({ length: MAX_TRASH_BATCH + 1 }, (_, i) => `node-${i}`);
+        let session = true;
+        const sent: string[][] = [];
+        const fates = await trashInBatches(
+            ids,
+            MAX_TRASH_BATCH,
+            () => session,
+            async (batch) => {
+                sent.push(batch);
+                session = false;
+                return new Map(batch.map((id): [string, ItemFate] => [id, 'done']));
+            },
+        );
+        expect(sent).toEqual([ids.slice(0, MAX_TRASH_BATCH)]);
+        // The unsent one is left for a later clean-up, never counted gone.
+        expect(fates.get(ids[MAX_TRASH_BATCH]!)).toBe('refused');
+        expect(fates.get(ids[0]!)).toBe('done');
+    });
+
+    test('a sign-out between tries of an abort, or of any request, sends no next try', async () => {
+        let session = true;
+        let tries = 0;
+        const fate = await askAbort(
+            async () => {
+                tries += 1;
+                session = false;
+                throw new DriveApiError('Still finishing.', 'conflict', 409, {
+                    upload: 'completing',
+                });
+            },
+            { stillOn: () => session, pause: async () => {} },
+        );
+        expect(tries).toBe(1);
+        expect(fate).toBe('unknown');
+        // Any request wrapped for the session: each call (a retry included) checks before it goes.
+        session = true;
+        const calls: string[] = [];
+        const send = whileSignedIn(
+            () => session,
+            async (id: string) => void calls.push(id),
+        );
+        await send('first');
+        session = false;
+        await expect(send('retry')).rejects.toBeInstanceOf(SignedOutError);
+        expect(calls).toEqual(['first']);
     });
 
     test('a sign-out while an interrupted clean-up trashes sends no delete forever, nor any other request', async () => {
@@ -2004,6 +2063,7 @@ describe('a save run', () => {
         await w.runs.put(left);
         w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
         w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.update = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
         expect(await keepInterrupted(w.deps, left)).toBe('not-recorded');
         expect(w.runs.rows.has('r')).toBe(true);
     });

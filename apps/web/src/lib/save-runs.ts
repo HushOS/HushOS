@@ -6,20 +6,14 @@ import {
     type RunJournal,
     type RunRow,
 } from '@hushos/drive/journal';
-import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import {
     abandonRuns,
     lockRuns,
-    askAbort,
     cleanUpInterrupted,
-    deniedWhole,
-    heldNow,
     interruptedRuns,
     keepInterrupted,
     roomOf,
     startRun,
-    trashFatesOf,
-    type ItemFate,
     type RunPlan,
     type SaveRunDeps,
 } from '@hushos/drive/save-runs';
@@ -36,7 +30,7 @@ import {
 import { driveApi } from '@/lib/drive-api';
 import { storageQueryOptions } from '@/lib/queries';
 import { onTransferEvent, transfers } from '@/lib/transfers';
-import { purgeBatch } from '@/lib/trash-batch';
+import { cleanUpSends } from '@/lib/save-run-sends';
 import { untilWritable } from '@/lib/uploads';
 
 /*
@@ -65,6 +59,8 @@ function runs() {
 
 // A Web Lock's name, not storage: nothing is kept under it.
 const LOCK_PREFIX = 'drive-save-run:';
+// The lock every tab takes for one interrupted run's Keep, Delete and quiet settling.
+const RECOVERY_PREFIX = 'drive-save-recovery:';
 const locks = () => (typeof navigator === 'undefined' ? undefined : navigator.locks);
 
 /*
@@ -98,6 +94,8 @@ function storageNow(queryClient: QueryClient) {
 
 function deps(queryClient: QueryClient): SaveRunDeps {
     const from = { generation: deviceSession.generation() };
+    // The session these deps were made in: nothing is sent or written for it once it ends.
+    const stillOn = () => deviceSession.open() && deviceSession.generation() === from.generation;
     const ownWorkspace = async () =>
         (
             queryClient.getQueryData(storageQueryOptions.queryKey) ??
@@ -155,69 +153,21 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             }
             return items;
         },
-        // An upload still finishing is asked about again for about ten seconds (askAbort).
-        abortUpload: (workspaceId, uploadId) =>
-            askAbort(() => driveApi.abortUpload(workspaceId, uploadId)),
-        trash: async (workspaceId, ids) => {
-            const fates = new Map<string, ItemFate>();
-            for (let at = 0; at < ids.length; at += MAX_TRASH_BATCH) {
-                const batch = ids.slice(at, at + MAX_TRASH_BATCH);
-                try {
-                    const answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
-                    for (const [id, fate] of trashFatesOf(answer.results)) fates.set(id, fate);
-                } catch (error) {
-                    // A family manager's pause is not lost access: kept for after the hold.
-                    if (heldNow(error)) for (const id of batch) fates.set(id, 'held');
-                    else if (deniedWhole(error)) for (const id of batch) fates.set(id, 'denied');
-                    else throw error;
-                }
-            }
-            return fates;
-        },
-        // Delete forever as the Trash page does it (lib/trash-batch.ts purgeBatch): a request the
-        // workspace was too busy for is sent again, and items left `busy` too, while that helps.
-        purge: async (workspaceId, ids) => {
-            const refusedWhole = new Set<string>();
-            const heldWhole = new Set<string>();
-            const { gone } = await purgeBatch(
-                ids.map((id) => ({ id, workspaceId }) as DriveNode),
-                {
-                    trash: () => Promise.reject(new Error('not used')),
-                    restore: () => Promise.reject(new Error('not used')),
-                    purge: async (ws, nodeIds) => {
-                        try {
-                            return await clientFor(ws).purgeMany(ws, nodeIds);
-                        } catch (error) {
-                            if (heldNow(error)) for (const id of nodeIds) heldWhole.add(id);
-                            else if (deniedWhole(error))
-                                for (const id of nodeIds) refusedWhole.add(id);
-                            throw error;
-                        }
-                    },
-                    ancestorsOf: () => [],
-                },
-            );
-            const out = new Set(gone);
-            return new Map(
-                ids.map((id): [string, ItemFate] => [
-                    id,
-                    out.has(id)
-                        ? 'done'
-                        : heldWhole.has(id)
-                          ? 'held'
-                          : refusedWhole.has(id)
-                            ? 'denied'
-                            : 'refused',
-                ]),
-            );
-        },
+        // Every clean-up request, and each retry, only while this session lasts (lib/save-run-sends.ts).
+        ...cleanUpSends(stillOn, clientFor, (workspaceId, uploadId) =>
+            driveApi.abortUpload(workspaceId, uploadId),
+        ),
         // The server deletes forever only for a member: the person's own Drive, a family's folder.
         mayPurge: async (workspaceId) =>
             groupOfSpace(workspaceId) !== null || workspaceId === (await ownWorkspace()),
         hold: locks() ? hold : undefined,
         isLive: locks() ? isLive : undefined,
         from,
-        current: () => deviceSession.open() && deviceSession.generation() === from.generation,
+        current: stillOn,
+        exclusive: locks()
+            ? <T>(runId: string, work: () => Promise<T>) =>
+                  locks()!.request(`${RECOVERY_PREFIX}${runId}`, work) as Promise<T>
+            : undefined,
     };
 }
 
@@ -249,7 +199,7 @@ export async function cleanUpSaveRun(queryClient: QueryClient, row: RunRow) {
     return cleanUpInterrupted(deps(queryClient), row);
 }
 
-/* Keeps what an interrupted run made: its row goes, its open uploads are aborted. */
+/* Keeps what an interrupted run made: its row is marked kept, its open uploads are aborted. */
 export async function keepSaveRun(queryClient: QueryClient, row: RunRow) {
     return keepInterrupted(deps(queryClient), row);
 }

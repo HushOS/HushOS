@@ -534,7 +534,9 @@ class DriveApi(val session: Shared.Session) : RootApi {
         NodeView.from(write(workspaceId, "/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
 
     /* One request of a selection to the trash, or back in place (Undo): up to MAX_TRASH_BATCH ids of one workspace. */
-    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = againOnce { batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids) }
+    /* `before` runs before each send, the one more after a lost answer too (the save path's session check: a throw sends nothing). */
+    fun trashBatch(workspaceId: String, ids: List<String>, before: () -> Unit = {}): List<BatchAnswer> =
+        againOnce { before(); batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids) }
     fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/restore-batch", ids)
 
     private fun batch(workspaceId: String, path: String, ids: List<String>): List<BatchAnswer> {
@@ -566,9 +568,12 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return NodeView.from(write(workspaceId, "/nodes/$nodeId/restore", body).getJSONObject("node"))
     }
 
-    /* Sent once more when the first got no answer; that one's 404 means the first deleted it. */
-    fun purge(nodeId: String, workspaceId: String) {
-        fun delete() = write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+    /* Sent once more when the first got no answer; that one's 404 means the first deleted it. `before`: as trashBatch's. */
+    fun purge(nodeId: String, workspaceId: String, before: () -> Unit = {}) {
+        fun delete() {
+            before()
+            write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        }
         try {
             delete()
         } catch (_: Unreachable) {
@@ -612,8 +617,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
      * The save path's reading of an abort's answer (SaveRuns.kt): `FINISHING` while the server is still completing it
      * (`data.upload` "completing"), to be asked about again.
      */
-    fun abortUploadFate(uploadId: String, workspaceId: String): SaveAbortFate = try {
-        againOnce { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
+    fun abortUploadFate(uploadId: String, workspaceId: String, before: () -> Unit = {}): SaveAbortFate = try {
+        againOnce { before(); send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
         SaveAbortFate.ABORTED
     } catch (_: NotFound) {
         SaveAbortFate.GONE

@@ -13,7 +13,13 @@ import {
 } from 'fake-indexeddb';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createIndexedDbRunJournal, type RunJournal, type RunRow } from './journal';
-import { interruptedRuns, keepInterrupted, quietlySettled } from './save-runs';
+import {
+    cleanUpInterrupted,
+    interruptedRuns,
+    keepInterrupted,
+    quietlySettled,
+    type SaveRunDeps,
+} from './save-runs';
 
 /*
  * Two tabs on one browser's journal: two IndexedDB connections to the same database. The quiet
@@ -93,7 +99,9 @@ test('another tab’s Keep between this tab’s look and its write is never undo
         },
     });
     await quietlySettled();
-    expect(await tabB.list()).toEqual([]);
+    // Kept: only the done mark is left in both tabs' journal, never offered, dropped at the next open.
+    expect(await tabA.list()).toEqual([{ ...answered, chosen: 'keep', done: true }]);
+    expect(await interruptedRuns({ runs: tabB, isLive: async () => false })).toEqual([]);
     expect(await tabA.list()).toEqual([]);
 });
 
@@ -114,4 +122,83 @@ test('a row changed by another tab is left as that tab wrote it', async () => {
     });
     await quietlySettled();
     expect(await tabA.list()).toEqual([{ ...offered, holds: 5 }]);
+});
+
+/* One Web Lock per name shared by the tabs, as navigator.locks is: each holder in turn. */
+function sharedLocks() {
+    const tails = new Map<string, Promise<unknown>>();
+    return <T>(runId: string, work: () => Promise<T>) => {
+        const turn = (tails.get(runId) ?? Promise.resolve()).then(work);
+        tails.set(
+            runId,
+            turn.catch(() => {}),
+        );
+        return turn;
+    };
+}
+
+/* A tab's Delete and Keep on one journal handle, with what it sends to the server. */
+function recoveryTab(runs: RunJournal, exclusive: ReturnType<typeof sharedLocks>, sent: string[]) {
+    let gate: Promise<void> = Promise.resolve();
+    const deps = {
+        runs,
+        exclusive,
+        trash: async (_ws: string, ids: string[]) => {
+            sent.push(`trash ${ids.join(',')}`);
+            await gate;
+            return new Map(ids.map((id) => [id, 'done' as const]));
+        },
+        purge: async (_ws: string, ids: string[]) => {
+            sent.push(`purge ${ids.join(',')}`);
+            return new Map(ids.map((id) => [id, 'done' as const]));
+        },
+        mayPurge: async () => true,
+        abortUpload: async (_ws: string, id: string) => {
+            sent.push(`abort ${id}`);
+            return 'aborted' as const;
+        },
+    } as unknown as SaveRunDeps;
+    return { deps, hold: (until: Promise<void>) => void (gate = until) };
+}
+
+const offered: RunRow = {
+    id: 'offered',
+    workspaceId: 'ws',
+    nodeIds: ['made'],
+    uploadIds: ['up'],
+    at: 1,
+    beat: 1,
+};
+
+test('Delete from a snapshot read before another tab’s Keep sends nothing and says it was kept', async () => {
+    const locks = sharedLocks();
+    const sent: string[] = [];
+    const tabA = recoveryTab(createIndexedDbRunJournal('runs-keep-then-delete'), locks, sent);
+    const tabB = recoveryTab(createIndexedDbRunJournal('runs-keep-then-delete'), locks, sent);
+    await tabA.deps.runs.put(offered);
+    // Both tabs offered the row; the person answered Keep in tab A first.
+    const [snapshotB] = await interruptedRuns({ runs: tabB.deps.runs, isLive: async () => false });
+    expect(await keepInterrupted(tabA.deps, offered)).toBe('kept');
+    expect(sent).toEqual(['abort up']);
+    // Tab B's Delete, from its older snapshot: no trash, no purge.
+    expect(await cleanUpInterrupted(tabB.deps, snapshotB!)).toBe('kept');
+    expect(sent).toEqual(['abort up']);
+});
+
+test('Keep while another tab’s Delete is under way waits for it, and never says kept of what went', async () => {
+    const locks = sharedLocks();
+    const sent: string[] = [];
+    const tabA = recoveryTab(createIndexedDbRunJournal('runs-delete-then-keep'), locks, sent);
+    const tabB = recoveryTab(createIndexedDbRunJournal('runs-delete-then-keep'), locks, sent);
+    await tabA.deps.runs.put({ ...offered, uploadIds: [] });
+    let release!: () => void;
+    tabB.hold(new Promise<void>((resolve) => (release = resolve)));
+    const deleting = cleanUpInterrupted(tabB.deps, { ...offered, uploadIds: [] });
+    await vi.waitFor(() => expect(sent).toEqual(['trash made']));
+    // Keep asked in tab A while B's trash request is on its way: it waits for B's lock.
+    const keeping = keepInterrupted(tabA.deps, { ...offered, uploadIds: [] });
+    release();
+    expect(await deleting).toBe('deleted');
+    expect(await keeping).toBe('gone');
+    expect(await tabA.deps.runs.list()).toEqual([]);
 });

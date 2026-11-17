@@ -167,7 +167,11 @@ export type RunRow = {
      * for them, quietly. One found is never deleted unasked: the answer is cleared and the row
      * offered again, with `holds`, how many items it held when seen.
      */
-    chosen?: 'delete';
+    /*
+     * `keep`: the person kept what was made; the row stays only as a mark (`done`) so a Delete
+     * another tab chose from an older snapshot finds it kept and removes nothing.
+     */
+    chosen?: 'delete' | 'keep';
     holds?: number;
 };
 

@@ -112,7 +112,8 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
     public var uncertain: [String: Date]?
     /*
      * The person's answer to "Delete what was made?" ("delete") when it couldn't be carried out yet because a folder may
-     * still be made: later opens apply it quietly, never asking again.
+     * still be made: later opens apply it quietly, never asking again. "keep" (with `done`): what was made was kept, and
+     * a Delete chosen from an older read finds it kept and removes nothing.
      */
     public var chosen: String?
     /* How many items the folders it names held when a later look found them: the row is offered again with it. */
@@ -440,8 +441,30 @@ public protocol SaveRunWriter: Sendable {
     /* Each item's fate; throws only when the request as a whole got no answer. */
     func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate]
     func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate]
+    /*
+     * As above, with the clean-up's session (`stillOn`) asked before every request: each batch, each purge, each try of an
+     * abort. A sign-out between two sends nothing more; what goes unsent is `refused` (an abort `unknown`), left for later.
+     */
+    func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate
+    func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate]
+    func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate]
     /* Whether the server lets this person delete forever there: a member (their own Drive, a family's folder). */
     func mayPurge(_ workspaceId: String) async -> Bool
+}
+
+/* A writer that sends each clean-up in one request (tests' stand-ins): asked once before it. */
+public extension SaveRunWriter {
+    func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {
+        stillOn() ? await abortUpload(uploadId, in: workspaceId) : .unknown
+    }
+
+    func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        stillOn() ? try await trash(ids, in: workspaceId) : Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) })
+    }
+
+    func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        stillOn() ? try await purge(ids, in: workspaceId) : Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) })
+    }
 }
 
 /*
@@ -449,7 +472,10 @@ public protocol SaveRunWriter: Sendable {
  * answer, an item refused), and the row stays; `noAccess` when the space is no
  * longer the person's, and the row goes.
  */
-public enum SaveCleanup: Sendable, Equatable { case deleted, trashed, nothing, left, noAccess }
+public enum SaveCleanup: Sendable, Equatable { case deleted, trashed, nothing, left, noAccess, kept }
+
+/* What Keep did: kept (now, or already, perhaps from another screen), gone (deleted meanwhile), or signed out first. */
+public enum SaveKeep: Sendable, Equatable { case kept, gone, signedOut }
 
 /* Why a run did not start: nothing was made. */
 public struct SaveRefused: Error, Equatable, LocalizedError {
@@ -605,7 +631,9 @@ public enum SaveRuns {
             // Each start chained after the last, swapped in under one lock: two opens never settle at once.
             let rows = quiet
             quietWork.chain {
-                for row in rows { await settleQuietly(row, writer: writer, journal: journal, now: now) }
+                for row in rows {
+                    await recovering(journal, row.id) { await settleQuietly(row, writer: writer, journal: journal, now: now) }
+                }
             }
         }
         return offered
@@ -643,7 +671,7 @@ public enum SaveRuns {
         if row.nodeIds.isEmpty {
             var left: [String] = []
             for uploadId in row.uploadIds {
-                if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
+                if await writer.abortUpload(uploadId, in: row.workspaceId, while: { journal.stillOn }) == .unknown { left.append(uploadId) }
                 guard journal.live else { return }
             }
             guard left.count < row.uploadIds.count else { return }
@@ -684,6 +712,18 @@ public enum SaveRuns {
      */
     public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(),
                                now: Date = Date()) async -> SaveCleanup {
+        await recovering(journal, row.id) {
+            // Under the run's lock, from the row as the journal holds it now: kept from another screen (kept), deleted
+            // already (nothing), or changed since this read (left: offered again as it is now).
+            guard journal.stillOn else { return .left }
+            guard let held = journal.list().first(where: { $0.id == row.id }) else { return .nothing }
+            if held.chosen == "keep" { return .kept }
+            guard held == row else { return .left }
+            return await cleanUpNow(row, writer: writer, journal: journal, now: now)
+        }
+    }
+
+    private static func cleanUpNow(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Date) async -> SaveCleanup {
         // Nothing asked of the server once the session or account changed (a sign-out), checked before every request.
         guard journal.stillOn else { return .left }
         let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationSettle }.keys)
@@ -705,14 +745,56 @@ public enum SaveRuns {
     }
 
     /*
-     * Keeps what an interrupted run made: its row always goes. Its open uploads are still asked to abort;
-     * one with no answer (offline, an older server) is left to the server, which lets an open upload go
-     * once it expires, and one still finishing lands and is kept, as asked.
+     * Keeps what an interrupted run made: its row is marked kept (chosen "keep", `done`: never offered, dropped at the
+     * next open), so a Delete chosen from an older read finds it kept and removes nothing. Its open uploads are still
+     * asked to abort; one with no answer (offline, an older server) is left to the server, which lets an open upload go
+     * once it expires, and one still finishing lands and is kept, as asked. Under the run's lock, from the row as it is now.
      */
-    public static func keep(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async throws {
-        for uploadId in row.uploadIds { _ = await writer.abortUpload(uploadId, in: row.workspaceId) }
-        // The disk refusing to let it go: still offered, and Keep may be asked again.
-        guard journal.retire(row) else { throw SaveRecordNotUpdated() }
+    @discardableResult
+    public static func keep(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async throws -> SaveKeep {
+        try await recovering(journal, row.id) { () async -> Result<SaveKeep, SaveRecordNotUpdated> in
+            guard journal.stillOn else { return .success(.signedOut) }
+            guard let held = journal.list().first(where: { $0.id == row.id }) else { return .success(.gone) }
+            if held.chosen == "keep" { return .success(.kept) }
+            for uploadId in held.uploadIds {
+                guard journal.stillOn else { return .success(.signedOut) }
+                _ = await writer.abortUpload(uploadId, in: held.workspaceId, while: { journal.stillOn })
+            }
+            var mark = held
+            mark.chosen = "keep"
+            mark.done = true
+            if journal.swap(held, mark) || journal.swap(held, mark) { return .success(.kept) }
+            // The disk refusing the mark: still offered, and Keep may be asked again.
+            return journal.stillOn ? .failure(SaveRecordNotUpdated()) : .success(.signedOut)
+        }.get()
+    }
+
+    /*
+     * One interrupted run's Keep, Delete and quiet settling, one at a time in this process (two screens, the quiet
+     * settling): the row read again and the decision made under the run's own turn, never the file's lock, which no
+     * network wait may hold.
+     */
+    static func recovering<T: Sendable>(_ journal: SaveRunJournal, _ runId: String, _ work: @escaping @Sendable () async -> T) async -> T {
+        await recoveryTurns.exclusive(journal.url.standardizedFileURL.path + "\n" + runId, work)
+    }
+
+    static let recoveryTurns = RecoveryTurns()
+    final class RecoveryTurns: @unchecked Sendable {
+        private let lock = NSLock()
+        private var tails: [String: Task<Void, Never>] = [:]
+        /* `work` after every earlier holder of `key` finished, each in turn. */
+        func exclusive<T: Sendable>(_ key: String, _ work: @escaping @Sendable () async -> T) async -> T {
+            let turn: Task<T, Never> = lock.withLock {
+                let before = tails[key]
+                let turn = Task<T, Never> {
+                    await before?.value
+                    return await work()
+                }
+                tails[key] = Task { _ = await turn.value }
+                return turn
+            }
+            return await turn.value
+        }
     }
 
     /* Aborts every upload the row names, removes its nodes; the row goes unless something is left. */
@@ -722,7 +804,7 @@ public enum SaveRuns {
      */
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
                       completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
-                      mayExist: Set<String> = [], stillOn: @Sendable () -> Bool = { true }) async
+                      mayExist: Set<String> = [], stillOn: @escaping @Sendable () -> Bool = { true }) async
         -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool, onlyWaitingOn: [String]?, held: Bool) {
         var unsettled = false
         var denied = false
@@ -735,7 +817,7 @@ public enum SaveRuns {
             guard stillOn() else { return (.left, kept, uncertain, nil, false, nil, false) }
             let answered = asked[uploadId].flatMap { $0 == .unknown || $0 == .finishing ? nil : $0 }
             let fate: DriveAPI.AbortFate
-            if let answered { fate = answered } else { fate = await writer.abortUpload(uploadId, in: row.workspaceId) }
+            if let answered { fate = answered } else { fate = await writer.abortUpload(uploadId, in: row.workspaceId, while: stillOn) }
             switch fate {
             case .unknown, .finishing:
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
@@ -787,11 +869,11 @@ public enum SaveRuns {
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil,
-                        stillOn: @Sendable () -> Bool = { true }, held: HeldFlag? = nil) async -> SaveCleanup {
+                        stillOn: @escaping @Sendable () -> Bool = { true }, held: HeldFlag? = nil) async -> SaveCleanup {
         guard !ids.isEmpty else { return .nothing }
         do {
             guard stillOn() else { return .left }
-            let trashed = try await writer.trash(ids, in: workspaceId)
+            let trashed = try await writer.trash(ids, in: workspaceId, while: stillOn)
             notFound?.add(ids.filter { trashed[$0] == .gone })
             let fates = ids.map { trashed[$0] ?? .refused }
             // A family manager's pause: nothing ended, the rest is left for after the hold.
@@ -806,7 +888,7 @@ public enum SaveRuns {
             guard stillOn() else { return .left }
             guard await writer.mayPurge(workspaceId) else { return .trashed }
             guard stillOn() else { return .left }
-            let purged = try await writer.purge(inTrash, in: workspaceId)
+            let purged = try await writer.purge(inTrash, in: workspaceId, while: stillOn)
             if inTrash.contains(where: { purged[$0] == .held }) {
                 held?.hold()
                 return .left
@@ -1587,8 +1669,15 @@ extension Vault: SaveRunWriter {
         await abortUpload(uploadId, in: workspaceId, pause: .seconds(2))
     }
 
-    func abortUpload(_ uploadId: String, in workspaceId: String, pause: Duration) async -> DriveAPI.AbortFate {
+    public func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {
+        await abortUpload(uploadId, in: workspaceId, pause: .seconds(2), while: stillOn)
+    }
+
+    func abortUpload(_ uploadId: String, in workspaceId: String, pause: Duration,
+                     while stillOn: @Sendable () -> Bool = { true }) async -> DriveAPI.AbortFate {
         for asked in 1 ... 5 {
+            // Signed out since: no next try.
+            guard stillOn() else { return .unknown }
             let fate = await api.abortUploadFate(uploadId: uploadId, workspaceId: workspaceId)
             guard fate == .finishing else { return fate }
             if asked < 5 { try? await Task.sleep(for: pause) }
@@ -1602,16 +1691,25 @@ extension Vault: SaveRunWriter {
      * refuses it (the clean-up left for later) while the folder may not be written.
      */
     public func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        try await trash(ids, in: workspaceId, while: { true })
+    }
+
+    public func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
         try await writing {
             _ = try familyTarget(workspaceId)
-            return try await trashNow(ids, in: workspaceId)
+            return try await trashNow(ids, in: workspaceId, stillOn)
         }
     }
 
-    private func trashNow(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+    private func trashNow(_ ids: [String], in workspaceId: String, _ stillOn: () -> Bool) async throws -> [String: SaveItemFate] {
         var fates: [String: SaveItemFate] = [:]
         for start in stride(from: 0, to: ids.count, by: TrashBatch.maxBatch) {
             let batch = Array(ids[start ..< min(ids.count, start + TrashBatch.maxBatch)])
+            // Signed out since: the rest unsent, left for a later clean-up.
+            guard stillOn() else {
+                for id in batch { fates[id] = .refused }
+                continue
+            }
             let answers: [TrashBatch.Answer]
             do {
                 answers = try await api.trashBatch(workspaceId: workspaceId, ids: batch)
@@ -1636,15 +1734,23 @@ extension Vault: SaveRunWriter {
 
     /* As trash: a write in its own scope, through the family's gate. */
     public func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        try await purge(ids, in: workspaceId, while: { true })
+    }
+
+    public func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
         try await writing {
             _ = try familyTarget(workspaceId)
-            return try await purgeNow(ids, in: workspaceId)
+            return try await purgeNow(ids, in: workspaceId, stillOn)
         }
     }
 
-    private func purgeNow(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+    private func purgeNow(_ ids: [String], in workspaceId: String, _ stillOn: () -> Bool) async throws -> [String: SaveItemFate] {
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
+            guard stillOn() else {
+                fates[id] = .refused
+                continue
+            }
             do {
                 try await api.purge(nodeId: id, workspaceId: workspaceId)
                 remove(id, in: workspaceId)
