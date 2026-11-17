@@ -129,16 +129,20 @@ class ToolRuns {
             }
             val thread = Thread(null, {
                 try {
-                    val result = runCatching { work(control) }
-                    outcome.complete(result.recoverCatching { error ->
+                    val result = runCatching { work(control) }.recoverCatching { error ->
                         when {
                             control.isCancelled() -> throw CancellationException("Cancelled.")
                             control.timedOut() -> throw ToolFailed()
                             error is ToolFailed -> throw error
                             else -> throw ToolFailed(cause = error)
                         }
-                    })
+                    }
+                    // Every reader the work made lets go of its chunks and its key now, before anyone
+                    // is told the run is over: a Kotlin wrapper would otherwise keep them until collected.
+                    control.finish()
+                    outcome.complete(result)
                 } finally {
+                    control.finish()
                     untrack()
                     current.value = null
                     slot.unlock(token)
@@ -214,39 +218,75 @@ class StoreSource(
 /*
  * The padding a cancelled run still owed (docs/file-tools-design.md, "Padding"): fetched in the
  * background, ciphertext only and thrown away, with no key and no plaintext, so the store still
- * sees the object read to its end, while the run's slot is already free for the next. One drain
- * at a time for the process; each range tried once (an expired address renewed once); a drain
- * gives up after `maxBytes` of padding or `maxMillis`, whichever comes first, and at most
- * `maxWaiting` wait behind the one going (more are dropped). The defaults cover any padding a
- * 4 GiB file carries on an ordinary connection: Padmé's bucket adds at most about 12%.
+ * sees the object read to its end, while the run's slot is already free for the next.
+ * - One drain at a time for the process; at most `maxWaiting` wait behind it (more are dropped).
+ * - Each range tried once (an expired address renewed once).
+ * - A drain gives up after `maxBytes` of padding (`meteredMaxBytes` on a metered network) or
+ *   `maxMillis`, whichever comes first; the deadline disconnects a request still in flight.
+ * - `cancelAll` (sign-out) drops every waiting drain and stops the current one at once, its
+ *   connection cut: the store then sees where that file ends.
+ * The defaults cover the padding of any file well past the 4 GiB extraction ceiling (Padmé's
+ * bucket adds at most about 12%) on an ordinary connection.
  */
 class PaddingDrains(
     private val maxBytes: Long = 1L shl 30,
     private val maxMillis: Long = 600_000,
     private val maxWaiting: Int = 4,
+    private val meteredMaxBytes: Long = 64L shl 20,
 ) {
     private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "padding-drain").apply { isDaemon = true } }
     private val queued = java.util.concurrent.atomic.AtomicInteger()
+    private val generation = java.util.concurrent.atomic.AtomicLong()
+    /* The request in flight, for the deadline and a sign-out to cut. */
+    private val current = AtomicReference<HttpURLConnection?>(null)
 
-    fun enqueue(ranges: List<ByteRange>, fetch: (ByteRange) -> Unit) {
+    /*
+     * `fetch` fetches one range, handing its connection to the function it is given as soon as it
+     * has one, so the drain can cut it off.
+     */
+    fun enqueue(ranges: List<ByteRange>, metered: Boolean = false, fetch: (ByteRange, (HttpURLConnection) -> Unit) -> Unit) {
         // The one going isn't counted; the ones waiting behind it are.
         if (queued.incrementAndGet() > maxWaiting + 1) {
             queued.decrementAndGet()
             return
         }
+        val born = generation.get()
         worker.execute {
             try {
-                val started = System.nanoTime()
-                var bytes = 0L
-                for (range in ranges) {
-                    if (bytes >= maxBytes || (System.nanoTime() - started) / 1_000_000 >= maxMillis) break
-                    bytes += (range.end - range.start + 1uL).toLong()
-                    runCatching { fetch(range) }
+                if (generation.get() != born) return@execute
+                val cap = if (metered) meteredMaxBytes else maxBytes
+                val expired = java.util.concurrent.atomic.AtomicBoolean(false)
+                val alarm = Timers.cutoffs.after(maxMillis) {
+                    expired.set(true)
+                    current.get()?.disconnect()
+                }
+                try {
+                    var bytes = 0L
+                    for (range in ranges) {
+                        if (generation.get() != born || expired.get() || bytes >= cap) break
+                        bytes += (range.end - range.start + 1uL).toLong()
+                        runCatching {
+                            fetch(range) { connection ->
+                                current.set(connection)
+                                // Cut meanwhile: this one goes at once too.
+                                if (generation.get() != born || expired.get()) connection.disconnect()
+                            }
+                        }
+                        current.set(null)
+                    }
+                } finally {
+                    alarm.cancel(false)
                 }
             } finally {
                 queued.decrementAndGet()
             }
         }
+    }
+
+    /* Sign-out: nothing of the old account's goes on draining. */
+    fun cancelAll() {
+        generation.incrementAndGet()
+        current.get()?.disconnect()
     }
 
     /* Whether nothing is draining or waiting: for tests. */
@@ -266,6 +306,9 @@ private class Timers(name: String) {
 
     fun every(millis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
         timer.scheduleWithFixedDelay({ runCatching(task) }, millis, millis, TimeUnit.MILLISECONDS)
+
+    fun after(millis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
+        timer.schedule({ runCatching(task) }, millis, TimeUnit.MILLISECONDS)
 
     companion object {
         val watchdogs = Timers("tool-watchdog")
@@ -302,23 +345,34 @@ private fun sleepWhileRunning(control: RunControl, millis: Long) {
  * retried as downloads are, the address renewed when it expires, and given up as soon as the run
  * ends (a wait between tries, an offline wait, or a connection in flight).
  */
-fun toolReaderOf(api: DriveApi, opened: OpenedVersion, workspaceId: String, control: RunControl, online: () -> Boolean = { true }): VersionReader {
-    val url = AtomicReference(api.versionUrl(opened.versionId, workspaceId))
+fun toolReaderOf(
+    api: DriveApi,
+    opened: OpenedVersion,
+    workspaceId: String,
+    control: RunControl,
+    online: () -> Boolean = { true },
+    metered: () -> Boolean = { false },
+    drains: PaddingDrains = PaddingDrains.shared,
+): VersionReader {
+    // The id alone: no function below may hold `opened`, whose content carries the version's key.
+    val versionId = opened.versionId
+    val url = AtomicReference(api.versionUrl(versionId, workspaceId))
     // Padding owed when the run ended: once each, an expired address renewed once, in the background.
-    val drainOnce: (ByteRange) -> Unit = { range ->
+    val drainOnce: (ByteRange, (HttpURLConnection) -> Unit) -> Unit = { range, watch ->
+        val fetch = { api.range(url.get(), range) { connection, request -> watch(connection); request() } }
         try {
-            api.range(url.get(), range)
+            fetch()
         } catch (error: ApiError) {
             if (error.status != 403) throw error
-            url.set(api.versionUrl(opened.versionId, workspaceId))
-            api.range(url.get(), range)
+            url.set(api.versionUrl(versionId, workspaceId))
+            fetch()
         }
     }
-    val source = StoreSource({ ranges -> PaddingDrains.shared.enqueue(ranges, drainOnce) }) { range, _ ->
+    val source = StoreSource({ ranges -> drains.enqueue(ranges, metered(), drainOnce) }) { range, _ ->
         Resumable.run(
             online = online,
             sleep = { millis -> sleepWhileRunning(control, millis) },
-            onExpired = { url.set(api.versionUrl(opened.versionId, workspaceId)) },
+            onExpired = { url.set(api.versionUrl(versionId, workspaceId)) },
         ) {
             control.check()
             api.range(url.get(), range) { connection, request -> Cutoff.whileRunning(control, connection, request) }
@@ -329,4 +383,8 @@ fun toolReaderOf(api: DriveApi, opened: OpenedVersion, workspaceId: String, cont
 
 /* A seekable, decrypting reader over a file's version for a tool run under `control` (toolReaderOf). */
 fun Vault.toolReader(item: Opened, control: RunControl, version: VersionListView? = null): VersionReader =
-    toolReaderOf(api, openVersion(item, version), item.node.workspaceId, control) { Resumable.online(context) }
+    toolReaderOf(
+        api, openVersion(item, version), item.node.workspaceId, control,
+        online = { Resumable.online(context) },
+        metered = { context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false },
+    )

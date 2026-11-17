@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     chunk_decrypt, chunk_length, chunk_range, content_layout, input, ByteRange, Content, CoreError,
-    CoreResult,
+    CoreResult, SecretBytes,
 };
 
 /// Produced plaintext waiting for upload, across every run of the process,
@@ -160,6 +160,8 @@ pub struct RunControl {
     clock: Mutex<Clock>,
     source: Arc<dyn ToolClock>,
     watchdog: u64,
+    /* The readers made under this run: wiped (chunks and key) the moment it ends or finishes. */
+    readers: Mutex<Vec<Weak<VersionReader>>>,
 }
 
 impl std::fmt::Debug for RunControl {
@@ -198,7 +200,19 @@ impl RunControl {
     }
 
     fn end(&self, how: u8) -> bool {
-        self.ended.compare_exchange(RUNNING, how, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        let ended = self.ended.compare_exchange(RUNNING, how, Ordering::SeqCst, Ordering::SeqCst).is_ok();
+        if ended {
+            self.wipe_readers();
+        }
+        ended
+    }
+
+    /* Every reader of the run lets go of its chunks and its key, now, not when it is dropped. */
+    fn wipe_readers(&self) {
+        let readers = std::mem::take(&mut *lock(&self.readers));
+        for reader in readers.iter().filter_map(Weak::upgrade) {
+            reader.wipe();
+        }
     }
 
     fn refusal(&self) -> CoreResult<()> {
@@ -224,7 +238,17 @@ impl RunControl {
             clock: Mutex::new(Clock { holds: 0, idle: 0, last }),
             source,
             watchdog: watchdog_millis,
+            readers: Mutex::new(Vec::new()),
         })
+    }
+
+    /// The run is over, however it ended: the app calls this when the run's
+    /// thread returns. Every reader made under it lets go of its chunks and its
+    /// key at once (a Swift or Kotlin wrapper would otherwise keep them until it
+    /// is collected), and any later read fails.
+    pub fn finish(&self) {
+        self.end(CANCELLED_STATE);
+        self.wipe_readers();
     }
 
     /// Stops the run: every later call from the work fails with "Cancelled.".
@@ -407,7 +431,9 @@ struct ReaderState {
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
 pub struct VersionReader {
     source: Arc<dyn ObjectSource>,
+    /* Everything about the version but its key, which is below, apart: wiped when the run ends. */
     content: Content,
+    key: Mutex<Option<SecretBytes>>,
     control: Option<Arc<RunControl>>,
     chunk_bytes: u64,
     chunk_count: u64,
@@ -437,9 +463,13 @@ impl VersionReader {
     ) -> CoreResult<Arc<Self>> {
         let layout = content_layout(content.suite, content.plaintext_size, content.thumbnail_bytes)?;
         let file_chunks = content.plaintext_size.div_ceil(layout.chunk_bytes).clamp(1, layout.chunk_count);
-        Ok(Arc::new(VersionReader {
+        // The key apart from the rest, so a run's end can wipe it while the reader lives on.
+        let mut content = content;
+        let key = std::mem::take(&mut content.key);
+        let reader = Arc::new(VersionReader {
             source,
-            control,
+            key: Mutex::new(Some(key)),
+            control: control.clone(),
             chunk_bytes: layout.chunk_bytes,
             chunk_count: layout.chunk_count,
             file_chunks,
@@ -448,7 +478,21 @@ impl VersionReader {
             padding_failed: Mutex::new(None),
             content,
             state: Mutex::new(ReaderState { cache: VecDeque::new(), tail: None }),
-        }))
+        });
+        if let Some(control) = &control {
+            lock(&control.readers).push(Arc::downgrade(&reader));
+            // Made after the run ended: wiped at once.
+            if control.is_ended() {
+                reader.wipe();
+            }
+        }
+        Ok(reader)
+    }
+
+    /* Its chunks and its key go: the run ended. Reads fail from here on. */
+    fn wipe(&self) {
+        self.forget();
+        lock(&self.key).take();
     }
 
     /// A `Read + Seek` view at offset 0. Each cursor keeps its own position;
@@ -500,7 +544,9 @@ impl VersionReader {
     }
 
     fn open_chunk(&self, index: u64, ciphertext: Vec<u8>) -> CoreResult<Plain> {
-        let plaintext = Zeroizing::new(chunk_decrypt(self.content.clone(), index, ciphertext)?);
+        let key = lock(&self.key).clone().ok_or_else(|| input(CANCELLED))?;
+        let plaintext =
+            Zeroizing::new(chunk_decrypt(Content { key, ..self.content.clone() }, index, ciphertext)?);
         if plaintext.len() as u64 != chunk_length(self.content.plaintext_size, index) {
             return Err(CoreError::Sealed(DAMAGED.into()));
         }
@@ -1204,6 +1250,38 @@ mod tests {
         assert_eq!(store.fetched.lock().unwrap().len(), fetches, "nothing more was fetched");
         let state = reader.state.lock().unwrap();
         assert!(state.cache.is_empty() && state.tail.is_none(), "every opened chunk went");
+    }
+
+    #[test]
+    fn a_run_that_ends_or_closes_wipes_its_readers_chunks_and_keys_at_once() {
+        let size = 2 * CHUNK;
+        let plain = plaintext(size);
+        let content = content(size, 0);
+        let stored = object(&content, &plain);
+        for end in ["finish", "cancel"] {
+            let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+            let reader =
+                VersionReader::open(store(stored.clone()), content.clone(), Some(Arc::clone(&control)))
+                    .unwrap();
+            assert_eq!(reader.read_at(10, 10).unwrap(), &plain[10..20]);
+            assert_eq!(reader.read_at(size - 10, 10).unwrap(), &plain[(size - 10) as usize..]);
+            // The reader is still held (by a Swift or Kotlin wrapper not yet collected), and yet:
+            if end == "finish" {
+                control.finish()
+            } else {
+                control.cancel()
+            }
+            let state = reader.state.lock().unwrap();
+            assert!(state.cache.is_empty() && state.tail.is_none(), "{end}: every chunk went");
+            drop(state);
+            assert!(reader.key.lock().unwrap().is_none(), "{end}: the key went");
+            assert_eq!(reader.read_at(10, 10), Err(input(CANCELLED)), "{end}: nothing more is read");
+        }
+        // A reader made after its run ended has no key to begin with.
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        control.finish();
+        let late = VersionReader::open(store(stored), content, Some(control)).unwrap();
+        assert!(late.key.lock().unwrap().is_none());
     }
 
     #[test]

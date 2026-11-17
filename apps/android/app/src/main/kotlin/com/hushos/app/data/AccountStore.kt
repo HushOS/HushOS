@@ -46,6 +46,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         // handed on are the save path's to drop; the budget they were counted in starts empty.
         ToolRuns.shared.cancelAll()
         ToolRuns.budget.clear()
+        // The background padding drains too: they hold the old account's address and API client.
+        PaddingDrains.shared.cancelAll()
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()

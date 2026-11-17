@@ -3,6 +3,8 @@ import { trackToolRun } from './active';
 import { toolBudget, type PlaintextBudget } from './budget';
 import {
     DONE_RESULT_MAX_BYTES,
+    OUTPUT_MIME_MAX,
+    OUTPUT_NAME_MAX,
     RESULT_MAX_BYTES,
     TOOL_FAILED,
     TOOL_WATCHDOG_MS,
@@ -344,8 +346,14 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
 
         function take(msg: Extract<ToPage, { type: 'output' }>) {
             const bytes: unknown = msg.bytes;
+            const name: unknown = msg.name;
+            const mime: unknown = msg.mime;
             if (
                 awaiting !== null ||
+                // Outside the budget, so held to a size: a name or type is never a way to carry bytes.
+                typeof name !== 'string' ||
+                name.length > OUTPUT_NAME_MAX ||
+                (mime !== null && (typeof mime !== 'string' || mime.length > OUTPUT_MIME_MAX)) ||
                 msg.id !== nextId ||
                 !(bytes instanceof ArrayBuffer) ||
                 bytes.byteLength > RESULT_MAX_BYTES
@@ -364,8 +372,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
             countUnreleased(1);
             let released = false;
             const output: ToolOutput = {
-                name: String(msg.name),
-                mime: typeof msg.mime === 'string' ? msg.mime : null,
+                name,
+                mime,
                 bytes,
                 size,
                 release() {

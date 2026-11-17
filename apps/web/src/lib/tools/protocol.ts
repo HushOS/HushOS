@@ -30,6 +30,9 @@ export const RESULT_MAX_BYTES = 256 * 1024 * 1024;
  * this much as JSON. Bytes travel as outputs, under the budget, never as the result.
  */
 export const DONE_RESULT_MAX_BYTES = 64 * 1024;
+/* A result's name and type: plain strings no longer than these (the bytes are counted; these are not). */
+export const OUTPUT_NAME_MAX = 1_024;
+export const OUTPUT_MIME_MAX = 255;
 
 /* From the page, on the worker itself. */
 export type ToWorker =

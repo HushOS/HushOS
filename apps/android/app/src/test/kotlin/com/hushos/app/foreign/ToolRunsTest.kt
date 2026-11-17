@@ -38,6 +38,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -427,11 +428,11 @@ class ToolRunsTest {
         val gate = CountDownLatch(1)
         fun range(start: Long) = com.hushos.core.ByteRange(start.toULong(), (start + 9).toULong())
         // The first drain's first fetch is held: the second waits behind it.
-        drains.enqueue(listOf(range(0), range(10), range(20), range(30))) { r ->
+        drains.enqueue(listOf(range(0), range(10), range(20), range(30))) { r, _ ->
             log.add("a${r.start}")
             if (r.start == 0uL) gate.await(5, TimeUnit.SECONDS)
         }
-        drains.enqueue(listOf(range(0))) { r -> log.add("b${r.start}") }
+        drains.enqueue(listOf(range(0))) { r, _ -> log.add("b${r.start}") }
         eventually { log.toList() == listOf("a0") }
         Thread.sleep(100)
         assertEquals("one drain at a time", listOf("a0"), log.toList())
@@ -439,6 +440,129 @@ class ToolRunsTest {
         // 20 bytes of padding, then the first gives up; the second runs after it.
         eventually { drains.idle }
         assertEquals(listOf("a0", "a10", "b0"), log.toList())
+    }
+
+    private fun range(start: Long) = com.hushos.core.ByteRange(start.toULong(), (start + 9).toULong())
+
+    @Test fun aSignOutStopsThePaddingDrainsAtOnce() {
+        val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 60_000, maxWaiting = 4)
+        val log = Collections.synchronizedList(ArrayList<String>())
+        val gate = CountDownLatch(1)
+        drains.enqueue(listOf(range(0), range(10))) { r, _ ->
+            log.add("a${r.start}")
+            if (r.start == 0uL) gate.await(5, TimeUnit.SECONDS)
+        }
+        eventually { log.toList() == listOf("a0") }
+        drains.enqueue(listOf(range(0))) { r, _ -> log.add("b${r.start}") }
+        drains.cancelAll()
+        gate.countDown()
+        eventually { drains.idle }
+        Thread.sleep(50)
+        assertEquals("the current one stopped between ranges, the waiting one dropped", listOf("a0"), log.toList())
+    }
+
+    /* A store that answers a range with its headers, then a byte a tenth of a second for ten seconds. */
+    private class Trickle : AutoCloseable {
+        val server: HttpServer = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val url = "http://127.0.0.1:${server.address.port}/o"
+        val cut = AtomicInteger()
+        init {
+            server.createContext("/o") { exchange ->
+                exchange.sendResponseHeaders(206, 100)
+                try {
+                    exchange.responseBody.use { body ->
+                        repeat(100) {
+                            body.write(0)
+                            body.flush()
+                            Thread.sleep(100)
+                        }
+                    }
+                } catch (_: java.io.IOException) {
+                    cut.incrementAndGet()
+                }
+            }
+            server.executor = java.util.concurrent.Executors.newCachedThreadPool()
+            server.start()
+        }
+        override fun close() = server.stop(0)
+    }
+
+    @Test fun aDrainsDeadlineCutsOffARequestThatTrickles() {
+        Trickle().use { trickle ->
+            val api = DriveApi(Shared.Session("http://127.0.0.1", "token", "user"))
+            val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 300, maxWaiting = 4)
+            val log = Collections.synchronizedList(ArrayList<String>())
+            val started = System.nanoTime()
+            drains.enqueue(listOf(com.hushos.core.ByteRange(0uL, 99uL))) { r, watch ->
+                api.range(trickle.url, r) { connection, request -> watch(connection); request() }
+            }
+            drains.enqueue(listOf(range(0))) { _, _ -> log.add("next") }
+            eventually { log.toList() == listOf("next") }
+            assertTrue("the deadline cut the request", (System.nanoTime() - started) / 1_000_000 < 3_000)
+        }
+    }
+
+    @Test fun aMeteredDrainStaysSmall() {
+        val drains = PaddingDrains(maxBytes = 1L shl 20, maxMillis = 60_000, maxWaiting = 4, meteredMaxBytes = 10)
+        val log = Collections.synchronizedList(ArrayList<String>())
+        drains.enqueue(listOf(range(0), range(10), range(20)), metered = true) { r, _ -> log.add("m${r.start}") }
+        eventually { drains.idle }
+        assertEquals(listOf("m0"), log.toList())
+    }
+
+    @Test fun aStoreThatSendsTheWholeObjectIsRefusedUnread() {
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        server.createContext("/o") { exchange ->
+            val body = ByteArray(4 shl 20)
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            runCatching { exchange.responseBody.use { it.write(body) } }
+        }
+        server.start()
+        try {
+            val api = DriveApi(Shared.Session("http://127.0.0.1", "token", "user"))
+            try {
+                api.range("http://127.0.0.1:${server.address.port}/o", range(0))
+                fail("a whole object was taken for ten bytes")
+            } catch (error: ApiError) {
+                assertEquals(200, error.status)
+            }
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test fun nothingTheReaderKeepsHoldsTheVersionsKey() {
+        val (content, stored, _) = sealed(1000)
+        Server(stored).use { server ->
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            val control = RunControl(toolWatchdogMillis(), null)
+            var opened: OpenedVersion? = OpenedVersion(content, "v1")
+            val weak = java.lang.ref.WeakReference(opened)
+            val reader = toolReaderOf(api, opened!!, "ws", control, drains = PaddingDrains())
+            opened = null
+            // The reader (and through it the source and its drain function) is still alive.
+            repeat(20) {
+                if (weak.get() == null) return@repeat
+                System.gc()
+                Thread.sleep(20)
+            }
+            assertNull("something the reader keeps still holds the version, and its key", weak.get())
+            assertEquals(1000uL, reader.size())
+        }
+    }
+
+    @Test fun aReaderMadeInARunReadsNothingOnceTheRunReturns() = runBlocking {
+        val (content, stored, _) = sealed(1000)
+        val source = StoreSource { range, _ -> stored.copyOfRange(range.start.toInt(), range.end.toInt() + 1) }
+        // The work keeps its reader past the run, as a careless tool might.
+        val reader = ToolRuns().run("Keeps its reader") { control ->
+            VersionReader(source, content, control).also { it.readAt(0uL, 10uL) }
+        }
+        try {
+            reader.readAt(0uL, 10uL)
+            fail("the reader still read after its run")
+        } catch (_: com.hushos.core.CoreException) {
+        }
     }
 
     @Test fun aRunThatEndsCutsOffItsFetch() {

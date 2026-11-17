@@ -352,10 +352,36 @@ class DriveApi(val session: Shared.Session) : RootApi {
         connection.setRequestProperty("Range", "bytes=${range.start}-${range.end}")
         connection.connectTimeout = 30_000
         connection.readTimeout = 120_000
+        val wanted = (range.end - range.start + 1uL).toLong()
         return guard(connection) {
             val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
             if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
-            try { connection.inputStream.use { it.readBytes() } } catch (error: java.io.IOException) { throw Unreachable() }
+            // Streamed and counted: a store that ignores the Range and sends the whole object is cut off as soon
+            // as it says so or passes the length asked for, never read whole.
+            if (connection.contentLengthLong > wanted) {
+                connection.disconnect()
+                throw ApiError(status, "The store sent more than was asked for")
+            }
+            try {
+                connection.inputStream.use { input ->
+                    val out = java.io.ByteArrayOutputStream(minOf(wanted, 16L shl 20).toInt())
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > wanted) {
+                            connection.disconnect()
+                            throw ApiError(status, "The store sent more than was asked for")
+                        }
+                        out.write(buffer, 0, read)
+                    }
+                    out.toByteArray()
+                }
+            } catch (error: java.io.IOException) {
+                throw Unreachable()
+            }
         }
     }
 

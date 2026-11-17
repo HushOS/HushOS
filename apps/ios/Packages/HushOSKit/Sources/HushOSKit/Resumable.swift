@@ -148,6 +148,7 @@ public final class NetworkWatch: @unchecked Sendable {
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
     private var satisfied = true
+    private var costly = false
     private var observers: [UUID: @Sendable (Bool) -> Void] = [:]
 
     private init() {
@@ -156,6 +157,7 @@ public final class NetworkWatch: @unchecked Sendable {
             let online = path.status == .satisfied
             let handlers = self.lock.withLock { () -> [@Sendable (Bool) -> Void] in
                 self.satisfied = online
+                self.costly = path.isExpensive || path.isConstrained
                 return Array(self.observers.values)
             }
             for handler in handlers { handler(online) }
@@ -164,6 +166,9 @@ public final class NetworkWatch: @unchecked Sendable {
     }
 
     public var online: Bool { lock.withLock { satisfied } }
+
+    /* Whether the path costs the person (cellular, a hotspot, Low Data Mode): background work stays small. */
+    public var metered: Bool { lock.withLock { costly } }
 
     /* Calls `handler` on every change of path, from the monitor's queue; returns a token for `stop`. */
     @discardableResult

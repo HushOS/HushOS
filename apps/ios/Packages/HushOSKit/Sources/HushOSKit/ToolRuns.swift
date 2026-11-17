@@ -169,12 +169,15 @@ public actor ToolRuns {
             watcher.resume()
             let live = self.live
             let thread = Thread {
-                let result = Result { try work(control) }
-                outcome.finish(result.mapError { error in
+                let result = Result { try work(control) }.mapError { error -> Error in
                     if control.isCancelled() { return ToolCancelled() }
                     if control.timedOut() { return ToolFailed() }
                     return error as? ToolFailed ?? ToolFailed()
-                })
+                }
+                // Every reader the work made lets go of its chunks and its key now, held or not,
+                // before anyone is told the run is over.
+                control.finish()
+                outcome.finish(result)
                 watcher.cancel()
                 live.untrack(id)
                 Task { await self.leave() }
@@ -290,41 +293,69 @@ public final class StoreSource: ObjectSource, @unchecked Sendable {
 /*
  * The padding a cancelled run still owed (docs/file-tools-design.md, "Padding"): fetched in the
  * background, ciphertext only and thrown away, with no key and no plaintext, so the store still
- * sees the object read to its end, while the run's slot is already free for the next. One drain
- * at a time for the process; each range tried once (an expired address renewed once); a drain
- * gives up after `maxBytes` of padding or `maxDuration`, whichever comes first, and at most
- * `maxWaiting` wait behind the one going (more are dropped). The defaults cover any padding a
- * 4 GiB file carries on an ordinary connection: Padmé's bucket adds at most about 12%.
+ * sees the object read to its end, while the run's slot is already free for the next.
+ * - One drain at a time for the process; at most `maxWaiting` wait behind it (more are dropped).
+ * - Each range tried once (an expired address renewed once).
+ * - A drain gives up after `maxBytes` of padding (`meteredMaxBytes` on a metered path) or
+ *   `maxDuration`, whichever comes first; the deadline cancels a request still in flight.
+ * - `cancelAll` (sign-out) drops every waiting drain and stops the current one at once,
+ *   its request cancelled: the store then sees where that file ends.
+ * The defaults cover the padding of any file well past the 4 GiB extraction ceiling (Padmé's
+ * bucket adds at most about 12%) on an ordinary connection.
  */
 public actor PaddingDrains {
     public static let shared = PaddingDrains()
 
     public struct Job: Sendable {
         let ranges: [ByteRange]
+        let metered: Bool
+        let generation: UInt64
         let fetch: @Sendable (ByteRange) async throws -> Void
     }
 
+    /* What a sign-out reaches without waiting on the actor: the generation, and the request in flight. */
+    private final class Live: @unchecked Sendable {
+        private let lock = NSLock()
+        private var generation: UInt64 = 0
+        private var current: Task<Void, Never>?
+        var now: UInt64 { lock.withLock { generation } }
+        func set(_ task: Task<Void, Never>?) { lock.withLock { current = task } }
+        func bump() { lock.withLock { generation += 1; current?.cancel() } }
+    }
+
     private let maxBytes: UInt64
+    private let meteredMaxBytes: UInt64
     private let maxDuration: Duration
     private let maxWaiting: Int
+    private nonisolated let live = Live()
     private var waiting: [Job] = []
     private var draining = false
 
-    public init(maxBytes: UInt64 = 1 << 30, maxDuration: Duration = .seconds(600), maxWaiting: Int = 4) {
+    public init(maxBytes: UInt64 = 1 << 30, meteredMaxBytes: UInt64 = 64 << 20, maxDuration: Duration = .seconds(600), maxWaiting: Int = 4) {
         self.maxBytes = maxBytes
+        self.meteredMaxBytes = meteredMaxBytes
         self.maxDuration = maxDuration
         self.maxWaiting = maxWaiting
     }
 
-    public nonisolated func enqueue(_ ranges: [ByteRange], fetch: @escaping @Sendable (ByteRange) async throws -> Void) {
-        Task { await self.add(Job(ranges: ranges, fetch: fetch)) }
+    public nonisolated func enqueue(_ ranges: [ByteRange], metered: Bool = false, fetch: @escaping @Sendable (ByteRange) async throws -> Void) {
+        let job = Job(ranges: ranges, metered: metered, generation: live.now, fetch: fetch)
+        Task { await self.add(job) }
+    }
+
+    /* Sign-out: nothing of the old account's goes on draining. */
+    public nonisolated func cancelAll() {
+        live.bump()
+        Task { await self.dropWaiting() }
     }
 
     /* Whether nothing is draining or waiting: for tests. */
     public var idle: Bool { !draining && waiting.isEmpty }
 
+    private func dropWaiting() { waiting.removeAll() }
+
     private func add(_ job: Job) {
-        guard waiting.count < maxWaiting else { return }
+        guard job.generation == live.now, waiting.count < maxWaiting else { return }
         waiting.append(job)
         guard !draining else { return }
         draining = true
@@ -334,12 +365,23 @@ public actor PaddingDrains {
     private func drainAll() async {
         while !waiting.isEmpty {
             let job = waiting.removeFirst()
-            let started = ContinuousClock.now
+            let deadline = ContinuousClock.now + maxDuration
+            let cap = job.metered ? meteredMaxBytes : maxBytes
             var bytes: UInt64 = 0
             for range in job.ranges {
-                if bytes >= maxBytes || ContinuousClock.now - started >= maxDuration { break }
+                if job.generation != live.now || bytes >= cap || ContinuousClock.now >= deadline { break }
                 bytes += range.end - range.start + 1
-                try? await job.fetch(range)
+                let fetch = Task { _ = try? await job.fetch(range) }
+                live.set(fetch)
+                // A cancelAll between the check and the set above: the request goes at once.
+                if job.generation != live.now { fetch.cancel() }
+                let alarm = Task {
+                    try? await Task.sleep(until: deadline, clock: .continuous)
+                    fetch.cancel()
+                }
+                await fetch.value
+                alarm.cancel()
+                live.set(nil)
             }
         }
         draining = false
@@ -384,7 +426,9 @@ public enum ToolReaders {
                 _ = try await api.range(await address.current, range)
             }
         }
-        let source = StoreSource(control: control, drainLater: { ranges in PaddingDrains.shared.enqueue(ranges, fetch: drainOnce) }) { range in
+        let source = StoreSource(control: control, drainLater: { ranges in
+            PaddingDrains.shared.enqueue(ranges, metered: NetworkWatch.shared.metered, fetch: drainOnce)
+        }) { range in
             try await Resumable.run(onExpired: { try await address.refresh() }) {
                 try await api.range(await address.current, range)
             }

@@ -271,6 +271,37 @@ describe('a worker that does not pace itself fails its run', () => {
         expect(taken).toEqual([]);
     });
 
+    test('a result whose name or type is not a short plain string', async () => {
+        const huge = 'x'.repeat(1_025);
+        for (const bad of [
+            { name: huge, mime: null },
+            { name: 'a.txt', mime: 'y'.repeat(256) },
+            { name: 7, mime: null },
+            { name: 'a.txt', mime: { type: 'text/plain' } },
+        ]) {
+            const taken: ToolOutput[] = [];
+            const { handle, worker } = run({ onOutput: (o) => void taken.push(o) });
+            worker.send({
+                type: 'output',
+                id: 0,
+                bytes: new ArrayBuffer(0),
+                ...bad,
+            } as unknown as ToPage);
+            await expect(handle.result).rejects.toThrow(TOOL_FAILED);
+            expect(taken).toEqual([]);
+        }
+        // At the limits, fine.
+        const fine = run({ onOutput: (o) => o.release() });
+        fine.worker.send({
+            type: 'output',
+            id: 0,
+            name: 'n'.repeat(1_024),
+            mime: 'm'.repeat(255),
+            bytes: new ArrayBuffer(1),
+        });
+        expect(fine.worker.accepted()).toEqual([0]);
+    });
+
     test('more reads in flight than the page allows', async () => {
         const held = heldReader();
         const { handle, worker } = run({ sources: [held.reader] });

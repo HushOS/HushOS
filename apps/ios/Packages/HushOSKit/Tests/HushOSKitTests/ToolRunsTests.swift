@@ -312,6 +312,74 @@ import Testing
         #expect(log.items == ["a0", "a10", "b0"])
     }
 
+    @Test func aSignOutStopsThePaddingDrainsAtOnce() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
+        // The first range of the first drain is in flight (cancellable, as a request is).
+        drains.enqueue([range(0), range(10)]) { range in
+            log.add("a\(range.start)")
+            try await Task.sleep(for: .seconds(30))
+        }
+        try await eventually { log.items == ["a0"] }
+        drains.enqueue([range(0)]) { range in log.add("b\(range.start)") }
+        try await Task.sleep(for: .milliseconds(50))
+        drains.cancelAll()
+        try await eventually { await drains.idle }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(log.items == ["a0"], "the request in flight cancelled, the rest and the waiting drain dropped")
+    }
+
+    @Test func aDrainsDeadlineCutsOffARequestThatTrickles() async throws {
+        let (content, object, _) = try Self.sealed(1000)
+        _ = content
+        let api = Self.stubbedAPI(object)
+        StoreStub.state.stall = true
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .milliseconds(300), maxWaiting: 4)
+        let log = Log()
+        let started = ContinuousClock.now
+        // A store that never finishes answering: the request ends only when the client stops it.
+        drains.enqueue([ByteRange(start: 0, end: 9)]) { range in
+            _ = try await api.range(URL(string: "https://store.test/o?n=2")!, range)
+        }
+        drains.enqueue([ByteRange(start: 0, end: 0)]) { _ in log.add("next") }
+        try await eventually { log.items == ["next"] }
+        #expect(ContinuousClock.now - started < .seconds(3))
+        try await eventually { StoreStub.state.stopped >= 1 }
+    }
+
+    @Test func aMeteredDrainStaysSmall() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, meteredMaxBytes: 10, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let ranges = [0, 10, 20].map { ByteRange(start: UInt64($0), end: UInt64($0) + 9) }
+        drains.enqueue(ranges, metered: true) { range in log.add("m\(range.start)") }
+        try await eventually { log.items.count == 1 }
+        try await eventually { await drains.idle }
+        #expect(log.items == ["m0"])
+    }
+
+    @Test func aStoreThatSendsTheWholeObjectIsRefusedUnbuffered() async throws {
+        let api = Self.stubbedAPI(Data(count: 4 << 20))
+        StoreStub.state.whole = true
+        await #expect(throws: DriveAPIError.self) {
+            _ = try await api.range(URL(string: "https://store.test/o?n=2")!, ByteRange(start: 0, end: 9))
+        }
+    }
+
+    @Test func aReaderMadeInARunReadsNothingOnceTheRunReturns() async throws {
+        let size: UInt64 = 1000
+        let (content, object, _) = try Self.sealed(size)
+        let source = StoreSource { range in object.subdata(in: Int(range.start) ..< Int(range.end) + 1) }
+        let runs = ToolRuns()
+        // The work keeps its reader past the run, as a careless tool might.
+        let reader = try await runs.run("Keeps its reader") { control in
+            let reader = try VersionReader(source: source, content: content, control: control)
+            _ = try reader.readAt(offset: 0, length: 10)
+            return reader
+        }
+        #expect(throws: CoreError.self) { _ = try reader.readAt(offset: 0, length: 10) }
+    }
+
     @Test func aRunThatEndsCancelsItsFetch() async throws {
         let (content, object, _) = try Self.sealed(1000)
         let api = Self.stubbedAPI(object)
@@ -338,6 +406,8 @@ final class StoreStubState: @unchecked Sendable {
     var refused = 0
     var ranges: [String] = []
     var stall = false
+    /* When set, the store ignores Range and sends the whole object with a 200. */
+    var whole = false
     /* When set, only the range starting here stalls. */
     var stallAt: Int?
     var stalled = 0
@@ -387,6 +457,10 @@ final class StoreStub: URLProtocol {
         Self.lock.unlock()
         // A stalled store never answers; the request ends only when the client stops it.
         if stall { return }
+        if state.whole {
+            answer(200, state.object, headers: ["Content-Length": String(state.object.count)])
+            return
+        }
         let header = request.value(forHTTPHeaderField: "Range") ?? ""
         Self.lock.lock(); state.ranges.append(header); Self.lock.unlock()
         let bounds = header.replacingOccurrences(of: "bytes=", with: "").split(separator: "-").compactMap { Int($0) }
