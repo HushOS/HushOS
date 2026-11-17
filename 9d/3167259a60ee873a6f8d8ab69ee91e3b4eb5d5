@@ -1,0 +1,69 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_db86a80569f1ac 267
+apps/android/app/src/main/kotlin/com/hushos/app/data/TwoStep.kt
+  s_c60e24772e04af::t_d36907bf47dd86 433-435,447-449
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_c60e24772e04af::t_d71c8d804a098f 10,501-503,506-507,512-517,530-540
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TwoStepScreen.kt
+  s_c60e24772e04af::t_690b8093a97bc3 12,135-136,158-159,165,182,190-191,200,207,214,220,228-235,237-238,240-242,402,412,430-431,439,451-462,476,478-479,482-487
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_ba96d262b7678d 374,391
+apps/ios/App/DeviceApproval.swift
+  s_c60e24772e04af::t_97c3b454332507 160-163,174-178,195-207,228
+apps/ios/App/TwoStep.swift
+  s_c60e24772e04af::t_5f3b3684ee5994 40-41,61,122-123,297-298,309-312,327-330,345,352-354,362-376,378-379,381,383,387,420,445-446,452,454,464-466,472-482
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TwoStep.swift
+  s_c60e24772e04af::t_5b7da560fa3c29 215-216,220-221
+apps/web/src/components/device-approvals.test.tsx
+  s_c60e24772e04af::t_b563e785da3627 66-73,93-98,109,111
+apps/web/src/components/device-approvals.tsx
+  s_c60e24772e04af::t_340280d87010d3 22,125,166,292,294-306,350,361-362,366,369
+apps/web/src/components/device-ask.tsx
+  s_c60e24772e04af::t_0ac1d61802af60 194-212,214-218,220,224
+apps/web/src/components/sign-in-step.tsx
+  s_c60e24772e04af::t_d6df485ddcbe8e 2,6,11,33-35,88-122,130-136,139,144-145,164,168-207,234-242,244-249
+apps/web/src/components/two-step-answer.tsx
+  s_c60e24772e04af::t_2a2d9b41f34d7f 3-4,35,38-42,45-48,60-62,84-89,94-96,120-127,130-136,145-166,189,222,244-255,257-266,275,278-281,283-289,293-295,297,300
+apps/web/src/components/unlock-device.test.tsx
+  s_c60e24772e04af::t_bdf2963b4aaf57 129-133,188-189,211-212,357-361,385,411,422,428-434,440,480-481
+apps/web/src/content/blog/two-step-sign-in.mdx
+  s_c60e24772e04af::t_9abb5d36576697 35,40-41,53-54,64-65
+apps/web/src/lib/approvals.ts
+  s_c60e24772e04af::t_58eab37452ae09 37-62
+apps/web/src/lib/passkeys.ts
+  s_566b8e0c4467a4::t_912156de68ac9a 13-15,28-34
+apps/web/src/routes/login/route.tsx
+  s_566b8e0c4467a4::t_0e86afc116254d 181
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_4ca850182d678e 794,857
+e2e/screenshots-two-step.spec.ts
+  s_566b8e0c4467a4::t_a7f4770b364c28 253-254,257-258,273-275
+e2e/two-step-device.spec.ts
+  s_c60e24772e04af::t_f3277d3e0e6192 90-95,97,99-100,160-164,226,231,234-236,247,251-255,312-313
+e2e/two-step-passkeys.spec.ts
+  s_c60e24772e04af::t_5c1482afb324bf 130,170-171,214,299,301,304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d3167259a60ee873a6f8d8ab69ee91e3b4eb5d5",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
