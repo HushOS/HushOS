@@ -9,6 +9,11 @@ import {
 } from './protocol';
 
 /*
+ * What a tool's work resolves with is its summary: plain data only (primitives, arrays, plain
+ * objects), at most 64 KiB of strings and 10,000 values, no object reached twice (a shared
+ * reference fails the run), and no bytes. The page rebuilds it and keeps only its copy
+ * (run.ts, summaryOf); bytes travel as `produce`d results.
+ *
  * The worker's side of a tool run: imported by each tools worker (archive, PDF, image), which
  * calls `serveTool` once with its work. A tools worker's file is named `*.tool-worker.ts`, which
  * the server answers with a policy that names no source (apps/web/server/csp.ts): it can fetch

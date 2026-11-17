@@ -61,7 +61,7 @@ import Testing
     @Test func aRunReadsAcrossAChunkBoundaryThroughAnAsyncStore() async throws {
         let size = Self.chunk + 5000
         let (content, object, plain) = try Self.sealed(size)
-        let source = StoreSource { range, _ in
+        let source = StoreSource { range in
             // The store answers later, on another task, as a URLSession would.
             try await Task.sleep(for: .milliseconds(5))
             return object.subdata(in: Int(range.start) ..< Int(range.end) + 1)
@@ -283,10 +283,33 @@ import Testing
         }
         // The tail is on its way when the run is cancelled.
         try await eventually { StoreStub.state.stalled == 1 }
+        let cancelled = ContinuousClock.now
         control.cancel()
+        // The read returns at once (the run's thread, and its slot, go free)...
         #expect(await reading.value == false)
-        // The padding was still asked for, after the cancel, to the object's end.
-        #expect(StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)"))
+        #expect(ContinuousClock.now - cancelled < .seconds(2))
+        // ...and the padding is still asked for, in the background, to the object's end.
+        try await eventually { StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)") }
+    }
+
+    @Test func paddingDrainsRunOneAtATimeAndStopAtTheirCap() async throws {
+        let drains = PaddingDrains(maxBytes: 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let gate = DispatchSemaphore(value: 0)
+        let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
+        // The first drain's first fetch is held: the second waits behind it.
+        drains.enqueue([range(0), range(10), range(20), range(30)]) { range in
+            log.add("a\(range.start)")
+            if range.start == 0 { await withCheckedContinuation { c in DispatchQueue.global().async { gate.wait(); c.resume() } } }
+        }
+        try await eventually { log.items == ["a0"] }
+        drains.enqueue([range(0)]) { range in log.add("b\(range.start)") }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(log.items == ["a0"], "one drain at a time")
+        gate.signal()
+        // 20 bytes of padding, then the first gives up; the second runs after it.
+        try await eventually { await drains.idle }
+        #expect(log.items == ["a0", "a10", "b0"])
     }
 
     @Test func aRunThatEndsCancelsItsFetch() async throws {

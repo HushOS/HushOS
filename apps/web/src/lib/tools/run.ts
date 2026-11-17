@@ -132,45 +132,68 @@ function advance() {
 }
 
 /*
- * Whether a run's result is a plain summary: null, booleans, numbers, strings, arrays and plain
- * objects, checked in one bounded walk. A worker taken over could otherwise hand back plaintext
- * as the result, past the per-result limit and the budget, and the page would keep it after a
- * lock; or hand back a value built to take the page's own thread for minutes (a shared reference
- * nested `[v, v]` deep, a sparse array four billion long), which the watchdog could not stop,
- * since it runs on that thread. So the walk visits at most SUMMARY_NODES values, refuses any
- * object it meets twice, any array or object with more than SUMMARY_ENTRIES entries and any
- * nesting past 32, and counts every string and key against DONE_RESULT_MAX_BYTES, before
- * anything is copied or turned into JSON.
+ * A run's result, rebuilt on the page as a plain summary: the worker's value is never kept, only
+ * a fresh copy made of primitives, arrays (indices 0 to length - 1, nothing else) and objects
+ * whose prototype is Object's or null (own enumerable string keys, nothing else). Anything else
+ * (a buffer, a typed array, a Blob, a Map, a class instance, a named property on an array, a
+ * symbol key) is either refused, failing the run, or left out of the copy, so no bytes reach
+ * `result`. A worker taken over could otherwise hand back plaintext there, past the per-result
+ * limit and the budget, kept by the page after a lock; or a value built to hold the page's own
+ * thread, which the watchdog could not stop, since it runs on that thread. So the walk visits at
+ * most SUMMARY_NODES values, refuses any object it meets twice (shared references included),
+ * any array or object with more than SUMMARY_ENTRIES entries and any nesting past 32, and counts
+ * every string and key against DONE_RESULT_MAX_BYTES, all before anything is kept.
  */
 const SUMMARY_NODES = 10_000;
 const SUMMARY_ENTRIES = 4_096;
-function isSummary(value: unknown) {
+const REFUSED = Symbol('refused');
+function summaryOf(value: unknown): { value: unknown } | null {
     let nodes = 0;
     let text = 0;
     const seen = new Set<object>();
     const counted = (length: number) => (text += length) <= DONE_RESULT_MAX_BYTES;
-    const walk = (item: unknown, depth: number): boolean => {
-        if (++nodes > SUMMARY_NODES || depth > 32) return false;
-        if (item === null || item === undefined || typeof item === 'boolean') return true;
-        if (typeof item === 'number') return counted(24);
-        if (typeof item === 'string') return counted(item.length);
-        if (typeof item !== 'object' || seen.has(item)) return false;
+    const copy = (item: unknown, depth: number): unknown => {
+        if (++nodes > SUMMARY_NODES || depth > 32) return REFUSED;
+        if (item === null || item === undefined || typeof item === 'boolean') return item;
+        if (typeof item === 'number') return counted(24) ? item : REFUSED;
+        if (typeof item === 'string') return counted(item.length) ? item : REFUSED;
+        if (typeof item !== 'object' || seen.has(item)) return REFUSED;
         seen.add(item);
-        if (Array.isArray(item)) {
-            if (item.length > SUMMARY_ENTRIES) return false;
-            for (let i = 0; i < item.length; i++) if (!walk(item[i], depth + 1)) return false;
-            return true;
-        }
         const prototype = Object.getPrototypeOf(item);
-        if (prototype !== Object.prototype && prototype !== null) return false;
-        let entries = 0;
-        for (const key in item) {
-            if (++entries > SUMMARY_ENTRIES || !counted(key.length)) return false;
-            if (!walk((item as Record<string, unknown>)[key], depth + 1)) return false;
+        if (Array.isArray(item)) {
+            if (prototype !== Array.prototype || item.length > SUMMARY_ENTRIES) return REFUSED;
+            const out: unknown[] = [];
+            for (let i = 0; i < item.length; i++) {
+                const entry = copy(item[i], depth + 1);
+                if (entry === REFUSED) return REFUSED;
+                out.push(entry);
+            }
+            return out;
         }
-        return true;
+        if (prototype !== Object.prototype && prototype !== null) return REFUSED;
+        const out: Record<string, unknown> = {};
+        let entries = 0;
+        for (const key of Object.keys(item)) {
+            if (++entries > SUMMARY_ENTRIES || !counted(key.length)) return REFUSED;
+            const entry = copy((item as Record<string, unknown>)[key], depth + 1);
+            if (entry === REFUSED) return REFUSED;
+            // Defined, not assigned: a key named __proto__ stays a key.
+            Object.defineProperty(out, key, {
+                value: entry,
+                enumerable: true,
+                writable: true,
+                configurable: true,
+            });
+        }
+        return out;
     };
-    return walk(value, 0);
+    try {
+        const rebuilt = copy(value, 0);
+        return rebuilt === REFUSED ? null : { value: rebuilt };
+    } catch {
+        // A value that throws when read (only something the page made could): refused.
+        return null;
+    }
 }
 
 /* Detaches a buffer, freeing its bytes wherever a reference to it is kept. */
@@ -379,14 +402,22 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                 case 'output':
                     take(msg);
                     return;
-                case 'done':
-                    // A summary only: bytes come as outputs, counted and dropped on a lock.
-                    if (!isSummary(msg.result)) {
+                case 'done': {
+                    // Not while a result still waits for room: that would leave the budget for
+                    // the next run to pass, and the next, unbounded.
+                    if (awaiting !== null) {
                         failed();
                         return;
                     }
-                    finish({ ok: true, value: msg.result as R });
+                    // A summary only, rebuilt here: bytes come as outputs, counted and dropped on a lock.
+                    const summary = summaryOf(msg.result);
+                    if (!summary) {
+                        failed();
+                        return;
+                    }
+                    finish({ ok: true, value: summary.value as R });
                     return;
+                }
                 case 'fail': {
                     const code = typeof msg.code === 'string' ? msg.code : null;
                     const words =

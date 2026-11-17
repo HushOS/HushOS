@@ -211,13 +211,15 @@ describe('the produced-plaintext budget', () => {
         const budget = new PlaintextBudget(10);
         const taken: ToolOutput[] = [];
         const first = run({ budget, onOutput: (o) => void taken.push(o) }, 'First');
-        first.worker.send(output(0, 12));
+        // Accepted (8 of 10), then done: its result waits for upload after the run.
+        first.worker.send(output(0, 8));
+        expect(first.worker.accepted()).toEqual([0]);
         first.worker.send({ type: 'done', result: null });
         await first.handle.result;
-        expect(budget.waiting).toBe(12);
+        expect(budget.waiting).toBe(8);
 
         const second = run({ budget, onOutput: (o) => void taken.push(o) }, 'Second');
-        second.worker.send(output(0, 1));
+        second.worker.send(output(0, 3));
         expect(second.worker.accepted()).toEqual([]);
         taken[0]!.release();
         expect(second.worker.accepted()).toEqual([0]);
@@ -409,6 +411,82 @@ describe('ending a run', () => {
             await expect(bad.handle.result).rejects.toThrow(TOOL_FAILED);
             expect(performance.now() - started).toBeLessThan(500);
         }
+    });
+
+    test('the result is rebuilt on the page, plain data only: nothing else of the worker’s is kept', async () => {
+        // Bytes anywhere reachable: named properties, symbol keys, anything.
+        const reachesBytes = (value: unknown, seen = new Set<unknown>()): boolean => {
+            if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true;
+            if (typeof value !== 'object' || value === null || seen.has(value)) return false;
+            seen.add(value);
+            return Reflect.ownKeys(value).some((key) =>
+                reachesBytes((value as Record<PropertyKey, unknown>)[key], seen),
+            );
+        };
+        const named = Object.assign([1, 2], { payload: new ArrayBuffer(8) });
+        const symbol = { a: 1, [Symbol('payload')]: new ArrayBuffer(8) };
+        const sent = { list: named, other: symbol, ['__proto__']: { kept: 'as a key' } };
+        const done = run();
+        done.worker.send({ type: 'done', result: sent });
+        const value = await done.handle.result;
+        expect(value).not.toBe(sent);
+        expect(JSON.parse(JSON.stringify(value))).toEqual({
+            list: [1, 2],
+            other: { a: 1 },
+            ['__proto__']: { kept: 'as a key' },
+        });
+        expect(reachesBytes(value)).toBe(false);
+        expect(Object.getPrototypeOf(value)).toBe(Object.prototype);
+        cancelAllToolRuns();
+        expect(reachesBytes(value)).toBe(false);
+
+        // What only reads bytes when looked at, or isn't plain at all: the run fails.
+        class Report {
+            files = 1;
+        }
+        for (const result of [
+            {
+                get data() {
+                    return new ArrayBuffer(8);
+                },
+            },
+            new Report(),
+            new Proxy(
+                {},
+                {
+                    ownKeys: () => ['data'],
+                    getOwnPropertyDescriptor: () => ({ enumerable: true, configurable: true }),
+                    get: () => new ArrayBuffer(8),
+                },
+            ),
+            new Proxy(
+                {},
+                {
+                    ownKeys: () => {
+                        throw new Error('a trap');
+                    },
+                },
+            ),
+        ]) {
+            const bad = run();
+            bad.worker.send({ type: 'done', result });
+            await expect(bad.handle.result).rejects.toThrow(TOOL_FAILED);
+        }
+    });
+
+    test('done while a result still waits for room fails the run, so runs can’t stack past the budget', async () => {
+        const budget = new PlaintextBudget(10);
+        const taken: ToolOutput[] = [];
+        for (let i = 0; i < 5; i++) {
+            const r = run({ budget, onOutput: (o) => void taken.push(o) }, `Run ${i}`);
+            // Over the line, so not accepted; then it says it is done anyway.
+            r.worker.send(output(0, 20));
+            expect(r.worker.accepted()).toEqual([]);
+            r.worker.send({ type: 'done', result: null });
+            await expect(r.handle.result).rejects.toThrow(TOOL_FAILED);
+        }
+        expect(budget.waiting).toBe(0);
+        expect(taken.every((o) => o.bytes.byteLength === 0)).toBe(true);
     });
 
     test('a refusal is shown in the page’s words, never the worker’s', async () => {

@@ -59,16 +59,23 @@ const BUDGET_WAIT_SLICE: Duration = Duration::from_millis(50);
 /// called on the run's own thread and may block it; never call a reader from
 /// the main thread or a cooperative pool.
 ///
-/// An ordinary fetch (`drain` false) is retried as downloads are, the address
-/// renewed when it expires, and given up as soon as the run's control has
-/// ended ([`RunControl::is_ended`]). A `drain` fetch is the padding after the
-/// file, fetched because the file's last chunk was: its bytes are thrown away
-/// unopened, and the app makes it even when the run has ended, once (an
-/// expired address renewed once), so the store sees the object read to its
-/// end whatever stopped the run.
+/// A fetch is retried as downloads are, the address renewed when it expires,
+/// and given up as soon as the run's control has ended
+/// ([`RunControl::is_ended`]). `drain` marks the padding after the file, which
+/// is fetched because the file's last chunk was and thrown away unopened; the
+/// app may treat it like any other fetch.
+///
+/// Once the run has ended, the padding still owed after an asked-for tail is
+/// handed to [`drain_later`](Self::drain_later): the read returns at once, the
+/// run's thread ends and frees the app's one run slot, and the app fetches
+/// those ranges in the background, ciphertext only, with no key and no
+/// plaintext, so the store still sees the object read to its end.
 #[cfg_attr(feature = "uniffi", uniffi::export(with_foreign))]
 pub trait ObjectSource: Send + Sync {
     fn fetch(&self, range: ByteRange, drain: bool) -> Result<Vec<u8>, FetchError>;
+    /// The padding ranges a run ended before fetching: each to be fetched
+    /// once, in the background, and thrown away. Must not block.
+    fn drain_later(&self, ranges: Vec<ByteRange>);
 }
 
 /// Why the store's bytes did not come: the app's words, which the read fails with. Not a
@@ -393,8 +400,8 @@ struct ReaderState {
 /// read; the file's last chunk is kept for the reader's life. When that chunk
 /// is fetched, the padding chunks after it are fetched too, as ciphertext only,
 /// as the web's reader does, so the ranges never show the store where the file
-/// ends, even for a run cancelled meanwhile; a padding chunk that fails to
-/// arrive fails the read. Any chunk that fails to open fails the read. In all a
+/// ends, even for a run cancelled meanwhile (the app drains what is left); a
+/// padding chunk that fails to arrive fails that read and every later one. Any chunk that fails to open fails the read. In all a
 /// reader fetches at most four times its object's size (the padding not
 /// counted), then fails.
 #[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
@@ -407,6 +414,8 @@ pub struct VersionReader {
     file_chunks: u64,
     fetched: AtomicU64,
     fetch_limit: u64,
+    /* A padding chunk that failed: every later read fails with it, as on the web. */
+    padding_failed: Mutex<Option<CoreError>>,
     state: Mutex<ReaderState>,
 }
 
@@ -436,6 +445,7 @@ impl VersionReader {
             file_chunks,
             fetched: AtomicU64::new(0),
             fetch_limit: layout.ciphertext_size.saturating_mul(FETCH_FACTOR),
+            padding_failed: Mutex::new(None),
             content,
             state: Mutex::new(ReaderState { cache: VecDeque::new(), tail: None }),
         }))
@@ -499,30 +509,55 @@ impl VersionReader {
 
     /*
      * The file's last chunk and the padding after it. Once the tail is asked for, every padding
-     * chunk is fetched, as ciphertext only and never opened, even if the run ends meanwhile or
-     * the tail's own fetch fails: a run stopped there would otherwise show the store where the
-     * file ends. If the run ended, every opened chunk goes before the padding is waited for, and
-     * the tail is never opened.
+     * chunk is asked for too, as ciphertext only and never opened, whatever becomes of the tail's
+     * own fetch: a run stopped there would otherwise show the store where the file ends. While
+     * the run goes on, each is fetched here (retried by the app as any fetch is), and one that
+     * fails doesn't stop the rest; it fails this read and every later one. Once the run has
+     * ended, every opened chunk goes, the padding not yet fetched is handed to the app to drain
+     * in the background (`drain_later`), and the read returns at once; the tail is never opened.
      */
     fn tail(&self, index: u64) -> CoreResult<Plain> {
         self.check()?;
         let tail = self.fetch_raw(index, false);
+        let mut failure = None;
+        let mut later = Vec::new();
+        for padding in self.file_chunks..self.chunk_count {
+            if self.ended() {
+                later.push(padding);
+                continue;
+            }
+            if let Err(error) = self.fetch_raw(padding, true) {
+                // Cut off by the run's end: still owed, so drained later. Otherwise a real failure.
+                if self.ended() {
+                    later.push(padding);
+                } else {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
         if self.ended() {
             self.forget();
         }
-        let mut drained = Ok(());
-        for padding in self.file_chunks..self.chunk_count {
-            if let Err(error) = self.fetch_raw(padding, true) {
-                drained = drained.and(Err(error));
-            }
-            if self.ended() {
-                self.forget();
-            }
+        if !later.is_empty() {
+            let ranges = later
+                .into_iter()
+                .map(|padding| {
+                    chunk_range(
+                        self.content.suite,
+                        self.content.plaintext_size,
+                        self.content.thumbnail_bytes,
+                        padding,
+                    )
+                })
+                .collect::<CoreResult<Vec<_>>>()?;
+            self.source.drain_later(ranges);
         }
         self.check()?;
-        let ciphertext = tail?;
-        drained?;
-        let plaintext = self.open_chunk(index, ciphertext)?;
+        if let Some(error) = failure {
+            *lock(&self.padding_failed) = Some(error.clone());
+            return Err(error);
+        }
+        let plaintext = self.open_chunk(index, tail?)?;
         lock(&self.state).tail = Some(Arc::clone(&plaintext));
         Ok(plaintext)
     }
@@ -566,6 +601,9 @@ impl VersionReader {
     /// wrote. Fails at once, whatever is cached, once the run has ended.
     pub fn read_into(&self, offset: u64, out: &mut [u8]) -> CoreResult<usize> {
         self.check()?;
+        if let Some(error) = lock(&self.padding_failed).clone() {
+            return Err(error);
+        }
         let size = self.content.plaintext_size;
         if offset >= size || out.is_empty() {
             return Ok(0);
@@ -751,6 +789,8 @@ mod tests {
         fetched: Mutex<Vec<ByteRange>>,
         /* The ranges asked for as drains: the padding, never opened. */
         drained: Mutex<Vec<u64>>,
+        /* Padding handed over to be drained in the background, by chunk. */
+        later: Mutex<Vec<u64>>,
         /* Runs before each fetch: moves a clock, fails a range. */
         hook: Option<Hook>,
     }
@@ -766,6 +806,10 @@ mod tests {
             }
             Ok(self.object[range.start as usize..=range.end as usize].to_vec())
         }
+
+        fn drain_later(&self, ranges: Vec<ByteRange>) {
+            self.later.lock().unwrap().extend(ranges.iter().map(|range| range.start / SEALED_CHUNK));
+        }
     }
 
     fn store(object: Vec<u8>) -> Arc<Store> {
@@ -773,6 +817,7 @@ mod tests {
             object,
             fetched: Mutex::new(Vec::new()),
             drained: Mutex::new(Vec::new()),
+            later: Mutex::new(Vec::new()),
             hook: None,
         })
     }
@@ -782,6 +827,7 @@ mod tests {
             object,
             fetched: Mutex::new(Vec::new()),
             drained: Mutex::new(Vec::new()),
+            later: Mutex::new(Vec::new()),
             hook: Some(hook),
         })
     }
@@ -913,6 +959,7 @@ mod tests {
             fn fetch(&self, range: ByteRange, _drain: bool) -> Result<Vec<u8>, FetchError> {
                 Ok(self.0[range.start as usize..range.end as usize].to_vec())
             }
+            fn drain_later(&self, _ranges: Vec<ByteRange>) {}
         }
         let content = content(1000, 0);
         let stored = object(&content, &plaintext(1000));
@@ -950,6 +997,8 @@ mod tests {
         );
         let reader = VersionReader::open(failing, content.clone(), None).unwrap();
         assert_eq!(reader.read_at(0, 10), Err(input("gone")));
+        // Every later read too, as on the web: the store saw the file's end, and the run stops.
+        assert_eq!(reader.read_at(0, 10), Err(input("gone")));
         // The padding is fetched as ciphertext and never opened: changed bytes in it don't matter,
         // the file's own chunks are what is checked (each is bound to the chunk count).
         let mut changed = stored;
@@ -965,14 +1014,17 @@ mod tests {
         content: Content,
         file_chunks: u64,
         fetched: Mutex<Vec<(u64, bool)>>,
-        hook: Box<dyn Fn(u64) + Send + Sync>,
+        later: Mutex<Vec<u64>>,
+        hook: Box<dyn Fn(u64) -> Option<FetchError> + Send + Sync>,
     }
 
     impl ObjectSource for Lazy {
         fn fetch(&self, range: ByteRange, drain: bool) -> Result<Vec<u8>, FetchError> {
             let index = range.start / SEALED_CHUNK;
             self.fetched.lock().unwrap().push((index, drain));
-            (self.hook)(index);
+            if let Some(error) = (self.hook)(index) {
+                return Err(error);
+            }
             let length = (range.end - range.start + 1) as usize;
             if index >= self.file_chunks {
                 return Ok(vec![0u8; length]);
@@ -980,57 +1032,96 @@ mod tests {
             let plain = plaintext(chunk_length(self.content.plaintext_size, index));
             Ok(chunk_encrypt(self.content.clone(), index, plain).unwrap())
         }
+
+        fn drain_later(&self, ranges: Vec<ByteRange>) {
+            self.later.lock().unwrap().extend(ranges.iter().map(|range| range.start / SEALED_CHUNK));
+        }
     }
 
-    fn lazy(hook: Box<dyn Fn(u64) + Send + Sync>) -> (Arc<Lazy>, Content, u64) {
+    fn lazy(hook: Box<dyn Fn(u64) -> Option<FetchError> + Send + Sync>) -> (Arc<Lazy>, Content, u64) {
         // Just under 512 MiB with a thumbnail: the bucket runs two whole chunks past the file.
         let size = 512 * 1024 * 1024 - 100;
         let content = content(size, 1000);
         let layout = content_layout(3, size, 1000).unwrap();
         let file_chunks = size.div_ceil(CHUNK);
         assert_eq!(layout.chunk_count - file_chunks, 2, "two chunks of padding alone");
-        let store =
-            Arc::new(Lazy { content: content.clone(), file_chunks, fetched: Mutex::new(Vec::new()), hook });
+        let store = Arc::new(Lazy {
+            content: content.clone(),
+            file_chunks,
+            fetched: Mutex::new(Vec::new()),
+            later: Mutex::new(Vec::new()),
+            hook,
+        });
         (store, content, size)
     }
 
+    const LAZY_TAIL: u64 = (512 * 1024 * 1024 - 100u64).div_ceil(CHUNK) - 1;
+
     #[test]
-    fn a_run_cancelled_as_the_tail_comes_still_fetches_all_the_padding_unopened() {
+    fn a_run_cancelled_as_the_tail_comes_hands_all_the_padding_over_and_returns() {
         let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
         let cancel = Arc::clone(&control);
-        let tail_index = (512 * 1024 * 1024 - 100u64).div_ceil(CHUNK) - 1;
         // The cancel lands while the tail is being fetched.
         let (store, content, size) = lazy(Box::new(move |index| {
-            if index == tail_index {
+            if index == LAZY_TAIL {
                 cancel.cancel();
             }
+            None
         }));
         let reader = VersionReader::open(store.clone(), content, Some(control)).unwrap();
         assert_eq!(reader.read_at(size - 10, 10), Err(input(CANCELLED)));
-        assert_eq!(
-            *store.fetched.lock().unwrap(),
-            vec![(tail_index, false), (tail_index + 1, true), (tail_index + 2, true)]
-        );
+        // Nothing more fetched on the run's thread: the padding is the app's to drain, all of it.
+        assert_eq!(*store.fetched.lock().unwrap(), vec![(LAZY_TAIL, false)]);
+        assert_eq!(*store.later.lock().unwrap(), vec![LAZY_TAIL + 1, LAZY_TAIL + 2]);
         let state = reader.state.lock().unwrap();
         assert!(state.tail.is_none() && state.cache.is_empty(), "the tail was never opened");
     }
 
     #[test]
-    fn a_run_cancelled_between_padding_chunks_still_fetches_the_rest() {
+    fn a_run_cancelled_between_padding_chunks_hands_the_rest_over() {
         let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
         let cancel = Arc::clone(&control);
-        let tail_index = (512 * 1024 * 1024 - 100u64).div_ceil(CHUNK) - 1;
         let (store, content, size) = lazy(Box::new(move |index| {
-            if index == tail_index + 1 {
+            if index == LAZY_TAIL + 1 {
                 cancel.cancel();
             }
+            None
         }));
         let reader = VersionReader::open(store.clone(), content, Some(control)).unwrap();
         assert_eq!(reader.read_at(size - 10, 10), Err(input(CANCELLED)));
+        assert_eq!(*store.fetched.lock().unwrap(), vec![(LAZY_TAIL, false), (LAZY_TAIL + 1, true)]);
+        assert_eq!(*store.later.lock().unwrap(), vec![LAZY_TAIL + 2]);
+    }
+
+    #[test]
+    fn a_padding_chunk_cut_off_by_the_run_ending_is_handed_over_too() {
+        let control = RunControl::new(TOOL_WATCHDOG_MILLIS, None);
+        let cancel = Arc::clone(&control);
+        // The app gives up the fetch because the run ended under it.
+        let (store, content, size) = lazy(Box::new(move |index| {
+            (index == LAZY_TAIL + 1).then(|| {
+                cancel.cancel();
+                FetchError::Failed { reason: "Cancelled.".into() }
+            })
+        }));
+        let reader = VersionReader::open(store.clone(), content, Some(control)).unwrap();
+        assert_eq!(reader.read_at(size - 10, 10), Err(input(CANCELLED)));
+        assert_eq!(*store.later.lock().unwrap(), vec![LAZY_TAIL + 1, LAZY_TAIL + 2]);
+    }
+
+    #[test]
+    fn a_padding_chunk_that_fails_leaves_the_rest_asked_for() {
+        let (store, content, size) = lazy(Box::new(|index| {
+            (index == LAZY_TAIL + 1).then(|| FetchError::Failed { reason: "gone".into() })
+        }));
+        let reader = VersionReader::open(store.clone(), content, None).unwrap();
+        assert_eq!(reader.read_at(size - 10, 10), Err(input("gone")));
         assert_eq!(
             *store.fetched.lock().unwrap(),
-            vec![(tail_index, false), (tail_index + 1, true), (tail_index + 2, true)]
+            vec![(LAZY_TAIL, false), (LAZY_TAIL + 1, true), (LAZY_TAIL + 2, true)]
         );
+        assert!(store.later.lock().unwrap().is_empty());
+        assert_eq!(reader.read_at(0, 10), Err(input("gone")), "and every later read fails");
     }
 
     #[test]

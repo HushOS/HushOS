@@ -3,6 +3,7 @@ package com.hushos.app.foreign
 import com.hushos.app.data.ApiError
 import com.hushos.app.data.DriveApi
 import com.hushos.app.data.OpenedVersion
+import com.hushos.app.data.PaddingDrains
 import com.hushos.app.data.Shared
 import com.hushos.app.data.StoreSource
 import com.hushos.app.data.ToolFailed
@@ -407,14 +408,37 @@ class ToolRunsTest {
             reading.start()
             // The tail is on its way when the run is cancelled.
             eventually { server.stalled.get() == 1 }
+            val cancelled = System.nanoTime()
             control.cancel()
+            // The read returns at once (the run's thread, and its slot, go free)...
             reading.join(10_000)
-            stall.countDown()
             assertFalse(reading.isAlive)
             assertEquals(1, failed.get())
-            // The padding was still asked for, after the cancel, to the object's end.
-            assertTrue(server.asked.toString(), server.asked.contains("bytes=${tail.size}-${layout.ciphertextSize - 1uL}"))
+            assertTrue((System.nanoTime() - cancelled) / 1_000_000 < 2_000)
+            stall.countDown()
+            // ...and the padding is still asked for, in the background, to the object's end.
+            eventually { server.asked.contains("bytes=${tail.size}-${layout.ciphertextSize - 1uL}") }
         }
+    }
+
+    @Test fun paddingDrainsRunOneAtATimeAndStopAtTheirCap() {
+        val drains = PaddingDrains(maxBytes = 20, maxMillis = 60_000, maxWaiting = 4)
+        val log = Collections.synchronizedList(ArrayList<String>())
+        val gate = CountDownLatch(1)
+        fun range(start: Long) = com.hushos.core.ByteRange(start.toULong(), (start + 9).toULong())
+        // The first drain's first fetch is held: the second waits behind it.
+        drains.enqueue(listOf(range(0), range(10), range(20), range(30))) { r ->
+            log.add("a${r.start}")
+            if (r.start == 0uL) gate.await(5, TimeUnit.SECONDS)
+        }
+        drains.enqueue(listOf(range(0))) { r -> log.add("b${r.start}") }
+        eventually { log.toList() == listOf("a0") }
+        Thread.sleep(100)
+        assertEquals("one drain at a time", listOf("a0"), log.toList())
+        gate.countDown()
+        // 20 bytes of padding, then the first gives up; the second runs after it.
+        eventually { drains.idle }
+        assertEquals(listOf("a0", "a10", "b0"), log.toList())
     }
 
     @Test fun aRunThatEndsCutsOffItsFetch() {

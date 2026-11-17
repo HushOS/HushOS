@@ -242,16 +242,22 @@ public actor ToolRuns {
 /*
  * The object store as the core's VersionReader reaches it. The core calls `fetch` on the run's
  * own thread (ToolRuns), which may block: the async fetch runs on a task of its own meanwhile,
- * and is cancelled as soon as the run ends. Never hand this to a reader used from the main
- * thread or a cooperative one.
+ * and is cancelled as soon as the run ends, padding or not. Padding a run still owed when it
+ * ended comes back through `drainLater`, for PaddingDrains to fetch in the background. Never hand
+ * this to a reader used from the main thread or a cooperative one.
  */
 public final class StoreSource: ObjectSource, @unchecked Sendable {
     private let control: RunControl?
-    private let fetchRange: @Sendable (ByteRange, Bool) async throws -> Data
+    private let fetchRange: @Sendable (ByteRange) async throws -> Data
+    private let drain: @Sendable ([ByteRange]) -> Void
 
-    /* `fetch` is told whether the range is a drain (the padding after the file): see ObjectSource. */
-    public init(control: RunControl? = nil, _ fetch: @escaping @Sendable (ByteRange, Bool) async throws -> Data) {
+    public init(
+        control: RunControl? = nil,
+        drainLater: @escaping @Sendable ([ByteRange]) -> Void = { _ in },
+        _ fetch: @escaping @Sendable (ByteRange) async throws -> Data
+    ) {
         self.control = control
+        drain = drainLater
         fetchRange = fetch
     }
 
@@ -260,13 +266,12 @@ public final class StoreSource: ObjectSource, @unchecked Sendable {
         let done = DispatchSemaphore(value: 0)
         let fetchRange = self.fetchRange
         let task = Task.detached {
-            do { box.result = .success(try await fetchRange(range, drain)) } catch { box.result = .failure(error) }
+            do { box.result = .success(try await fetchRange(range)) } catch { box.result = .failure(error) }
             done.signal()
         }
-        // In slices, so a run that ends meanwhile stops waiting (and fetching) within a twentieth of a
-        // second; a drain is waited for whatever the run does, bounded by the request's own timeout.
+        // In slices, so a run that ends meanwhile stops waiting (and fetching) within a twentieth of a second.
         while done.wait(timeout: .now() + .milliseconds(50)) == .timedOut {
-            if !drain, control?.isEnded() == true {
+            if control?.isEnded() == true {
                 task.cancel()
                 throw FetchError.Failed(reason: "Cancelled.")
             }
@@ -275,6 +280,69 @@ public final class StoreSource: ObjectSource, @unchecked Sendable {
         case .success(let data): return data
         case .failure(let error): throw FetchError.Failed(reason: error.localizedDescription)
         }
+    }
+
+    public func drainLater(ranges: [ByteRange]) {
+        drain(ranges)
+    }
+}
+
+/*
+ * The padding a cancelled run still owed (docs/file-tools-design.md, "Padding"): fetched in the
+ * background, ciphertext only and thrown away, with no key and no plaintext, so the store still
+ * sees the object read to its end, while the run's slot is already free for the next. One drain
+ * at a time for the process; each range tried once (an expired address renewed once); a drain
+ * gives up after `maxBytes` of padding or `maxDuration`, whichever comes first, and at most
+ * `maxWaiting` wait behind the one going (more are dropped). The defaults cover any padding a
+ * 4 GiB file carries on an ordinary connection: Padmé's bucket adds at most about 12%.
+ */
+public actor PaddingDrains {
+    public static let shared = PaddingDrains()
+
+    public struct Job: Sendable {
+        let ranges: [ByteRange]
+        let fetch: @Sendable (ByteRange) async throws -> Void
+    }
+
+    private let maxBytes: UInt64
+    private let maxDuration: Duration
+    private let maxWaiting: Int
+    private var waiting: [Job] = []
+    private var draining = false
+
+    public init(maxBytes: UInt64 = 1 << 30, maxDuration: Duration = .seconds(600), maxWaiting: Int = 4) {
+        self.maxBytes = maxBytes
+        self.maxDuration = maxDuration
+        self.maxWaiting = maxWaiting
+    }
+
+    public nonisolated func enqueue(_ ranges: [ByteRange], fetch: @escaping @Sendable (ByteRange) async throws -> Void) {
+        Task { await self.add(Job(ranges: ranges, fetch: fetch)) }
+    }
+
+    /* Whether nothing is draining or waiting: for tests. */
+    public var idle: Bool { !draining && waiting.isEmpty }
+
+    private func add(_ job: Job) {
+        guard waiting.count < maxWaiting else { return }
+        waiting.append(job)
+        guard !draining else { return }
+        draining = true
+        Task { await self.drainAll() }
+    }
+
+    private func drainAll() async {
+        while !waiting.isEmpty {
+            let job = waiting.removeFirst()
+            let started = ContinuousClock.now
+            var bytes: UInt64 = 0
+            for range in job.ranges {
+                if bytes >= maxBytes || ContinuousClock.now - started >= maxDuration { break }
+                bytes += range.end - range.start + 1
+                try? await job.fetch(range)
+            }
+        }
+        draining = false
     }
 }
 
@@ -307,18 +375,18 @@ public enum ToolReaders {
             return url
         }
         let address = ObjectAddress(try await fresh(), renew: fresh)
-        let source = StoreSource(control: control) { range, drain in
-            guard drain else {
-                return try await Resumable.run(onExpired: { try await address.refresh() }) {
-                    try await api.range(await address.current, range)
-                }
-            }
-            // The padding: once, an expired address renewed once, and not cut off by the run's end.
+        // Padding owed when the run ended: once each, an expired address renewed once, in the background.
+        let drainOnce: @Sendable (ByteRange) async throws -> Void = { range in
             do {
-                return try await api.range(await address.current, range)
+                _ = try await api.range(await address.current, range)
             } catch DriveAPIError.server(403, _) {
                 try await address.refresh()
-                return try await api.range(await address.current, range)
+                _ = try await api.range(await address.current, range)
+            }
+        }
+        let source = StoreSource(control: control, drainLater: { ranges in PaddingDrains.shared.enqueue(ranges, fetch: drainOnce) }) { range in
+            try await Resumable.run(onExpired: { try await address.refresh() }) {
+                try await api.range(await address.current, range)
             }
         }
         return try VersionReader(source: source, content: opened.content, control: control)

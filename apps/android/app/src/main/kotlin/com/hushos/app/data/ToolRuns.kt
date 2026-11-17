@@ -194,15 +194,66 @@ class ToolRuns {
 
 /*
  * The object store as the core's VersionReader reaches it: `fetch` is called on the run's own
- * thread, where blocking on the network is what it is for. A failure reaches the core in its
- * words (FetchError), and the read fails with them.
+ * thread, where blocking on the network is what it is for, and is cut off as soon as the run ends,
+ * padding or not. Padding a run still owed when it ended comes back through `drainLater`, for
+ * PaddingDrains to fetch in the background. A failure reaches the core in its words (FetchError).
  */
-class StoreSource(private val fetchRange: (ByteRange, Boolean) -> ByteArray) : ObjectSource {
-    /* `drain`: the padding after the file (see ObjectSource in the core). */
+class StoreSource(
+    private val drain: (List<ByteRange>) -> Unit = {},
+    private val fetchRange: (ByteRange, Boolean) -> ByteArray,
+) : ObjectSource {
     override fun fetch(range: ByteRange, drain: Boolean): ByteArray = try {
         fetchRange(range, drain)
     } catch (error: Exception) {
         throw FetchException.Failed(error.message ?: "The file couldn't be read.")
+    }
+
+    override fun drainLater(ranges: List<ByteRange>) = drain(ranges)
+}
+
+/*
+ * The padding a cancelled run still owed (docs/file-tools-design.md, "Padding"): fetched in the
+ * background, ciphertext only and thrown away, with no key and no plaintext, so the store still
+ * sees the object read to its end, while the run's slot is already free for the next. One drain
+ * at a time for the process; each range tried once (an expired address renewed once); a drain
+ * gives up after `maxBytes` of padding or `maxMillis`, whichever comes first, and at most
+ * `maxWaiting` wait behind the one going (more are dropped). The defaults cover any padding a
+ * 4 GiB file carries on an ordinary connection: Padmé's bucket adds at most about 12%.
+ */
+class PaddingDrains(
+    private val maxBytes: Long = 1L shl 30,
+    private val maxMillis: Long = 600_000,
+    private val maxWaiting: Int = 4,
+) {
+    private val worker = Executors.newSingleThreadExecutor { task -> Thread(task, "padding-drain").apply { isDaemon = true } }
+    private val queued = java.util.concurrent.atomic.AtomicInteger()
+
+    fun enqueue(ranges: List<ByteRange>, fetch: (ByteRange) -> Unit) {
+        // The one going isn't counted; the ones waiting behind it are.
+        if (queued.incrementAndGet() > maxWaiting + 1) {
+            queued.decrementAndGet()
+            return
+        }
+        worker.execute {
+            try {
+                val started = System.nanoTime()
+                var bytes = 0L
+                for (range in ranges) {
+                    if (bytes >= maxBytes || (System.nanoTime() - started) / 1_000_000 >= maxMillis) break
+                    bytes += (range.end - range.start + 1uL).toLong()
+                    runCatching { fetch(range) }
+                }
+            } finally {
+                queued.decrementAndGet()
+            }
+        }
+    }
+
+    /* Whether nothing is draining or waiting: for tests. */
+    val idle: Boolean get() = queued.get() == 0
+
+    companion object {
+        val shared = PaddingDrains()
     }
 }
 
@@ -253,17 +304,17 @@ private fun sleepWhileRunning(control: RunControl, millis: Long) {
  */
 fun toolReaderOf(api: DriveApi, opened: OpenedVersion, workspaceId: String, control: RunControl, online: () -> Boolean = { true }): VersionReader {
     val url = AtomicReference(api.versionUrl(opened.versionId, workspaceId))
-    val source = StoreSource { range, drain ->
-        if (drain) {
-            // The padding: once, an expired address renewed once, and not cut off by the run's end.
-            return@StoreSource try {
-                api.range(url.get(), range)
-            } catch (error: ApiError) {
-                if (error.status != 403) throw error
-                url.set(api.versionUrl(opened.versionId, workspaceId))
-                api.range(url.get(), range)
-            }
+    // Padding owed when the run ended: once each, an expired address renewed once, in the background.
+    val drainOnce: (ByteRange) -> Unit = { range ->
+        try {
+            api.range(url.get(), range)
+        } catch (error: ApiError) {
+            if (error.status != 403) throw error
+            url.set(api.versionUrl(opened.versionId, workspaceId))
+            api.range(url.get(), range)
         }
+    }
+    val source = StoreSource({ ranges -> PaddingDrains.shared.enqueue(ranges, drainOnce) }) { range, _ ->
         Resumable.run(
             online = online,
             sleep = { millis -> sleepWhileRunning(control, millis) },

@@ -3,7 +3,12 @@ import type { CryptoRequests, CryptoResults, DownloadChunkResult } from '@hushos
 import { chunkCount, chunkRange, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi } from './api';
 import type { DriveNode, FolderListing, Rpc } from './client';
-import { createDownloadManager, type DownloadSink, type ZipEntry } from './downloads';
+import {
+    createDownloadManager,
+    fetchCiphertextRange,
+    type DownloadSink,
+    type ZipEntry,
+} from './downloads';
 
 /*
  * The download engine against a fake worker, a fake API and a recording sink:
@@ -745,6 +750,53 @@ describe('download manager', () => {
         await reader.close();
     });
 
+    test('a padding chunk that fails leaves the rest asked for, and is retried while the reader is open', async () => {
+        // Just under 512 MiB with the trailer: two chunks of padding alone after the file.
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-big': { plaintextSize: size, thumbnailBytes: 1000 } };
+        expect(chunkCount(contentLength(3, size, 1000)) - chunkCount(size)).toBe(2);
+        // The first padding chunk is refused for good: the second is still asked for.
+        const gone = harness({
+            sealed,
+            raw: (_v, index) => (index === 64 ? Promise.resolve({ status: 404, length: 0 }) : null),
+        });
+        const reader = gone.manager.openReader(paddedFile('big', size, 1000), 1, { tool: true });
+        const tail = reader.read(size - 10, 10);
+        await settle(500);
+        await tail;
+        expect(gone.raw).toEqual(['v-big:64', 'v-big:65']);
+        await expect(reader.read(0, 1)).rejects.toThrow();
+
+        // A busy store: retried while the reader is open, and nothing fails.
+        let tries = 0;
+        const busy = harness({
+            sealed,
+            raw: (_v, index) =>
+                index === 64 && ++tries === 1 ? Promise.resolve({ status: 503, length: 0 }) : null,
+        });
+        const open = busy.manager.openReader(paddedFile('big', size, 1000), 1, { tool: true });
+        const read = open.read(size - 10, 10);
+        await settle(10_000);
+        await read;
+        expect(busy.raw).toEqual(['v-big:64', 'v-big:64', 'v-big:65']);
+        const later = open.read(0, 1);
+        await settle(100);
+        expect((await later).byteLength).toBe(1);
+    });
+
+    test('after the reader closed, each padding chunk is tried once', async () => {
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-cz': { plaintextSize: size, thumbnailBytes: 1000 } };
+        const h = harness({ sealed, raw: () => Promise.resolve({ status: 503, length: 0 }) });
+        const reader = h.manager.openReader(paddedFile('cz', size, 1000), 1, { tool: true });
+        const read = reader.read(size - 10, 10);
+        read.catch(() => {});
+        const closing = reader.close();
+        await settle(10_000);
+        await closing;
+        expect(h.raw).toEqual(['v-cz:64', 'v-cz:65']);
+    });
+
     test('a tool’s reader made to seek without end stops at four times the object', async () => {
         const size = 4 * CHUNK;
         const h = harness({});
@@ -798,5 +850,60 @@ describe('download manager', () => {
         expect(h.sinks[0]!.writes.length).toBe(4);
         // Every chunk was fetched exactly once: a pause is not a retry.
         expect([...h.attempts.values()].every((n) => n === 1)).toBe(true);
+    });
+});
+
+describe('fetching a range as ciphertext only', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    test('a store that sends the whole object is cut off past the length asked for', async () => {
+        let pulled = 0;
+        let cancelled = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(
+                        new ReadableStream<Uint8Array>({
+                            pull(controller) {
+                                pulled++;
+                                controller.enqueue(new Uint8Array(1024 * 1024));
+                            },
+                            cancel() {
+                                cancelled = true;
+                            },
+                        }),
+                        { status: 200 },
+                    ),
+            ),
+        );
+        const answer = await fetchCiphertextRange('https://store/o', 0, 99);
+        expect(answer.length).toBeGreaterThan(100);
+        expect(cancelled).toBe(true);
+        // A megabyte or two, not the gigabytes it would have sent.
+        expect(pulled).toBeLessThanOrEqual(3);
+    });
+
+    test('a store that goes quiet is given up after the idle timeout', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async (_url: string, init: RequestInit) =>
+                    new Response(
+                        new ReadableStream<Uint8Array>({
+                            start(controller) {
+                                init.signal?.addEventListener('abort', () =>
+                                    controller.error(new DOMException('Aborted', 'AbortError')),
+                                );
+                            },
+                        }),
+                        { status: 206 },
+                    ),
+            ),
+        );
+        const answer = fetchCiphertextRange('https://store/o', 0, 99, 1_000);
+        const failed = expect(answer).rejects.toThrow();
+        await settle(1_500);
+        await failed;
     });
 });

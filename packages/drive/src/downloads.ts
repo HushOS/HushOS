@@ -127,13 +127,50 @@ export type DownloadManagerOptions = {
     ) => Promise<{ status: number; length: number }>;
 };
 
-async function fetchCiphertextRange(url: string, start: number, end: number) {
-    const response = await fetch(url, {
-        headers: { Range: `bytes=${start}-${end}` },
-        cache: 'no-store',
-    });
-    const length = response.ok ? (await response.arrayBuffer()).byteLength : 0;
-    return { status: response.status, length };
+/*
+ * Bytes `start` to `end` of an object fetched and counted, none kept: streamed, so a store that
+ * ignores the Range and sends the whole object is cut off as soon as it passes the length asked
+ * for, and given up after `idleMs` without a byte, as the crypto worker's downloads are.
+ */
+export async function fetchCiphertextRange(
+    url: string,
+    start: number,
+    end: number,
+    idleMs = 120_000,
+) {
+    const wanted = end - start + 1;
+    const abort = new AbortController();
+    let timer = setTimeout(() => abort.abort(), idleMs);
+    const awake = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => abort.abort(), idleMs);
+    };
+    try {
+        const response = await fetch(url, {
+            headers: { Range: `bytes=${start}-${end}` },
+            cache: 'no-store',
+            signal: abort.signal,
+        });
+        if (!response.ok || !response.body) {
+            await response.body?.cancel().catch(() => {});
+            return { status: response.status, length: 0 };
+        }
+        const reader = response.body.getReader();
+        let length = 0;
+        for (;;) {
+            awake();
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.byteLength;
+            if (length > wanted) {
+                await reader.cancel().catch(() => {});
+                break;
+            }
+        }
+        return { status: response.status, length };
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /* A tool's reader fetches at most this many times its object's chunks. */
@@ -410,7 +447,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
          * not the key, so it can run after the reader let go of its key. An expired address is
          * renewed once; a short or failed answer fails it.
          */
-        async function fetchCiphertext(index: number) {
+        async function fetchCiphertext(index: number, live: () => boolean = () => true) {
             const range = chunkRange(
                 version!.contentSuite,
                 plaintextSize,
@@ -418,18 +455,41 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 index,
             );
             const fetchRange = options.fetchCiphertext ?? fetchCiphertextRange;
+            const wanted = range.end - range.start + 1;
             for (let attempt = 1; ; attempt++) {
-                const answer = await fetchRange(await freshUrl(), range.start, range.end);
-                if (answer.status === 403 && attempt === 1) {
-                    url = '';
+                let status = 0;
+                let length = 0;
+                try {
+                    ({ status, length } = await fetchRange(
+                        await freshUrl(),
+                        range.start,
+                        range.end,
+                    ));
+                } catch {
+                    // No answer at all (no network, a reset, the idle timeout): retried like a 0.
+                }
+                if ((status === 206 || status === 200) && length === wanted) return;
+                if (status === 403) url = ''; // expired: a fresh one next time
+                const failure = new Error('The file could not be read to its end.');
+                // After the reader closed: each chunk once, an expired address renewed once.
+                if (!live()) {
+                    if (status === 403 && attempt === 1) continue;
+                    throw failure;
+                }
+                // While it is open, retried as the file's own chunks are.
+                const retryable =
+                    status === 0 ||
+                    status === 403 ||
+                    status === 408 ||
+                    status === 429 ||
+                    status >= 500;
+                if (retryable && offline()) {
+                    attempt--;
+                    await onlineAgain(offline);
                     continue;
                 }
-                if (
-                    (answer.status === 206 || answer.status === 200) &&
-                    answer.length === range.end - range.start + 1
-                )
-                    return;
-                throw new Error('The file could not be read to its end.');
+                if (!retryable || attempt >= maxAttempts) throw failure;
+                await new Promise((resolve) => setTimeout(resolve, backoffDelay(attempt)));
             }
         }
         async function close() {
@@ -560,13 +620,15 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 );
             return source.open().then(() => source.fetchChunk(index));
         }
-        function drainPadding() {
-            return (async () => {
-                for (let pad = source.fileChunks; pad < source.total; pad++)
-                    await source.fetchCiphertext(pad);
-            })().catch((error: unknown) => {
-                paddingFailed = error;
-            });
+        /* Every padding chunk asked for, one failing or not; the first failure fails every later read. */
+        async function drainPadding() {
+            for (let pad = source.fileChunks; pad < source.total; pad++) {
+                try {
+                    await source.fetchCiphertext(pad, () => !closed);
+                } catch (error) {
+                    paddingFailed ??= error;
+                }
+            }
         }
         function chunk(index: number) {
             if (options.tool && index === source.fileChunks - 1) {
