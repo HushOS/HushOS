@@ -1,0 +1,47 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_bbe5ec3b7adcae 1664
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_d4b8372f7b56f9 537-539,571-576,620-621
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_e5a3b8331e22a8 36,40,44,53,95-101,206,307-310,447,494-508,524-527,529-540,1175-1184,1292-1293,1313-1314,1316,1343,1345
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_e73d957c997f44 483-487,495,497,1017-1019,1023-1069,1546-1598
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_8c1b9dbd5c37b3 1286
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_cc538e0e85137c 115-116,444-450,455-469,475-478,634-636,674,715-726,748-775,777-797,807,820,872,876,891,1672-1677,1679-1680,1694-1697,1700,1704,1708-1712,1737-1740,1743,1747,1750-1753
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_44fa4dd1b5384f 200-202,205,493-497,505,507,1099-1147,1632-1675
+apps/web/src/lib/save-run-sends.test.ts
+  s_c60e24772e04af::t_82ae20084c8763 1-93
+apps/web/src/lib/save-run-sends.ts
+  s_c60e24772e04af::t_a92a40eb3ba5c1 1-94
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_1e86b1d62201fc 33,62-63,97-98,156-159,166-170,202
+docs/file-tools-design.md
+  s_c60e24772e04af::t_56251a7e243e7a 299,312
+packages/drive/src/journal.ts
+  s_c60e24772e04af::t_63b242ff7d1ba1 170-174
+packages/drive/src/save-runs.journal.test.ts
+  s_c60e24772e04af::t_8126db50a25f1f 16-22,102-104,126-204
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_565450732b349b 50,52,54,59,1191,1207-1209,1216,1766-1769,1779,1784,1788,1793-1840,2066
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_aa5d29b6c57d52 287-293,299,348-385,470-474,1543-1550,1620-1635,1678,1684-1685,1687-1690,1692-1728
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "af4b76da58a34e88623efbb68aaa19c42ec43f4b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
