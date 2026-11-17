@@ -112,6 +112,8 @@ android {
         for ((field, value) in firebaseOptions) buildConfigField("String", field, "\"${value.replace("\"", "")}\"")
         // Read by check-bundle.sh: a bundle for Play must carry notifications.
         manifestPlaceholders["pushConfigured"] = (firebaseMissing.isEmpty()).toString()
+        // The test APK's runner (src/androidTest): no part of the app's own build.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -212,6 +214,8 @@ dependencies {
     implementation(libs.commonmark.strikethrough)
     implementation(libs.commonmark.autolink)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
     // JVM tests open real envelopes: JNA's desktop jar loads the core built for this machine.
     testImplementation(libs.jna)
     // android.jar's org.json is stubs that throw on the JVM; settings tests edit real JSON.

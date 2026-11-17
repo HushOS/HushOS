@@ -401,6 +401,27 @@ describe('a worker that does not pace itself fails its run', () => {
         sized.worker.send(output(2, 1));
         await expect(sized.handle.result).rejects.toThrow(TOOL_FAILED);
 
+        // A cap that is not a positive whole number is the caller's bug: it throws, before any worker.
+        let made = 0;
+        for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1, 2.5]) {
+            for (const cap of ['maxOutputs', 'maxTotalBytes'] as const) {
+                expect(() =>
+                    startToolRun({
+                        label: 'Bad cap',
+                        worker: () => {
+                            made++;
+                            return new ScriptedWorker() as unknown as Worker;
+                        },
+                        input: null,
+                        sources: [],
+                        budget: new PlaintextBudget(),
+                        [cap]: bad,
+                    }),
+                ).toThrow(RangeError);
+            }
+        }
+        expect(made).toBe(0);
+
         // Without a cap of its own, a run gets section 3's.
         const plain = run({ budget: new PlaintextBudget(Number.MAX_SAFE_INTEGER) });
         for (let id = 0; id < RUN_OUTPUTS_MAX; id++) plain.worker.send(output(id, 0));

@@ -221,6 +221,14 @@ function drop(buffer: ArrayBuffer) {
     }
 }
 
+/* A run's cap as given, or its default: NaN, Infinity, zero or a fraction would quietly turn it off, so they throw. */
+function capOf(name: string, value: number | undefined, fallback: number) {
+    if (value === undefined) return fallback;
+    if (!Number.isSafeInteger(value) || value <= 0)
+        throw new RangeError(`${name} must be a positive whole number, not ${value}.`);
+    return value;
+}
+
 export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     /*
      * What the run needs, copied out: no function below may reach `options`, and what is heavy
@@ -230,8 +238,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     const { label, refusals } = options;
     const budget = options.budget ?? toolBudget;
     const watchdogMs = options.watchdogMs ?? TOOL_WATCHDOG_MS;
-    const maxOutputs = options.maxOutputs ?? RUN_OUTPUTS_MAX;
-    const maxTotalBytes = options.maxTotalBytes ?? RUN_TOTAL_BYTES_MAX;
+    const maxOutputs = capOf('maxOutputs', options.maxOutputs, RUN_OUTPUTS_MAX);
+    const maxTotalBytes = capOf('maxTotalBytes', options.maxTotalBytes, RUN_TOTAL_BYTES_MAX);
     let sources: RangeReader[] = options.sources;
     let launch: {
         worker: () => Worker;

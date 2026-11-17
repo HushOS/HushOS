@@ -654,6 +654,19 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 - `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the `RangeCall` to cut off).
 - Tests: `ToolRunsTest`.
 
+### Tools on a device
+
+The unit tests use the host JVM's networking. `src/androidTest/.../ToolCutoffTest.kt` runs the cut-offs on Android's own: a run's end cutting off a trickling range and a trickling address request, and a padding drain's deadline cutting off a trickling range. CI runs no instrumented tests; run it by hand after changing `RangeCall`, `Cutoff`, `PaddingDrains` or `DriveApi.range`/`versionUrl`.
+
+- Boot an emulator of your own, headless and read-only, so nothing it installs is kept and nobody else's emulator is touched:
+    - `$ANDROID_HOME/emulator/emulator -avd Pixel_9_API_36 -port 5560 -read-only -no-window -no-audio -no-boot-anim -no-snapshot &`
+    - Wait for `adb -s emulator-5560 shell getprop sys.boot_completed` to print `1`.
+- Run it on that emulator only: `adb -s emulator-5560 logcat -c && ANDROID_SERIAL=emulator-5560 ./gradlew :app:connectedDebugAndroidTest`.
+    - Gradle exits 0 even when the APK did not install, so check the result: `grep -o 'tests="[0-9]*" failures="[0-9]*"' app/build/outputs/androidTest-results/connected/debug/TEST-*.xml` must say `tests="3" failures="0"`.
+    - `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (and `tests="0"`): the AVD already holds a build signed with another key. On the read-only emulator run `adb -s emulator-5560 uninstall com.hushos.app` and run the tests again; the uninstall may answer `DELETE_FAILED_INTERNAL_ERROR`, and the second run installs all the same (seen twice on 2026-11-17).
+- Read the timings: `adb -s emulator-5560 logcat -d -s EmulatorCutoff:I`. Each cut should take well under the tests' 2 s (on 2026-11-17, Android 16 arm64: 8 to 34 ms for a range or an address, 303 to 307 ms for a 300 ms drain deadline).
+- Stop it: `adb -s emulator-5560 emu kill`.
+
 ## Saves from other apps (write-backs)
 
 Another app's saves of one file through the provider are coalesced in `data/WriteBacks.kt`. Test: `FilesSaveOrderTest`.
