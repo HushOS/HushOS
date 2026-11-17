@@ -1,0 +1,39 @@
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_2dfc4711b48e66 17-18,20-21,30-31,33
+apps/web/src/components/drive/file-list.tsx
+  s_c60e24772e04af::t_85e6e456677dff 68-73,160-164,174-179,182-186,354
+apps/web/src/components/drive/folder-view.tsx
+  s_9fb935311e39d2::t_e54a9dd1ccfc2f 519,1318-1322,1335-1344,1500,1692-1695,1736
+apps/web/src/components/drive/node-actions.tsx
+  s_c60e24772e04af::t_76e3a9e0d75e33 313,318-319,322-333
+apps/web/src/components/drive/virtual-list.tsx
+  s_9fb935311e39d2::t_8284e3bd517888 20-24,164-166,233-235,271,283-287,336,347-355
+e2e/helpers.ts
+  s_c60e24772e04af::t_72f8a94d65ce0a 189-193,198,205-210,217,221
+e2e/long-list.spec.ts
+  s_c60e24772e04af::t_98efd34a113b2c 9-10,34-69,72,162-323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f5920111e7573c2b550fcb2c2d283a889dbef7a4",
+  "prompts": {},
+  "sessions": {
+    "s_9fb935311e39d2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1eb5e-250f-7e80-b492-cddbce57b978",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

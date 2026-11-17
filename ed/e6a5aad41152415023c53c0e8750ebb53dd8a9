@@ -1,0 +1,29 @@
+apps/web/src/components/drive/virtual-list.tsx
+  s_c60e24772e04af::t_84b28aaabb27c5 233-240
+  s_c60e24772e04af::t_cfa2a22b562477 1-232,241-315,317,323-324
+  s_c60e24772e04af::t_9d55eab36e0c19 316,318-322,325-345
+apps/web/src/components/drive/file-list.tsx
+  s_c60e24772e04af::t_286a80743ab219 6,66-67,119,121-126,128-138
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_28ed09cbc4b82b 7,32,40,42,44,46,49,62,104,130-139,232-482,518,636-639,1039-1041,1045-1046,1051,1056,1059,1063-1064,1066,1071,1075-1111,1113-1142,1144-1150,1165,1177-1178,1193-1197,1228,1265-1267,1269-1331,1333,1493-1494,1545-1546,1550,1635-1641,1643-1655,1657-1658,1662,1665-1669,1671-1675,1677-1678,1681-1684,1686-1716,1722-1728
+apps/web/src/components/drive/node-actions.tsx
+  s_c60e24772e04af::t_3a9e7b4f1602de 40,212-231,236-243,245-246,248,256,258,260,262,273-323
+apps/web/src/components/drive/unverified-mark.tsx
+  s_c60e24772e04af::t_513b44cbc98c9d 192-205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ede6a5aad41152415023c53c0e8750ebb53dd8a9",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
