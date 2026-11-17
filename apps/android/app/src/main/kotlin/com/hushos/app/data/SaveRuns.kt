@@ -83,8 +83,11 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     /* Tests only: runs once a write's staging file is on disk, before it is renamed over the journal. */
     @Volatile internal var staged: (() -> Unit)? = null
 
+    /* Tests only: runs (outside the lock) after each list's read, and before each swap takes the lock. */
+    @Volatile internal var between: (() -> Unit)? = null
+
     /* Every row, those of finished runs (`done`) included. */
-    fun list(): List<SaveRunRow> = synchronized(lock) { read() }
+    fun list(): List<SaveRunRow> = synchronized(lock) { read() }.also { between?.invoke() }
 
     /*
      * Writes the row, once more if the first write is refused (rows are whole), and throws SaveUnrecorded when that one is
@@ -112,6 +115,24 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         if (runCatching { write(others) }.isSuccess || runCatching { write(others) }.isSuccess) return true
         val done = others + row.copy(done = true)
         runCatching { write(done) }.isSuccess || runCatching { write(done) }.isSuccess
+    }
+
+    /*
+     * The row as `expected` replaced by `next` (null removes it), only if it is still exactly that row: the compare and the
+     * write under one hold of the file's lock, so no other write of this process lands in between (a Keep, another look).
+     * False when it had changed, or the session ended.
+     */
+    fun swap(expected: SaveRunRow, next: SaveRunRow?): Boolean {
+        between?.invoke()
+        return swapLocked(expected, next)
+    }
+
+    private fun swapLocked(expected: SaveRunRow, next: SaveRunRow?): Boolean = synchronized(lock) {
+        if (!live) return false
+        val rows = read()
+        if (rows.firstOrNull { it.id == expected.id } != expected) return false
+        val others = rows.filter { it.id != expected.id }
+        runCatching { write(if (next == null) others else others + next) }.isSuccess
     }
 
     /* Rows of finished runs that couldn't be removed then, removed now. */
@@ -430,11 +451,12 @@ object SaveRuns {
             writer.lookFolder(id, row.workspaceId)?.let { holds = (holds ?: 0) + it }
             if (!journal.live) return
         }
+        // Compared and written in one hold of the journal's lock (swap): a Keep in between is never undone.
         if (holds != null) {
-            if (stillSo()) journal.put(row.copy(chosenDelete = false, holds = holds))
+            journal.swap(row, row.copy(chosenDelete = false, holds = holds))
             return
         }
-        if (row.uncertain.values.all { now - it >= CREATION_SETTLE_MS } && stillSo()) journal.retire(row)
+        if (row.uncertain.values.all { now - it >= CREATION_SETTLE_MS }) journal.swap(row, null)
     }
 
     /*
@@ -450,13 +472,17 @@ object SaveRuns {
      * not found, may still be made: the row stays until a later launch finds it or CREATION_SETTLE_MS has passed.
      */
     fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, now: Long = System.currentTimeMillis()): SaveCleanup {
-        val cleaned = clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_SETTLE_MS }.keys)
+        // Nothing asked of the server once the session ended (a sign-out), checked before every request.
+        if (!journal.live) return SaveCleanup.LEFT
+        val cleaned = clean(row, writer, journal, emptySet(), null, null, mayExist = row.uncertain.filterValues { now - it < CREATION_SETTLE_MS }.keys,
+            stillOn = { journal.live })
+        if (!journal.live) return SaveCleanup.LEFT
         // Kept only to wait for folders that may still land, all else done: the row names just those, with the person's answer,
         // and later launches only look for them (interrupted).
         val waitingOn = cleaned.onlyWaitingOn
         if (cleaned.cleanup == SaveCleanup.LEFT && waitingOn != null)
-            runCatching { journal.put(row.copy(nodeIds = waitingOn, uploadIds = emptyList(), uncertain = row.uncertain.filterKeys { it in waitingOn },
-                chosenDelete = true, holds = null)) }
+            journal.swap(row, row.copy(nodeIds = waitingOn, uploadIds = emptyList(), uncertain = row.uncertain.filterKeys { it in waitingOn },
+                chosenDelete = true, holds = null))
         return cleaned.cleanup
     }
 
@@ -488,7 +514,8 @@ object SaveRuns {
      * got no answer.
      */
     internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>, completing: Set<String>?,
-                       published: Set<String>?, asked: Map<String, SaveAbortFate> = emptyMap(), mayExist: Set<String> = emptySet()): Cleaned {
+                       published: Set<String>?, asked: Map<String, SaveAbortFate> = emptyMap(), mayExist: Set<String> = emptySet(),
+                       stillOn: () -> Boolean = { true }): Cleaned {
         var unsettled = false
         var denied = false
         var kept = 0
@@ -497,7 +524,8 @@ object SaveRuns {
         // An upload the stop already aborted with an answer isn't asked again; one that got none is.
         fun fateOf(uploadId: String) = asked[uploadId]?.takeIf { it != SaveAbortFate.UNKNOWN && it != SaveAbortFate.FINISHING }
             ?: abort(writer, uploadId, row.workspaceId)
-        for (uploadId in row.uploadIds) when (fateOf(uploadId)) {
+        // Signed out meanwhile (an interrupted run's clean-up): nothing more asked of the server, nothing written.
+        for (uploadId in row.uploadIds) when (if (stillOn()) fateOf(uploadId) else return Cleaned(SaveCleanup.LEFT, kept, uncertain)) {
             SaveAbortFate.UNKNOWN, SaveAbortFate.FINISHING -> {
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
@@ -515,7 +543,9 @@ object SaveRuns {
             else -> {}
         }
         val notFound = HashSet<String>()
-        val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound)
+        if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
+        val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound, stillOn)
+        if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
         val waitingOn = mayExist.filter { it in notFound }
         val waiting = waitingOn.isNotEmpty()
@@ -534,9 +564,11 @@ object SaveRuns {
             onlyWaitingOn)
     }
 
-    internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null): SaveCleanup {
+    internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null,
+                         stillOn: () -> Boolean = { true }): SaveCleanup {
         if (ids.isEmpty()) return SaveCleanup.NOTHING
         return try {
+            if (!stillOn()) return SaveCleanup.LEFT
             val trashed = writer.trash(ids, workspaceId)
             notFound?.addAll(ids.filter { trashed[it] == SaveItemFate.GONE })
             val fates = ids.map { trashed[it] ?: SaveItemFate.REFUSED }
@@ -544,7 +576,9 @@ object SaveRuns {
             if (fates.any { it == SaveItemFate.REFUSED || it == SaveItemFate.DENIED }) return SaveCleanup.LEFT
             val inTrash = ids.filter { trashed[it] == SaveItemFate.DONE }
             if (inTrash.isEmpty()) return SaveCleanup.NOTHING
+            if (!stillOn()) return SaveCleanup.LEFT
             if (!writer.mayPurge(workspaceId)) return SaveCleanup.TRASHED
+            if (!stillOn()) return SaveCleanup.LEFT
             val purged = writer.purge(inTrash, workspaceId)
             if (inTrash.all { purged[it] == SaveItemFate.DONE || purged[it] == SaveItemFate.GONE }) SaveCleanup.DELETED else SaveCleanup.LEFT
         } catch (error: Exception) {

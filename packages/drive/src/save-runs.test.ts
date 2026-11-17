@@ -1682,6 +1682,38 @@ describe('a save run', () => {
         expect(w.server.live.has('node-a')).toBe(true);
     });
 
+    test('a sign-out while an interrupted clean-up trashes sends no delete forever, nor any other request', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'left',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-x'],
+            uploadIds: ['up-x'],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        w.server.open.add('up-x');
+        const sent: string[] = [];
+        const { trash, purge, mayPurge, abortUpload } = w.deps;
+        w.deps.abortUpload = (ws, id) => (sent.push('abort'), abortUpload(ws, id));
+        w.deps.trash = async (ws, ids) => {
+            sent.push('trash');
+            const fates = await trash(ws, ids);
+            // Signed out while the trash was on its way (another account may sign in next).
+            session = false;
+            return fates;
+        };
+        w.deps.mayPurge = (ws) => (sent.push('may-purge'), mayPurge(ws));
+        w.deps.purge = (ws, ids) => (sent.push('purge'), purge(ws, ids));
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        expect(sent).toEqual(['abort', 'trash']);
+        expect(w.server.purged.size).toBe(0);
+    });
+
     test('an interrupted clean-up that a sign-out overtakes writes nothing back for that account', async () => {
         const w = world();
         let session = true;

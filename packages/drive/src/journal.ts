@@ -175,6 +175,15 @@ export interface RunJournal {
     list(): Promise<RunRow[]>;
     put(row: RunRow): Promise<void>;
     remove(id: string): Promise<void>;
+    /*
+     * Reads the row and writes what `change` makes of it in one transaction, so no other tab's
+     * write lands between the two: a row to put, null to remove it, undefined to leave it.
+     * True when something was written.
+     */
+    update?(
+        id: string,
+        change: (current: RunRow | undefined) => RunRow | null | undefined,
+    ): Promise<boolean>;
 }
 
 interface Schema extends DBSchema {
@@ -235,6 +244,15 @@ export function createIndexedDbRunJournal(name = 'hushos-drive'): RunJournal {
             await tx.store.delete(id);
             await tx.done;
         },
+        async update(id, change) {
+            const db = await open();
+            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+            const next = change(await tx.store.get(id));
+            if (next === null) await tx.store.delete(id);
+            else if (next !== undefined) await tx.store.put(next);
+            await tx.done;
+            return next !== undefined;
+        },
     };
 }
 
@@ -250,6 +268,13 @@ export function createMemoryRunJournal(): RunJournal & { rows: Map<string, RunRo
         },
         async remove(id) {
             rows.delete(id);
+        },
+        async update(id, change) {
+            const held = rows.get(id);
+            const next = change(held && structuredClone(held));
+            if (next === null) rows.delete(id);
+            else if (next !== undefined) rows.set(id, structuredClone(next));
+            return next !== undefined;
         },
     };
 }

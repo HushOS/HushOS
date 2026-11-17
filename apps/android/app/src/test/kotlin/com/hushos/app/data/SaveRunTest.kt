@@ -185,9 +185,13 @@ class SaveRunTest {
             if (uploadId in finished) return SaveAbortFate.FINISHED
             return if (open.remove(uploadId)) SaveAbortFate.ABORTED else SaveAbortFate.GONE
         }
+        /* Every request a clean-up sends, in order; and a hook that runs once a trash has been answered. */
+        val sent = java.util.Collections.synchronizedList(ArrayList<String>())
+        var afterTrash: (() -> Unit)? = null
         override fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate> {
+            sent += "trash"
             if (offline) throw Unreachable()
-            return ids.associateWith { id ->
+            val fates = ids.associateWith { id ->
                 when {
                     denied -> SaveItemFate.DENIED
                     id in refuse -> SaveItemFate.REFUSED
@@ -196,15 +200,17 @@ class SaveRunTest {
                     else -> SaveItemFate.GONE
                 }
             }
+            afterTrash?.invoke()
+            return fates
         }
-        override fun purge(ids: List<String>, workspaceId: String) = ids.associateWith { id ->
+        override fun purge(ids: List<String>, workspaceId: String) = ids.also { sent += "purge" }.associateWith { id ->
             when {
                 id in busy -> SaveItemFate.REFUSED
                 trashed.remove(id) -> { purged += id; SaveItemFate.DONE }
                 else -> SaveItemFate.GONE
             }
         }
-        override fun mayPurge(workspaceId: String) = member
+        override fun mayPurge(workspaceId: String) = member.also { sent += "may-purge" }
     }
 
     @Test
@@ -951,6 +957,37 @@ class SaveRunTest {
         val row = rows.list().single()
         assertFalse(row.chosenDelete)
         assertEquals(0, row.holds)
+    }
+
+    /* A sign-out while an interrupted run's clean-up trashes: nothing more is sent, no delete forever. */
+    @Test
+    fun aSignOutDuringAnInterruptedCleanUpSendsNoDeleteForever() {
+        val session = SaveRunJournal.Epoch()
+        val rows = journal(session)
+        val writer = FakeWriter().apply { live += "node-x"; afterTrash = { session.end() } }
+        val row = SaveRunRow("left", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        rows.put(row)
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(row, writer, rows))
+        assertEquals(listOf("trash"), writer.sent.toList())
+        assertTrue(writer.purged.isEmpty())
+    }
+
+    /* A Keep that comes between a quiet look and its write is never undone: compared and written in one hold of the lock. */
+    @Test
+    fun aKeepBetweenAQuietLookAndItsWriteIsNeverUndone() {
+        val rows = journal()
+        val answered = SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true)
+        rows.put(answered)
+        // The look finds the folder (filled since); the person's Keep lands on the journal's next access after it, between any
+        // read and the write that would follow it.
+        val writer = FakeWriter().apply { live += "slow"; items["slow"] = 2 }
+        var armed = false
+        rows.between = { if (armed) { armed = false; SaveRuns.keep(answered, writer, rows) } }
+        writer.looking = { armed = true }
+        SaveRuns.interrupted(rows, writer, now = 2L)
+        SaveRuns.quietlySettled()
+        rows.between = null
+        assertTrue(rows.list().isEmpty())
     }
 
     /* finish waits for a folder still being made: the row stays until its creation settles. */

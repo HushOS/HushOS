@@ -1237,7 +1237,19 @@ async function cleanUp(
     let keptVersions = 0;
     let uncertainVersions = 0;
     let othersMayLand = false;
+    // An interrupted run's clean-up asks the server nothing once signed out: checked before every
+    // request (a live run's stop goes on, and says what may remain).
+    const stillOn = () => !options.quitOnSignOut || (options.current?.() ?? true);
+    const signedOutNow = () => ({
+        cleanup: 'left' as const,
+        keptVersions,
+        uncertainVersions,
+        remains: null,
+        waiting: false,
+        onlyWaitingOn: null,
+    });
     for (const uploadId of row.uploadIds) {
+        if (!stillOn()) return signedOutNow();
         const fate = await deps.abortUpload(row.workspaceId, uploadId);
         if (fate === 'unknown') {
             unsettled = true;
@@ -1263,22 +1275,13 @@ async function cleanUp(
             else othersMayLand = true;
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
-    // An interrupted run's clean-up signed out meanwhile: nothing more is asked of the server or
-    // written for that account (a live run's stop goes on, and says what may remain).
-    if (options.quitOnSignOut && !(options.current?.() ?? true))
-        return {
-            cleanup: 'left',
-            keptVersions,
-            uncertainVersions,
-            remains: null,
-            waiting: false,
-            onlyWaitingOn: null,
-        };
+    if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
-    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound).catch(
+    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound, stillOn).catch(
         (): Cleanup => 'left',
     );
     // A folder whose creation went unanswered, not found now: the server may still make it.
+    if (!stillOn()) return signedOutNow();
     const waitingOn = [...(options.mayExist ?? [])].filter((id) => notFound.has(id));
     const waiting = waitingOn.length > 0;
     const onlyWaitingOn =
@@ -1317,6 +1320,7 @@ async function cleanUp(
 async function retire(runs: RunJournal, row: RunRow) {
     for (let tries = 0; tries < 2; tries++)
         try {
+            // One delete: a transaction of its own.
             await runs.remove(row.id);
             return true;
         } catch {
@@ -1333,6 +1337,38 @@ async function retire(runs: RunJournal, row: RunRow) {
     return false;
 }
 
+/*
+ * One read and write of a row, in one journal transaction where the journal has them (the
+ * browser's: no other tab's write lands in between). Keep, Delete and the quiet settling all
+ * write a recovered row through here.
+ */
+async function changeRow(
+    runs: RunJournal,
+    id: string,
+    change: (current: RunRow | undefined) => RunRow | null | undefined,
+) {
+    if (runs.update) return runs.update(id, change);
+    const next = change((await runs.list()).find((row) => row.id === id));
+    if (next === null) await runs.remove(id);
+    else if (next !== undefined) await runs.put(next);
+    return next !== undefined;
+}
+
+/*
+ * A row read earlier written only if it is still the row read, compared and written in one
+ * transaction: another tab's Keep or settling in between leaves this write undone, never undone
+ * itself. Not after a sign-out.
+ */
+function swapRow(
+    deps: Pick<SaveRunDeps, 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    expected: RunRow,
+    next: RunRow | null,
+) {
+    return changeRow(deps.runs, expected.id, (current) =>
+        current && signedIn(deps) && stable(current) === stable(expected) ? next : undefined,
+    );
+}
+
 /* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
 async function discard(
     deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge'>,
@@ -1340,8 +1376,11 @@ async function discard(
     nodeIds: string[],
     /* Filled with the ids the server did not find. */
     notFound?: Set<string>,
+    /* Asked before every request: false (a sign-out) stops here, leaving the rest. */
+    stillOn: () => boolean = () => true,
 ): Promise<Cleanup> {
     if (!nodeIds.length) return 'nothing';
+    if (!stillOn()) return 'left';
     const trashed = await deps.trash(workspaceId, nodeIds);
     const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
     for (const id of nodeIds) if (trashed.get(id) === 'gone') notFound?.add(id);
@@ -1349,7 +1388,9 @@ async function discard(
     if (fates.some((fate) => fate === 'refused' || fate === 'denied')) return 'left';
     const inTrash = nodeIds.filter((id) => trashed.get(id) === 'done');
     if (!inTrash.length) return 'nothing';
+    if (!stillOn()) return 'left';
     if (!(await deps.mayPurge(workspaceId))) return 'trashed';
+    if (!stillOn()) return 'left';
     const purged = await deps.purge(workspaceId, inTrash);
     if (inTrash.some((id) => !['done', 'gone'].includes(purged.get(id) ?? 'refused')))
         return 'left';
@@ -1435,13 +1476,12 @@ async function lookAgain(
         if (items !== null) holds = (holds ?? 0) + items;
     }
     if (holds !== null) {
-        if (!(await stillSo(deps, row))) return;
         const { chosen: _answer, ...rest } = row;
-        await deps.runs.put({ ...rest, holds });
+        await swapRow(deps, row, { ...rest, holds });
         return;
     }
     const settled = (row.uncertain ?? []).every((held) => now - held.at >= CREATION_SETTLE_MS);
-    if (settled && (await stillSo(deps, row))) await retire(deps.runs, row);
+    if (settled) await swapRow(deps, row, null);
 }
 
 /* Still this session's (no sign-out since). */
@@ -1496,15 +1536,13 @@ export async function cleanUpInterrupted(deps: SaveRunDeps, row: RunRow) {
     const waitingOn = result.onlyWaitingOn;
     if (result.cleanup === 'left' && waitingOn && current()) {
         const { holds: _seen, ...rest } = row;
-        await deps.runs
-            .put({
-                ...rest,
-                nodeIds: waitingOn,
-                uploadIds: [],
-                uncertain: (row.uncertain ?? []).filter((held) => waitingOn.includes(held.id)),
-                chosen: 'delete',
-            })
-            .catch(() => {});
+        await swapRow(deps, row, {
+            ...rest,
+            nodeIds: waitingOn,
+            uploadIds: [],
+            uncertain: (row.uncertain ?? []).filter((held) => waitingOn.includes(held.id)),
+            chosen: 'delete',
+        }).catch(() => {});
     }
     return result.cleanup;
 }
@@ -1519,9 +1557,8 @@ async function settleUploads(
         if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') left.push(uploadId);
         if (!signedIn(deps)) return;
     }
-    if (left.length === row.uploadIds.length || !(await stillSo(deps, row))) return;
-    if (!left.length) await retire(deps.runs, row);
-    else await deps.runs.put({ ...row, uploadIds: left }).catch(() => {});
+    if (left.length === row.uploadIds.length) return;
+    await swapRow(deps, row, left.length ? { ...row, uploadIds: left } : null).catch(() => {});
 }
 
 /*

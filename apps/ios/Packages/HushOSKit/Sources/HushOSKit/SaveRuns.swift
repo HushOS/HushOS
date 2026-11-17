@@ -208,8 +208,33 @@ public final class SaveRunJournal: @unchecked Sendable {
 
     /* Every row, those of finished runs (`done`) included. */
     public func list() -> [SaveRunRow] {
-        lock.withLock { read() }
+        let rows = lock.withLock { read() }
+        between?()
+        return rows
     }
+
+    /* Tests only: runs (outside the lock) after each list's read, and before each swap takes the lock. */
+    var between: (@Sendable () -> Void)?
+
+    /*
+     * The row as `expected` replaced by `next` (nil removes it), only if it is still exactly that row: the compare and the
+     * write under one hold of the file's lock, so no other write of this process lands in between (a Keep, another look).
+     * False when it had changed, or the session ended.
+     */
+    @discardableResult
+    func swap(_ expected: SaveRunRow, _ next: SaveRunRow?) -> Bool {
+        between?()
+        return lock.withLock {
+            guard live, signedInHere else { return false }
+            let rows = read()
+            guard rows.first(where: { $0.id == expected.id }) == expected else { return false }
+            let others = rows.filter { $0.id != expected.id }
+            return (try? write(next.map { others + [$0] } ?? others)) != nil
+        }
+    }
+
+    /* Still this journal's session and account: an interrupted clean-up asks the server nothing once it isn't. */
+    var stillOn: Bool { live && lock.withLock { signedInHere } }
 
     /*
      * Writes the row, once more if the first write is refused (rows are whole), and throws
@@ -610,12 +635,10 @@ public enum SaveRuns {
                 if await writer.abortUpload(uploadId, in: row.workspaceId) == .unknown { left.append(uploadId) }
                 guard journal.live else { return }
             }
-            guard left.count < row.uploadIds.count, stillSo() else { return }
-            if left.isEmpty { journal.retire(row) } else {
-                var next = row
-                next.uploadIds = left
-                try? journal.put(next)
-            }
+            guard left.count < row.uploadIds.count else { return }
+            var next = row
+            next.uploadIds = left
+            journal.swap(row, left.isEmpty ? nil : next)
             return
         }
         var holds: Int?
@@ -625,15 +648,15 @@ public enum SaveRuns {
             guard journal.live else { return }
             if let items { holds = (holds ?? 0) + items }
         }
+        // Compared and written in one hold of the journal's lock (swap): a Keep in between is never undone.
         if let holds {
-            guard stillSo() else { return }
             var again = row
             again.chosen = nil
             again.holds = holds
-            try? journal.put(again)
+            journal.swap(row, again)
             return
         }
-        if (row.uncertain ?? [:]).values.allSatisfy({ now.timeIntervalSince($0) >= creationSettle }), stillSo() { journal.retire(row) }
+        if (row.uncertain ?? [:]).values.allSatisfy({ now.timeIntervalSince($0) >= creationSettle }) { journal.swap(row, nil) }
     }
 
     /*
@@ -650,8 +673,12 @@ public enum SaveRuns {
      */
     public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal(),
                                now: Date = Date()) async -> SaveCleanup {
+        // Nothing asked of the server once the session or account changed (a sign-out), checked before every request.
+        guard journal.stillOn else { return .left }
         let mayExist = Set((row.uncertain ?? [:]).filter { now.timeIntervalSince($0.value) < creationSettle }.keys)
-        let cleaned = await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist)
+        let cleaned = await clean(row, writer: writer, journal: journal, versions: [], completing: nil, published: nil, mayExist: mayExist,
+                                  stillOn: { journal.stillOn })
+        guard journal.stillOn else { return .left }
         // Kept only to wait for folders that may still land, all else done: the row names just those, with the person's
         // answer, and later opens only look for them (interrupted).
         if cleaned.cleanup == .left, let waitingOn = cleaned.onlyWaitingOn {
@@ -661,7 +688,7 @@ public enum SaveRuns {
             answered.uncertain = (row.uncertain ?? [:]).filter { waitingOn.contains($0.key) }
             answered.chosen = "delete"
             answered.holds = nil
-            try? journal.put(answered)
+            journal.swap(row, answered)
         }
         return cleaned.cleanup
     }
@@ -684,7 +711,7 @@ public enum SaveRuns {
      */
     static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
                       completing: Set<String>?, published: Set<String>?, asked: [String: DriveAPI.AbortFate] = [:],
-                      mayExist: Set<String> = []) async
+                      mayExist: Set<String> = [], stillOn: @Sendable () -> Bool = { true }) async
         -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?, waiting: Bool, onlyWaitingOn: [String]?) {
         var unsettled = false
         var denied = false
@@ -692,6 +719,8 @@ public enum SaveRuns {
         var uncertain = 0
         var othersMayLand = false
         for uploadId in row.uploadIds {
+            // Signed out meanwhile (an interrupted run's clean-up): nothing more asked of the server, nothing written.
+            guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
             let answered = asked[uploadId].flatMap { $0 == .unknown || $0 == .finishing ? nil : $0 }
             let fate: DriveAPI.AbortFate
             if let answered { fate = answered } else { fate = await writer.abortUpload(uploadId, in: row.workspaceId) }
@@ -716,7 +745,9 @@ public enum SaveRuns {
             }
         }
         let notFound = SentIds()
-        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound)
+        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
+        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound, stillOn: stillOn)
+        guard stillOn() else { return (.left, kept, uncertain, nil, false, nil) }
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
         let waitingOn = mayExist.intersection(notFound.ids).sorted()
         let waiting = !waitingOn.isEmpty
@@ -736,9 +767,11 @@ public enum SaveRuns {
         return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting, onlyWaitingOn)
     }
 
-    static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil) async -> SaveCleanup {
+    static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil,
+                        stillOn: @Sendable () -> Bool = { true }) async -> SaveCleanup {
         guard !ids.isEmpty else { return .nothing }
         do {
+            guard stillOn() else { return .left }
             let trashed = try await writer.trash(ids, in: workspaceId)
             notFound?.add(ids.filter { trashed[$0] == .gone })
             let fates = ids.map { trashed[$0] ?? .refused }
@@ -746,7 +779,9 @@ public enum SaveRuns {
             if fates.contains(where: { $0 == .refused || $0 == .denied }) { return .left }
             let inTrash = ids.filter { trashed[$0] == .done }
             if inTrash.isEmpty { return .nothing }
+            guard stillOn() else { return .left }
             guard await writer.mayPurge(workspaceId) else { return .trashed }
+            guard stillOn() else { return .left }
             let purged = try await writer.purge(inTrash, in: workspaceId)
             return inTrash.allSatisfy { purged[$0] == .done || purged[$0] == .gone } ? .deleted : .left
         } catch {

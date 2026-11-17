@@ -838,6 +838,21 @@ const SCENARIOS: Record<string, Scenario> = {
         },
         run: async (run, srv) => ({ files: [], versions: [await version(run, srv)] }),
     },
+    // The same as the server answers it (the completion names the version, still current), with
+    // another upload having listed the folder moments before: the attach must look again, fresh,
+    // or it seals under the old key the cached listing still holds.
+    'another device re-keys the file mid-upload, the listing warm': {
+        finishes: true,
+        before: (srv, app) => {
+            let once = true;
+            srv.onPart(() => {
+                if (!once) return;
+                once = false;
+                void app.warm(F).then(() => srv.bumpKey('doc'));
+            });
+        },
+        run: async (run, srv) => ({ files: [], versions: [await version(run, srv)] }),
+    },
     'another device re-keys the folder mid-upload': {
         finishes: true,
         before: (srv) => {

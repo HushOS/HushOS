@@ -189,7 +189,12 @@ actor FakeWriter: SaveRunWriter {
         if finished.contains(uploadId) { return .finished }
         return open.remove(uploadId) != nil ? .aborted : .gone
     }
+    /* Every request a clean-up sends, in order; and a hook that runs once a trash has been answered. */
+    var sent: [String] = []
+    var afterTrash: (@Sendable () -> Void)?
+    func set(afterTrash: @escaping @Sendable () -> Void) { self.afterTrash = afterTrash }
     func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        sent.append("trash")
         if offline { throw DriveAPIError.transport("offline") }
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
@@ -198,9 +203,11 @@ actor FakeWriter: SaveRunWriter {
                 fates[id] = .done
             } else { fates[id] = trashed.contains(id) ? .done : .gone }
         }
+        afterTrash?()
         return fates
     }
     func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+        sent.append("purge")
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
             if busy.contains(id) { fates[id] = .refused } else if trashed.remove(id) != nil {
@@ -210,7 +217,10 @@ actor FakeWriter: SaveRunWriter {
         }
         return fates
     }
-    func mayPurge(_ workspaceId: String) async -> Bool { member }
+    func mayPurge(_ workspaceId: String) async -> Bool {
+        sent.append("may-purge")
+        return member
+    }
 }
 
 func opened(_ id: String, parent: String? = "root", version: String? = nil, keyEpoch: UInt64 = 1, name: String? = nil) -> Opened {
@@ -1040,6 +1050,44 @@ let own = SaveSources.ownWriting
         await SaveRuns.quietlySettled()
         #expect(looks.value == 1)
         #expect(rows.list().first?.chosen == nil && rows.list().first?.holds == 0)
+    }
+
+    /* A sign-out while an interrupted run's clean-up trashes: nothing more is sent, no delete forever. */
+    @Test func aSignOutDuringAnInterruptedCleanUpSendsNoDeleteForever() async throws {
+        let session = SaveRunJournal.Epoch()
+        let rows = journal(session)
+        let writer = FakeWriter()
+        await writer.makeLive("node-x")
+        await writer.set(afterTrash: { session.end() })
+        let row = SaveRunRow(id: "left", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try rows.put(row)
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: rows) == .left)
+        #expect(await writer.sent == ["trash"])
+        #expect(await writer.purged.isEmpty)
+    }
+
+    /* A Keep that comes between a quiet look and its write is never undone: compared and written in one hold of the lock. */
+    @Test func aKeepBetweenAQuietLookAndItsWriteIsNeverUndone() async throws {
+        let rows = journal()
+        let answered = SaveRunRow(id: "answered", workspaceId: "ws", nodeIds: ["slow"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                                  uncertain: ["slow": Date()], chosen: "delete")
+        try rows.put(answered)
+        let writer = FakeWriter()
+        await writer.makeLive("slow")
+        await writer.set(items: 2, in: "slow")
+        // The person's Keep lands on the journal's next access after the look, between any read and the write after it.
+        let armed = Locked(false)
+        rows.between = {
+            guard armed.value else { return }
+            armed.value = false
+            // Keep: its row goes (its uploads, none here, asked to abort first).
+            rows.retire(answered)
+        }
+        await writer.set(looking: { armed.value = true })
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        await SaveRuns.quietlySettled()
+        rows.between = nil
+        #expect(rows.list().isEmpty)
     }
 
     /* finish waits for a folder still being made: the row stays until its creation settles. */

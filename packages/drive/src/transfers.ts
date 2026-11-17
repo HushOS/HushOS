@@ -1631,11 +1631,15 @@ export function createTransferManager(options: TransferManagerOptions) {
             throw new Error('This file changed while it was uploading. Upload it again.');
         const workspaceId = workspaceOf(u);
         const lookup = options.openNodes;
-        const looked = await lookup(entry);
+        // Always from the server: the completion was refused because a key or a version moved, so a
+        // listing shared from moments ago (lookUp's two seconds) may hold the keys it refused.
+        const looked = await lookup(entry, { fresh: true });
         if (u.generation !== generation) throw new Error('Cancelled.');
         // Attaching writes under the folder (a sibling) or the file's own key (the same node):
         // either may be waiting for a family folder's key change, exactly as a new upload does.
-        const ready = await untilWritable(u, generation, looked, () => lookup(entry));
+        const ready = await untilWritable(u, generation, looked, () =>
+            lookup(entry, { fresh: true }),
+        );
         if (!ready) throw new Error('Cancelled.');
         const { parent, replaces } = ready;
         // A produced version whose file is no longer in its folder (moved, trashed, deleted) is
