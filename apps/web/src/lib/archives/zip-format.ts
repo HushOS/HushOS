@@ -169,8 +169,21 @@ export async function findDirectory(size: number, read: Read): Promise<Directory
         count === MAX16 ||
         directorySize === MAX32 ||
         directoryOffset === MAX32;
-    if (sentinel && !locator) throw new ZipError('damaged');
-    if (!sentinel && (disk !== 0 || directoryDisk !== 0)) throw new ZipError('split');
+    /*
+     * Without a ZIP64 locator, 0xffff entries is a count like any other: Python's zipfile writes
+     * an archive of exactly 65,535 entries so. Only the counts may say it; any other field at its
+     * sentinel without a locator is damage.
+     */
+    const classic =
+        !locator &&
+        onDisk === MAX16 &&
+        count === MAX16 &&
+        disk !== MAX16 &&
+        directoryDisk !== MAX16 &&
+        directorySize !== MAX32 &&
+        directoryOffset !== MAX32;
+    if (sentinel && !locator && !classic) throw new ZipError('damaged');
+    if ((!sentinel || classic) && (disk !== 0 || directoryDisk !== 0)) throw new ZipError('split');
     if (locator) {
         zip64 = true;
         if (locator.getUint32(4, true) !== 0 || locator.getUint32(16, true) > 1)
@@ -201,10 +214,12 @@ export async function findDirectory(size: number, read: Read): Promise<Directory
         end = recordOffset;
     }
     if (onDisk !== count) throw new ZipError('split');
-    if (count > ZIP_LIMITS.entries) throw new ZipError('too-many-entries');
-    if (directorySize > ZIP_LIMITS.directoryBytes) throw new ZipError('directory-too-large');
+    // What the end records say must hold together before any cap is weighed, as in the core: the
+    // caps differ (the phones list 50,000 entries), and a damaged archive is damaged on both.
     if (directoryOffset + directorySize !== end) throw new ZipError('damaged');
     if (count * CENTRAL_LENGTH > directorySize) throw new ZipError('damaged');
+    if (count > ZIP_LIMITS.entries) throw new ZipError('too-many-entries');
+    if (directorySize > ZIP_LIMITS.directoryBytes) throw new ZipError('directory-too-large');
     return { offset: directoryOffset, size: directorySize, count, zip64 };
 }
 

@@ -209,6 +209,10 @@ fn large(name: &str) -> Vec<u8> {
         "entries-100001.zip" => {
             write_zip(&(0..100_001).map(|i| stored(&format!("e/{i:06}"))).collect::<Vec<_>>(), true)
         }
+        // As Python's zipfile writes it: the end record's counts 0xffff, no ZIP64 records.
+        "entries-65535.zip" => {
+            write_zip(&(0..65_535).map(|i| stored(&i.to_string())).collect::<Vec<_>>(), false)
+        }
         "directory-65m.zip" => write_zip(
             &(0..1_100)
                 .map(|i| Spec { comment: vec![b' '; 62_000], ..stored(&format!("c/{i:04}")) })
@@ -333,7 +337,9 @@ fn every_fixture_as_expected_json_says() {
         let source = bytes_of(name, generated);
         let source = source.as_ref();
         let listing = Zip::open(source).map(|_| ());
-        assert_eq!(outcome(listing.clone()), expected["listing"].as_str().unwrap(), "{name}: listing");
+        // The phones list at most 50,000 entries (the web 100,000): `listingCore` says where that differs.
+        let wanted = expected["listingCore"].as_str().or(expected["listing"].as_str()).unwrap();
+        assert_eq!(outcome(listing.clone()), wanted, "{name}: listing");
         if listing.is_err() {
             continue;
         }
@@ -348,6 +354,10 @@ fn every_fixture_as_expected_json_says() {
                 list.listed.iter().all(|item| parts_of(&folders, item).len() == LIST_DEPTH_MAX),
                 "{name}: none flat"
             );
+            continue;
+        }
+        if let Some(count) = expected["entryCount"].as_u64() {
+            assert_eq!(list.listed.len() as u64, count, "{name}: how many entries");
             continue;
         }
         let wanted = expected["entries"].as_array().unwrap();

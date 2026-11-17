@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import table from '../../../../../e2e/fixtures/archives/expected.json';
@@ -31,6 +33,7 @@ type Expected = {
     unlockSkips?: string;
     unproven?: { password: string; entry: string };
     damagedTwice?: string;
+    entryCount?: number;
     parts?: Record<string, string[]>;
     partsLength?: Record<string, number>;
     count?: number;
@@ -204,6 +207,10 @@ describe('every fixture, as expected.json says', () => {
                     ).not.toBeNull();
                     return;
                 }
+                if (expected.entryCount !== undefined) {
+                    expect(archive.listed).toHaveLength(expected.entryCount);
+                    return;
+                }
                 const wanted = expected.entries!;
                 expect(archive.entries.map((entry) => entry.path)).toEqual(
                     wanted.map((entry) => entry.path),
@@ -341,6 +348,32 @@ describe('reading', () => {
         // A preview is held to its limit before anything is inflated.
         expect(await outcome(() => archive.preview(readme, 10))).toBe('too-large');
     });
+
+    it('lists a classic zip of exactly 65,535 entries, as Python’s zipfile writes it', async () => {
+        // No ZIP64 records: the end record's counts are 0xffff, a count like any other.
+        const dir = mkdtempSync(join(tmpdir(), 'hushos-65535-'));
+        try {
+            const path = join(dir, 'python.zip');
+            const made = spawnSync('python3', [
+                '-I',
+                '-c',
+                'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "w") as z:\n    for i in range(65535): z.writestr(str(i), b"")',
+                path,
+            ]);
+            expect(made.status).toBe(0);
+            const bytes = new Uint8Array(readFileSync(path));
+            const end = bytes.length - 22;
+            expect(new DataView(bytes.buffer).getUint16(end + 10, true)).toBe(0xffff);
+            const archive = await ZipArchive.open({
+                size: bytes.length,
+                read: async (offset, length) => bytes.slice(offset, offset + length),
+            });
+            expect(archive.listed).toHaveLength(65_535);
+            expect(archive.listed.at(-1)?.path).toBe('65534');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    }, 60_000);
 
     it('keeps a password only once it opens something, and drops it on close', async () => {
         const archive = await open('aes.zip');

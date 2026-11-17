@@ -61,10 +61,13 @@ const whole = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =
  * The folders, checked: each after its parent, each name a part a path could hold (never empty,
  * `.` or holding a separator), no more than the directory could hold; or null.
  */
-function readFolders(parents: unknown, names: unknown): FolderList | null {
-    if (!(parents instanceof Uint32Array) || typeof names !== 'string') return null;
-    const count = parents.length;
+function readFolders(sent: unknown, names: unknown): FolderList | null {
+    if (!(sent instanceof Uint32Array) || typeof names !== 'string') return null;
+    const count = sent.length;
     if (count < 1 || count > MAX_FOLDERS || names.length > ZIP_LIMITS.directoryBytes) return null;
+    // Copied before it is checked, into an array of its own: the worker's could be a view onto a
+    // far larger buffer (kept for the archive's life), or one it shares and changes meanwhile.
+    const parents = sent.slice();
     if (parents[0] !== 0 || names.includes('\\')) return null;
     const starts = new Uint32Array(count + 1);
     let at = 0;
@@ -176,11 +179,21 @@ function spanReader(archive: RangeReader, offset: number, size: number, owned = 
     };
 }
 
+/*
+ * Bytes the worker sent, as a plain ArrayBuffer: not shared (the worker could change them after
+ * they are checked) and not resizable (one could grow past what was checked).
+ */
+function plainBuffer(bytes: unknown): bytes is ArrayBuffer {
+    return bytes instanceof ArrayBuffer && !(bytes as { resizable?: boolean }).resizable;
+}
+
 type Pending = {
     resolve: (value: FromArchive) => void;
     reject: (error: Error) => void;
     /* For a download: where each chunk goes. */
     chunk?: (bytes: ArrayBuffer) => void;
+    /* For a download: whether the page is still writing a chunk (the worker must wait for `more`). */
+    writing?: () => boolean;
 };
 
 export type ArchiveSession = ReturnType<typeof openArchive>;
@@ -294,7 +307,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
 
     function settle(id: unknown, message: FromArchive) {
         const waiter = typeof id === 'number' ? pending.get(id) : undefined;
-        if (!waiter) return broken();
+        // A download's end before the page took its last chunk: a worker off its script.
+        if (!waiter || waiter.writing?.()) return broken();
         pending.delete(id as number);
         idle();
         waiter.resolve(message);
@@ -331,7 +345,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 });
             case 'bytes': {
                 const bytes = msg.bytes;
-                if (!(bytes instanceof ArrayBuffer)) return broken();
+                if (!plainBuffer(bytes)) return broken();
                 return settle(msg.id, { type: 'bytes', id: msg.id as number, bytes });
             }
             case 'span': {
@@ -342,11 +356,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             case 'chunk': {
                 const waiter = typeof msg.id === 'number' ? pending.get(msg.id) : undefined;
                 const bytes = msg.bytes;
-                if (
-                    !waiter?.chunk ||
-                    !(bytes instanceof ArrayBuffer) ||
-                    bytes.byteLength > 2 * CHUNK_BYTES
-                )
+                if (!waiter?.chunk || !plainBuffer(bytes) || bytes.byteLength > 2 * CHUNK_BYTES)
                     return broken();
                 watchdog?.progress();
                 waiter.chunk(bytes);
@@ -389,12 +399,13 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         message: (id: number) => ToArchive,
         chunk?: (bytes: ArrayBuffer) => void,
         transfer: Transferable[] = [],
+        writing?: () => boolean,
     ) {
         if (ended) throw ended;
         const id = nextId++;
         begin();
         const answer = new Promise<FromArchive>((resolve, reject) =>
-            pending.set(id, { resolve, reject, chunk }),
+            pending.set(id, { resolve, reject, chunk, writing }),
         );
         post(message(id), transfer);
         return { id, answer };
@@ -517,6 +528,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             let written = 0;
             let id = 0;
             let writing = Promise.resolve();
+            // A chunk is being written: until it is, the worker may send nothing more for this download.
+            let busy = false;
             let failure: Error | null = null;
             /* Tells the worker to stop, lets go of what it still sends, and fails the download. */
             function halt() {
@@ -543,23 +556,30 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                         ...(port ? { port } : {}),
                     }),
                     (bytes) => {
+                        // One chunk at a time: the next waits for `more`, sent once this one is
+                        // written. A worker that sends on while the sink is busy would have the
+                        // page queue whatever it sends: it is stopped instead.
+                        if (busy) return broken();
                         written += bytes.byteLength;
                         if (written > entry.size) {
                             failure = new ArchiveRefusal('size');
                             halt();
                             return;
                         }
+                        busy = true;
                         // Writing the chunk is a wait on the page (or the browser's download), not the worker's time.
                         const release = watchdog?.hold();
                         writing = writing
                             .then(() => sink.write(new Uint8Array(bytes)))
                             .then(
                                 () => {
+                                    busy = false;
                                     release?.();
                                     onProgress(written);
                                     post({ type: 'more', id });
                                 },
                                 (error: unknown) => {
+                                    busy = false;
                                     release?.();
                                     failure ??=
                                         error instanceof Error ? error : new Error(TOOL_FAILED);
@@ -568,6 +588,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                             );
                     },
                     port ? [port] : [],
+                    () => busy,
                 );
                 id = asked.id;
                 await asked.answer;

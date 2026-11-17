@@ -760,6 +760,17 @@ function entries100001() {
     return writeZip(specs, { zip64Directory: true });
 }
 
+/*
+ * Exactly 65,535 empty stored entries named "0" to "65534", with no ZIP64 records: the end record's
+ * counts are 0xffff, a count like any other, as Python's zipfile writes such an archive (5.6 MB, so
+ * written when the tests run).
+ */
+function entries65535() {
+    const specs: Spec[] = [];
+    for (let i = 0; i < 65_535; i++) specs.push({ name: String(i), method: 0 });
+    return writeZip(specs);
+}
+
 function directory65MiB() {
     // 1,100 records, each with a comment of 62,000 bytes: a real central directory of 65.1 MiB.
     const comment = new Uint8Array(62_000).fill(0x20);
@@ -1619,6 +1630,7 @@ export const FIXTURES: Fixture[] = [
     { name: 'zeros-1g.zip', large: true, build: zeros1GiB },
     { name: 'zip64-5g.zip', large: true, build: zip64FiveGiB },
     { name: 'entries-100001.zip', large: true, build: entries100001 },
+    { name: 'entries-65535.zip', large: true, build: entries65535 },
     { name: 'directory-65m.zip', large: true, build: directory65MiB },
 ];
 

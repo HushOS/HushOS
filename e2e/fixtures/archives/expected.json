@@ -1,5 +1,5 @@
 {
-    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (its refusal of a declared ratio past 200:1 included); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as. `check` holds an entry to its declared ratio (at most 200:1 once it declares over 1 MiB), not a running one. `unlockWith` tries another `password`: aimed at each entry `at` (its index given, as the clients do once that entry's password is asked for), and aimed at none (`anywhere`). `unlockSkips` names an entry an unlock with `password` reads less of than its packed bytes: it is never inflated to probe. `unproven` names a wrong `password` an unlock holds (only its check byte passed) and the `entry` whose download then reads damage: that download lets the password go (`password-unproven`), and the next is refused for want of one (`password`). `damagedTwice` names an entry the right password can't prove (only its check byte is read) and that reads as damaged: its first download lets the password go (`password-unproven`); unlocked again with the same password, it is kept, and the next download says the damage. `count` says, for a listing too large to spell out, how many entries it has (none of them listed flat).",
+    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (its refusal of a declared ratio past 200:1 included); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as. `check` holds an entry to its declared ratio (at most 200:1 once it declares over 1 MiB), not a running one. `unlockWith` tries another `password`: aimed at each entry `at` (its index given, as the clients do once that entry's password is asked for), and aimed at none (`anywhere`). `unlockSkips` names an entry an unlock with `password` reads less of than its packed bytes: it is never inflated to probe. `unproven` names a wrong `password` an unlock holds (only its check byte passed) and the `entry` whose download then reads damage: that download lets the password go (`password-unproven`), and the next is refused for want of one (`password`). `damagedTwice` names an entry the right password can't prove (only its check byte is read) and that reads as damaged: its first download lets the password go (`password-unproven`); unlocked again with the same password, it is kept, and the next download says the damage. `count` says, for a listing too large to spell out, how many entries it has (none of them listed flat). `entryCount` says how many entries a listing too large to spell out has, wherever they sit. `listingCore` is the core's listing where it differs from the web's: the phones list at most 50,000 entries (refused `too-many-entries`, not `damaged`, for a classic archive of 65,535).",
     "password": "correct horse battery",
     "fixtures": {
         "basic.zip": {
@@ -937,6 +937,13 @@
         "entries-100001.zip": {
             "generated": true,
             "listing": "too-many-entries"
+        },
+        "entries-65535.zip": {
+            "generated": true,
+            "listing": "ok",
+            "listingCore": "too-many-entries",
+            "hidden": 0,
+            "entryCount": 65535
         },
         "directory-65m.zip": {
             "generated": true,

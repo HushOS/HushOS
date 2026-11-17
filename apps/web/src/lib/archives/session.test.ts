@@ -341,13 +341,15 @@ describe('downloads side by side', () => {
                 const at = message.index! * CHUNK + 4096;
                 for (let done = 0; done < CHUNK; done += 65_536)
                     expect(await read(at + done, 65_536)).toBe(true);
-                // Handed over a MiB at a time, as the worker's chunks are.
-                for (let sent = 0; sent < CHUNK; sent += 1024 * 1024)
+                // Handed over a MiB at a time, as the worker's chunks are, each once the last was written.
+                for (let sent = 0; sent < CHUNK; sent += 1024 * 1024) {
                     worker.send({
                         type: 'chunk',
                         id: message.id,
                         bytes: new ArrayBuffer(1024 * 1024),
                     });
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
                 worker.send({ type: 'end', id: message.id });
             }),
         );
@@ -404,5 +406,90 @@ describe('a large stored entry played by range', () => {
         const hostile = reading(worker.main());
         for (let n = 0; n < 200 && !worker.terminated(); n++) await hostile((n % 5) * CHUNK, 1);
         expect(worker.terminated()).toBe(true);
+    });
+});
+
+describe('what the worker hands the page', () => {
+    it('keeps the folders in an array of their own, never the worker’s larger buffer', () => {
+        const parents = new Uint32Array(new ArrayBuffer(32 * 1024 * 1024), 0, 1);
+        const listing = readListing(message([], { parents, names: '' }), 1000)!;
+        expect(listing).not.toBeNull();
+        expect(listing.folders.parents.buffer.byteLength).toBe(4);
+        expect([...listing.folders.parents]).toEqual([0]);
+    });
+
+    async function downloading() {
+        const { openArchive } = await import('./session');
+        const { memoryReader } = await import('@/lib/tools/ranges');
+        const worker = driven();
+        const session = openArchive(
+            memoryReader(new Uint8Array(4 << 20)),
+            () => worker.fake as unknown as Worker,
+        );
+        const item = big(0, 2 << 20);
+        worker.send({ type: 'listing', ...message([item]) });
+        await session.listing;
+        const writes: number[] = [];
+        let release = () => {};
+        const download = session.download(item as ArchiveEntry, {
+            // The sink is busy (a slow disk, a save dialog's stream): its write waits.
+            write: (chunk) => {
+                writes.push(chunk.byteLength);
+                return new Promise<void>((resolve) => (release = resolve));
+            },
+            close: async () => {},
+            abort: async () => {},
+        });
+        download.done.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const asked = worker.asked.find((message) => message.type === 'download')!;
+        return { worker, writes, asked, release: () => release() };
+    }
+
+    it('takes one download chunk at a time: one more before `more` stops the worker', async () => {
+        const { worker, writes, asked } = await downloading();
+        worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+        await Promise.resolve();
+        expect(worker.terminated()).toBe(false);
+        // Sent on without waiting for `more`, while the sink still writes the first.
+        worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+        expect(worker.terminated()).toBe(true);
+        expect(writes).toEqual([1 << 20]);
+    });
+
+    it('takes a download’s end only once its last chunk is written', async () => {
+        const { worker, asked, release } = await downloading();
+        worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+        worker.send({ type: 'end', id: asked.id });
+        expect(worker.terminated()).toBe(true);
+        release();
+    });
+
+    it('waits for `more`, then takes the next chunk and the end', async () => {
+        const { worker, writes, asked, release } = await downloading();
+        const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+        worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+        await tick();
+        release();
+        await tick();
+        expect(worker.asked.filter((message) => message.type === 'more')).toHaveLength(1);
+        worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+        await tick();
+        release();
+        await tick();
+        worker.send({ type: 'end', id: asked.id });
+        expect(worker.terminated()).toBe(false);
+        expect(writes).toEqual([1 << 20, 1 << 20]);
+    });
+
+    it('refuses a chunk in a resizable buffer, which could grow past what was checked', async () => {
+        const { worker, writes, asked } = await downloading();
+        const resizable = new (ArrayBuffer as unknown as new (
+            length: number,
+            options: { maxByteLength: number },
+        ) => ArrayBuffer)(1024, { maxByteLength: 1 << 30 });
+        worker.send({ type: 'chunk', id: asked.id, bytes: resizable });
+        expect(worker.terminated()).toBe(true);
+        expect(writes).toEqual([]);
     });
 });

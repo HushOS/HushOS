@@ -279,10 +279,20 @@ pub(crate) fn find_directory(source: &dyn RangeRead) -> Result<Directory> {
         || count == MAX16
         || directory_size == MAX32
         || directory_offset == MAX32;
-    if sentinel && locator.is_none() {
+    // Without a ZIP64 locator, 0xffff entries is a count like any other: Python's zipfile writes an
+    // archive of exactly 65,535 entries so. Only the counts may say it; any other field at its
+    // sentinel without a locator is damage.
+    let classic = locator.is_none()
+        && on_disk == MAX16
+        && count == MAX16
+        && disk != MAX16
+        && directory_disk != MAX16
+        && directory_size != MAX32
+        && directory_offset != MAX32;
+    if sentinel && locator.is_none() && !classic {
         return refused(Refusal::Damaged);
     }
-    if !sentinel && (disk != 0 || directory_disk != 0) {
+    if (!sentinel || classic) && (disk != 0 || directory_disk != 0) {
         return refused(Refusal::Split);
     }
     if let Some(locator) = locator {
@@ -326,17 +336,20 @@ pub(crate) fn find_directory(source: &dyn RangeRead) -> Result<Directory> {
     if on_disk != count {
         return refused(Refusal::Split);
     }
-    if count > ZIP_ENTRIES_MAX {
-        return refused(Refusal::TooManyEntries);
-    }
-    if directory_size > ZIP_DIRECTORY_MAX_BYTES {
-        return refused(Refusal::DirectoryTooLarge);
-    }
+    // What the end records say must hold together before any cap is weighed, as on the web: the
+    // caps differ (the phones list 50,000 entries, the web 100,000), and a damaged archive is
+    // then damaged on both, whatever count it claims.
     if directory_offset + directory_size != end {
         return refused(Refusal::Damaged);
     }
     if count * CENTRAL_LENGTH as u64 > directory_size {
         return refused(Refusal::Damaged);
+    }
+    if count > ZIP_ENTRIES_MAX {
+        return refused(Refusal::TooManyEntries);
+    }
+    if directory_size > ZIP_DIRECTORY_MAX_BYTES {
+        return refused(Refusal::DirectoryTooLarge);
     }
     Ok(Directory { offset: directory_offset, size: directory_size, count })
 }
