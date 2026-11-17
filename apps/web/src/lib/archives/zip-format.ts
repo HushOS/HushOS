@@ -53,6 +53,7 @@ export type ZipRefusal =
     | 'encryption'
     | 'password'
     | 'wrong-password'
+    | 'password-unproven'
     | 'crc'
     | 'auth'
     | 'size'

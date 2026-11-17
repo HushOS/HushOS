@@ -62,12 +62,6 @@ public enum ArchiveSessions {
         close(familiesWhere: { forgotten.contains($0) })
     }
 
-    /* The allowlist sweep (`TemporaryCopies.sweepFamily`): every family archive whose workspace isn't kept closes. */
-    static func closeFamilies(keeping: Set<String>) {
-        let kept = Set(keeping.map { $0.lowercased() })
-        close(familiesWhere: { !kept.contains($0) })
-    }
-
     private static func close(familiesWhere goes: (String) -> Bool) {
         let closes = live.lock.withLock {
             let ids = live.families.filter { goes($0.value) }.map(\.key)
@@ -785,7 +779,18 @@ public enum ArchiveText {
                     used += rest[take].utf8.count
                     take = rest.index(after: take)
                 }
-                if take == rest.startIndex, take < rest.endIndex { take = rest.index(after: take) }
+                if take == rest.startIndex, take < rest.endIndex {
+                    // One character larger than a piece (a letter under half a million accents): cut
+                    // between its Unicode scalars, so no piece, and no Text, is ever larger than the cap.
+                    let scalars = rest.unicodeScalars
+                    var scalar = scalars.startIndex
+                    var used = 0
+                    while scalar < scalars.endIndex, used + UTF8.width(scalars[scalar]) <= bytes {
+                        used += UTF8.width(scalars[scalar])
+                        scalar = scalars.index(after: scalar)
+                    }
+                    take = scalar
+                }
                 let part = rest[..<take]
                 rest = rest[take...]
                 if count == lines || size + part.utf8.count > bytes, !current.isEmpty {

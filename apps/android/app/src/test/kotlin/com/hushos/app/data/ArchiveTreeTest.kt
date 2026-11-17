@@ -107,7 +107,7 @@ class ArchiveTreeTest {
     @Test fun everyRefusalTheCoreSendsHasItsOwnWords() {
         val codes = listOf(
             "damaged", "directory-too-large", "too-many-entries", "encrypted-directory", "split", "overlap", "local", "method",
-            "encryption", "password", "wrong-password", "crc", "auth", "size", "short", "ratio", "nested", "link", "directory", "too-large",
+            "encryption", "password", "wrong-password", "password-unproven", "crc", "auth", "size", "short", "ratio", "nested", "link", "directory", "too-large",
         )
         val fallback = ArchiveWords.refusal("something new")
         for (code in codes) assertNotEquals(code, fallback, ArchiveWords.refusal(code))

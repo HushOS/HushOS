@@ -231,6 +231,18 @@ import Testing
         await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) { try await archive.preview(zeros, limit: 1024) }
     }
 
+    @Test func aPasswordOnlyItsCheckBytePassedIsLetGoOfWhenItsItemReadsAsDamaged() async throws {
+        // unproven.zip: "wrong 516" passes the one ZipCrypto check byte of an item an unlock can't inflate.
+        let archive = try await Self.open("unproven.zip")
+        #expect(try await archive.unlock("wrong 516"))
+        let zeros = try #require(archive.entries.first)
+        #expect(await code { try await archive.download(zeros, into: ArchiveSink { _ in }) } == "password-unproven")
+        #expect(await code { try await archive.download(zeros, into: ArchiveSink { _ in }) } == "password")
+        // Let go of on the archive, not only the download's sibling: every item asks again.
+        #expect(!archive.unlocked)
+        archive.close()
+    }
+
     @Test func anIdleFamilyZipClosesTheMomentItsFamilyIsLetGoOf() async throws {
         let workspace = UUID().uuidString.lowercased()
         let archive = try await Self.open("aes.zip", registered: true)
@@ -258,21 +270,21 @@ import Testing
         other.close()
     }
 
-    @Test func theAllowlistSweepClosesAZipOfAFamilyNoLongerKept() async throws {
-        let kept = UUID().uuidString.lowercased(), dropped = UUID().uuidString.lowercased()
-        let staying = try await Self.open("aes.zip", registered: true)
-        let going = try await Self.open("aes.zip", registered: true)
-        ArchiveSessions.mark(archive: staying.identity, family: kept)
-        ArchiveSessions.mark(archive: going.identity, family: dropped)
-        #expect(try await staying.unlock("correct horse battery"))
-        #expect(try await going.unlock("correct horse battery"))
+    @Test func theAllowlistSweepLeavesAnOpenZipToItsFamilysForget() async throws {
+        // A family not proven again since the sync began: its copies swept, its open zip left alone.
+        let family = UUID().uuidString.lowercased()
+        let archive = try await Self.open("aes.zip", registered: true)
+        ArchiveSessions.mark(archive: archive.identity, family: family)
+        #expect(try await archive.unlock("correct horse battery"))
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: temporary) }
-        #expect(TemporaryCopies.sweepFamily(keeping: [kept], in: temporary))
+        #expect(TemporaryCopies.sweepFamily(keeping: [], in: temporary))
         ArchiveSessions.closeQueue.sync {}
-        #expect(!going.unlocked)
-        #expect(staying.unlocked)
-        staying.close()
+        #expect(archive.unlocked)
+        // Its revocation is what closes it.
+        TemporaryCopies.forgetFamily([family], in: temporary)
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!archive.unlocked)
     }
 
     final class Counter: @unchecked Sendable {
@@ -345,6 +357,12 @@ import Testing
         let cut = ArchiveText.pieces(long)
         #expect(cut.allSatisfy { $0.utf8.count <= ArchiveText.bytes })
         #expect(cut.joined(separator: "\n").replacingOccurrences(of: "\n", with: "") == String(decoding: long, as: UTF8.self))
+        // One character of 1 MB (a letter under 524,288 accents) is cut too, between its scalars.
+        let mark = "a" + String(repeating: "\u{301}", count: 524_288)
+        let marked = ArchiveText.pieces(Data(mark.utf8))
+        #expect(marked.count > 60)
+        #expect(marked.allSatisfy { $0.utf8.count <= ArchiveText.bytes })
+        #expect(marked.flatMap(\.unicodeScalars) == Array(mark.unicodeScalars))
     }
 
     /*
@@ -426,7 +444,7 @@ import Testing
     @Test func everyRefusalTheListShowsHasTheWebsWords() {
         // The codes archive.rs sends that reach the person (directory, link and too-large are drawn, never said).
         for code in ["damaged", "directory-too-large", "too-many-entries", "encrypted-directory", "split", "overlap", "local",
-                     "method", "encryption", "password", "wrong-password", "crc", "auth", "size", "short", "ratio", "nested",
+                     "method", "encryption", "password", "wrong-password", "password-unproven", "crc", "auth", "size", "short", "ratio", "nested",
                      "link", "directory", "too-large"] {
             #expect(ArchiveWords.refusals[code] != nil, "\(code)")
         }

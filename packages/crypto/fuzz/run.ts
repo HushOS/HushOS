@@ -233,19 +233,12 @@ function seedArchive() {
 /* The web's zip reader against the core's on the same bytes, for `seconds`: the archive target's other side. */
 function webArchive() {
     if (merge) return 0;
+    // From the fuzz crate's own folder, so its pinned nightly (rust-toolchain.toml) builds it, as cargo-fuzz does.
     const built = run(
         'cargo',
-        [
-            'build',
-            '-q',
-            '--locked',
-            '--release',
-            '--manifest-path',
-            'crates/hushos-core/fuzz/Cargo.toml',
-            '--example',
-            'verdicts',
-        ],
-        root,
+        ['build', '-q', '--locked', '--release', '--example', 'verdicts'],
+        join(root, 'crates/hushos-core/fuzz'),
+        { CARGO_BUILD_JOBS: '8' },
     );
     if (built !== 0) return built;
     return run(

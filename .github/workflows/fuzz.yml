@@ -53,19 +53,22 @@ jobs:
                   bun-version: 1.4.4
             - run: bun install --frozen-lockfile
               timeout-minutes: 5
+            # Both engines: the js one builds the core's verdicts for the archive target's web side.
             - uses: Swatinem/rust-cache@v2
-              if: matrix.engine == 'rust'
               with:
                   workspaces: crates/hushos-core/fuzz -> target
-            # The nightly pinned in crates/hushos-core/fuzz/rust-toolchain.toml, a pinned
-            # cargo-fuzz (kept by the cache above), and the fuzz crate's lockfile as committed.
-            - name: Pinned nightly, cargo-fuzz and dependencies
-              if: matrix.engine == 'rust'
+            # The nightly pinned in crates/hushos-core/fuzz/rust-toolchain.toml and the fuzz
+            # crate's lockfile as committed, for both; a pinned cargo-fuzz (kept by the cache
+            # above) for the Rust engine.
+            - name: Pinned nightly and dependencies
               working-directory: crates/hushos-core/fuzz
               run: |
                   rustup toolchain install
-                  cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
                   cargo fetch --locked
+            - name: cargo-fuzz
+              if: matrix.engine == 'rust'
+              working-directory: crates/hushos-core/fuzz
+              run: cargo install cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }} --locked
             # Jazzer.js instruments only on Node (under Bun it would fuzz blind).
             - uses: actions/setup-node@v7
               if: matrix.engine == 'js'

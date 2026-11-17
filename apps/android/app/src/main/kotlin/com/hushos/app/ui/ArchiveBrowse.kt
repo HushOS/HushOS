@@ -71,6 +71,14 @@ class ArchiveBrowse(
     var path by mutableStateOf(listOf<Int>())
     var opened by mutableStateOf<ArchiveEntry?>(null)
     var unlocked by mutableStateOf(false)
+    /* The password held, which only its quick check had passed, was let go of: the cards say it may be wrong. */
+    var doubted by mutableStateOf(false)
+
+    /* The core let go of the password held (`password-unproven`): every locked item asks again. */
+    fun passwordLost() {
+        unlocked = false
+        doubted = true
+    }
     var asking by mutableStateOf<ArchiveEntry?>(null)
     /* The download whose place the Save dialog is choosing: kept across a rotation. */
     var waitingFor by mutableStateOf<ArchiveEntry?>(null)
@@ -168,6 +176,13 @@ class ArchiveBrowse(
         if (error is ArchiveException.Refused && error.code == "wrong-password") {
             downloads.remove(record)
             if (record.entry.index !in reprompt) reprompt.add(record.entry.index)
+            opened = record.entry
+            return
+        }
+        // The password held may be wrong (only its quick check passed): let go of, asked for again.
+        if (error is ArchiveException.Refused && error.code == "password-unproven") {
+            downloads.remove(record)
+            passwordLost()
             opened = record.entry
             return
         }

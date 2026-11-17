@@ -29,6 +29,7 @@ type Expected = {
     unlock?: { right: boolean; wrong: boolean };
     unlockWith?: { password: string; anywhere: boolean; at: Record<string, boolean> };
     unlockSkips?: string;
+    unproven?: { password: string; entry: string };
     parts?: Record<string, string[]>;
     partsLength?: Record<string, number>;
     count?: number;
@@ -263,6 +264,19 @@ describe('every fixture, as expected.json says', () => {
                         expected.unlock.right,
                     );
                     expect(await (await open(name)).unlock('not it')).toBe(expected.unlock.wrong);
+                }
+                if (expected.unproven) {
+                    const held = await open(name);
+                    const index = held.entries.findIndex(
+                        (entry) => entry.path === expected.unproven!.entry,
+                    );
+                    // Only its check byte passed: held, then let go of by the damage it reads.
+                    expect(await held.unlock(expected.unproven.password)).toBe(true);
+                    expect(await outcome(() => held.download(index, () => {}))).toBe(
+                        'password-unproven',
+                    );
+                    expect(held.unlocked).toBe(false);
+                    expect(await outcome(() => held.download(index, () => {}))).toBe('password');
                 }
                 if (expected.unlockSkips) {
                     const bytes = bytesOf(name);

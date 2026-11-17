@@ -19,6 +19,8 @@ object ArchiveWords {
     const val PASSWORD_LABEL = "Password"
     const val OPEN = "Open"
     const val WRONG_PASSWORD = "That password isn’t right."
+    /* A password only its quick check passed, and an item then read as damaged: let go of, asked for again. */
+    const val PASSWORD_UNPROVEN = "This item didn’t open with that password. It may be wrong: enter it again."
     const val DOWNLOAD = "Download"
     const val DOWNLOAD_ARCHIVE = "Download the archive"
     const val CANCEL = "Cancel"
@@ -61,6 +63,7 @@ object ArchiveWords {
         "encryption" -> ENCRYPTION
         "password" -> NEEDS_PASSWORD
         "wrong-password" -> WRONG_PASSWORD
+        "password-unproven" -> PASSWORD_UNPROVEN
         // One sentence whichever check noticed the damage first: the web's decoders notice it at
         // their own point (words.ts, ITEM_DAMAGED).
         "crc", "auth", "size", "short" -> ITEM_DAMAGED

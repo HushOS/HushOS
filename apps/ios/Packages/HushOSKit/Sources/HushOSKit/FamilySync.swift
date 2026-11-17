@@ -768,7 +768,11 @@ public actor FamilySync: FamilyJudge {
 
     /* A device record nothing opens any more: its folders' rows and keys first (the sweep takes their copies), then the record. */
     func dropUnreadableRecord(_ groupId: String) async {
-        await vault.forgetWorkspaces(await knownAreas(groupId))
+        let areas = await knownAreas(groupId)
+        // Its copies, and any zip of it still open, go now, as every revocation's do: the sweep below
+        // only cleans copies.
+        TemporaryCopies.forgetFamily(Array(areas), in: temporary, session: session)
+        await vault.forgetWorkspaces(areas)
         records.delete(userId: userId, groupId: groupId)
         sweepCopies()
     }

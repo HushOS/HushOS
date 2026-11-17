@@ -54,10 +54,22 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
         const remembered = versionId ? recallPreview(versionId) : null;
         if (remembered?.kind === 'document') return memoryReader(remembered.data);
         const reader = openReader(node, true);
-        const stop = () => void reader.close();
+        /*
+         * Stopped while the file is read: closed at once. Stopped while its padding is fetched
+         * (the file read whole): that fetch finishes first, as a tool's reader lets it, so the
+         * store never sees reading stop where the file ends.
+         */
+        let draining: Promise<void> | null = null;
+        const reading = {
+            ...reader,
+            drain: () => (draining = reader.drain?.() ?? Promise.resolve()),
+        };
+        const stop = () => {
+            if (!draining) void reader.close();
+        };
         signal?.addEventListener('abort', stop, { once: true });
         try {
-            const { bytes } = await readAll(reader, PREVIEW_LIMITS.document);
+            const { bytes } = await readAll(reading, PREVIEW_LIMITS.document);
             signal?.throwIfAborted();
             if (versionId)
                 rememberPreview(versionId, { kind: 'document', data: bytes, bytes: bytes.length });

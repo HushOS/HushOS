@@ -106,6 +106,24 @@ class ArchiveSessionsTest {
         }
     }
 
+    @Test fun aPasswordOnlyItsCheckBytePassedIsLetGoOfWhenItsItemReadsAsDamaged() = runBlocking {
+        // unproven.zip: "wrong 516" passes the one ZipCrypto check byte of an item an unlock can't inflate.
+        val (content, stored) = sealed(File(fixtures, "unproven.zip").readBytes())
+        val sessions = ArchiveSessions()
+        val archive = sessions.open(store(stored), content)
+        assertTrue(archive.unlock("wrong 516"))
+        val sibling = archive.sibling()
+        try {
+            sibling.download(0u, object : EntrySink { override fun write(chunk: ByteArray) {} })
+            fail("downloaded under a wrong password")
+        } catch (error: ArchiveException.Refused) {
+            assertEquals("password-unproven", error.code)
+        }
+        // Let go of on the archive too, not only the download's sibling: every item asks again.
+        assertFalse(archive.unlocked)
+        sessions.closeAll()
+    }
+
     @Test fun aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() = runBlocking {
         // A family's file: its folder let go of (a removal, a fork) while a download streams it.
         val words = java.util.concurrent.atomic.AtomicReference<String?>(null)

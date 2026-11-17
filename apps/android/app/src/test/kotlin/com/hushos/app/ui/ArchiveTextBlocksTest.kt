@@ -23,6 +23,20 @@ class ArchiveTextBlocksTest {
         assertEquals("last line", blocks.last().substringAfter('\n'))
     }
 
+    @Test fun anOversizedCharacterIsCutByCodePointsAndNoEmojiIsSplit() {
+        // A letter under 524,288 accents: one grapheme of a megabyte, still in bounded blocks.
+        val marked = "a" + "\u0301".repeat(524_288)
+        val blocks = textBlocks(marked)
+        assertTrue(blocks.all { it.length <= TEXT_BLOCK_CHARS })
+        assertEquals(marked, blocks.joinToString(""))
+        // Emoji are two UTF-16 units each; an odd start puts the cut inside one unless it moves.
+        val emoji = "x" + "\uD83D\uDE00".repeat(20_000)
+        val cut = textBlocks(emoji)
+        assertTrue(cut.all { it.length <= TEXT_BLOCK_CHARS })
+        assertTrue(cut.none { Character.isHighSurrogate(it.last()) || Character.isLowSurrogate(it.first()) })
+        assertEquals(emoji, cut.joinToString(""))
+    }
+
     @Test fun manyShortLinesMakeBlocksOfTwoHundredLines() {
         val text = (1..450).joinToString("\n") { "line $it" }
         val blocks = textBlocks(text)

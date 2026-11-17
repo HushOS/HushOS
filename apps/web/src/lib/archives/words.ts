@@ -24,6 +24,8 @@ export const archiveWords = {
     passwordLabel: 'Password',
     open: 'Open',
     wrongPassword: 'That password isn’t right.',
+    /* A password only its quick check passed, and an item then read as damaged: let go of, asked for again. */
+    passwordUnproven: 'This item didn’t open with that password. It may be wrong: enter it again.',
     asksFirst: (size: number, packed: number) =>
         `This item expands to ${formatBytes(size)} from ${formatBytes(packed)}.`,
     downloading: (name: string) => `Downloading “${name}”`,
@@ -58,6 +60,7 @@ export const refusalWords: Record<string, string> = {
     encryption: archiveWords.encryption,
     password: archiveWords.needsPassword,
     'wrong-password': archiveWords.wrongPassword,
+    'password-unproven': archiveWords.passwordUnproven,
     crc: ITEM_DAMAGED,
     auth: ITEM_DAMAGED,
     size: ITEM_DAMAGED,

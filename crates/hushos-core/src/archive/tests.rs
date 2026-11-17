@@ -440,6 +440,27 @@ fn every_fixture_as_expected_json_says() {
             assert_eq!(right, unlock["right"].as_bool().unwrap(), "{name}: unlock with the password");
             assert_eq!(wrong, unlock["wrong"].as_bool().unwrap(), "{name}: unlock with another");
         }
+        if let Some(unproven) = expected.get("unproven") {
+            let password = unproven["password"].as_str().unwrap().as_bytes();
+            let index = list
+                .listed
+                .iter()
+                .find(|item| item.path == unproven["entry"].as_str().unwrap())
+                .unwrap()
+                .index;
+            let zip = Zip::open(source).unwrap();
+            // Only its check byte passed: held, then let go of by the damage a sibling's download reads,
+            // on the archive as well, as the session does after every read.
+            assert!(
+                zip.unlock(source, password, None).unwrap(),
+                "{name}: the wrong password passes its check byte"
+            );
+            let sibling = zip.sibling().unwrap();
+            let read = sibling.download(source, index, Some(password), &mut |_| Ok(()));
+            assert_eq!(outcome(sibling.unproven(index, Some(password), read)), "password-unproven", "{name}");
+            assert!(zip.password().is_none(), "{name}: let go of on the archive too");
+            assert_eq!(outcome(zip.download(source, index, None, &mut |_| Ok(()))), "password", "{name}");
+        }
         if let Some(skips) = expected["unlockSkips"].as_str() {
             let counted = Counting(source, Mutex::new(Vec::new()));
             let zip = Zip::open(&counted).unwrap();

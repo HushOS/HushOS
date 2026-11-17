@@ -36,6 +36,8 @@ struct ArchiveScreen: View {
     @State private var path: [UInt32] = []
     @State private var opened: ArchiveEntry?
     @State private var unlocked = false
+    /* The password held, which only its quick check had passed, was let go of: the cards say it may be wrong. */
+    @State private var doubted = false
     /* The entry waiting for a folder to be picked, and whether the picker shows: apart, because
      * SwiftUI clears the picker's flag before its completion runs, which once lost the entry. */
     @State private var saving: ArchiveEntry?
@@ -83,7 +85,7 @@ struct ArchiveScreen: View {
                     Divider().overlay(Alpine.rule)
                 }
                 if let opened {
-                    ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, askPassword: passwordFor == opened.index,
+                    ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, doubted: $doubted, askPassword: passwordFor == opened.index,
                                      onDownload: { start(opened) })
                         .id(opened.index)
                 } else {
@@ -296,6 +298,13 @@ struct ArchiveScreen: View {
                         downloads.removeAll { $0 === progress }
                         opened = entry
                         passwordFor = entry.index
+                    } else if (error as? ArchiveFailure)?.code == "password-unproven" {
+                        // The password held may be wrong (only its quick check passed): let go of, asked for again.
+                        downloads.removeAll { $0 === progress }
+                        unlocked = false
+                        doubted = true
+                        opened = entry
+                        passwordFor = entry.index
                     } else {
                         progress.error = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
                     }
@@ -413,6 +422,8 @@ private struct ArchiveEntryPane: View {
     let entry: ArchiveEntry
     let archive: OpenArchive
     @Binding var unlocked: Bool
+    /* The password held was let go of, maybe wrong: the card says so. */
+    @Binding var doubted: Bool
     /* A Download is waiting on this entry's password (one held didn't open it, or none is held yet). */
     let askPassword: Bool
     let onDownload: () -> Void
@@ -429,6 +440,7 @@ private struct ArchiveEntryPane: View {
     private var kind: ArchiveEntries.Kind { ArchiveEntries.kind(of: name) }
     private var limits: PreviewLimits { ArchiveEntries.limits(kind) }
     private var locked: Bool { entry.lock != "none" && !unlocked }
+    private var note: String? { doubted ? ArchiveWords.passwordUnproven : nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -454,8 +466,9 @@ private struct ArchiveEntryPane: View {
             card(title: name, message: entry.support == "method" ? ArchiveWords.method : ArchiveWords.encryption)
         } else if askPassword || passwordToDownload {
             // A download waits on the password: asked for, tried on this entry first, then the download goes on.
-            ArchivePasswordCard(name: name, archive: archive, entry: entry) {
+            ArchivePasswordCard(name: name, archive: archive, entry: entry, note: note) {
                 unlocked = true
+                doubted = false
                 passwordToDownload = false
                 onDownload()
             }
@@ -465,8 +478,9 @@ private struct ArchiveEntryPane: View {
                 if locked { passwordToDownload = true } else { onDownload() }
             }
         } else if locked || reprompt {
-            ArchivePasswordCard(name: name, archive: archive, entry: entry) {
+            ArchivePasswordCard(name: name, archive: archive, entry: entry, note: note) {
                 unlocked = true
+                doubted = false
                 reprompt = false
                 failure = nil
                 bytes = nil
@@ -495,7 +509,11 @@ private struct ArchiveEntryPane: View {
                 .task(id: attempt) {
                     do { bytes = try await archive.preview(entry, limit: limits.ceiling) } catch {
                         guard !Task.isCancelled else { return }
-                        if (error as? ArchiveFailure)?.code == "wrong-password" { reprompt = true } else {
+                        if (error as? ArchiveFailure)?.code == "wrong-password" { reprompt = true } else if (error as? ArchiveFailure)?.code == "password-unproven" {
+                            // The password held may be wrong (only its quick check passed): let go of, so this entry asks again.
+                            unlocked = false
+                            doubted = true
+                        } else {
                             failure = (error as? ArchiveFailure)?.message ?? (ErrorWords.say(error) ?? ErrorWords.generic)
                         }
                     }
@@ -613,6 +631,8 @@ private struct ArchivePasswordCard: View {
     let archive: OpenArchive
     /* The entry the password is asked for: tried on it first, so a password that opens only some of the archive's entries opens the one picked. */
     let entry: ArchiveEntry
+    /* Said before anything is typed: why the password is asked for again. */
+    var note: String?
     let onUnlocked: () -> Void
     @State private var password = ""
     @State private var busy = false
@@ -630,8 +650,8 @@ private struct ArchivePasswordCard: View {
                     .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(wrong ? Alpine.danger : Alpine.rule))
                     .accessibilityLabel(ArchiveWords.passwordLabel)
-                if wrong || error != nil {
-                    Text(wrong ? ArchiveWords.wrongPassword : error ?? "").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
+                if wrong || error != nil || note != nil {
+                    Text(wrong ? ArchiveWords.wrongPassword : error ?? note ?? "").font(Theme.Text.footnote).foregroundStyle(Alpine.danger)
                 }
             }
             Button(action: submit) {

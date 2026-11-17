@@ -110,6 +110,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     const [path, setPath] = useState<number[]>([]);
     const [opened, setOpened] = useState<ArchiveEntry | null>(null);
     const [unlocked, setUnlocked] = useState(false);
+    // The held password, which only its quick check had passed, was let go of: the cards say it may be wrong.
+    const [doubted, setDoubted] = useState(false);
     const [downloads, setDownloads] = useState<Download[]>([]);
     const [asking, setAsking] = useState<ArchiveEntry | null>(null);
     // An entry whose password is asked for so it can be downloaded.
@@ -197,8 +199,21 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     setOpened(entry);
                     return;
                 }
+                // The password held may be wrong (only its quick check passed): let go of, asked for again.
+                if (cause instanceof ArchiveRefusal && cause.code === 'password-unproven') {
+                    drop();
+                    passwordLost();
+                    setAskFor(entry);
+                    setOpened(entry);
+                    return;
+                }
                 update({ error: cause instanceof Error ? cause.message : viewerWords.broken });
             });
+    }
+
+    function passwordLost() {
+        setUnlocked(false);
+        setDoubted(true);
     }
 
     /* After a password has opened it, or when none is needed. */
@@ -281,7 +296,12 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     entry={opened}
                     session={session}
                     unlocked={unlocked}
-                    onUnlocked={() => setUnlocked(true)}
+                    onUnlocked={() => {
+                        setUnlocked(true);
+                        setDoubted(false);
+                    }}
+                    doubted={doubted}
+                    onPasswordLost={passwordLost}
                     onDownload={() => download(opened)}
                     downloadAfterPassword={askFor === opened}
                     onDownloadNow={() => {
@@ -548,6 +568,8 @@ function EntryPane({
     onDownloadArchive,
     downloadAfterPassword,
     onDownloadNow,
+    doubted,
+    onPasswordLost,
 }: {
     archive: DriveNode;
     entry: ArchiveEntry;
@@ -559,6 +581,9 @@ function EntryPane({
     /* The password is asked for so the entry can be downloaded (its own, or one a preview can't use). */
     downloadAfterPassword: boolean;
     onDownloadNow: () => void;
+    /* The password held was let go of, maybe wrong: the card says so. */
+    doubted: boolean;
+    onPasswordLost: () => void;
 }) {
     const name = entry.name;
     const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
@@ -587,6 +612,9 @@ function EntryPane({
                 } catch (cause) {
                     if (cause instanceof ArchiveRefusal && cause.code === 'wrong-password')
                         setReprompt(true);
+                    // The held password may be wrong: let go of, so this entry's card asks again.
+                    if (cause instanceof ArchiveRefusal && cause.code === 'password-unproven')
+                        onPasswordLost();
                     throw cause;
                 }
             },
@@ -616,6 +644,7 @@ function EntryPane({
                 name={name}
                 session={session}
                 entry={entry}
+                note={doubted ? archiveWords.passwordUnproven : null}
                 onUnlocked={() => {
                     setReprompt(false);
                     setAttempt((value) => value + 1);
@@ -681,6 +710,7 @@ function PasswordCard({
     name,
     session,
     entry,
+    note,
     onUnlocked,
 }: {
     name: string;
@@ -690,6 +720,8 @@ function PasswordCard({
      * some of the archive's entries opens the one the person picked.
      */
     entry: ArchiveEntry;
+    /* Said before anything is typed: why the password is asked for again. */
+    note: string | null;
     onUnlocked: () => void;
 }) {
     const [password, setPassword] = useState('');
@@ -740,20 +772,22 @@ function PasswordCard({
                         value={password}
                         onChange={(event) => setPassword(event.target.value)}
                         aria-invalid={wrong || undefined}
-                        aria-describedby={wrong || error ? 'archive-password-error' : undefined}
+                        aria-describedby={
+                            wrong || error || note ? 'archive-password-error' : undefined
+                        }
                         wrapperClassName="min-w-0 flex-1"
                     />
                     <Button type="submit" className="h-11" disabled={!password || busy}>
                         {archiveWords.open}
                     </Button>
                 </div>
-                {(wrong || error) && (
+                {(wrong || error || note) && (
                     <p
                         id="archive-password-error"
                         role="alert"
                         className="text-sm text-destructive"
                     >
-                        {wrong ? archiveWords.wrongPassword : error}
+                        {wrong ? archiveWords.wrongPassword : (error ?? note)}
                     </p>
                 )}
             </form>

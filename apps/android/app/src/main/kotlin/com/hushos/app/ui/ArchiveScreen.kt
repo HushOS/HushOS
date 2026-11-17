@@ -175,8 +175,10 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                         Box(Modifier.weight(1f)) {
                             if (entry != null) EntryPane(
                                 current, entry, browse.unlocked, reprompt = entry.index in browse.reprompt,
-                                onUnlocked = { browse.unlocked = true; browse.reprompt.remove(entry.index) },
+                                doubted = browse.doubted,
+                                onUnlocked = { browse.unlocked = true; browse.doubted = false; browse.reprompt.remove(entry.index) },
                                 onWrongPassword = { if (entry.index !in browse.reprompt) browse.reprompt.add(entry.index) },
+                                onPasswordLost = browse::passwordLost,
                                 onDownload = { download(entry) },
                                 onDownloadArchive = { sending = true },
                             )
@@ -345,11 +347,15 @@ private fun EntryPane(
     entry: ArchiveEntry,
     unlocked: Boolean,
     reprompt: Boolean,
+    /* The password held was let go of, maybe wrong: the card says so. */
+    doubted: Boolean,
     onUnlocked: () -> Unit,
     onWrongPassword: () -> Unit,
+    onPasswordLost: () -> Unit,
     onDownload: () -> Unit,
     onDownloadArchive: () -> Unit,
 ) {
+    val note = if (doubted) ArchiveWords.PASSWORD_UNPROVEN else null
     val alpine = Alpine.colors
     val context = LocalContext.current
     val name = entry.name
@@ -374,14 +380,14 @@ private fun EntryPane(
                 entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 // An archive inside is never previewed; downloading a locked one asks for its password first.
-                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index) {
+                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index, note) {
                     attempt++
                     askFor = false
                     onUnlocked()
                     onDownload()
                 }
                 entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) askFor = true else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
-                locked -> PasswordCard(archive, name, entry.index) { attempt++; onUnlocked() }
+                locked -> PasswordCard(archive, name, entry.index, note) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 // The large-file card: past the ceiling only Download; past the threshold, what opening costs and Continue.
@@ -392,14 +398,14 @@ private fun EntryPane(
                         Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) }
                     }
                 }
-                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), attempt, onWrongPassword, onDownload)
+                else -> EntryPreview(archive, entry, kind, limits.ceiling.toLong(), attempt, onWrongPassword, onPasswordLost, onDownload)
             }
         }
     }
 }
 
 @Composable
-private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onDownload: () -> Unit) {
+private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: () -> Unit, onDownload: () -> Unit) {
     val alpine = Alpine.colors
     var shown by remember(entry.index, attempt) { mutableStateOf<Shown>(Shown.Loading) }
     LaunchedEffect(entry.index, attempt) {
@@ -412,6 +418,8 @@ private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String
         } catch (error: Throwable) {
             // The item has a password of its own: asked for again, for this item.
             if (error is ArchiveException.Refused && error.code == "wrong-password") onWrongPassword()
+            // The password held may be wrong (only its quick check passed): let go of, so this item asks again.
+            if (error is ArchiveException.Refused && error.code == "password-unproven") onPasswordLost()
             Shown.Failed(archiveFailure(error, entry = true))
         }
     }
@@ -459,7 +467,9 @@ internal fun textBlocks(text: String): List<String> {
         // run on from the line before with its line break lost.
         if (lines > 0 && end - line + 1 > TEXT_BLOCK_CHARS - block.length) flush()
         while (end - line > TEXT_BLOCK_CHARS - block.length) {
-            val room = TEXT_BLOCK_CHARS - block.length
+            var room = TEXT_BLOCK_CHARS - block.length
+            // Never between a surrogate pair: half an emoji in each block would show as two broken ones.
+            if (room > 1 && Character.isHighSurrogate(text[line + room - 1])) room--
             block.append(text, line, line + room)
             line += room
             flush()
@@ -569,11 +579,12 @@ private fun PdfView(document: PdfDocumentHolder, onDownload: () -> Unit) {
 
 /* `index`: the item the password is asked for, tried on first, so a password that opens only some of the archive's items opens the one picked. */
 @Composable
-private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, onUnlocked: () -> Unit) {
+private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: String?, onUnlocked: () -> Unit) {
     // Kept in memory only (remember, never saved state), and gone with the card.
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    // `note` first (why it is asked again), until something is typed.
+    var error by remember(note) { mutableStateOf(note) }
     val scope = rememberCoroutineScope()
     fun submit() {
         if (password.isEmpty() || busy) return

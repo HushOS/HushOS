@@ -23,6 +23,8 @@ public enum ArchiveWords {
     public static let passwordLabel = "Password"
     public static let open = "Open"
     public static let wrongPassword = "That password isn’t right."
+    /* A password only its quick check passed, and an item then read as damaged: let go of, asked for again. */
+    public static let passwordUnproven = "This item didn’t open with that password. It may be wrong: enter it again."
     public static func asksFirst(size: String, packed: String) -> String { "This item expands to \(size) from \(packed)." }
     public static func downloading(_ name: String) -> String { "Downloading “\(name)”" }
     public static let stop = "Stop"
@@ -53,6 +55,7 @@ public enum ArchiveWords {
         "encryption": encryption,
         "password": needsPassword,
         "wrong-password": wrongPassword,
+        "password-unproven": passwordUnproven,
         // One sentence whichever check noticed the damage first: the web's decoders notice it at
         // their own point (words.ts, ITEM_DAMAGED).
         "crc": itemDamaged,

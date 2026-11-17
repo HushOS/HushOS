@@ -85,6 +85,8 @@ pub enum Refusal {
     Encryption,
     Password,
     WrongPassword,
+    /* The password held passed only its verifier, and a locked entry then read as damaged: let go of, asked for again. */
+    PasswordUnproven,
     Crc,
     Auth,
     Size,
@@ -110,6 +112,7 @@ impl Refusal {
             Refusal::Encryption => "encryption",
             Refusal::Password => "password",
             Refusal::WrongPassword => "wrong-password",
+            Refusal::PasswordUnproven => "password-unproven",
             Refusal::Crc => "crc",
             Refusal::Auth => "auth",
             Refusal::Size => "size",
@@ -1530,8 +1533,19 @@ pub(crate) struct Listing {
 /* The password, and whether the archive is closed: one lock, so an unlock racing a close can't publish a password after it. */
 #[derive(Default)]
 struct Lifecycle {
-    password: Option<Zeroizing<Vec<u8>>>,
     closed: bool,
+}
+
+/*
+ * The password held, shared by an archive and its siblings (a download's), and whether an entry
+ * decoded whole proved it. One proven only by its verifier (ZipCrypto's one byte passes 1 wrong
+ * password in 256) is let go of by the first locked entry that then reads as damaged, on any of
+ * them, and that entry asks for it again (`password-unproven`).
+ */
+#[derive(Default)]
+struct Held {
+    password: Option<Zeroizing<Vec<u8>>>,
+    proven: bool,
 }
 
 /// An open archive: its listing, and the password while one is held. Each entry is decoded from
@@ -1542,6 +1556,9 @@ pub(crate) struct Zip {
     /* The list's folders until the app takes them: nothing here reads them, so none are kept after. */
     folders: Mutex<Option<ArchiveFolders>>,
     life: Mutex<Lifecycle>,
+    held: Arc<Mutex<Held>>,
+    /* A sibling never wipes the password its archive still holds. */
+    sibling: bool,
     closed: std::sync::atomic::AtomicBool,
 }
 
@@ -1561,6 +1578,8 @@ impl Zip {
             listing: Mutex::new(Some(Arc::new(Listing { entries, listed }))),
             folders: Mutex::new(Some(folders)),
             life: Mutex::new(Lifecycle::default()),
+            held: Arc::new(Mutex::new(Held::default())),
+            sibling: false,
             closed: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -1839,11 +1858,12 @@ impl Zip {
             let outcome = self.inflate(source, entry, false, Some(password), check_only, &mut |_| Ok(()));
             match outcome {
                 Ok(()) => {
-                    let mut life = lock(&self.life);
+                    let life = lock(&self.life);
                     if life.closed {
                         return Err(closed_error());
                     }
-                    life.password = Some(Zeroizing::new(password.to_vec()));
+                    *lock(&self.held) =
+                        Held { password: Some(Zeroizing::new(password.to_vec())), proven: !check_only };
                     return Ok(true);
                 }
                 // Only the password check says the password is wrong; a bad code or CRC may be tampering.
@@ -1866,13 +1886,38 @@ impl Zip {
             listing: Mutex::new(Some(listing)),
             // A sibling reads entries, never lists: its app has the folders already.
             folders: Mutex::new(None),
-            life: Mutex::new(Lifecycle { password: life.password.clone(), ..Default::default() }),
+            life: Mutex::new(Lifecycle::default()),
+            held: self.held.clone(),
+            sibling: true,
             closed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
+    /*
+     * After a call on entry `index` read with `used`: a locked entry that read as damaged (its
+     * stream, size, CRC or AES code) under a password only its verifier passed lets that password
+     * go, on this archive and its siblings, and says so (`password-unproven`), so it is asked for
+     * again rather than every locked entry reading as damaged.
+     */
+    pub fn unproven<T>(&self, index: u32, used: Option<&[u8]>, result: Result<T>) -> Result<T> {
+        let Err(ArchiveError::Refused { code }) = &result else { return result };
+        let damaged = matches!(code.as_str(), "damaged" | "size" | "short" | "crc" | "auth");
+        let locked = self
+            .listing()
+            .ok()
+            .and_then(|listing| listing.entries.get(index as usize).map(|entry| entry.lock != Lock::None))
+            .unwrap_or(false);
+        let (Some(used), true, true) = (used, damaged, locked) else { return result };
+        let mut held = lock(&self.held);
+        if held.proven || held.password.as_deref().map(Vec::as_slice) != Some(used) {
+            return result;
+        }
+        *held = Held::default();
+        refused(Refusal::PasswordUnproven)
+    }
+
     pub fn password(&self) -> Option<Zeroizing<Vec<u8>>> {
-        lock(&self.life).password.clone()
+        lock(&self.held).password.clone()
     }
 
     /// Closes the archive: the password wiped, the listing dropped, every later call refused.
@@ -1881,7 +1926,9 @@ impl Zip {
         {
             let mut life = lock(&self.life);
             life.closed = true;
-            life.password = None;
+            if !self.sibling {
+                *lock(&self.held) = Held::default();
+            }
         }
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         lock(&self.listing).take();
@@ -2063,10 +2110,10 @@ impl ZipArchiveSession {
     pub fn preview(&self, index: u32, limit: u64, control: Arc<RunControl>) -> Result<Vec<u8>> {
         let _turn = lock(&self.turn);
         let password = self.zip.password();
-        let result = self.reader(&control).and_then(|source| {
-            self.zip.preview(source.as_ref(), index, limit, password.as_deref().map(Vec::as_slice))
-        });
-        let bytes = self.after(result)?;
+        let used = password.as_deref().map(Vec::as_slice);
+        let result =
+            self.reader(&control).and_then(|source| self.zip.preview(source.as_ref(), index, limit, used));
+        let bytes = self.after(self.zip.unproven(index, used, result))?;
         control.check()?;
         Ok(bytes)
     }
@@ -2084,8 +2131,9 @@ impl ZipArchiveSession {
             sink.write(std::mem::take(pending))
                 .map_err(|FetchError::Failed { reason }| ArchiveError::Failed { reason })
         };
+        let used = password.as_deref().map(Vec::as_slice);
         let result = self.reader(&control).and_then(|source| {
-            self.zip.download(source.as_ref(), index, password.as_deref().map(Vec::as_slice), &mut |chunk| {
+            self.zip.download(source.as_ref(), index, used, &mut |chunk| {
                 pending.extend_from_slice(chunk);
                 if pending.len() >= CHUNK_BYTES {
                     flush(&mut pending)?;
@@ -2093,7 +2141,7 @@ impl ZipArchiveSession {
                 Ok(())
             })
         });
-        self.after(result)?;
+        self.after(self.zip.unproven(index, used, result))?;
         flush(&mut pending)?;
         control.check()?;
         Ok(())

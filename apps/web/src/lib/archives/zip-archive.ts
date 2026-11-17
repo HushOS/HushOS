@@ -228,6 +228,8 @@ export const UNLOCK_READ_MAX = 32 * 1024 * 1024;
 export class ZipArchive {
     #source: Source;
     #password: string | null = null;
+    /* Whether an entry decoded whole proved the password, or only its verifier passed it (the core's Held). */
+    #proven = false;
     #closed = false;
     #nested: Set<number>;
     /* The list's folders until the worker sends them on: nothing here reads them after. */
@@ -396,16 +398,48 @@ export class ZipArchive {
         if (declaresTooMuch(entry)) throw new ZipError('ratio');
         const out = new Uint8Array(entry.size);
         let at = 0;
-        await this.#inflate(entry, {
-            ratio: false,
-            password: this.#password,
-            signal,
-            write: (chunk) => {
-                out.set(chunk, at);
-                at += chunk.length;
-            },
-        });
+        const used = this.#password;
+        await this.#unproven(
+            entry,
+            used,
+            this.#inflate(entry, {
+                ratio: false,
+                password: used,
+                signal,
+                write: (chunk) => {
+                    out.set(chunk, at);
+                    at += chunk.length;
+                },
+            }),
+        );
         return out;
+    }
+
+    /*
+     * A locked entry that read as damaged (its stream, size, CRC or AES code) under the held
+     * password, which only its verifier passed (ZipCrypto's one byte passes 1 wrong password in
+     * 256): the password is let go of and asked for again (`password-unproven`), rather than every
+     * locked entry reading as damaged. As the core does (Zip::unproven).
+     */
+    async #unproven(entry: ZipEntry, used: string | null, reading: Promise<void>) {
+        try {
+            await reading;
+        } catch (error) {
+            const damaged =
+                error instanceof ZipError &&
+                ['damaged', 'size', 'short', 'crc', 'auth'].includes(error.code);
+            if (
+                damaged &&
+                used !== null &&
+                entry.lock !== 'none' &&
+                !this.#proven &&
+                used === this.#password
+            ) {
+                this.#password = null;
+                throw new ZipError('password-unproven');
+            }
+            throw error;
+        }
     }
 
     /*
@@ -436,7 +470,11 @@ export class ZipArchive {
         password: string | null = this.#password,
     ) {
         const entry = this.#entry(index);
-        await this.#inflate(entry, { ratio: false, password, signal, write });
+        await this.#unproven(
+            entry,
+            password,
+            this.#inflate(entry, { ratio: false, password, signal, write }),
+        );
     }
 
     /*
@@ -492,6 +530,7 @@ export class ZipArchive {
             }
             if (this.#closed) return false;
             this.#password = password;
+            this.#proven = !checkOnly;
             return true;
         }
         return false;

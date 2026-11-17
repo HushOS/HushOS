@@ -327,12 +327,16 @@ public enum TemporaryCopies {
      * isn't in `keeping` goes, its forget generation moved first so no download of it writes after.
      * Under the copies' lock, and never from an ended session. Copies go whatever any record
      * remembers; an empty `keeping` (a cold start) deletes them all, which only costs a download.
+     * Copies only, never an open zip: the allowlist is the families proven since this sync began
+     * (empty as it starts), so a zip of a family not proven again yet would close for nothing.
+     * Every revocation closes zips through `forgetFamily` before it sweeps: a refusal or a fork
+     * (FamilySync.forgetOpened), a wipe, a folder the family stopped listing, an unreadable record.
      */
     @discardableResult
     public static func sweepFamily(keeping: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
         let kept = Set(keeping.map { $0.lowercased() })
-        let swept = forgetLock.withLock { () -> Bool in
+        return forgetLock.withLock {
             if let session, !session.open { return false }
             for folder in (try? FileManager.default.contentsOfDirectory(at: family, includingPropertiesForKeys: nil)) ?? [] {
                 let workspace = folder.lastPathComponent.lowercased()
@@ -342,9 +346,6 @@ public enum TemporaryCopies {
             }
             return true
         }
-        // A zip of a family no longer kept closes too, idle or not: its listing and password go now.
-        if swept { ArchiveSessions.closeFamilies(keeping: keeping) }
-        return swept
     }
 
     static let forgetLock = NSLock()

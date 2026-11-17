@@ -1237,6 +1237,44 @@ function aesEmptyFixture() {
     return writeRaw([locked('empty-ae2.txt', 2, 801), locked('empty-ae1.txt', 1, 802)]);
 }
 
+/*
+ * One ZipCrypto entry an unlock can't prove: 2 MiB of zeros in about 2 KB, past the declared
+ * ratio, so a password is tried on its one check byte alone. UNPROVEN_PASSWORD is a wrong
+ * password that byte passes (1 in 256 do): the unlock holds it, and the download that then
+ * reads damage lets it go and asks again (`password-unproven`).
+ */
+const UNPROVEN_DATA = () => new Uint8Array(2 * MiB);
+function unprovenFixture() {
+    return writeZip([
+        { name: 'zeros.bin', data: UNPROVEN_DATA(), method: 8, encrypt: { kind: 'zipcrypto' } },
+    ]);
+}
+
+/* The first of "wrong 0", "wrong 1", … whose decrypted check byte is `unprovenFixture`'s. */
+export const UNPROVEN_PASSWORD = (() => {
+    const check = (crc32(UNPROVEN_DATA()) >>> 24) & 0xff;
+    const header = zipCryptoEncrypt(new Uint8Array(0), PASSWORD, check, fixed(11, 12));
+    for (let n = 0; ; n++) {
+        const candidate = `wrong ${n}`;
+        const keys = [0x12345678, 0x23456789, 0x34567890];
+        const crcByte = (crc: number, byte: number) =>
+            (TABLE[(crc ^ byte) & 0xff]! ^ (crc >>> 8)) >>> 0;
+        const update = (byte: number) => {
+            keys[0] = crcByte(keys[0]!, byte);
+            keys[1] = (Math.imul((keys[1]! + (keys[0]! & 0xff)) >>> 0, 134775813) + 1) >>> 0;
+            keys[2] = crcByte(keys[2]!, keys[1]! >>> 24);
+        };
+        for (const byte of utf8(candidate)) update(byte);
+        let last = 0;
+        for (const byte of header) {
+            const temp = (keys[2]! | 2) >>> 0;
+            last = byte ^ ((Math.imul(temp, temp ^ 1) >>> 8) & 0xff);
+            update(last);
+        }
+        if (last === check) return candidate;
+    }
+})();
+
 /* WinZip AES at any strength, the salt fixed by `seed`. */
 function aesAt(data: Uint8Array, strength: 1 | 2 | 3, seed: number, password = PASSWORD) {
     const keyLength = [16, 24, 32][strength - 1]!;
@@ -1539,6 +1577,7 @@ export const FIXTURES: Fixture[] = [
     { name: 'two-passwords.zip', large: false, build: twoPasswordsFixture },
     { name: 'locked-ratio.zip', large: false, build: lockedRatioFixture },
     { name: 'aes-empty.zip', large: false, build: aesEmptyFixture },
+    { name: 'unproven.zip', large: false, build: unprovenFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },
