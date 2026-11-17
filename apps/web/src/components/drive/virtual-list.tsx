@@ -227,10 +227,16 @@ export function useVirtualRows({
 }
 
 /*
- * When items arrive or leave above the screen, scroll by as many lines, so the rows on screen
- * stay where they were. Measured by ids, not pixels: the first item on screen and the one
- * after it, before and after. A new order (the list sorted again) moves that neighbour too,
- * and is left where it lands.
+ * Keeps the first item on screen where it was when the list changes under it: items arriving
+ * or leaving above the screen (a sync, an upload, a move), the grid gaining or losing a column
+ * (Info opening beside it, the window resized), a row or tile measuring another height (zoom).
+ *
+ * Measured by ids, not pixels: the item at the top of the screen before the change, or the
+ * first after it that is still listed if it left too, is put back at the top, as far into its
+ * line as it was. The target is absolute, from the offset before the change, so a browser that
+ * has already pulled the scroll in (rows removed at the bottom of the list) is not moved twice.
+ * A new order (sorted again, or a rename; the count stays) keeps the scroll as it is, and so
+ * does a scroll in progress: writing it then would stop a fling dead under the finger.
  */
 function useKeepInPlace(
     virtualizer: ListVirtualizer,
@@ -238,34 +244,40 @@ function useKeepInPlace(
     perLine: number,
     size: number,
 ) {
-    const last = useRef<{
-        ids: readonly string[];
-        id: string;
-        next: string | undefined;
-        line: number;
-        perLine: number;
-    } | null>(null);
+    const last = useRef<{ ids: readonly string[]; perLine: number; size: number } | null>(null);
     useLayoutEffect(() => {
-        const first = virtualizer.range?.startIndex ?? 0;
         const before = last.current;
+        last.current = { ids, perLine, size };
         const list = virtualizer.scrollElement;
-        if (
-            list &&
-            before &&
-            before.ids !== ids &&
-            before.perLine === perLine &&
-            (virtualizer.scrollOffset ?? 0) > 0
-        ) {
-            const now = ids.indexOf(before.id);
-            const kept = now >= 0 && ids[now + 1] === before.next;
-            const moved = kept ? Math.floor(now / perLine) - before.line : 0;
-            if (moved !== 0) scrollerOf(list).scrollBy({ top: moved * size });
+        if (!before || !list) return;
+        const reshaped = before.perLine !== perLine || before.size !== size;
+        const relisted = before.ids !== ids && before.ids.length !== ids.length;
+        if (!reshaped && !relisted) return;
+        // The offset as it was before this change: scroll events have not reported since.
+        const was = virtualizer.scrollOffset ?? 0;
+        if (was <= 0 || virtualizer.isScrolling || before.size <= 0) return;
+        const line = Math.floor(was / before.size);
+        const into = (was - line * before.size) / before.size;
+        let item = line * before.perLine;
+        let index = item;
+        if (relisted) {
+            // The first item from the top of the screen down that is still listed.
+            const where = new Map(ids.map((id, at) => [id, at]));
+            index = -1;
+            for (; item < before.ids.length && index < 0; item++)
+                index = where.get(before.ids[item]!) ?? -1;
+            if (index < 0) return;
         }
-        const index = first * perLine;
-        last.current =
-            index < ids.length
-                ? { ids, id: ids[index]!, next: ids[index + 1], line: first, perLine }
-                : null;
+        const target = (Math.floor(index / perLine) + into) * size;
+        const scroller = scrollerOf(list);
+        const now = offsetOf(list, scroller);
+        const top = scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
+        const room =
+            scroller instanceof Window
+                ? document.documentElement.scrollHeight - scroller.innerHeight
+                : scroller.scrollHeight - scroller.clientHeight;
+        const next = Math.max(0, Math.min(room, top + target - now));
+        if (Math.abs(next - top) >= 1) scroller.scrollTo({ top: next });
     });
 }
 

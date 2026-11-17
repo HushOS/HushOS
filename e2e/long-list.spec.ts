@@ -53,6 +53,42 @@ const onScreen = (p: Page) =>
         }).length;
     });
 
+/* The item under a fixed point of the sheet, and where its top is. */
+const under = (p: Page) =>
+    p.evaluate(() => {
+        const box = document
+            .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+            .getBoundingClientRect();
+        const item = document
+            .elementFromPoint(box.left + 400, box.top + 250)
+            ?.closest<HTMLElement>('[data-node-id]');
+        return item
+            ? {
+                  name: item.querySelector('[data-row-name]')?.textContent,
+                  top: Math.round(item.getBoundingClientRect().top),
+              }
+            : null;
+    });
+
+/*
+ * Moves `names` in the folder on screen to the Trash the way another device would: through the
+ * app's Drive client in the page (dev server only, as seedFolders), so the tab hears of it when
+ * it next polls for changes.
+ */
+async function trashBySync(p: Page, names: string[]) {
+    await p.evaluate(async (names) => {
+        type Drive = {
+            clientFor(): { listFolder(id: string): Promise<{ children: { name: string }[] }> };
+            trashNodes(nodes: unknown[]): Promise<unknown>;
+        };
+        const module = '/src/lib/drive.ts';
+        const drive = (await import(/* @vite-ignore */ module)) as Drive;
+        const id = /\/app\/drive\/f\/([^/?#]+)/.exec(location.pathname)![1]!;
+        const { children } = await drive.clientFor().listFolder(id);
+        await drive.trashNodes(children.filter((node) => names.includes(node.name)));
+    }, names);
+}
+
 /* Rows the table draws past each edge of the screen (virtual-list.tsx's overscan). */
 const OVERSCAN = 8;
 /* The index of the first row whose middle is on screen, from its aria-rowindex. */
@@ -285,6 +321,50 @@ test('the grid draws only the tiles near the screen, each placed in the whole li
     }
 });
 
+test('when Info narrows the grid, the tiles at the top of the screen stay there', async () => {
+    await reset(page);
+    await page.getByRole('button', { name: 'Show as grid' }).click();
+    try {
+        await expect(rows(page).first()).toBeVisible();
+        await page.evaluate(() => {
+            const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+            sheet.scrollTop = sheet.scrollHeight / 2;
+        });
+        await settledScroll(page);
+        // The first tile wholly on screen, selected.
+        const picked = await page.evaluate(() => {
+            const box = document
+                .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+                .getBoundingClientRect();
+            return [...document.querySelectorAll<HTMLElement>('[data-node-id]')]
+                .find((tile) => tile.getBoundingClientRect().top >= box.top)!
+                .querySelector('[data-row-name]')!
+                .getAttribute('aria-label')!;
+        });
+        const tile = row(page, Number(picked.slice(4)));
+        await tile.locator('[data-row-name]').click();
+        await expect(tile).toHaveAttribute('data-selected', 'true');
+        const columns = () =>
+            page.evaluate(
+                () =>
+                    getComputedStyle(
+                        document.querySelector('ul[aria-label="Contents of Long"]')!,
+                    ).gridTemplateColumns.split(' ').length,
+            );
+        const wide = await columns();
+        await page.keyboard.press('i');
+        await expect.poll(columns).toBeLessThan(wide);
+        await settledScroll(page);
+        await expect(tile).toBeInViewport();
+        await page.keyboard.press('i');
+        await expect.poll(columns).toBe(wide);
+        await settledScroll(page);
+        await expect(tile).toBeInViewport();
+    } finally {
+        await page.getByRole('button', { name: 'Show as list' }).click();
+    }
+});
+
 test('at a phone’s width the window scrolls and the rows drawn follow it', async () => {
     await reset(page);
     const size = page.viewportSize()!;
@@ -371,23 +451,7 @@ test('rows that arrive above the screen leave the rows on it where they were', a
     await scrollToRow(page, before - 1 - 20);
     await settledScroll(page);
     expect(await firstOnScreen(page)).toBeGreaterThan(2 * OVERSCAN);
-    /* The row under a fixed point of the sheet, and where its top is. */
-    const under = () =>
-        page.evaluate(() => {
-            const box = document
-                .querySelector('[data-scroll-restoration-id="app-sheet"]')!
-                .getBoundingClientRect();
-            const item = document
-                .elementFromPoint(box.left + 400, box.top + 250)
-                ?.closest<HTMLElement>('[data-node-id]');
-            return item
-                ? {
-                      name: item.querySelector('[data-row-name]')?.textContent,
-                      top: Math.round(item.getBoundingClientRect().top),
-                  }
-                : null;
-        });
-    const still = await under();
+    const still = await under(page);
     expect(still).not.toBeNull();
     // Three folders that sort above everything on screen, made the way another device would
     // make them: the tab hears of them when it next polls for changes, as with any sync.
@@ -396,9 +460,36 @@ test('rows that arrive above the screen leave the rows on it where they were', a
         timeout: 90_000,
     });
     await settledScroll(page);
-    const after = await under();
+    const after = await under(page);
     expect(after?.name).toBe(still!.name);
     // Scroll offsets snap to whole device pixels.
+    expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);
+    expect(await duplicates(page)).toBe(0);
+});
+
+test('rows that leave above the screen at the foot of the list leave the last rows on it', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    await page.evaluate(() => {
+        const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+        sheet.scrollTop = sheet.scrollHeight;
+    });
+    await settledScroll(page);
+    const last = page.locator(`tbody [aria-rowindex="${before}"]`);
+    await expect(last).toBeInViewport();
+    const name = await last.locator('[data-row-name]').innerText();
+    const still = await under(page);
+    expect(still).not.toBeNull();
+    // Three rows at the top of the list leave by sync: the browser pulls the scroll in by as
+    // much, as the list got shorter, and the list must not pull it in again.
+    await trashBySync(page, ['aa-0', 'aa-1', 'aa-2']);
+    await expect(page.locator('table')).toHaveAttribute('aria-rowcount', String(before - 3), {
+        timeout: 90_000,
+    });
+    await settledScroll(page);
+    await expect(row(page, Number(name.slice(4)))).toBeInViewport();
+    const after = await under(page);
+    expect(after?.name).toBe(still!.name);
     expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);
     expect(await duplicates(page)).toBe(0);
 });
