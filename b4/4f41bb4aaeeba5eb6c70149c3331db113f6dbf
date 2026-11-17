@@ -1,0 +1,19 @@
+e2e/long-list.spec.ts
+  s_c60e24772e04af::t_57f386e29caefa 2,8-15,78-118,122-123,125-139,191-197,199,261,278,447-452,463-466,469,477,480,496,506-507,520-524,551-553,569-570,585-604
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b44f41bb4aaeeba5eb6c70149c3331db113f6dbf",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
