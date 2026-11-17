@@ -96,15 +96,20 @@ fun stillRunning(spaces: Map<String, List<SpaceArea>>, groupId: String, run: Wal
  * device finished it while this one waited, or a 404 from its work) is ended elsewhere, never failed; a 404 while it still
  * runs is the walk failing.
  */
-fun FamilySync.walk(groupId: String, target: WalkTarget, progress: (Int) -> Unit = {}, checkStop: () -> Unit = {}): WalkEnd = FamilyWalkLocks.hold(target.workspaceId) {
-    checkStop()
-    if (!stillRunning(api.spaces(), groupId, target)) return@hold WalkEnd.ENDED_ELSEWHERE
-    try {
-        vault.walkFamilyFolder(target, progress, checkStop)
-        WalkEnd.WALKED
-    } catch (error: NotFound) {
-        if (!stillRunning(api.spaces(), groupId, target)) WalkEnd.ENDED_ELSEWHERE else throw error
+fun FamilySync.walk(groupId: String, target: WalkTarget, progress: (Int) -> Unit = {}, checkStop: () -> Unit = {}): WalkEnd = try {
+    FamilyWalkLocks.hold(target.workspaceId) {
+        checkStop()
+        if (!stillRunning(api.spaces(), groupId, target)) return@hold WalkEnd.ENDED_ELSEWHERE
+        try {
+            vault.walkFamilyFolder(target, progress, checkStop)
+            WalkEnd.WALKED
+        } catch (error: NotFound) {
+            if (!stillRunning(api.spaces(), groupId, target)) WalkEnd.ENDED_ELSEWHERE else throw error
+        }
     }
+} finally {
+    // However far it got, the folder's keys moved: a pass's folder listing from before it is asked for again.
+    chainLanded()
 }
 
 /*

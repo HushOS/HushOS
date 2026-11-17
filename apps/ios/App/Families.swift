@@ -566,11 +566,9 @@ extension DriveStore {
         for release in families.releases.take() {
             let groupId = release.groupId
             if let summary = familyList?.first(where: { $0.id.lowercased() == groupId.lowercased() }) {
-                // Its own work, never under a pass this was reached from (FamilySync.outsidePass).
-                Task {
-                    await FamilySync.outsidePass {
-                        await adopt(release.revised.state, of: summary, revision: release.revised.revision, session: session)
-                    }
+                // Its own work, never under a pass this was reached from.
+                FamilySync.taskOutsidePass {
+                    await self.adopt(release.revised.state, of: summary, revision: release.revised.revision, session: session)
                 }
             } else if case .wiped = release.revised.state {
                 removed(groupId)
@@ -681,7 +679,7 @@ extension DriveStore {
             if let ended = walkEnded[target.key], Date() < ended.until { continue }
             walking.insert(workspace)
             // The walk's own work, never under the pass that started it: its last sync reads the folders as they are then.
-            Task { await FamilySync.outsidePass {
+            FamilySync.taskOutsidePass { [self] in
                 defer { walking.remove(workspace) }
                 do {
                     let walked = try await inFamily(session) { families in
@@ -703,7 +701,7 @@ extension DriveStore {
                     familyWalks[groupId, default: FamilyWalkShown()].stopped[workspace] = Self.walkWords(error)
                     FamilyWalkTasks.soon(session: vault.api.session)
                 }
-            } }
+            }
         }
     }
 

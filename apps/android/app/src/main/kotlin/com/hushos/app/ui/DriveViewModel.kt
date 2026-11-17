@@ -1877,24 +1877,30 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // have changed what trust rests on without moving that generation, so it always loads afresh.
         val generation = vault.memory.generation.get()
         if (join) trustRun?.let { (run, owner, at) ->
-            if (run.isActive && owner === vault && at == generation) return run.join()
+            // Joined, and it settled the trust set: that answers. One that failed or didn't land is loaded once more.
+            if (run.isActive && owner === vault && at == generation && run.await()) return
         }
-        val run = viewModelScope.launch { loadTrust(vault) }
+        val run = viewModelScope.async { loadTrust(vault) }
         trustRun = Triple(run, vault, generation)
-        run.join()
+        run.await()
     }
 
-    private var trustRun: Triple<kotlinx.coroutines.Job, com.hushos.app.data.Vault, Long>? = null
+    private var trustRun: Triple<kotlinx.coroutines.Deferred<Boolean>, com.hushos.app.data.Vault, Long>? = null
 
-    private suspend fun loadTrust(vault: com.hushos.app.data.Vault) {
+    /*
+     * Whether this load settled the trust set: it landed and loaded, or the session ended (nothing to load again for). A
+     * failure, or a load a later one or another vault overtook, did not.
+     */
+    private suspend fun loadTrust(vault: com.hushos.app.data.Vault): Boolean {
         val load = trustLoads.begin()
         val result = withContext(Dispatchers.IO) { runCatching { vault.trust() } }
-        trustLoads.land(load) {
-            if (this.vault !== vault) return@land
-            if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return@land }
+        return trustLoads.land(load) {
+            if (this.vault !== vault) return@land false
+            if (result.exceptionOrNull() is NotAuthenticated) { sessionLost(); return@land true }
             if (result.exceptionOrNull() is Unreachable) _state.update { it.copy(unreachable = true) }
             _state.update { it.copy(trust = it.trust.after(result)) }
-        }
+            result.isSuccess
+        } ?: false
     }
 
     private val trustLoads = com.hushos.app.data.TrustLoads()

@@ -499,14 +499,14 @@ Design: `docs/identity-pq-design.md`.
     - `loadSettings`/`settingsServed` always read now; `Vault.settingsToLook` hands back the last fresh read for up to `SETTINGS_REUSE_MS` (10 s), as the web's `lib/contacts.ts` does.
     - Look-only readers use it: a family sync's acceptance and settle (`familyPin(groupId, look = true)`), `vouched`, `checkedFamilyWith`, `contacts()`.
     - Everything else reads now: every family act before it sends, every read in the `GuardTurn`, `updateSettings`'s base, rotation, the re-seal pass, a push's names.
-    - The copy is dropped when `TrustMemory.generation` moves (every guard commit; every save, before its PUT and again after it), on a failed read, and after the window; a copy older than the marks another vault raised is read again.
+    - The copy is dropped when `TrustMemory.generation` moves (every guard commit; every save, before its PUT and again after it), on any failed read (no answer, the identity or marks unreadable, a rollback), and after the window; a copy older than the marks another vault raised is read again.
     - Look-only readers therefore see another device's change, a server rollback included, up to 10 s late; a fresh read refuses a rollback at once.
     - Tests: `SettingsReuseTest`.
 - At launch `loadRoot` loads the trust set beside the workspace, and the family pass runs on its own: Home's loading state never waits for it.
-    - `refreshTrust(join = true)`, only from `loadRoot` and `onForeground`, joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined. Every other ask follows an act (a check, Continue, a key replacement, Try again) and loads afresh.
-    - A non-forced `refreshFamilies` waits for a pass already running (then finds nothing due) rather than run a second; never from inside a pass (`InFamilyPass`).
+    - `refreshTrust(join = true)`, only from `loadRoot` and `onForeground`, joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined, and one joined that didn't settle the trust set (failed, or overtaken) is loaded once more. Every other ask follows an act (a check, Continue, a key replacement, Try again) and loads afresh.
+    - A non-forced `refreshFamilies` waits for a pass already running for the same session (then finds nothing due) rather than run a second; never from inside a pass (`InFamilyPass`), and never on an ended session's (`reset` lets go of it). Test: `FamiliesModelSessionTest`.
     - A pass asks route 25 once: `FamilySync.pass()` holds the answer in a coroutine context element (a thread-local that follows the pass's coroutine), so only its own syncs see it, and it ends with the pass's coroutine.
-    - A chain call that lands (`sendKept`'s `finish(CallEnd.Landed)`) moves `FamilySync.landings`; a listing asked for before it is asked for again.
+    - A chain call that lands (`sendKept`'s `finish(CallEnd.Landed)`) or a walk that ends moves `FamilySync.landings`; a listing asked for before it is asked for again. Test: `FamilyManageTest`.
 
 ### Pins and shares
 

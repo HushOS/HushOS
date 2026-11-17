@@ -572,23 +572,25 @@ class Vault(internal val context: Context, val api: DriveApi) {
     internal fun settingsServed(): Pair<Settings, Auth.StoredSettings> {
         // Taken before the read: a guard write or a save while it runs leaves its copy unused (settingsToLook).
         val generation = memory.generation.get()
-        val userId = api.session.userId
-        val identity = identityKeys()
-        val stored = Auth.settings(context, api.session)
-        val mark = marks(stored)
-        // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
-        mark.adopt(userId, listOf(identity.encryptionPublicKey))
-        val settings = try {
+        val read = try {
+            val userId = api.session.userId
+            val identity = identityKeys()
+            val stored = Auth.settings(context, api.session)
+            val mark = marks(stored)
+            // A mark an earlier app kept per identity carries over first, so the per-account one never starts lower.
+            mark.adopt(userId, listOf(identity.encryptionPublicKey))
             readServedSettings(userId, stored.envelope, stored.sequence, mark) {
                 openSettingsKey(stored) ?: throw AuthFailure("Your settings key is missing. Sign in again.")
-            }
-        } catch (refused: Exception) {
-            // Refused (a rollback) or unreadable: no reader goes on with an earlier copy, each reads, and is refused, itself.
+            } to stored
+        } catch (failed: Exception) {
+            // Any read that didn't finish (no answer, the identity or the marks unreadable, a rollback refused): no reader
+            // goes on with an earlier copy; each reads, and fails or is refused, itself.
             settingsCopy = null
-            throw refused
+            throw failed
         }
+        val (settings, stored) = read
         settingsCopy = SettingsCopy(generation, memory.clock(), settings.json.toString(), settings.version, stored)
-        return settings to stored
+        return read
     }
 
     /*

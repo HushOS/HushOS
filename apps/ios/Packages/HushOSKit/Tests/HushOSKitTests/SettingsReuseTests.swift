@@ -74,6 +74,19 @@ extension OnFakeDrive {
             #expect(server.count("/api/drive/spaces") == 2)
         }
 
+        /* A task of its own started under a pass (a walk, a release adopted) never reads the pass's listing, even while it runs. */
+        @Test func aTaskOutsideThePassAsksForTheFoldersItselfWhileThePassRuns() async throws {
+            let (family, server, phone, _) = try await setUp()
+            defer { phone.done() }
+            let sync = phone.sync, summary = family.summary
+            server.clearRequests()
+            await FamilySync.inPass {
+                _ = await sync.sync(summary)
+                await FamilySync.taskOutsidePass { _ = await sync.sync(summary) }.value
+                #expect(server.count("/api/drive/spaces") == 2)
+            }
+        }
+
         /* A task the pass started that syncs after the pass returned asks for the folders itself. */
         @Test func aTaskStartedUnderAPassThatSyncsAfterItEndsAsksForTheFoldersItself() async throws {
             let (family, server, phone, _) = try await setUp()

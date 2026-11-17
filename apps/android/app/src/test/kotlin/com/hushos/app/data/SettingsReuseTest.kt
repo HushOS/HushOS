@@ -116,6 +116,17 @@ class SettingsReuseTest {
         assertThrows(SettingsRolledBack::class.java) { look() }
     }
 
+    /* A fresh read that failed before any settings came (no answer) leaves no copy: the next looking reader reads. */
+    @Test
+    fun aFreshReadThatFailedLeavesNoCopy() {
+        assertEquals("first", marker(look()))
+        server.failSettingsReads = true
+        assertThrows(Exception::class.java) { vault.loadSettings() }
+        server.failSettingsReads = false
+        server.editSettings { it.json.put("marker", "after the failure") }
+        assertEquals("after the failure", marker(look()))
+    }
+
     /* Past the window the settings are read again. */
     @Test
     fun theCopyEndsWithItsWindow() {

@@ -262,6 +262,15 @@ public actor FamilySync: FamilyJudge {
         try await $pass.withValue(nil, operation: work, isolation: isolation)
     }
 
+    /*
+     * A task of its own on the main actor (a walk, a release adopted) that may be started under a pass: it runs outside
+     * it, so it never reads the pass's listing, while the pass runs or after.
+     */
+    @discardableResult
+    public static func taskOutsidePass(_ work: @escaping @MainActor @Sendable () async -> Void) -> Task<Void, Never> {
+        Task { @MainActor in await outsidePass { await work() } }
+    }
+
     /* Route 25, as the pass this sync runs in has it (asked at most once in it, and again after a call lands), else asked now. */
     private func passSpaces() async throws -> [SpaceList.Entry] {
         guard let current = Self.pass else { return try await api.spaces() }

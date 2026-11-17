@@ -120,6 +120,39 @@ class FamiliesModelSessionTest {
         assertTrue("the old account's family reached the new session", model.states.isEmpty())
     }
 
+    /*
+     * Codex round 3: the old account's family pass is stuck on route 2 when another account signs in. The new session's
+     * pass never waits on it: it lists and checks the family on its own while the old one is still out. Fails if the pass
+     * marker outlives its session.
+     */
+    @Test
+    fun aNewSessionsPassNeverWaitsOnTheOldSessionsStalledOne() {
+        val host = Host(vault())
+        val model = FamiliesModel(host)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val held = java.util.concurrent.atomic.AtomicBoolean(false)
+        // Held before it is answered, while other requests are answered meanwhile.
+        server.beforeAnswer = { method, path ->
+            if (method == "GET" && path == "groups" && held.compareAndSet(false, true)) {
+                started.countDown()
+                release.await(20, TimeUnit.SECONDS)
+            }
+        }
+        val old = thread { runBlocking { model.refreshFamilies() } }
+        assertTrue("the old pass never asked for route 2", started.await(10, TimeUnit.SECONDS))
+        // Another account signs in, as DriveViewModel's signedIn does.
+        host.vault = vault()
+        model.reset()
+        try {
+            runBlocking { kotlinx.coroutines.withTimeout(8_000) { model.refreshFamilies() } }
+            assertTrue("the new session's pass didn't list", model.list != null)
+        } finally {
+            release.countDown()
+            old.join(20_000)
+        }
+    }
+
     @Test
     fun theOldAccounts401NeverSignsTheNewSessionOut() {
         val host = Host(vault())

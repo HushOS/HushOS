@@ -1287,6 +1287,34 @@ describe('opening', () => {
         expect(steps).not.toContain('driveOpenWorkspace');
     });
 
+    test('a lock lets go of a Shared by me request still out: the next account’s pass never joins it', async () => {
+        const h = harness();
+        let asked = 0;
+        const answer = deferred();
+        const api = {
+            ...h.api,
+            sharedByMe: async () => {
+                asked++;
+                if (asked === 1) await answer.promise;
+                return h.api.sharedByMe();
+            },
+        };
+        const client = createDriveClient(h.rpc, api as DriveApi, {
+            trustGrantee: h.trustGrantee,
+            ledger: ledgerOf({ shares: {}, links: {} }),
+        });
+        await client.open('owner');
+        const listing = client.mySharing();
+        await vi.waitFor(() => expect(asked).toBe(1));
+        // Locked (another account signs in next): the request still out is the old account's.
+        client.close();
+        await client.open('owner');
+        await client.upgradeShares();
+        expect(asked).toBe(2);
+        answer.resolve();
+        await listing.catch(() => {});
+    });
+
     test('Shared by me asks afresh even while the upgrade pass’s request is on its way', async () => {
         const h = harness();
         let asked = 0;

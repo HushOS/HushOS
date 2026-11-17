@@ -486,9 +486,10 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - Tests: `SettingsReuseTests`.
 - A family pass (`Families.refreshFamilies`) asks route 25 once: `FamilySync.inPass` holds the answer in a task-local.
     - Plain `Task { }`s inherit task-locals, so the listing is ended when `inPass` returns (cancelled or not); a task that outlives the pass then asks for itself.
-    - A task created under a pass for work of its own (a walk in `startWalks`, a release adopted in `applyReleases`) runs `FamilySync.outsidePass`, so it never reads the pass's listing even while the pass still runs.
-    - A chain call that lands (`sendKept`'s `drop(.landed)`) moves `FamilySync.landings`; a listing asked for before it is asked for again.
-    - Tests: `SettingsReuseTests` (one listing per pass, none for a detached sync or a task that syncs after the pass).
+    - A task created under a pass for work of its own (a walk in `startWalks`, a release adopted in `applyReleases`) is made by `FamilySync.taskOutsidePass`, so it never reads the pass's listing even while the pass still runs.
+    - A chain call that lands (`sendKept`'s `drop(.landed)`) or a walk that ends moves `FamilySync.landings`; a listing asked for before it is asked for again.
+    - Each session has its own vault, so the workspace read and the `/shares/mine` join never cross a sign-out.
+    - Tests: `SettingsReuseTests` (one listing per pass, none for a detached sync, a task outside the pass or one that syncs after it) and `FamilyManageTests` (asked again after a call lands).
 - Requests made together share one answer:
     - `loadWorkspace` (`loadingWorkspace`): the first list and the live sync at launch.
     - `sharedByMeAnswer(join:)`: the upgrade pass joins the sharing listing's `/shares/mine` when nothing is owed; the listing always asks afresh.

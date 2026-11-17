@@ -2321,6 +2321,8 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         openedNodes.clear();
         workspaceOf.clear();
         mounts = undefined;
+        // A Shared by me request still out belongs to the account that locked: never joined by the next one's pass.
+        sharedByMeRequest = undefined;
         // Names die with the keys; the mirror on disk is ciphertext and stays.
         generation++;
         building = undefined;
