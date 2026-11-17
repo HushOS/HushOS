@@ -366,6 +366,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
+        trustJoins.clear()
         notices.clear()
         vault = Vault.fromShared(context)
         filesAppChanged()
@@ -626,6 +627,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
@@ -959,6 +961,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val ending = vault
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
@@ -988,6 +991,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         families.reset()
+        trustJoins.clear()
         notices.clear()
         link = null
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
@@ -1875,17 +1879,13 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // load already under way for the same vault, started since the last guard write or settings save, answers it.
         // Every other ask follows an act (a check, a Continue, this account's own key replacement, Try again), which may
         // have changed what trust rests on without moving that generation, so it always loads afresh.
-        val generation = vault.memory.generation.get()
-        if (join) trustRun?.let { (run, owner, at) ->
-            // Joined, and it settled the trust set: that answers. One that failed or didn't land is loaded once more.
-            if (run.isActive && owner === vault && at == generation && run.await()) return
-        }
-        val run = viewModelScope.async { loadTrust(vault) }
-        trustRun = Triple(run, vault, generation)
-        run.await()
+        // Joined, and it settled the trust set: that answers. One that failed or didn't land is loaded once more, but only
+        // while this vault is still the session's (JoinedLoads).
+        trustJoins.load(viewModelScope, vault, vault.memory.generation.get(), join, current = { this.vault }) { loadTrust(vault) }
     }
 
-    private var trustRun: Triple<kotlinx.coroutines.Deferred<Boolean>, com.hushos.app.data.Vault, Long>? = null
+    /* The launch-time loads that join one another; holds a vault only while its load runs, and is cleared with the session. */
+    private val trustJoins = com.hushos.app.data.JoinedLoads<com.hushos.app.data.Vault>()
 
     /*
      * Whether this load settled the trust set: it landed and loaded, or the session ended (nothing to load again for). A
@@ -2253,6 +2253,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         vault?.areaLedger?.clear()
         vault = null
         viewModelScope.launch { families.reset() }
+        trustJoins.clear()
         notices.clear()
         filesAppChanged()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
