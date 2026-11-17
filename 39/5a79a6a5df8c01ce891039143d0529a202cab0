@@ -1,0 +1,44 @@
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/BrandQR.swift
+  s_566b8e0c4467a4::t_fdcfd788b35e04 1-208
+  s_c60e24772e04af::t_7b97305ca6ffe8 209-219
+apps/android/app/src/test/kotlin/com/hushos/app/ui/BrandQrTest.kt
+  s_566b8e0c4467a4::t_858c0ca04320af 1-74
+  s_566b8e0c4467a4::t_ab26734a49b5e4 75-76
+apps/android/app/src/main/kotlin/com/hushos/app/ui/BrandQr.kt
+  s_566b8e0c4467a4::t_becbbafb2b5ada 1-111
+  s_c60e24772e04af::t_7cfdb253b18d77 112-113
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/BrandQRTests.swift
+  s_566b8e0c4467a4::t_9e74a2b8340543 1-50
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_245ac47c5b95e5 501
+apps/android/app/src/main/kotlin/com/hushos/app/ui/LinksUi.kt
+  s_566b8e0c4467a4::t_fdd3397f63340c 758
+apps/ios/App/DeviceApproval.swift
+  s_566b8e0c4467a4::t_3a9db7e8d321eb 160
+apps/ios/App/Sharing.swift
+  s_566b8e0c4467a4::t_28f8d9d1e4aa2c 523,1109-1114,1116-1117,1120-1124
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "395a79a6a5df8c01ce891039143d0529a202cab0",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
