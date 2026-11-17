@@ -759,8 +759,18 @@ let own = SaveSources.ownWriting
         #expect(await writer.purged == ["made-Out"])
         #expect(rows.list().isEmpty)
 
+        // Its own id already taken (an earlier send of the same request made it): it may exist.
+        let twice = FakeWriter()
+        await twice.set(refuseCreation: .server(409, "An item with this id already exists."))
+        let twiceRows = journal()
+        let made = try await SaveRun.start(writer: twice, targets: [opened("f")], results: [], journal: twiceRows)
+        var kept: SaveRunStopped?
+        do { _ = try await made.folder("Out", sources: own) } catch let error as SaveRunStopped { kept = error }
+        #expect(kept?.cleanup == .left)
+        #expect(twiceRows.list().first?.nodeIds == ["made-Out"])
+
         let refused = FakeWriter()
-        await refused.set(refuseCreation: .server(409, "That name is taken."))
+        await refused.set(refuseCreation: .forbidden("You can’t change this."))
         let other = journal()
         let second = try await SaveRun.start(writer: refused, targets: [opened("f")], results: [], journal: other)
         var said: SaveRunStopped?

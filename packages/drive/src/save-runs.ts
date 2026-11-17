@@ -308,14 +308,17 @@ export function abortFateOf(error: unknown): AbortFate | 'finishing' {
 /*
  * A creation the server refused with an answer (a 4xx carrying its reason): nothing was made.
  * Anything else (no answer, a timeout, a 5xx, an abort, a failure after it was made) may have
- * made it, and a clean-up that finds nothing yet must look again later.
+ * made it, and a clean-up that finds nothing yet must look again later. So may a 409 `conflict`
+ * (its id already there): ids are minted here, so only this run's own earlier send made it, one
+ * the browser sent again by itself after its connection dropped.
  */
 export function refusedOutright(error: unknown) {
     return (
         error instanceof DriveApiError &&
         error.status >= 400 &&
         error.status < 500 &&
-        error.code !== 'unavailable'
+        error.code !== 'unavailable' &&
+        error.code !== 'conflict'
     );
 }
 

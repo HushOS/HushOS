@@ -690,7 +690,14 @@ class SaveRunTest {
         assertEquals(setOf("made-Out"), writer.purged)
         assertTrue(rows.list().isEmpty())
 
-        val refused = FakeWriter().apply { refuseCreation = ApiError(409, "That name is taken.", "conflict") }
+        // Its own id already taken (an earlier send of the same request made it): it may exist.
+        val twice = FakeWriter().apply { refuseCreation = ApiError(409, "An item with this id already exists.", "conflict") }
+        val twiceRows = journal()
+        val made = SaveRun.start(twice, listOf(opened("f")), emptyList(), twiceRows)
+        assertEquals(SaveCleanup.LEFT, assertThrows(SaveRunStopped::class.java) { made.folder("Out", own) }.cleanup)
+        assertEquals(listOf("made-Out"), twiceRows.list().single().nodeIds)
+
+        val refused = FakeWriter().apply { refuseCreation = ApiError(409, "The destination folder is in the trash.", "parent-trashed") }
         val other = journal()
         val second = SaveRun.start(refused, listOf(opened("f")), emptyList(), other)
         val said = assertThrows(SaveRunStopped::class.java) { second.folder("Out", own) }
@@ -754,6 +761,34 @@ class SaveRunTest {
         assertTrue("${writer.partsAfterStop} parts after the stop began", writer.partsAfterStop <= 1)
         assertTrue(rows.list().isEmpty())
         pool.shutdown()
+    }
+
+    /*
+     * A journal opened while another writes the same file: it clears a leftover staging file only under the file's lock,
+     * so it waits until that write's staging file is renamed over the journal, never deleting it in between.
+     */
+    @Test
+    fun aJournalOpenedMidWriteWaitsBeforeClearingTheStagingFile() {
+        val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
+        val writer = SaveRunJournal(file, SaveRunJournal.Epoch())
+        val staging = File(file.parentFile, SaveRunJournal.STAGING)
+        var opener: Thread? = null
+        var stagedThen = false
+        var openedMidWrite = false
+        writer.staged = {
+            writer.staged = null
+            stagedThen = staging.exists()
+            opener = Thread { SaveRunJournal(file, SaveRunJournal.Epoch()) }.also { it.start() }
+            // Held mid-write: long enough for an open that doesn't wait for the lock to clear the staging file.
+            opener!!.join(300)
+            openedMidWrite = !opener!!.isAlive
+        }
+        writer.put(SaveRunRow("run", "ws", listOf("node"), emptyList(), 1L, "now"))
+        opener!!.join(5_000)
+        assertTrue(stagedThen)
+        assertFalse("a journal opened mid-write cleared the staging file", openedMidWrite)
+        assertEquals(listOf("run"), writer.list().map { it.id })
+        assertFalse(staging.exists())
     }
 
     /* A listing that fails after a result landed stops the run and removes it: all or nothing. */
@@ -1023,6 +1058,20 @@ class SaveResultTest {
         Shared.writeDevice(context, deviceRemember(server.userId, server.accountKey, 1uL, 1uL, UUID.randomUUID().toString()))
         vault = Vault(context, DriveApi(Shared.session(context)!!))
         vault.listChildren(server.root)
+    }
+
+    /*
+     * A write whose answer is lost goes out once (DriveApi.sentOnce): the client never sends it again by itself, so a
+     * lost answer is Unreachable for the save run's own rules, never a 409 for its own id or a second trash.
+     */
+    @Test
+    fun aWriteWhoseAnswerIsLostIsSentOnce() {
+        server.dropReply = { method, path -> method == "POST" && (path == "drive/folders" || path.endsWith("/trash-batch")) }
+        assertThrows(Unreachable::class.java) { vault.createFolder(server.root, "Out") }
+        assertEquals(1, server.requests.count { it == "POST /api/drive/folders" })
+        assertThrows(Unreachable::class.java) { vault.api.trashBatch(vault.workspaceId, listOf(server.root)) }
+        assertEquals(1, server.requests.count { it.endsWith("/trash-batch") })
+        server.dropReply = null
     }
 
     @After

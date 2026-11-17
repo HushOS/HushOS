@@ -143,9 +143,6 @@ class SaveRunEngineTest {
         // A request that never reaches the server is still read whole (a connection dropped before its body is read
         // leaves the client writing it until its timeout): the fake answers nothing in its place and drops the reply.
         val unreached = java.util.Collections.synchronizedSet(HashSet<Thread>())
-        // Folders whose creation lost its answer while the server was still making them.
-        val cut = java.util.Collections.synchronizedSet(HashSet<String>())
-        fun folderIds(body: JSONObject) = body.optJSONArray("folders")?.let { array -> (0 until array.length()).map { array.getJSONObject(it).getString("id") } }.orEmpty()
         server.beforeAnswer = hook@{ method, path ->
             if (path.trimStart('/').startsWith("store/")) return@hook
             val point = pointOf(method, path)
@@ -166,16 +163,9 @@ class SaveRunEngineTest {
                 // The share ended: every request about it is a 404, as the server answers one no longer theirs.
                 world.live && world.revoked -> 404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
                 fault == Fault.REFUSED -> { synchronized(pending) { pending.remove(Thread.currentThread()) }; 403 to JSONObject().put("code", "forbidden").put("message", "Refused.") }
-                // The answer is cut (dropReply) while the server is still making the folder: it appears a second later. The
-                // client's own resend of that request (HttpURLConnection sends a POST again once when its connection drops)
-                // meets the same: the server is still at it.
-                method == "POST" && segments == listOf("drive", "folders") &&
-                    (fault == Fault.LATE || folderIds(body).any { it in cut }) -> {
-                    synchronized(pending) { pending[Thread.currentThread()] = Fault.LATE }
-                    if (fault == Fault.LATE) {
-                        cut += folderIds(body)
-                        world.late += pool.submit { Thread.sleep(1_000); server.createFoldersLate(body) }
-                    }
+                // The answer is cut (dropReply) while the server is still making the folder: it appears a second later.
+                fault == Fault.LATE && method == "POST" && segments == listOf("drive", "folders") -> {
+                    world.late += pool.submit { Thread.sleep(1_000); server.createFoldersLate(body) }
                     200 to JSONObject()
                 }
                 // Trash and delete forever, per item, as the batch routes answer.

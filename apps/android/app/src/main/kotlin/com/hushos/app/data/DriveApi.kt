@@ -240,12 +240,24 @@ class DriveApi(val session: Shared.Session) : RootApi {
 
     private fun send(path: String, body: JSONObject, method: String = "POST"): JSONObject {
         val connection = open(path, method)
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
+        val bytes = body.toString().toByteArray()
+        sentOnce(connection, bytes.size)
         // Writing the body is the first thing to touch the network: no network there is Unreachable too, not
         // a raw "unable to resolve host" for the error dialog.
-        try { connection.outputStream.use { it.write(body.toString().toByteArray()) } } catch (error: java.io.IOException) { throw Unreachable() }
+        try { connection.outputStream.use { it.write(bytes) } } catch (error: java.io.IOException) { throw Unreachable() }
         return finish(connection)
+    }
+
+    /*
+     * A write goes out once. Left to buffer its body, HttpURLConnection sends it again by itself when the connection
+     * drops after it went (the JDK's retryPost; Android's OkHttp retryOnConnectionFailure): a folder creation or a begin
+     * the server already took then comes back a 409 for its own id, and a lost answer reads as a refusal. Streamed
+     * at a fixed length the body can't be replayed, so a drop is Unreachable and the caller's own rules decide.
+     */
+    private fun sentOnce(connection: HttpURLConnection, length: Int) {
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setFixedLengthStreamingMode(length)
     }
 
     /* A write into `workspaceId`: the final gate, then the request. */
@@ -490,9 +502,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
     private fun batch(workspaceId: String, path: String, ids: List<String>): List<BatchAnswer> {
         beforeWrite(workspaceId)
         val connection = open(path, "POST")
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
         val body = JSONObject().put("nodeIds", org.json.JSONArray(ids)).toString().toByteArray()
+        sentOnce(connection, body.size)
         try { connection.outputStream.use { it.write(body) } } catch (error: java.io.IOException) { throw Unreachable() }
         val status: Int
         val text: String

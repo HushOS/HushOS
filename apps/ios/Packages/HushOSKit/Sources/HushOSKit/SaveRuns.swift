@@ -593,12 +593,14 @@ public enum SaveRuns {
     }
 
     /*
-     * A request that got no answer (no network, a timeout, a 5xx, cancelled on its way): what it asked may still have
-     * been done. Only a refusal the server explained (a 4xx) settles that it wasn't.
+     * A creation that may have been made: no answer (no network, a timeout, a 5xx, cancelled on its way), or a plain 409
+     * (the server's `conflict`, its id already there: minted here, so only an earlier send of the same request made it,
+     * one URLSession may send again by itself when a reused connection drops). Any other refusal the server explained
+     * (a 4xx) settles that it wasn't.
      */
     static func noAnswer(_ error: Error) -> Bool {
         switch error {
-        case DriveAPIError.server(let status, _): return status == 0 || status >= 500
+        case DriveAPIError.server(let status, _): return status == 0 || status >= 500 || status == 409
         case DriveAPIError.notAuthenticated, DriveAPIError.notFound, DriveAPIError.trashed, DriveAPIError.rotating, DriveAPIError.stale,
              DriveAPIError.conflicted, DriveAPIError.forbidden: return false
         default: return true

@@ -1391,7 +1391,11 @@ describe('a save run', () => {
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
         w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
             await minted('refused');
-            throw new DriveApiError('That name is taken.', 'conflict', 409);
+            throw new DriveApiError(
+                'The destination folder is in the trash.',
+                'parent-trashed',
+                409,
+            );
         };
         const stopped = (await run
             .folder('Out', own)
@@ -1399,6 +1403,30 @@ describe('a save run', () => {
         expect(stopped.cleanup).toBe('nothing');
         expect(stopped.message).toContain('Nothing was saved');
         expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder creation answered 409 for its own id (the browser sent it again) may exist: the row stays', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('twice');
+            // The first send is still being made; the resend finds its id taken.
+            void new Promise<void>((resolve) => {
+                create = resolve;
+            }).then(() => w.server.live.add('twice'));
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        create();
+        await tick();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).not.toContain('Nothing was saved');
+        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('twice')).toBe(true);
     });
 
     test('two late folders that both can’t be removed are both named by the row', async () => {

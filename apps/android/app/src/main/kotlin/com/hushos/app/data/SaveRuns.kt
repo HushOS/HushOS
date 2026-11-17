@@ -72,6 +72,8 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
 
     /* Tests only: runs before each write with the rows it would write, and a throw refuses it as a full disk would. */
     @Volatile internal var fault: ((List<SaveRunRow>) -> Unit)? = null
+    /* Tests only: runs once a write's staging file is on disk, before it is renamed over the journal. */
+    @Volatile internal var staged: (() -> Unit)? = null
 
     /* Every row, those of finished runs (`done`) included. */
     fun list(): List<SaveRunRow> = synchronized(lock) { read() }
@@ -135,6 +137,7 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
                 out.write(JSONArray(rows.map { it.json() }).toString().toByteArray())
                 out.fd.sync()
             }
+            staged?.invoke()
             if (!staging.renameTo(file)) {
                 file.delete()
                 if (!staging.renameTo(file)) throw java.io.IOException("The save record couldn’t be written.")
@@ -452,10 +455,12 @@ object SaveRuns {
     internal fun isNoRoom(error: Throwable) = error is ApiError && error.status == 402
 
     /*
-     * A request that got no answer (no network, a timeout, a 5xx): what it asked may still have been done. A refusal the
-     * server explained (a 4xx) or a failure before it was sent settles that it wasn't.
+     * A creation that may have been made: no answer (no network, a timeout, a 5xx), or a 409 `conflict` for its own id
+     * (minted here, so only an earlier send of the same request made it). Any other refusal the server explained (a 4xx),
+     * or a failure before it was sent, settles that it wasn't.
      */
-    internal fun noAnswer(error: Throwable) = error is Unreachable || error is java.io.IOException || (error is ApiError && (error.status == 0 || error.status >= 500))
+    internal fun noAnswer(error: Throwable) = error is Unreachable || error is java.io.IOException ||
+        (error is ApiError && (error.status == 0 || error.status >= 500 || (error.status == 409 && error.code == "conflict")))
 }
 
 /*
