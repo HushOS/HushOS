@@ -20,11 +20,20 @@ struct ArchiveScreen: View {
     let item: Opened?
     let kept: URL?
     let name: String
+    /*
+     * Hears of the row the archive opened when it is newer than `item` (a family's file another
+     * member replaced): the viewer adopts it, as `DriveStore.fetch(adopted:)` has it do, so its
+     * header and Send a copy judge the version shown, not the one tapped.
+     */
+    var adopted: ((Opened) -> Void)?
     @State private var archive: OpenArchive?
+    /* The key adopting a row makes: the task it starts finds that row open already. */
+    @State private var adoptedKey: String?
     @State private var tree: ArchiveTree?
     @State private var failure: String?
     @State private var attempt = 0
-    @State private var path: [String] = []
+    /* The folders from the top to the one shown, by their numbers in the tree. */
+    @State private var path: [UInt32] = []
     @State private var opened: ArchiveEntry?
     @State private var unlocked = false
     /* The entry waiting for a folder to be picked, and whether the picker shows: apart, because
@@ -37,10 +46,11 @@ struct ArchiveScreen: View {
     /* Every download running or failed, a row each: a second never hides the first. */
     @State private var downloads: [ArchiveDownload] = []
 
-    init(item: Opened) {
+    init(item: Opened, adopted: ((Opened) -> Void)? = nil) {
         self.item = item
         kept = nil
         name = item.name
+        self.adopted = adopted
     }
 
     init(kept url: URL, name: String) {
@@ -51,8 +61,12 @@ struct ArchiveScreen: View {
 
     private var title: String { archive?.row?.name ?? name }
     private var key: String {
-        if let item { return "\(item.id)-\(item.node.currentVersion?.id ?? "")-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)" }
+        if let item { return key(of: item) }
         return "kept-\(kept?.path ?? "")-\(attempt)"
+    }
+
+    private func key(of row: Opened) -> String {
+        "\(row.id)-\(row.node.currentVersion?.id ?? "")-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)"
     }
 
     var body: some View {
@@ -73,7 +87,7 @@ struct ArchiveScreen: View {
                                      onDownload: { start(opened) })
                         .id(opened.index)
                 } else {
-                    list(tree.rows(at: path), hidden: archive.hidden)
+                    list(tree.rows(in: path.last ?? 0), hidden: archive.hidden)
                 }
                 ForEach(downloads) { downloadBar($0) }
             } else {
@@ -89,6 +103,12 @@ struct ArchiveScreen: View {
         }
         .background(Alpine.ground.ignoresSafeArea())
         .task(id: key) {
+            // The row this archive opened, adopted by the viewer: open already, nothing to do again.
+            if key == adoptedKey, archive != nil {
+                adoptedKey = nil
+                return
+            }
+            adoptedKey = nil
             archive?.close()
             archive = nil
             tree = nil
@@ -108,10 +128,15 @@ struct ArchiveScreen: View {
             // The tree off the main thread (a 50,000-entry list takes a moment), and the archive closed if the viewer is left
             // meanwhile: until it is shown, nothing else would close it.
             let entries = open.entries
-            let built = await Task.detached(priority: .userInitiated) { ArchiveTree(entries) }.value
+            let folders = open.takeFolders()
+            let built = await Task.detached(priority: .userInitiated) { ArchiveTree(entries, folders: folders) }.value
             guard !Task.isCancelled else { open.close(); return }
             tree = built
             archive = open
+            if let item, let row = open.row, row.node != item.node {
+                adoptedKey = key(of: row)
+                adopted?(row)
+            }
         }
         // Leaving the viewer stops its downloads and closes the archive (its calls cancelled, the password wiped).
         .onDisappear {
@@ -139,13 +164,13 @@ struct ArchiveScreen: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Alpine.Space.s1) {
                 crumb(title, current: path.isEmpty && opened == nil) { go([]) }
-                ForEach(Array(path.enumerated()), id: \.offset) { index, part in
+                ForEach(Array(path.enumerated()), id: \.offset) { index, folder in
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
-                    crumb(part, current: index == path.count - 1 && opened == nil) { go(Array(path.prefix(index + 1))) }
+                    crumb(tree?.name(of: folder) ?? "", current: index == path.count - 1 && opened == nil) { go(Array(path.prefix(index + 1))) }
                 }
                 if let opened {
                     Image(systemName: "chevron.right").font(.caption).foregroundStyle(Alpine.inkMuted).accessibilityHidden(true)
-                    crumb(opened.parts.last ?? opened.path, current: true) {}
+                    crumb(opened.name, current: true) {}
                 }
             }
             .padding(.horizontal, Alpine.Space.s4)
@@ -166,7 +191,7 @@ struct ArchiveScreen: View {
         .accessibilityAddTraits(current ? .isSelected : [])
     }
 
-    private func go(_ to: [String]) {
+    private func go(_ to: [UInt32]) {
         opened = nil
         path = to
     }
@@ -206,7 +231,7 @@ struct ArchiveScreen: View {
 
     private func open(_ row: ArchiveRow) {
         switch row {
-        case .folder(let name, _): path.append(name)
+        case .folder(let id, _, _): path.append(id)
         case .file(let entry): if !entry.link { opened = entry }
         }
     }
@@ -271,7 +296,7 @@ struct ArchiveScreen: View {
 
     private func downloadBar(_ download: ArchiveDownload) -> some View {
         HStack(spacing: Alpine.Space.s3) {
-            Text(download.error ?? ArchiveWords.downloading(download.entry.parts.last ?? download.entry.path))
+            Text(download.error ?? ArchiveWords.downloading(download.entry.name))
                 .font(Theme.Text.footnote).foregroundStyle(download.error == nil ? Alpine.ink : Alpine.danger).lineLimit(2)
             Spacer(minLength: 0)
             if download.error == nil, download.entry.size > 0 {
@@ -319,7 +344,7 @@ enum ArchiveFiles {
 extension ArchiveRow {
     var key: String {
         switch self {
-        case .folder(let name, _): "d:\(name)"
+        case .folder(let id, _, _): "d:\(id)"
         case .file(let entry): "f:\(entry.index)"
         }
     }
@@ -356,15 +381,15 @@ private struct ArchiveRowView: View {
         switch row {
         case .folder: FolderGlyph().frame(width: Theme.mark * 0.9, height: Theme.mark * 0.9 * 46 / 56)
         case .file(let entry):
-            let ext = ((entry.parts.last ?? entry.path) as NSString).pathExtension.uppercased()
-            PageGlyph(label: (1 ... 4).contains(ext.count) ? ext : nil, name: entry.parts.last ?? entry.path)
+            let ext = (entry.name as NSString).pathExtension.uppercased()
+            PageGlyph(label: (1 ... 4).contains(ext.count) ? ext : nil, name: entry.name)
                 .frame(width: Theme.mark * 0.66, height: Theme.mark * 0.66 * 54 / 44)
         }
     }
 
     private var subtitle: String {
         switch row {
-        case .folder(_, let count): return ArchiveWords.items(count)
+        case .folder(_, _, let count): return ArchiveWords.items(count)
         case .file(let entry):
             if entry.link { return ArchiveWords.link }
             if entry.lock != "none" && !unlocked { return ArchiveWords.needsPassword }
@@ -390,7 +415,7 @@ private struct ArchiveEntryPane: View {
     @State private var passwordToDownload = false
     @State private var attempt = 0
 
-    private var name: String { entry.parts.last ?? entry.path }
+    private var name: String { entry.name }
     private var kind: ArchiveEntries.Kind { ArchiveEntries.kind(of: name) }
     private var limits: PreviewLimits { ArchiveEntries.limits(kind) }
     private var locked: Bool { entry.lock != "none" && !unlocked }
@@ -430,7 +455,7 @@ private struct ArchiveEntryPane: View {
                 if locked { passwordToDownload = true } else { onDownload() }
             }
         } else if locked || reprompt {
-            ArchivePasswordCard(name: name, archive: archive, entry: reprompt ? entry : nil) {
+            ArchivePasswordCard(name: name, archive: archive, entry: entry) {
                 unlocked = true
                 reprompt = false
                 failure = nil
@@ -576,8 +601,8 @@ private struct InMemoryPDF: UIViewRepresentable {
 private struct ArchivePasswordCard: View {
     let name: String
     let archive: OpenArchive
-    /* The entry whose own password this is, tried first; none for the archive's. */
-    let entry: ArchiveEntry?
+    /* The entry the password is asked for: tried on it first, so a password that opens only some of the archive's entries opens the one picked. */
+    let entry: ArchiveEntry
     let onUnlocked: () -> Void
     @State private var password = ""
     @State private var busy = false

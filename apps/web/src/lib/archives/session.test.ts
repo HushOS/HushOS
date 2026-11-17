@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readListing } from './session';
+import { folderName, readListing } from './session';
 
 /*
  * The page's boundary against the archive worker: a worker a hostile file took over can send the
@@ -10,7 +10,8 @@ import { readListing } from './session';
 const entry = (overrides: Record<string, unknown> = {}) => ({
     index: 0,
     path: 'docs/readme.txt',
-    parts: ['docs', 'readme.txt'],
+    folder: 1,
+    name: 'readme.txt',
     directory: false,
     size: 10,
     packed: 8,
@@ -26,58 +27,66 @@ const entry = (overrides: Record<string, unknown> = {}) => ({
     ...overrides,
 });
 
+/* A listing message: its entries under the folders `docs` (1) and `docs/notes` (2) unless others are given. */
+const message = (
+    entries: unknown[],
+    {
+        hidden = 0,
+        parents = Uint32Array.of(0, 0, 1) as unknown,
+        names = 'docs/notes/' as unknown,
+    } = {},
+) => ({ entries, hidden, parents, names });
+
 describe('reading the worker’s listing', () => {
-    it('keeps only the fields it checks, copied', () => {
-        const parts = ['docs', 'readme.txt'];
-        const read = readListing(
-            { entries: [entry({ parts, extra: new ArrayBuffer(1024) })], hidden: 0 },
-            100,
-        );
+    it('keeps only the fields it checks, and finds each folder’s name', () => {
+        const read = readListing(message([entry({ extra: new ArrayBuffer(1024) })]), 100);
         expect(read).not.toBeNull();
         expect(read!.entries[0]).not.toHaveProperty('extra');
-        // A copy: the worker's own array is never what the viewer holds.
-        expect(read!.entries[0]!.parts).not.toBe(parts);
-        expect(read!.entries[0]!.parts).toEqual(parts);
+        expect(read!.entries[0]!.folder).toBe(1);
+        expect([0, 1, 2].map((k) => folderName(read!.folders, k))).toEqual(['', 'docs', 'notes']);
     });
 
-    it('refuses a path deeper than the listing’s cap, and more parts than the archive may spend', () => {
-        const deep = Array.from({ length: 257 }, (_, i) => `d${i}`);
-        expect(readListing({ entries: [entry({ parts: deep })], hidden: 0 }, 100)).toBeNull();
-        expect(
-            readListing({ entries: [entry({ parts: deep.slice(0, 256) })], hidden: 0 }, 100),
-        ).not.toBeNull();
-        // 1,000 entries of 256 parts: 256,000 parts, past the 250,000 a listing may spend.
-        const many = Array.from({ length: 1_000 }, (_, i) =>
-            entry({ index: i, parts: deep.slice(0, 256) }),
-        );
-        expect(readListing({ entries: many, hidden: 0 }, 100)).toBeNull();
+    it('refuses folders that aren’t a tree, or names no path could hold', () => {
+        const refused = (parents: unknown, names: unknown) =>
+            readListing(message([entry()], { parents, names }), 100);
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/notes/')).not.toBeNull();
+        // A folder before its parent, or its own parent: a loop the view could walk forever.
+        expect(refused(Uint32Array.of(0, 2, 0), 'docs/notes/')).toBeNull();
+        expect(refused(Uint32Array.of(0, 1, 1), 'docs/notes/')).toBeNull();
+        expect(refused(Uint32Array.of(1, 0, 1), 'docs/notes/')).toBeNull();
+        // A name for every folder, each one a part: not empty, `.` or holding a separator.
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/')).toBeNull();
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/notes/more/')).toBeNull();
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/notes')).toBeNull();
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs//')).toBeNull();
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/./')).toBeNull();
+        expect(refused(Uint32Array.of(0, 0, 1), 'docs/a\\b/')).toBeNull();
+        expect(refused([0, 0, 1], 'docs/notes/')).toBeNull();
+        expect(refused(new Uint32Array(0), '')).toBeNull();
     });
 
     it('refuses repeated indexes, an entry packed larger than the archive, and odd values', () => {
-        expect(readListing({ entries: [entry(), entry()], hidden: 0 }, 100)).toBeNull();
-        expect(readListing({ entries: [entry({ packed: 101 })], hidden: 0 }, 100)).toBeNull();
+        expect(readListing(message([entry(), entry()]), 100)).toBeNull();
+        expect(readListing(message([entry({ packed: 101 })]), 100)).toBeNull();
         for (const odd of [
             { lock: 'pkware' },
             { support: 'maybe' },
             { size: -1 },
             { size: 1.5 },
             { stored: 'yes' },
-            { parts: ['docs', ''] },
+            { folder: 3 },
+            { folder: -1 },
+            { name: '' },
             { saveName: '' },
             { saveName: 'x'.repeat(256) },
             { mtime: Number.NaN },
         ])
-            expect(
-                readListing({ entries: [entry(odd)], hidden: 0 }, 100),
-                JSON.stringify(odd),
-            ).toBeNull();
+            expect(readListing(message([entry(odd)]), 100), JSON.stringify(odd)).toBeNull();
     });
 
     it('refuses more than 100,000 entries, and a hidden count above the entries', () => {
-        expect(readListing({ entries: [entry()], hidden: 2 }, 100)).toBeNull();
-        expect(
-            readListing({ entries: Array.from({ length: 100_001 }, () => null), hidden: 0 }, 100),
-        ).toBeNull();
+        expect(readListing(message([entry()], { hidden: 2 }), 100)).toBeNull();
+        expect(readListing(message(Array.from({ length: 100_001 }, () => null)), 100)).toBeNull();
     });
 });
 
@@ -100,7 +109,7 @@ describe('a lock or sign-out', () => {
             () => fake as unknown as Worker,
         );
         fake.onmessage!({
-            data: { type: 'listing', entries: [entry()], hidden: 0 },
+            data: { type: 'listing', ...message([entry()]) },
         } as MessageEvent);
         await session.listing;
         const unlocking = session.unlock('the password');

@@ -1,53 +1,58 @@
 package com.hushos.app.data
 
 import com.hushos.core.ArchiveEntry
+import com.hushos.core.ArchiveFolders
 import java.time.LocalDateTime
 import java.time.ZoneId
 
 /*
- * The archive's list as folders (the web's treeOf in components/drive/archive-view.tsx): a tree
- * whose nodes hold only their own children, folders implied by a deeper path included, so memory
- * grows with the entries' parts, never with every prefix of every path (the core caps a path at
- * 256 parts). Mac resource entries are left out. Rows sort folders first, then by name, numbers in
- * order ("2" before "10"), once per folder and kept.
+ * The archive's list as folders (the web's rowsOf in components/drive/archive-view.tsx), from the
+ * core's ArchiveFolders: each folder's parent and name in one array and one string, never an
+ * object a folder, so a listing of millions of folders costs a few bytes each. A folder's rows
+ * (its folders first, then its files, each by name, numbers in order: "2" before "10") are made
+ * the first time they are asked for and kept. Mac resource entries are left out.
  */
-class ArchiveTree(entries: List<ArchiveEntry>) {
+class ArchiveTree(entries: List<ArchiveEntry>, folders: ArchiveFolders) {
     sealed interface Row {
         val name: String
-        data class Folder(override val name: String, val count: Int) : Row
+        /* A folder: its number in the list's folders, and how many items it holds. */
+        data class Folder(val id: Int, override val name: String, val count: Int) : Row
         data class File(override val name: String, val entry: ArchiveEntry) : Row
     }
 
-    private class Node {
-        val folders = LinkedHashMap<String, Node>()
-        val files = ArrayList<ArchiveEntry>()
-        /* The rows, sorted the first time they are asked for. */
-        var rows: List<Row>? = null
-    }
-
-    private val top = Node()
-
-    init {
-        for (entry in entries) {
-            if (entry.hidden) continue
-            val parts = entry.parts
-            val depth = if (entry.directory) parts.size else parts.size - 1
-            var node = top
-            for (i in 0 until depth) node = node.folders.getOrPut(parts[i]) { Node() }
-            if (!entry.directory && parts.isNotEmpty()) node.files.add(entry)
+    private val parents: IntArray = java.nio.ByteBuffer.wrap(folders.parents).order(java.nio.ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+        .let { buffer -> IntArray(maxOf(buffer.remaining(), 1)).also { buffer.get(it, 0, buffer.remaining()) } }
+    private val names = folders.names
+    /* Where each folder's name starts in `names`; the next one's start, less its `/`, is where it ends. */
+    private val starts = IntArray(parents.size + 1).also { starts ->
+        var at = 0
+        for (k in 1 until parents.size) {
+            starts[k] = at
+            at = names.indexOf('/', at).let { if (it < 0) names.length else it + 1 }
         }
+        starts[parents.size] = at
     }
+    private val files = entries.filter { !it.hidden && !it.directory && it.folder.toInt() < parents.size }
+    /* What each folder holds, folders and files. */
+    private val counts = IntArray(parents.size).also { counts ->
+        for (k in 1 until parents.size) counts[parents[k]]++
+        for (file in files) counts[file.folder.toInt()]++
+    }
+    private val made = HashMap<Int, List<Row>>()
 
-    /* The rows of the folder at `path` (its parts), empty for one the archive doesn't hold. */
-    fun rows(path: List<String>): List<Row> {
-        var node: Node = top
-        for (part in path) node = node.folders[part] ?: return emptyList()
-        node.rows?.let { return it }
+    /* Folder `id`'s name ("" for the top). */
+    fun name(id: Int): String = if (id <= 0 || id >= parents.size) "" else names.substring(starts[id], starts[id + 1] - 1)
+
+    /* The rows of folder `id` (0: the top), empty for one the list doesn't hold. */
+    fun rows(id: Int): List<Row> = synchronized(made) {
+        made[id]?.let { return it }
+        if (id < 0 || id >= parents.size) return emptyList()
         val byName = Comparator<String> { a, b -> numberAware(a, b, collator) }
-        val folders = node.folders.entries.sortedWith(compareBy(byName) { it.key })
-            .map { Row.Folder(it.key, it.value.folders.size + it.value.files.size) }
-        val files = node.files.sortedWith(compareBy(byName) { it.parts.last() }).map { Row.File(it.parts.last(), it) }
-        return (folders + files).also { node.rows = it }
+        val inside = ArrayList<Row.Folder>()
+        for (k in 1 until parents.size) if (parents[k] == id) inside.add(Row.Folder(k, name(k), counts[k]))
+        val folderRows = inside.sortedWith(compareBy(byName) { it.name })
+        val fileRows = files.filter { it.folder.toInt() == id }.sortedWith(compareBy(byName) { it.name }).map { Row.File(it.name, it) }
+        return (folderRows + fileRows).also { made[id] = it }
     }
 
     private val collator = java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY }

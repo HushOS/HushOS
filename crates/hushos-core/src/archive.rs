@@ -30,11 +30,24 @@ const MIB: u64 = 1024 * 1024;
 pub const ZIP_DIRECTORY_MAX_BYTES: u64 = 16 * MIB;
 /// The most entries listed.
 pub const ZIP_ENTRIES_MAX: u64 = 50_000;
+
+/// The most entries a zip's list takes here, for the words that say so.
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn zip_entries_max() -> u64 {
+    ZIP_ENTRIES_MAX
+}
 const RATIO: u64 = 200;
 const RATIO_FROM: u64 = MIB;
 const ASK_ABOVE: u64 = 4 * 1024 * MIB;
-/// An unlock decrypts the smallest locked entry in full when it is at most this large.
+/// The most an unlock inflates of an entry, by what it declares, to be sure of a password. An
+/// entry past it, or past the declared ratio, is never inflated to probe: a 16 MiB stream of
+/// zeros can declare gigabytes.
 const UNLOCK_CHECK_BYTES: u64 = 16 * MIB;
+
+/// Whether an unlock may inflate `entry` in full to prove a password.
+fn probes(entry: &Entry) -> bool {
+    entry.size <= UNLOCK_CHECK_BYTES && !declares_too_much(entry.size, entry.packed)
+}
 /// How far one try of a password goes: at most three entries and 32 MiB read, however many are locked.
 const UNLOCK_ENTRIES_MAX: usize = 3;
 const UNLOCK_READ_MAX: u64 = 32 * MIB;
@@ -634,8 +647,12 @@ fn local_header_read(entry: &Entry) -> u64 {
 pub struct ArchiveEntry {
     pub index: u32,
     pub path: String,
-    /// Its folders and name for the list: `/` and `\` both separate; empty and `.` parts are dropped.
-    pub parts: Vec<String>,
+    /// The folder it is listed in (`ArchiveFolders`; 0 is the top) and its name there: the last part
+    /// of its path (`/` and `\` both separate; empty and `.` parts are dropped), or its whole path
+    /// when it is listed flat at the top (deeper than 256 parts, or a file named by separators
+    /// alone). A Mac resource entry under `__MACOSX/` is in no folder: 0, and never shown.
+    pub folder: u32,
+    pub name: String,
     pub directory: bool,
     pub size: u64,
     pub packed: u64,
@@ -659,8 +676,50 @@ const ARCHIVE_EXTENSIONS: &[&str] = &[
     "tbz", "tbz2", "xz", "txz", "zst", "tzst", "lz", "lzma", "z", "cab", "iso", "dmg",
 ];
 
+/// The archive's folders, as the list shows them. Folder 0 is the top; folder `k` (from 1) has its
+/// parent, always below `k`, as the `k`th little-endian u32 of `parents`, and its name as the `k`th
+/// of `names`, each name followed by `/` (no name holds `/` or `\`). Bytes rather than a list of
+/// numbers, so an app holds them as one array, not millions of boxed values.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ArchiveFolders {
+    pub parents: Vec<u8>,
+    pub names: String,
+}
+
+/// Where the next part of `path` from byte `from` starts and ends: `/` and `\` both separate, and
+/// empty and `.` parts are skipped.
+pub(crate) fn next_part(path: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = path.as_bytes();
+    let separator = |byte: u8| byte == b'/' || byte == b'\\';
+    let mut at = from;
+    loop {
+        while at < bytes.len() && separator(bytes[at]) {
+            at += 1;
+        }
+        if at >= bytes.len() {
+            return None;
+        }
+        let start = at;
+        while at < bytes.len() && !separator(bytes[at]) {
+            at += 1;
+        }
+        if &path[start..at] != "." {
+            return Some((start, at));
+        }
+    }
+}
+
+/// A path's folders and name (`next_part` after `next_part`).
+#[cfg(test)]
 pub(crate) fn path_parts(path: &str) -> Vec<String> {
-    path.split(['/', '\\']).filter(|part| !part.is_empty() && *part != ".").map(str::to_owned).collect()
+    let mut parts = Vec::new();
+    let mut from = 0;
+    while let Some((start, end)) = next_part(path, from) {
+        parts.push(path[start..end].to_owned());
+        from = end;
+    }
+    parts
 }
 
 fn extension_of(name: &str) -> String {
@@ -682,65 +741,9 @@ fn support_of(entry: &Entry) -> &'static str {
     }
 }
 
-/// How deep the list goes: past 256 parts, or once the archive's entries have used 250,000
-/// parts between them, an entry is listed flat, under its whole path, at the top (the web's
-/// LIST_DEPTH_MAX and LIST_PARTS_MAX). Without it one 64 KiB name of `a/a/a/…` costs gigabytes in
-/// prefixes.
+/// How deep the list goes: an entry more than 256 parts deep is listed flat, under its whole path,
+/// at the top (the web's LIST_DEPTH_MAX).
 pub const LIST_DEPTH_MAX: usize = 256;
-pub const LIST_PARTS_MAX: usize = 250_000;
-
-/// Names as a tree, each node a number and each child found by its parent and name: memory grows
-/// with the parts, never with their prefixes.
-pub(crate) struct NameTree {
-    /*
-     * Each child by its parent and a keyed hash of its name: 24 bytes or so a node, where a
-     * name kept as a String cost three times that for a million parts. The hash's keys are this
-     * process's own (RandomState), so a crafted archive can't aim two names at one node; and a
-     * collision could only hide or show a Mac resource file, nothing more.
-     */
-    children: HashMap<(u32, u64), u32>,
-    keys: std::collections::hash_map::RandomState,
-    next: u32,
-}
-
-impl Default for NameTree {
-    fn default() -> Self {
-        NameTree { children: HashMap::new(), keys: std::collections::hash_map::RandomState::new(), next: 0 }
-    }
-}
-
-impl NameTree {
-    fn key(&self, parent: u32, name: &str) -> (u32, u64) {
-        use std::hash::BuildHasher;
-        (parent, self.keys.hash_one(name))
-    }
-
-    /// The child `name` of `parent` (0 is the top), made if asked; 0 when absent.
-    pub fn child(&mut self, parent: u32, name: &str, make: bool) -> u32 {
-        let key = self.key(parent, name);
-        if let Some(&found) = self.children.get(&key) {
-            return found;
-        }
-        if !make {
-            return 0;
-        }
-        self.next += 1;
-        self.children.insert(key, self.next);
-        self.next
-    }
-
-    /// The node at `parts`, 0 when any step is absent (or `parts` is empty: the top).
-    pub fn find(&mut self, parts: &[String]) -> u32 {
-        let mut node = 0;
-        for part in parts {
-            node = self.child(node, part, false);
-            if node == 0 {
-                return 0;
-            }
-        }
-        node
-    }
-}
 
 /* Characters no file system takes, or that change how a name reads (controls, bidi marks): the web's save-file.ts set. */
 fn unsafe_char(code: u32) -> bool {
@@ -840,31 +843,157 @@ pub fn save_name(name: &str) -> String {
     }
 }
 
-/// The list, from the entries; each entry's decoded name moves into it (an entry keeps its raw
-/// name to check against), so the two are never held twice.
-pub(crate) fn list_entries(entries: &mut [Entry]) -> Vec<ArchiveEntry> {
-    let mut budget = LIST_PARTS_MAX;
+/// The list and its folders, from the entries; each entry's decoded name moves into it (an entry
+/// keeps its raw name to check against), so the two are never held twice.
+///
+/// The folders are made a level at a time: every entry still going deeper takes its next part, and
+/// a map of this level's names under their parents finds each folder made already. Only that map
+/// and a few numbers an entry are held while it runs, and the folders come out as one array and one
+/// string, so memory grows with the directory's bytes and nothing else: no entry keeps its parts,
+/// and no path's prefixes are ever made.
+pub(crate) fn list_entries(entries: &mut [Entry]) -> (Vec<ArchiveEntry>, ArchiveFolders) {
     let count = entries.len();
-    let mut listed: Vec<ArchiveEntry> = entries
+    // Where each entry sits: its folder, and its name's span in its path (the whole path when flat).
+    let mut folder = vec![0u32; count];
+    let mut name = vec![(0usize, 0usize); count];
+    let mut hidden = vec![false; count];
+    // Its parts (counted to one past the cap), the next one's start, and the folder reached so far.
+    let mut depth = vec![0u16; count];
+    let mut at = vec![0u32; count];
+    let mut node = vec![0u32; count];
+    let mut made: u32 = 1;
+    let mut active: Vec<u32> = Vec::new();
+    let mut flat: Vec<u32> = Vec::new();
+    let list: &[Entry] = entries;
+    // At most a folder for every part but a file's last, each name with its `/`: the room the
+    // folders are given at once, so they never grow by doubling (the pages never written are
+    // never held), then trimmed to what they took.
+    let (mut most, mut most_bytes) = (0usize, 0usize);
+    for (i, entry) in list.iter().enumerate() {
+        let (mut parts, mut from, mut bytes, mut last) = (0usize, 0usize, 0usize, 0usize);
+        while parts <= LIST_DEPTH_MAX {
+            let Some((start, end)) = next_part(&entry.path, from) else { break };
+            parts += 1;
+            bytes += end - start + 1;
+            last = end - start + 1;
+            from = end;
+        }
+        depth[i] = parts as u16;
+        if parts > LIST_DEPTH_MAX || (parts == 0 && !entry.directory) {
+            name[i] = (0, entry.path.len());
+            flat.push(i as u32);
+        } else if parts > 0 {
+            active.push(i as u32);
+            let file = !entry.directory as usize;
+            most += parts - file;
+            most_bytes += bytes - last * file;
+        }
+    }
+    let mut parents: Vec<u8> = Vec::with_capacity(4 * (most + 1));
+    parents.extend_from_slice(&[0; 4]);
+    let mut names = String::with_capacity(most_bytes);
+    let flat_name = |i: usize| if list[i].path.is_empty() { "_" } else { list[i].path.as_str() };
+    let mut level = 0usize;
+    let mut children: HashMap<(u32, &str), u32> = HashMap::new();
+    // Level 0 runs even with nothing nested: the flat entries are names of the top too.
+    while level == 0 || !active.is_empty() {
+        children.clear();
+        if level == 0 {
+            for &i in &flat {
+                children.entry((0, flat_name(i as usize))).or_insert(0);
+            }
+        }
+        let mut next = Vec::with_capacity(active.len());
+        for &i in &active {
+            let i = i as usize;
+            let path = list[i].path.as_str();
+            let Some((start, end)) = next_part(path, at[i] as usize) else { continue };
+            at[i] = end as u32;
+            let part = &path[start..end];
+            let parent = node[i];
+            let last = level + 1 == depth[i] as usize;
+            if level == 0 && part == "__MACOSX" {
+                // Mac resource entries: hidden, and no folder made for them.
+                hidden[i] = true;
+                children.entry((0, part)).or_insert(0);
+                let mut from = end;
+                name[i] = (start, end);
+                while let Some(span) = next_part(path, from) {
+                    name[i] = span;
+                    from = span.1;
+                }
+                continue;
+            }
+            if last && !list[i].directory {
+                folder[i] = parent;
+                name[i] = (start, end);
+                children.entry((parent, part)).or_insert(0);
+                continue;
+            }
+            let slot = children.entry((parent, part)).or_insert(0);
+            if *slot == 0 {
+                *slot = made;
+                made += 1;
+                parents.extend_from_slice(&parent.to_le_bytes());
+                names.push_str(part);
+                names.push('/');
+            }
+            if last {
+                folder[i] = parent;
+                name[i] = (start, end);
+            } else {
+                node[i] = *slot;
+                next.push(i as u32);
+            }
+        }
+        // A `._x` is hidden only beside an `x`: a file or folder of this level under the same parent.
+        for &i in &active {
+            let i = i as usize;
+            if hidden[i] || list[i].directory || level + 1 != depth[i] as usize {
+                continue;
+            }
+            let part = &list[i].path[name[i].0..name[i].1];
+            if part.starts_with("._")
+                && part.chars().count() > 2
+                && children.contains_key(&(folder[i], &part[2..]))
+            {
+                hidden[i] = true;
+            }
+        }
+        if level == 0 {
+            for &i in &flat {
+                let i = i as usize;
+                let part = flat_name(i);
+                if !list[i].directory
+                    && part.starts_with("._")
+                    && part.chars().count() > 2
+                    && children.contains_key(&(0, &part[2..]))
+                {
+                    hidden[i] = true;
+                }
+            }
+        }
+        active = next;
+        level += 1;
+    }
+    drop(children);
+    parents.shrink_to_fit();
+    names.shrink_to_fit();
+    let listed = entries
         .iter_mut()
         .enumerate()
-        .map(|(at, entry)| {
-            let remaining = count - at - 1;
-            let mut parts = path_parts(&entry.path);
-            if parts.is_empty() && !entry.directory {
-                parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
-            }
-            // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
-            // Each entry still to come is owed at least one part, so the last ones list flat, never past the cap.
-            if parts.len() > LIST_DEPTH_MAX || parts.len() + remaining > budget {
-                parts = vec![if entry.path.is_empty() { "_".into() } else { entry.path.clone() }];
-            }
-            budget = budget.saturating_sub(parts.len());
-            let name = parts.last().cloned().unwrap_or_default();
+        .filter(|(i, entry)| depth[*i] > 0 || !entry.directory)
+        .map(|(i, entry)| {
+            let name = if entry.path.is_empty() {
+                "_".to_owned()
+            } else {
+                entry.path[name[i].0..name[i].1].to_owned()
+            };
             let link = entry.link && !entry.directory;
             ArchiveEntry {
                 index: entry.index,
                 path: std::mem::take(&mut entry.path),
+                folder: folder[i],
                 directory: entry.directory,
                 size: entry.size,
                 packed: entry.packed,
@@ -876,38 +1005,14 @@ pub(crate) fn list_entries(entries: &mut [Entry]) -> Vec<ArchiveEntry> {
                 nested: !entry.directory
                     && !entry.link
                     && ARCHIVE_EXTENSIONS.contains(&extension_of(&name).as_str()),
-                hidden: false,
+                hidden: hidden[i],
                 stored: !entry.directory && !entry.link && entry.method == 0 && entry.lock == Lock::None,
                 save_name: save_name(&name),
-                parts,
+                name,
             }
         })
         .collect();
-    // Every path, explicit or implied by a deeper one, so a `._x` is hidden only beside an `x`.
-    let mut tree = NameTree::default();
-    for item in &listed {
-        let mut node = 0;
-        for part in &item.parts {
-            node = tree.child(node, part, true);
-        }
-    }
-    for item in &mut listed {
-        if item.parts.first().map(String::as_str) == Some("__MACOSX") {
-            item.hidden = true;
-            continue;
-        }
-        if let Some(name) = item.parts.last() {
-            if !item.directory && name.starts_with("._") && name.chars().count() > 2 {
-                let depth = item.parts.len();
-                let parent = if depth > 1 { tree.find(&item.parts[..depth - 1]) } else { 0 };
-                if (depth == 1 || parent != 0) && tree.child(parent, &name[2..], false) != 0 {
-                    item.hidden = true;
-                }
-            }
-        }
-    }
-    listed.retain(|item| !item.parts.is_empty() || !item.directory);
-    listed
+    (listed, ArchiveFolders { parents, names })
 }
 
 /// Whether an entry declares more than 200 times what it packs, once it declares over 1 MiB: a
@@ -1426,6 +1531,8 @@ struct Lifecycle {
 /// directory, so an entry can't be read under any other record.
 pub(crate) struct Zip {
     listing: Mutex<Option<Arc<Listing>>>,
+    /* The list's folders until the app takes them: nothing here reads them, so none are kept after. */
+    folders: Mutex<Option<ArchiveFolders>>,
     life: Mutex<Lifecycle>,
     closed: std::sync::atomic::AtomicBool,
 }
@@ -1441,9 +1548,10 @@ impl Zip {
         let mut entries = read_directory(&bytes, &directory)?;
         // The directory's bytes go before the list is made: on a phone they are up to 16 MiB.
         drop(bytes);
-        let listed = list_entries(&mut entries);
+        let (listed, folders) = list_entries(&mut entries);
         Ok(Zip {
             listing: Mutex::new(Some(Arc::new(Listing { entries, listed }))),
+            folders: Mutex::new(Some(folders)),
             life: Mutex::new(Lifecycle::default()),
             closed: std::sync::atomic::AtomicBool::new(false),
         })
@@ -1451,6 +1559,11 @@ impl Zip {
 
     pub fn is_closed(&self) -> bool {
         self.closed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The list's folders, handed over once.
+    pub fn take_folders(&self) -> ArchiveFolders {
+        lock(&self.folders).take().unwrap_or_default()
     }
 
     pub fn listing(&self) -> Result<Arc<Listing>> {
@@ -1673,10 +1786,13 @@ impl Zip {
         self.inflate(source, entry, false, password, false, write)
     }
 
-    /// Tries `password`, on entry `index` first when given (an entry whose own password was asked
-    /// for), then on the locked entries with bytes, smallest first: in full when at most 16 MiB,
-    /// otherwise to its password check. An empty entry proves nothing (ZipCrypto's one check byte
-    /// passes 1 in 256 wrong passwords), so it is never the probe. A wrong password ends it; an
+    /// Tries `password`, on entry `index` first when given (the entry the password was asked for),
+    /// then on the locked entries with bytes: first those it may inflate in full (`probes`:
+    /// declaring at most 16 MiB, within the declared ratio), smallest first, whose CRC or
+    /// authentication code then proves the password; then the rest, to their password check
+    /// alone. So when no entry qualifies, the password verifier alone decides (AES's two bytes;
+    /// ZipCrypto's one check byte, which passes 1 wrong password in 256: a download then fails its
+    /// CRC). An empty entry proves nothing, so it is never the probe. A wrong password ends it; an
     /// entry that fails for another reason (damage, a bad authentication code or CRC, which may be
     /// tampering) says nothing certain of the password, and the next is tried: at most three
     /// entries and 32 MiB read in all, past which a try reads only an entry's password check.
@@ -1694,7 +1810,7 @@ impl Zip {
                     && support_of(entry) == "ok"
             })
             .collect();
-        candidates.sort_by_key(|entry| (entry.packed, entry.index));
+        candidates.sort_by_key(|entry| (!probes(entry), entry.packed, entry.index));
         if let Some(first) = index.and_then(|index| candidates.iter().position(|entry| entry.index == index))
         {
             let entry = candidates.remove(first);
@@ -1705,7 +1821,7 @@ impl Zip {
             if self.is_closed() {
                 return Err(closed_error());
             }
-            let check_only = entry.packed > UNLOCK_CHECK_BYTES || read + entry.packed > UNLOCK_READ_MAX;
+            let check_only = !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
             if !check_only {
                 read += entry.packed;
             }
@@ -1737,6 +1853,8 @@ impl Zip {
         }
         Ok(Zip {
             listing: Mutex::new(Some(listing)),
+            // A sibling reads entries, never lists: its app has the folders already.
+            folders: Mutex::new(None),
             life: Mutex::new(Lifecycle { password: life.password.clone(), ..Default::default() }),
             closed: std::sync::atomic::AtomicBool::new(false),
         })
@@ -1756,6 +1874,7 @@ impl Zip {
         }
         self.closed.store(true, std::sync::atomic::Ordering::SeqCst);
         lock(&self.listing).take();
+        lock(&self.folders).take();
     }
 }
 
@@ -1894,6 +2013,16 @@ impl ZipArchiveSession {
     /// The list; empty once closed.
     pub fn entries(&self) -> Vec<ArchiveEntry> {
         self.zip.listing().map(|listing| listing.listed.clone()).unwrap_or_default()
+    }
+
+    /// The list's folders (`ArchiveEntry::folder`), handed over once: the session keeps none, since
+    /// nothing it does reads them, so they are held once, by the app. Later calls, and calls once
+    /// closed, return none.
+    pub fn take_folders(&self) -> ArchiveFolders {
+        if self.zip.is_closed() {
+            return ArchiveFolders::default();
+        }
+        self.zip.take_folders()
     }
 
     /// Mac resource files left out of the list.

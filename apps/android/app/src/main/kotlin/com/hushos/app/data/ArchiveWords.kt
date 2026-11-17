@@ -49,7 +49,7 @@ object ArchiveWords {
     fun refusal(code: String, entry: Boolean = false): String = when (code) {
         "damaged" -> if (entry) "This item is damaged, or isn’t something HushOS can read." else "This archive is damaged, or isn’t a zip archive HushOS can read."
         "directory-too-large" -> "This archive’s list of contents is too large to open here. Download it to open it on your computer."
-        "too-many-entries" -> "This archive has more than 100,000 items, too many to list here. Download it to open it on your computer."
+        "too-many-entries" -> "This archive has more than ${String.format(java.util.Locale.US, "%,d", com.hushos.core.zipEntriesMax().toLong())} items, too many to list here. Download it to open it on your computer."
         "encrypted-directory" -> ENCRYPTED_DIRECTORY
         "split" -> "This is one part of an archive split into several. HushOS can’t open it."
         "overlap" -> "This archive’s items overlap each other, which is how some zip bombs work. HushOS won’t open it."

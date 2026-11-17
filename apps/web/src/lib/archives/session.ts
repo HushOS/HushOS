@@ -4,7 +4,7 @@ import { TOOL_FAILED, TOOL_WATCHDOG_MS } from '@/lib/tools/protocol';
 import { readAllowance, serveRanges, type RangeReader } from '@/lib/tools/ranges';
 import { createWatchdog, type Watchdog } from '@/lib/tools/watchdog';
 import { CHUNK_BYTES, type FromArchive, type ToArchive, type WireEntry } from './protocol';
-import { LIST_DEPTH_MAX, LIST_PARTS_MAX } from './zip-format';
+import { ZIP_LIMITS } from './zip-format';
 import { entryRefusalWords, refusalWords } from './words';
 
 /*
@@ -22,7 +22,17 @@ import { entryRefusalWords, refusalWords } from './words';
  */
 
 export type ArchiveEntry = WireEntry;
-export type Listing = { entries: ArchiveEntry[]; hidden: number };
+/*
+ * The list's folders as the page holds them (zip-format.ts's Folders): folder `k`'s parent at
+ * `parents[k]`, and its name in `names` from `starts[k]` to just before `starts[k + 1]`'s `/`.
+ */
+export type FolderList = { parents: Uint32Array; names: string; starts: Uint32Array };
+export type Listing = { entries: ArchiveEntry[]; hidden: number; folders: FolderList };
+
+/* Folder `k`'s name ('' for the top). */
+export function folderName(folders: FolderList, k: number) {
+    return k === 0 ? '' : folders.names.slice(folders.starts[k], folders.starts[k + 1]! - 1);
+}
 
 /* A refusal the archive or one of its items met, already in words; `code` says which. */
 export class ArchiveRefusal extends Error {
@@ -36,6 +46,8 @@ export class ArchiveRefusal extends Error {
 }
 
 const MAX_ENTRIES = 100_000;
+/* Every folder is a part of some path, at least a character and its separator in the directory. */
+const MAX_FOLDERS = ZIP_LIMITS.directoryBytes / 2 + 1;
 const MAX_TEXT = 128 * 1024 * 1024;
 const LOCKS = new Set(['none', 'zipcrypto', 'aes', 'other']);
 const SUPPORTS = new Set(['ok', 'method', 'encryption']);
@@ -44,37 +56,58 @@ const MiB = 1024 * 1024;
 const whole = (value: unknown, max = Number.MAX_SAFE_INTEGER): value is number =>
     Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= max;
 
+/*
+ * The folders, checked: each after its parent, each name a part a path could hold (never empty,
+ * `.` or holding a separator), no more than the directory could hold; or null.
+ */
+function readFolders(parents: unknown, names: unknown): FolderList | null {
+    if (!(parents instanceof Uint32Array) || typeof names !== 'string') return null;
+    const count = parents.length;
+    if (count < 1 || count > MAX_FOLDERS || names.length > ZIP_LIMITS.directoryBytes) return null;
+    if (parents[0] !== 0 || names.includes('\\')) return null;
+    const starts = new Uint32Array(count + 1);
+    let at = 0;
+    // Checked in place: a substring a folder would be millions of strings for a wide archive.
+    for (let k = 1; k < count; k++) {
+        if (parents[k]! >= k) return null;
+        const end = names.indexOf('/', at);
+        if (end <= at || (end - at === 1 && names.charCodeAt(at) === 0x2e)) return null;
+        starts[k] = at;
+        at = end + 1;
+    }
+    if (at !== names.length) return null;
+    starts[count] = at;
+    return { parents, names, starts };
+}
+
 /* The listing, rebuilt from checked fields only, or null if anything in it is out of shape. */
 export function readListing(value: unknown, archiveSize: number): Listing | null {
-    const msg = value as { entries?: unknown; hidden?: unknown } | null;
+    const msg = value as {
+        entries?: unknown;
+        hidden?: unknown;
+        parents?: unknown;
+        names?: unknown;
+    } | null;
     const entries = msg?.entries;
     if (!Array.isArray(entries) || entries.length > MAX_ENTRIES) return null;
     if (!whole(msg?.hidden, entries.length)) return null;
-    let text = 0;
-    let partsTotal = 0;
+    const folders = readFolders(msg?.parents, msg?.names);
+    if (!folders) return null;
+    let text = folders.names.length;
     const seen = new Set<number>();
     const out: ArchiveEntry[] = [];
     for (const raw of entries) {
         const item = raw as Record<string, unknown> | null;
         if (!item || typeof item !== 'object') return null;
-        const { index, path, parts, size, packed, dos, mtime, lock, support } = item;
+        const { index, path, folder, name, size, packed, dos, mtime, lock, support } = item;
         if (!whole(index, MAX_ENTRIES - 1) || seen.has(index)) return null;
         seen.add(index);
-        // The listing's caps, held here too: a worker can't hand the page a tree to choke on.
-        if (typeof path !== 'string' || !Array.isArray(parts) || parts.length > LIST_DEPTH_MAX)
-            return null;
-        partsTotal += parts.length;
-        if (partsTotal > LIST_PARTS_MAX) return null;
+        if (typeof path !== 'string' || !whole(folder, folders.parents.length - 1)) return null;
+        if (typeof name !== 'string' || name.length === 0) return null;
         const saveName: unknown = item.saveName;
         if (typeof saveName !== 'string' || saveName.length === 0 || saveName.length > 255)
             return null;
-        text += path.length + saveName.length;
-        const copied: string[] = [];
-        for (const part of parts) {
-            if (typeof part !== 'string' || part.length === 0) return null;
-            text += part.length;
-            copied.push(part);
-        }
+        text += path.length + name.length + saveName.length;
         if (text > MAX_TEXT) return null;
         if (!whole(size) || !whole(packed, archiveSize) || !whole(dos, 0xffffffff)) return null;
         if (mtime !== null && (typeof mtime !== 'number' || !Number.isFinite(mtime))) return null;
@@ -86,7 +119,8 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
         out.push({
             index,
             path,
-            parts: copied,
+            folder,
+            name,
             directory: flag('directory'),
             size,
             packed,
@@ -101,7 +135,7 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
             saveName,
         });
     }
-    return { entries: out, hidden: msg!.hidden as number };
+    return { entries: out, hidden: msg!.hidden as number, folders };
 }
 
 /* A reader over bytes the viewer holds: an entry the worker inflated. Closing it lets them go. */
@@ -317,8 +351,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     };
     instance.onmessageerror = broken;
 
-    // The directory: at most the end records and a 64 MiB directory.
-    grant(Math.min(reader.size, 64 * MiB + 128 * 1024));
+    // The directory: at most the end records and the largest directory read.
+    grant(Math.min(reader.size, ZIP_LIMITS.directoryBytes + 128 * 1024));
     begin();
     post({ type: 'open', size: reader.size, port: channel.port2 }, [channel.port2]);
 

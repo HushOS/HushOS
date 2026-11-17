@@ -1,6 +1,7 @@
 package com.hushos.app.foreign
 
 import com.hushos.app.data.ArchiveSessions
+import com.hushos.app.data.FamilyFailure
 import com.hushos.app.data.StoreSource
 import com.hushos.core.ArchiveException
 import com.hushos.core.Content
@@ -103,6 +104,45 @@ class ArchiveSessionsTest {
             fail("read after close")
         } catch (_: CancellationException) {
         }
+    }
+
+    @Test fun aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() = runBlocking {
+        // A family's file: its folder let go of (a removal, a fork) while a download streams it.
+        val words = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val zip = java.io.ByteArrayOutputStream().also { bytes ->
+            java.util.zip.ZipOutputStream(bytes).use { out ->
+                out.putNextEntry(java.util.zip.ZipEntry("big.bin"))
+                out.write(ByteArray(3 shl 20).also(java.util.Random(7)::nextBytes))
+                out.closeEntry()
+            }
+        }.toByteArray()
+        val (content, stored) = sealed(zip)
+        val sessions = ArchiveSessions()
+        val archive = sessions.open(store(stored), content, stands = { words.get() })
+        val sibling = archive.sibling()
+        val pieces = java.util.concurrent.atomic.AtomicInteger()
+        try {
+            sibling.download(0u, object : EntrySink {
+                override fun write(chunk: ByteArray) {
+                    pieces.incrementAndGet()
+                    words.set("This family folder was removed.")
+                }
+            })
+            fail("downloaded on after the family went")
+        } catch (error: FamilyFailure) {
+            assertEquals("This family folder was removed.", error.message)
+        }
+        // The first piece only, and the sibling closed with its call.
+        assertEquals(1, pieces.get())
+        assertTrue(sibling.closed)
+        // The archive goes at its next call, before anything is read.
+        try {
+            archive.preview(0u, 1024)
+            fail("previewed after the family went")
+        } catch (_: FamilyFailure) {
+        }
+        assertTrue(archive.closed)
+        assertEquals(0, sessions.count)
     }
 
     @Test fun aSiblingDownloadsALockedItemWithTheParentsPasswordWhileTheParentPreviews() = runBlocking {

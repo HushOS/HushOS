@@ -13,6 +13,7 @@ import com.hushos.core.toolWatchdogMillis
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -52,8 +53,10 @@ class ArchiveSessions {
         watchdogMillis: Long = toolWatchdogMillis().toLong(),
         pollMillis: Long = 1_000,
         clock: ToolClock? = null,
+        stands: (() -> String?)? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, current, watchdogMillis, pollMillis, clock)
+        archive.stands = stands
         add(archive)
         try {
             // The content (which carries the key) is the core's from here; nothing in Kotlin keeps it.
@@ -75,8 +78,10 @@ class ArchiveSessions {
         watchdogMillis: Long = toolWatchdogMillis().toLong(),
         pollMillis: Long = 1_000,
         clock: ToolClock? = null,
+        stands: (() -> String?)? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, CallControl(), watchdogMillis, pollMillis, clock)
+        archive.stands = stands
         add(archive)
         try {
             archive.session = archive.call { control -> ZipArchiveSession.openLocal(source, control) }
@@ -131,6 +136,12 @@ class OpenArchive internal constructor(
     @Volatile internal var session: ZipArchiveSession? = null
     @Volatile var closed = false
         private set
+    /*
+     * For a family's file: null while its family folder stands, the family's words once it was let
+     * go of (its invalidation count moved: a removal, a fork, a forget). Every call asks before it
+     * starts and before it hands anything back, and the archive closes at the first words.
+     */
+    @Volatile internal var stands: (() -> String?)? = null
     private val turn = Mutex()
     /* The call going now, by what ends it: what close calls. */
     private val calls = ConcurrentHashMap.newKeySet<() -> Unit>()
@@ -141,6 +152,8 @@ class OpenArchive internal constructor(
     private fun opened() = session ?: throw CancellationException("Closed.")
 
     val entries get() = opened().entries()
+    /* The list's folders, handed over once: the core keeps none after (ArchiveTree holds them). */
+    fun takeFolders() = opened().takeFolders()
     val hidden get() = opened().hidden().toInt()
     val unlocked get() = session?.unlocked() == true
 
@@ -151,7 +164,16 @@ class OpenArchive internal constructor(
     suspend fun preview(index: UInt, limit: Long): ByteArray = call { opened().preview(index, limit.toULong(), it) }
 
     /* The entry into `sink`, a MiB at a time, held to its declared size. */
-    suspend fun download(index: UInt, sink: EntrySink) = call { opened().download(index, sink, it) }
+    suspend fun download(index: UInt, sink: EntrySink) = call {
+        // Asked of every piece too: a family let go of mid-download writes nothing more.
+        val held = object : EntrySink {
+            override fun write(chunk: ByteArray) {
+                stands?.invoke()?.let { words -> throw FetchException.Failed(words) }
+                sink.write(chunk)
+            }
+        }
+        opened().download(index, held, it)
+    }
 
     /*
      * The same archive again, with the listing and the password this one holds and a reader of its
@@ -161,12 +183,25 @@ class OpenArchive internal constructor(
     suspend fun sibling(): OpenArchive {
         val parent = opened()
         val child = OpenArchive(owner, current, watchdogMillis, pollMillis, clock)
-        child.session = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { parent.sibling() }
+        child.stands = stands
+        // Known before it exists, so a close or a sign-out meanwhile reaches it; made under
+        // NonCancellable, so a cancel while the core makes it can't drop the session unclosed.
         owner.add(child)
         children.add(child)
         child.parent = this
-        // Closed meanwhile: the child goes too, and says so.
-        if (closed) { child.close(); throw CancellationException("Closed.") }
+        try {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
+                child.session = parent.sibling()
+            }
+        } catch (error: Throwable) {
+            child.close()
+            throw error
+        }
+        // Closed meanwhile (this archive, a sign-out), or the caller cancelled: the child goes, and says so.
+        if (closed || child.closed || !kotlinx.coroutines.currentCoroutineContext().isActive) {
+            child.close()
+            throw CancellationException("Closed.")
+        }
         return child
     }
     private val children = ConcurrentHashMap.newKeySet<OpenArchive>()
@@ -191,6 +226,26 @@ class OpenArchive internal constructor(
      */
     internal suspend fun <T> call(work: (RunControl) -> T): T {
         if (closed) throw CancellationException("Closed.")
+        letGoIfFamilyMoved()
+        val result = try {
+            callOnce(work)
+        } catch (error: Throwable) {
+            // Failed because the family went (a download's piece refused): said as that.
+            letGoIfFamilyMoved()
+            throw error
+        }
+        letGoIfFamilyMoved()
+        return result
+    }
+
+    /* Closes the archive and throws the family's words once its family folder was let go of. */
+    private fun letGoIfFamilyMoved() {
+        val words = stands?.invoke() ?: return
+        close()
+        throw FamilyFailure(words)
+    }
+
+    private suspend fun <T> callOnce(work: (RunControl) -> T): T {
         val token = Any()
         turn.lock(token)
         var handedOver = false
@@ -298,7 +353,10 @@ fun archiveSourceOf(
  * zip kept on this phone opens from the kept copy, offline included.
  */
 suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveSessions.shared): OpenArchive {
-    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept)) }
+    // A family's file is held to its folder's invalidation count as it was before anything began.
+    val workspace = item.node.workspaceId
+    val stands = if (isFamilyWorkspace(workspace)) familyEpoch(workspace).let { epoch -> { familyWordsSince(workspace, epoch) } } else null
+    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), stands = stands) }
     val opened = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { openVersion(item) }
     val current = CallControl()
     val source = archiveSourceOf(
@@ -306,5 +364,5 @@ suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveS
         online = { Resumable.online(context) },
         metered = { context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false },
     )
-    return sessions.open(source, opened.content, current)
+    return sessions.open(source, opened.content, current, stands = stands)
 }

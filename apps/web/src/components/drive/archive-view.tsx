@@ -29,6 +29,7 @@ import {
 } from '@/lib/archives/open';
 import {
     ArchiveRefusal,
+    folderName,
     openArchive,
     type ArchiveEntry,
     type ArchiveSession,
@@ -51,72 +52,62 @@ export function preloadArchive() {
     preloadArchiveWorker();
 }
 
-type Folder = {
-    /* Each folder inside, by name: its node in the tree. */
-    folders: Map<string, Folder>;
-    files: ArchiveEntry[];
-};
-
-const emptyFolder = (): Folder => ({ folders: new Map(), files: [] });
-
-/*
- * The archive's folders as a tree, each folder a node holding its own children only: memory grows
- * with the entries' parts, not with every prefix of every path (the listing already caps a path
- * at 256 parts).
- */
-function treeOf(listing: Listing) {
-    const top = emptyFolder();
-    for (const entry of listing.entries) {
-        if (entry.hidden) continue;
-        const depth = entry.directory ? entry.parts.length : entry.parts.length - 1;
-        let node = top;
-        for (let i = 0; i < depth; i++) {
-            const name = entry.parts[i]!;
-            let child = node.folders.get(name);
-            if (!child) node.folders.set(name, (child = emptyFolder()));
-            node = child;
-        }
-        if (!entry.directory) node.files.push(entry);
-    }
-    return top;
-}
-
-/* The folder at `path`, or none when the path isn't in the tree. */
-function folderAt(top: Folder, path: string[]) {
-    let node: Folder | undefined = top;
-    for (const part of path) node = node?.folders.get(part);
-    return node;
-}
-
 const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 type Row =
-    | { kind: 'folder'; name: string; count: number }
+    | { kind: 'folder'; id: number; name: string; count: number }
     | { kind: 'file'; name: string; entry: ArchiveEntry };
 
-function rowsOf(folder: Folder | undefined): Row[] {
-    if (!folder) return [];
-    const folders = [...folder.folders]
-        .sort(([a], [b]) => byName.compare(a, b))
-        .map(([name, child]): Row => ({
+/*
+ * Folder `id`'s rows: its folders, then its files, each by name, numbers in order. Read from the
+ * listing's folder array as they are asked for, so nothing the size of every path is ever built:
+ * one pass over the folders finds the children, a second counts what each holds.
+ */
+function rowsOf(listing: Listing, id: number): Row[] {
+    const { parents } = listing.folders;
+    const counts = new Map<number, number>();
+    for (let k = 1; k < parents.length; k++) if (parents[k] === id) counts.set(k, 0);
+    for (let k = 1; k < parents.length; k++) {
+        const count = counts.get(parents[k]!);
+        if (count !== undefined) counts.set(parents[k]!, count + 1);
+    }
+    const files: Row[] = [];
+    for (const entry of listing.entries) {
+        if (entry.hidden || entry.directory) continue;
+        if (entry.folder === id) files.push({ kind: 'file', name: entry.name, entry });
+        const count = counts.get(entry.folder);
+        if (count !== undefined) counts.set(entry.folder, count + 1);
+    }
+    const folders = [...counts]
+        .map(([k, count]): Row => ({
             kind: 'folder',
-            name,
-            count: child.folders.size + child.files.length,
-        }));
-    const files = [...folder.files]
-        .sort((a, b) => byName.compare(a.parts.at(-1)!, b.parts.at(-1)!))
-        .map((entry): Row => ({ kind: 'file', name: entry.parts.at(-1)!, entry }));
+            id: k,
+            name: folderName(listing.folders, k),
+            count,
+        }))
+        .sort((a, b) => byName.compare(a.name, b.name));
+    files.sort((a, b) => byName.compare(a.name, b.name));
     return [...folders, ...files];
 }
 
-type Download = { entry: ArchiveEntry; written: number; stop: () => void; error: string | null };
+/* One download: its own, by `id`, so the same entry downloaded twice is two downloads, each stopped on its own. */
+type Download = {
+    id: number;
+    entry: ArchiveEntry;
+    written: number;
+    stop: () => void;
+    error: string | null;
+};
+
+let downloadIds = 0;
 
 export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload: () => void }) {
     const [session, setSession] = useState<ArchiveSession | null>(null);
     const [listing, setListing] = useState<Listing | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
     const [attempt, setAttempt] = useState(0);
-    const [path, setPath] = useState<string[]>([]);
+    // The folders from the top to the one shown, by id.
+    const [path, setPath] = useState<number[]>([]);
     const [opened, setOpened] = useState<ArchiveEntry | null>(null);
     const [unlocked, setUnlocked] = useState(false);
     const [downloads, setDownloads] = useState<Download[]>([]);
@@ -157,8 +148,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [versionId, attempt]);
 
-    const tree = useMemo(() => (listing ? treeOf(listing) : null), [listing]);
-    const rows = useMemo(() => rowsOf(tree ? folderAt(tree, path) : undefined), [tree, path]);
+    const shown = path.at(-1) ?? 0;
+    const rows = useMemo(() => (listing ? rowsOf(listing, shown) : []), [listing, shown]);
 
     function startDownload(entry: ArchiveEntry) {
         if (!session) return;
@@ -168,7 +159,9 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         let handle: { done: Promise<void>; stop: () => void } | null = null;
         // Stop can come before the sink is open: it is remembered, and a sink opened after it is let go.
         let stopped = false;
+        const id = ++downloadIds;
         const record: Download = {
+            id,
             entry,
             written: 0,
             stop: () => {
@@ -177,12 +170,12 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
             },
             error: null,
         };
-        setDownloads((list) => [...list.filter((item) => item.entry !== entry), record]);
+        setDownloads((list) => [...list, record]);
         const update = (patch: Partial<Download>) =>
             setDownloads((list) =>
-                list.map((item) => (item.entry === entry ? { ...item, ...patch } : item)),
+                list.map((item) => (item.id === id ? { ...item, ...patch } : item)),
             );
-        const drop = () => setDownloads((list) => list.filter((item) => item.entry !== entry));
+        const drop = () => setDownloads((list) => list.filter((item) => item.id !== id));
         void sink
             .then(async (opened) => {
                 if (stopped) {
@@ -245,7 +238,7 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         );
     if (!listing || !session) return <Opening name={node.name} />;
 
-    const go = (to: string[]) => {
+    const go = (to: number[]) => {
         setOpened(null);
         setAskFor(null);
         setPath(to);
@@ -265,16 +258,16 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                             current={path.length === 0 && !opened}
                             onClick={() => go([])}
                         />
-                        {path.map((part, i) => (
+                        {path.map((id, i) => (
                             <Crumb
-                                key={`${i}:${part}`}
-                                label={part}
+                                key={id}
+                                label={folderName(listing.folders, id)}
                                 separated
                                 current={i === path.length - 1 && !opened}
                                 onClick={() => go(path.slice(0, i + 1))}
                             />
                         ))}
-                        {opened && <Crumb label={opened.parts.at(-1)!} separated current />}
+                        {opened && <Crumb label={opened.name} separated current />}
                     </ol>
                 </nav>
             )}
@@ -299,7 +292,7 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     rows={rows}
                     unlocked={unlocked}
                     hidden={listing.hidden}
-                    onFolder={(name) => go([...path, name])}
+                    onFolder={(id) => go([...path, id])}
                     onOpen={setOpened}
                     onDownload={download}
                 />
@@ -308,11 +301,11 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                 <ul className="shrink-0 border-t border-rule bg-card">
                     {downloads.map((item) => (
                         <li
-                            key={item.entry.index}
+                            key={item.id}
                             className="flex min-h-12 items-center gap-3 px-3 text-[13px] sm:px-5"
                         >
                             <span className="min-w-0 flex-1 truncate">
-                                {item.error ?? archiveWords.downloading(item.entry.parts.at(-1)!)}
+                                {item.error ?? archiveWords.downloading(item.entry.name)}
                             </span>
                             {!item.error && (
                                 <span className="shrink-0 text-muted-foreground tabular-nums">
@@ -328,7 +321,9 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                                 title={item.error ? 'Dismiss' : archiveWords.stop}
                                 onClick={() => {
                                     item.stop();
-                                    setDownloads((list) => list.filter((other) => other !== item));
+                                    setDownloads((list) =>
+                                        list.filter((other) => other.id !== item.id),
+                                    );
                                 }}
                             >
                                 <XIcon />
@@ -416,7 +411,7 @@ function EntryList({
     rows: Row[];
     unlocked: boolean;
     hidden: number;
-    onFolder: (name: string) => void;
+    onFolder: (id: number) => void;
     onOpen: (entry: ArchiveEntry) => void;
     onDownload: (entry: ArchiveEntry) => void;
 }) {
@@ -444,9 +439,7 @@ function EntryList({
                         const row = rows[item.index]!;
                         return (
                             <li
-                                key={
-                                    row.kind === 'folder' ? `d:${row.name}` : `f:${row.entry.index}`
-                                }
+                                key={row.kind === 'folder' ? `d:${row.id}` : `f:${row.entry.index}`}
                                 className="absolute inset-x-0 flex h-14 items-center border-b border-rule"
                                 style={{ transform: `translateY(${item.start}px)` }}
                             >
@@ -457,7 +450,7 @@ function EntryList({
                                         }
                                         name={row.name}
                                         meta={archiveWords.items(row.count)}
-                                        onClick={() => onFolder(row.name)}
+                                        onClick={() => onFolder(row.id)}
                                     />
                                 ) : (
                                     <>
@@ -564,7 +557,7 @@ function EntryPane({
     downloadAfterPassword: boolean;
     onDownloadNow: () => void;
 }) {
-    const name = entry.parts.at(-1)!;
+    const name = entry.name;
     const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
     const kind = previewKind(node);
     const icon = <FileMark kind="file" name={name} size="large" />;
@@ -610,7 +603,7 @@ function EntryPane({
             <PasswordCard
                 name={name}
                 session={session}
-                entry={reprompt || downloadAfterPassword ? entry : null}
+                entry={entry}
                 onUnlocked={() => {
                     setReprompt(false);
                     setAttempt((value) => value + 1);
@@ -680,8 +673,11 @@ function PasswordCard({
 }: {
     name: string;
     session: ArchiveSession;
-    /* The entry whose own password this is, tried first; none for the archive's. */
-    entry: ArchiveEntry | null;
+    /*
+     * The entry the password is asked for: tried on it first, so a password that opens only
+     * some of the archive's entries opens the one the person picked.
+     */
+    entry: ArchiveEntry;
     onUnlocked: () => void;
 }) {
     const [password, setPassword] = useState('');

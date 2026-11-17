@@ -1,6 +1,7 @@
 package com.hushos.app.data
 
 import com.hushos.core.ArchiveEntry
+import com.hushos.core.ArchiveFolders
 import java.time.LocalDateTime
 import java.time.ZoneId
 import org.junit.Assert.assertEquals
@@ -16,37 +17,70 @@ import org.junit.Test
  * an entry's date and the words for each refusal the core can send.
  */
 class ArchiveTreeTest {
-    private fun entry(path: String, index: Int, directory: Boolean = false, hidden: Boolean = false, dos: UInt = 0u, mtime: Long? = null) = ArchiveEntry(
-        index.toUInt(), path, path.split('/', '\\').filter { it.isNotEmpty() && it != "." }, directory, 1uL, 1uL, dos, mtime,
-        "none", "ok", link = false, nested = false, hidden = hidden, stored = false, saveName = path.substringAfterLast('/'),
+    private fun entry(path: String, index: Int, directory: Boolean = false, hidden: Boolean = false, dos: UInt = 0u, mtime: Long? = null, folder: Int = 0) = ArchiveEntry(
+        index = index.toUInt(), path = path, folder = folder.toUInt(), name = path.trimEnd('/').substringAfterLast('/'), directory = directory,
+        size = 1uL, packed = 1uL, dos = dos, mtimeMillis = mtime, lock = "none", support = "ok", link = false, nested = false,
+        hidden = hidden, stored = false, saveName = path.trimEnd('/').substringAfterLast('/'),
     )
 
+    /*
+     * A tree over `paths` (a trailing `/` a directory) listed as the core lists them: a folder for
+     * each name under each parent, numbered as made, each entry in its folder; one under `__MACOSX/`
+     * hidden and in none. The core's own listing is held to the shared table in its tests.
+     */
+    private fun tree(vararg paths: String): ArchiveTree {
+        val ids = HashMap<String, Int>()
+        val parents = java.io.ByteArrayOutputStream()
+        val names = StringBuilder()
+        fun folder(parent: Int, name: String) = ids.getOrPut("$parent/$name") {
+            val id = ids.size + 1
+            for (shift in 0..24 step 8) parents.write((parent ushr shift) and 0xff)
+            names.append(name).append('/')
+            id
+        }
+        for (shift in 0..24 step 8) parents.write(0)
+        val entries = paths.mapIndexed { index, path ->
+            val directory = path.endsWith("/")
+            val parts = path.split('/').filter { it.isNotEmpty() }
+            if (parts.first() == "__MACOSX") return@mapIndexed entry(path, index, directory, hidden = true)
+            var node = 0
+            for (part in parts.dropLast(1)) node = folder(node, part)
+            if (directory) folder(node, parts.last())
+            entry(path, index, directory, folder = node)
+        }
+        return ArchiveTree(entries, ArchiveFolders(parents.toByteArray(), names.toString()))
+    }
+
     @Test fun foldersAreImpliedByDeeperPathsAndCountWhatTheyHold() {
-        val tree = ArchiveTree(listOf(entry("a/b/c.txt", 0), entry("a/d.txt", 1), entry("e/", 2, directory = true), entry("top.txt", 3)))
-        val top = tree.rows(emptyList())
+        val tree = tree("a/b/c.txt", "a/d.txt", "e/", "top.txt")
+        val top = tree.rows(0)
         assertEquals(listOf("a", "e", "top.txt"), top.map { it.name })
-        assertEquals(ArchiveTree.Row.Folder("a", 2), top[0])
-        assertEquals(ArchiveTree.Row.Folder("e", 0), top[1])
-        assertEquals(listOf("b", "d.txt"), tree.rows(listOf("a")).map { it.name })
-        assertEquals(listOf("c.txt"), tree.rows(listOf("a", "b")).map { it.name })
+        val a = top[0] as ArchiveTree.Row.Folder
+        assertEquals(ArchiveTree.Row.Folder(a.id, "a", 2), a)
+        assertEquals("e" to 0, (top[1] as ArchiveTree.Row.Folder).let { it.name to it.count })
+        assertEquals(listOf("b", "d.txt"), tree.rows(a.id).map { it.name })
+        val b = tree.rows(a.id)[0] as ArchiveTree.Row.Folder
+        assertEquals(listOf("c.txt"), tree.rows(b.id).map { it.name })
+        assertEquals(listOf("a", "b"), listOf(a.id, b.id).map(tree::name))
         // A folder the archive doesn't hold is empty, not an error.
-        assertTrue(tree.rows(listOf("nowhere")).isEmpty())
+        assertTrue(tree.rows(99).isEmpty())
+        assertEquals("", tree.name(99))
     }
 
     @Test fun macResourceEntriesAreLeftOutAndCountNowhere() {
-        val tree = ArchiveTree(listOf(entry("photo.jpg", 0), entry("__MACOSX/._photo.jpg", 1, hidden = true), entry("__MACOSX/", 2, directory = true, hidden = true)))
-        assertEquals(listOf("photo.jpg"), tree.rows(emptyList()).map { it.name })
+        val tree = tree("photo.jpg", "__MACOSX/._photo.jpg", "__MACOSX/")
+        assertEquals(listOf("photo.jpg"), tree.rows(0).map { it.name })
     }
 
     @Test fun aFileAndAFolderOfOneNameAreBothShown() {
-        val tree = ArchiveTree(listOf(entry("same", 0), entry("same/inner.txt", 1)))
-        assertEquals(listOf(ArchiveTree.Row.Folder("same", 1)), tree.rows(emptyList()).filterIsInstance<ArchiveTree.Row.Folder>())
-        assertEquals(listOf("same"), tree.rows(emptyList()).filterIsInstance<ArchiveTree.Row.File>().map { it.name })
+        val tree = tree("same", "same/inner.txt")
+        assertEquals(listOf("same" to 1), tree.rows(0).filterIsInstance<ArchiveTree.Row.Folder>().map { it.name to it.count })
+        assertEquals(listOf("same"), tree.rows(0).filterIsInstance<ArchiveTree.Row.File>().map { it.name })
     }
 
     @Test fun numbersSortAsNumbers() {
-        val tree = ArchiveTree(listOf(entry("f10.txt", 0), entry("f2.txt", 1), entry("f1.txt", 2)))
-        assertEquals(listOf("f1.txt", "f2.txt", "f10.txt"), tree.rows(emptyList()).map { it.name })
+        val tree = tree("f10.txt", "f2.txt", "f1.txt")
+        assertEquals(listOf("f1.txt", "f2.txt", "f10.txt"), tree.rows(0).map { it.name })
     }
 
     @Test fun anEntryIsDatedByItsUnixTimeElseItsDosDateOnThisClock() {
@@ -87,20 +121,37 @@ class ArchiveTreeTest {
         assertEquals(ArchiveWords.refusal("crc"), ArchiveWords.refusal("crc", entry = true))
     }
 
-    @Test fun deepPathsCostTheirPartsNotEveryPrefix() {
-        // 2,000 entries 256 parts deep under one long chain: by prefixes this is about 65 million
-        // path strings joined; as a tree of nodes it is 2,000 walks of 256 steps.
-        val chain = (1..255).joinToString("/") { "a" }
-        val entries = (0 until 2_000).map { entry("$chain/f$it.txt", it) }
+    @Test fun aMillionFoldersCostArraysNotObjects() {
+        // 4,000 chains of 250 folders each, all different: a million folders, as the core hands
+        // them over. The tree holds them as arrays; a folder's rows are found when asked for.
+        val parents = java.nio.ByteBuffer.allocate(4 * 1_000_001).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val names = StringBuilder()
+        parents.putInt(0)
+        val entries = ArrayList<ArchiveEntry>()
+        var id = 0
+        for (chain in 0 until 4_000) {
+            var parent = 0
+            for (depth in 0 until 250) {
+                id++
+                parents.putInt(parent)
+                names.append(if (depth == 0) "c$chain" else "a").append('/')
+                parent = id
+            }
+            entries.add(entry("f$chain.txt", chain, folder = parent))
+        }
         val started = System.nanoTime()
-        val tree = ArchiveTree(entries)
-        val rows = tree.rows(chain.split('/'))
+        val tree = ArchiveTree(entries, ArchiveFolders(parents.array(), names.toString()))
+        val top = tree.rows(0)
         val millis = (System.nanoTime() - started) / 1_000_000
-        assertEquals(2_000, rows.size)
-        assertEquals("f0.txt", rows.first().name)
-        assertTrue("took $millis ms", millis < 2_000)
+        assertEquals(4_000, top.size)
+        assertEquals("c0", top.first().name)
+        assertTrue("took $millis ms", millis < 5_000)
+        // Down the first chain: one folder a level, the file at the bottom.
+        var folder = (top.first() as ArchiveTree.Row.Folder).id
+        repeat(249) { folder = (tree.rows(folder).single() as ArchiveTree.Row.Folder).id }
+        assertEquals(listOf("f0.txt"), tree.rows(folder).map { it.name })
         // Asked again, the same sorted rows, not sorted again.
-        assertTrue(rows === tree.rows(chain.split('/')))
+        assertTrue(top === tree.rows(0))
     }
 
     @Test fun numbersCompareAsNumbersWithLeadingZerosAndMixedRuns() {

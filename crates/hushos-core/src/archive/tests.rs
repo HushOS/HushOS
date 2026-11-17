@@ -254,8 +254,8 @@ fn large(name: &str) -> Vec<u8> {
                 false,
             )
         }
-        "flat-budget.zip" => {
-            // make.ts's flatBudgetFixture: 1,000 entries of 256 parts.
+        "wide.zip" => {
+            // make.ts's wideFixture: 1,000 entries of 256 parts.
             let folders: Vec<String> = (0..255).map(|d| format!("p{d}")).collect();
             let folders = folders.join("/");
             write_zip(
@@ -325,18 +325,14 @@ fn every_fixture_as_expected_json_says() {
         }
         let zip = Zip::open(source).unwrap();
         let list = zip.listing().unwrap();
-        // Every listing stays within the parts the page accepts, the last entries listed flat.
-        assert!(
-            list.listed.iter().map(|item| item.parts.len()).sum::<usize>() <= LIST_PARTS_MAX,
-            "{name}: parts"
-        );
+        let folders = folders_of(&zip.take_folders());
+        // Every entry sits where its path puts it, or flat at the top, through one folder per name.
+        assert_listed_where_its_path_says(&list, &folders, name);
         if let Some(count) = expected["count"].as_u64() {
             assert_eq!(list.listed.len() as u64, count, "{name}: count");
-            let flat = list.listed.iter().position(|item| item.parts.len() == 1);
-            assert_eq!(flat.map(|at| at as u64), expected["flatFrom"].as_u64(), "{name}: flat from");
             assert!(
-                list.listed[flat.unwrap()..].iter().all(|item| item.parts.len() == 1),
-                "{name}: flat after"
+                list.listed.iter().all(|item| parts_of(&folders, item).len() == LIST_DEPTH_MAX),
+                "{name}: none flat"
             );
             continue;
         }
@@ -405,7 +401,7 @@ fn every_fixture_as_expected_json_says() {
         }
         if let Some(parts) = expected["parts"].as_object() {
             for (path, want) in parts {
-                let got = &list.listed.iter().find(|item| &item.path == path).unwrap().parts;
+                let got = &parts_of(&folders, list.listed.iter().find(|item| &item.path == path).unwrap());
                 let want: Vec<String> =
                     want.as_array().unwrap().iter().map(|part| part.as_str().unwrap().to_owned()).collect();
                 assert_eq!(got, &want, "{name}: parts of {path}");
@@ -413,7 +409,8 @@ fn every_fixture_as_expected_json_says() {
         }
         if let Some(lengths) = expected["partsLength"].as_object() {
             for (path, want) in lengths {
-                let got = list.listed.iter().find(|item| &item.path == path).unwrap().parts.len();
+                let got =
+                    parts_of(&folders, list.listed.iter().find(|item| &item.path == path).unwrap()).len();
                 assert_eq!(got as u64, want.as_u64().unwrap(), "{name}: parts of a path {} long", path.len());
             }
         }
@@ -428,6 +425,29 @@ fn every_fixture_as_expected_json_says() {
             let wrong = Zip::open(source).unwrap().unlock(source, b"not it", None).unwrap();
             assert_eq!(right, unlock["right"].as_bool().unwrap(), "{name}: unlock with the password");
             assert_eq!(wrong, unlock["wrong"].as_bool().unwrap(), "{name}: unlock with another");
+        }
+        if let Some(skips) = expected["unlockSkips"].as_str() {
+            let counted = Counting(source, Mutex::new(Vec::new()));
+            let zip = Zip::open(&counted).unwrap();
+            counted.1.lock().unwrap().clear();
+            assert!(zip.unlock(&counted, PASSWORD.as_bytes(), None).unwrap(), "{name}: unlock");
+            let read: u64 = counted.1.lock().unwrap().iter().map(|&(_, length)| length).sum();
+            let packed = list.entries.iter().find(|entry| path_of(entry.index) == skips).unwrap().packed;
+            assert!(read < packed, "{name}: the unlock read {read} bytes of {skips}'s {packed}");
+        }
+        if let Some(with) = expected.get("unlockWith") {
+            let password = with["password"].as_str().unwrap().as_bytes();
+            let anywhere = Zip::open(source).unwrap().unlock(source, password, None).unwrap();
+            assert_eq!(
+                anywhere,
+                with["anywhere"].as_bool().unwrap(),
+                "{name}: another password, aimed at none"
+            );
+            for (path, right) in with["at"].as_object().unwrap() {
+                let index = list.listed.iter().find(|item| &item.path == path).unwrap().index;
+                let got = Zip::open(source).unwrap().unlock(source, password, Some(index)).unwrap();
+                assert_eq!(got, right.as_bool().unwrap(), "{name}: another password, aimed at {path}");
+            }
         }
     }
 }
@@ -520,19 +540,29 @@ fn opening_checks_the_whole_span_and_the_local_header_s_sizes_and_crc() {
     }
 }
 
+impl RangeRead for &dyn RangeRead {
+    fn size(&self) -> u64 {
+        (**self).size()
+    }
+    fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
+        (**self).read_at(offset, length)
+    }
+}
+
+/* A source that remembers what was read. */
+struct Counting<S: RangeRead>(S, Mutex<Vec<(u64, u64)>>);
+impl<S: RangeRead> RangeRead for Counting<S> {
+    fn size(&self) -> u64 {
+        self.0.size()
+    }
+    fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
+        self.1.lock().unwrap().push((offset, length));
+        self.0.read_at(offset, length)
+    }
+}
+
 #[test]
 fn refuses_more_entries_or_a_larger_directory_than_the_caps_before_reading_it() {
-    /* A source that remembers what was read. */
-    struct Counting(Vec<u8>, Mutex<Vec<(u64, u64)>>);
-    impl RangeRead for Counting {
-        fn size(&self) -> u64 {
-            self.0.len() as u64
-        }
-        fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
-            self.1.lock().unwrap().push((offset, length));
-            self.0.read_at(offset, length)
-        }
-    }
     for name in ["entries-100001.zip", "directory-65m.zip"] {
         let source = Counting(large(name), Mutex::new(Vec::new()));
         assert!(Zip::open(&source).is_err());
@@ -548,8 +578,58 @@ fn a_deep_path_costs_its_parts_not_their_prefixes() {
     let zip = Zip::open(&bytes).unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
     let list = zip.listing().unwrap();
-    assert_eq!(list.listed[0].parts, vec![list.listed[0].path.clone()]);
-    assert_eq!(list.listed[1].parts.len(), LIST_DEPTH_MAX);
+    let folders = folders_of(&zip.take_folders());
+    assert_eq!(parts_of(&folders, &list.listed[0]), vec![list.listed[0].path.clone()]);
+    assert_eq!(parts_of(&folders, &list.listed[1]).len(), LIST_DEPTH_MAX);
+}
+
+/* Each folder's parent and name (folder 0, the top, has none). */
+fn folders_of(folders: &ArchiveFolders) -> Vec<(u32, String)> {
+    let parents: Vec<u32> =
+        folders.parents.chunks(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect();
+    let names: Vec<&str> = folders.names.split_terminator('/').collect();
+    assert_eq!(names.len() + 1, parents.len(), "a name for every folder");
+    assert!(folders.names.is_empty() || folders.names.ends_with('/'));
+    std::iter::once((0, String::new()))
+        .chain(parents[1..].iter().zip(names).map(|(&p, n)| (p, n.to_owned())))
+        .collect()
+}
+
+/* An entry's folders and name, from the top, as the list shows them. */
+fn parts_of(folders: &[(u32, String)], item: &ArchiveEntry) -> Vec<String> {
+    let mut parts = vec![item.name.clone()];
+    let mut at = item.folder;
+    while at != 0 {
+        parts.push(folders[at as usize].1.clone());
+        at = folders[at as usize].0;
+    }
+    parts.reverse();
+    parts
+}
+
+fn assert_listed_where_its_path_says(list: &Listing, folders: &[(u32, String)], name: &str) {
+    let mut seen = std::collections::HashSet::new();
+    for (k, (parent, folder)) in folders.iter().enumerate().skip(1) {
+        assert!((*parent as usize) < k, "{name}: folder {k} comes after its parent");
+        assert!(
+            !folder.is_empty() && !folder.contains(['/', '\\']) && folder != ".",
+            "{name}: folder {k} named {folder:?}"
+        );
+        assert!(seen.insert((*parent, folder.clone())), "{name}: two folders named {folder:?} in one");
+    }
+    for item in &list.listed {
+        if item.hidden && path_parts(&item.path).first().map(String::as_str) == Some("__MACOSX") {
+            assert_eq!(item.folder, 0, "{name}: {} in no folder", item.path);
+            continue;
+        }
+        let parts = path_parts(&item.path);
+        let want = if parts.is_empty() || parts.len() > LIST_DEPTH_MAX {
+            vec![if item.path.is_empty() { "_".to_owned() } else { item.path.clone() }]
+        } else {
+            parts
+        };
+        assert_eq!(parts_of(folders, item), want, "{name}: where {} is listed", item.path);
+    }
 }
 
 #[test]

@@ -13,6 +13,16 @@ class ArchiveTextBlocksTest {
         assertEquals(line, blocks.joinToString(""))
     }
 
+    @Test fun aLongLineAfterAShortOneKeepsTheLineBreakBetweenThem() {
+        // Each block shows as lines of its own: the long line can't run on from "first line".
+        val long = "x".repeat(20_000)
+        val blocks = textBlocks("first line\n$long\nlast line")
+        assertEquals("first line", blocks.first())
+        assertTrue(blocks.all { it.length <= TEXT_BLOCK_CHARS })
+        assertEquals(long, blocks.drop(1).dropLast(1).joinToString("") + blocks.last().substringBefore('\n'))
+        assertEquals("last line", blocks.last().substringAfter('\n'))
+    }
+
     @Test fun manyShortLinesMakeBlocksOfTwoHundredLines() {
         val text = (1..450).joinToString("\n") { "line $it" }
         val blocks = textBlocks(text)

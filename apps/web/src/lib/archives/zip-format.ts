@@ -16,17 +16,22 @@
 const MiB = 1024 * 1024;
 
 export const ZIP_LIMITS = {
-    /* The largest central directory read: 100,000 entries of ordinary names take about 10 MiB. */
-    directoryBytes: 64 * MiB,
+    /*
+     * The largest central directory read: 100,000 entries of ordinary names take about 10 MiB.
+     * 16 MiB, as on the phones: a directory of nothing but folders (7.6 million of them, each
+     * apart) then peaks at about 470 MB between the worker and the page, measured 2026-11-17;
+     * at 64 MiB it was over a gigabyte.
+     */
+    directoryBytes: 16 * MiB,
     entries: 100_000,
-    /* Inflating past this many times the compressed bytes read so far is refused, once 1 MiB has come out. */
+    /* A preview refuses an entry that declares more than this many times what it packs, once it declares over 1 MiB (`declaresTooMuch`). */
     ratio: 200,
     ratioFrom: MiB,
     /* An entry this large at more than `ratio` asks before downloading. */
     askAbove: 4 * 1024 * MiB,
 };
 
-/* Whether this build decodes Deflate64 (method 9): zip.js 2.24.0 does, through its JavaScript inflater, and so does the core's `zip` crate. */
+/* Whether this build decodes Deflate64 (method 9): zip.js 2.24.0 does, through its JavaScript inflater, and so does the core (the deflate64 crate). */
 export const DEFLATE64 = true;
 
 /* Why an archive or an entry was refused: a code the page puts into words (archive-words.ts). */
@@ -117,7 +122,7 @@ function u64(data: DataView, at: number) {
  * Where the central directory is, from the end of the file: the end record in the last
  * 64 KiB + 22 bytes, its comment reaching exactly to the end; then the ZIP64 locator and record
  * when there is one. Caps and refusals come before the directory is read: more than 100,000
- * entries, a directory over 64 MiB, a split archive, an encrypted directory.
+ * entries, a directory over 16 MiB, a split archive, an encrypted directory.
  */
 export async function findDirectory(size: number, read: Read): Promise<Directory> {
     if (size < EOCD_LENGTH) throw new ZipError('damaged');
@@ -494,7 +499,30 @@ const ARCHIVE_EXTENSIONS = new Set([
 
 /* A path's folders and name, `/` and `\` both separating; empty and `.` parts dropped, `..` kept as a name. */
 export function pathParts(path: string) {
-    return path.split(/[\\/]/).filter((part) => part !== '' && part !== '.');
+    const parts: string[] = [];
+    for (let at = nextPart(path, 0); at >= 0; at = nextPart(path, partEnd))
+        parts.push(path.slice(at, partEnd));
+    return parts;
+}
+
+const separator = (code: number) => code === 0x2f || code === 0x5c;
+
+/*
+ * Where the next part of `path` from `from` starts (pathParts's rule), or -1; it ends at
+ * `partEnd`. A number and a variable, not a pair: listing a wide archive asks this millions of
+ * times, and a pair each time was the most of what it threw away.
+ */
+let partEnd = 0;
+function nextPart(path: string, from: number) {
+    let at = from;
+    for (;;) {
+        while (at < path.length && separator(path.charCodeAt(at))) at++;
+        if (at >= path.length) return -1;
+        const start = at;
+        while (at < path.length && !separator(path.charCodeAt(at))) at++;
+        partEnd = at;
+        if (at - start !== 1 || path.charCodeAt(start) !== 0x2e) return start;
+    }
 }
 
 export function extensionOf(name: string) {
@@ -515,8 +543,14 @@ export function supportOf(entry: Pick<ZipEntry, 'lock' | 'method' | 'aes'>): Sup
 export type Listed = {
     index: number;
     path: string;
-    /* Its folders and name for the list (pathParts), never empty. */
-    parts: string[];
+    /*
+     * The folder it is listed in (Folders; 0 is the top) and its name there: the last of its
+     * pathParts, or its whole path when it is listed flat at the top (deeper than 256 parts, or a
+     * file named by separators alone). A Mac resource entry under `__MACOSX/` is in no folder: 0,
+     * and never shown.
+     */
+    folder: number;
+    name: string;
     directory: boolean;
     size: number;
     packed: number;
@@ -534,39 +568,15 @@ export type Listed = {
     saveName: string;
 };
 
-/*
- * How deep the list goes: past 256 parts, or once the archive's entries have used 250,000 parts
- * between them, an entry is listed flat, under its whole path, at the top. Without it one 64 KiB
- * name of `a/a/a/…` costs gigabytes in prefixes.
- */
+/* How deep the list goes: an entry more than 256 parts deep is listed flat, under its whole path, at the top. */
 export const LIST_DEPTH_MAX = 256;
-/*
- * 250,000 parts, on every client: the widest listing a phone takes (a 16 MiB directory of paths 255
- * parts deep) then peaks at about 148 MB in the core, measured 2026-11-17; at a million it was 250 MB.
- */
-export const LIST_PARTS_MAX = 250_000;
 
-/* Names as a tree, each node a number and each child found by its parent and name: memory grows with the parts, never with their prefixes. */
-export class NameTree {
-    #children = new Map<string, number>();
-    #next = 1;
-    /* The child `name` of `parent` (0 is the top), made if asked; 0 when absent. */
-    child(parent: number, name: string, make = false) {
-        const key = `${parent}/${name}`;
-        let found = this.#children.get(key) ?? 0;
-        if (!found && make) this.#children.set(key, (found = this.#next++));
-        return found;
-    }
-    /* The node at `parts`, 0 when any step is absent (or `parts` is empty: the top). */
-    find(parts: string[]) {
-        let node = 0;
-        for (const part of parts) {
-            node = this.child(node, part);
-            if (!node) return 0;
-        }
-        return node;
-    }
-}
+/*
+ * The archive's folders, as the list shows them. Folder 0 is the top; folder `k` (from 1) has its
+ * parent, always below `k`, at `parents[k]`, and its name as the `k`th of `names`, each name
+ * followed by `/` (no name holds `/` or `\`). One array and one string, however many folders.
+ */
+export type Folders = { parents: Uint32Array; names: string };
 
 /* Characters no file system takes, or that change how a name reads (controls, bidi marks): save-file.ts's set. */
 const FORBIDDEN = new Set('\\/:*?"<>|');
@@ -640,61 +650,207 @@ export function saveName(name: string) {
     return kept ? kept + extension : 'Untitled';
 }
 
+/* Whether two spans of text are the same name, compared in place. */
+function sameName(a: string, aFrom: number, aTo: number, b: string, bFrom: number, bTo: number) {
+    if (aTo - aFrom !== bTo - bFrom) return false;
+    for (let k = 0; k < aTo - aFrom; k++)
+        if (a.charCodeAt(aFrom + k) !== b.charCodeAt(bFrom + k)) return false;
+    return true;
+}
+
+/* Past this many names under one folder at one level, they are found by a map rather than compared one by one. */
+const GROUP_SCAN = 16;
+
 /*
- * The list as the person sees it: each entry's parts, what it is, and whether it is a Mac
- * resource entry to hide. An entry whose path has no parts (a name of only separators) is named
- * as stored, so nothing in the archive goes unlisted.
+ * The list as the person sees it, and its folders: where each entry is, what it is, and whether
+ * it is a Mac resource entry to hide. An entry whose path has no parts (a name of only
+ * separators) is named as stored, so nothing in the archive goes unlisted. The core lists the
+ * same way (crates/hushos-core/src/archive.rs).
+ *
+ * The folders are made a level at a time: every entry still going deeper takes its next part.
+ * A level's parents are the folders the level before made, numbered in a row, so its entries are
+ * sorted into groups by parent by counting, and a group's names are compared in place. Only a
+ * group of more than 16 names makes strings to find them by. Nothing is held but a few numbers
+ * an entry, and the folders come out as one array and one string, so memory grows with the
+ * directory's bytes and nothing else: no entry keeps its parts, and no path's prefixes are made.
  */
-export function listEntries(entries: ZipEntry[]): Listed[] {
-    let budget = LIST_PARTS_MAX;
-    const listed: Listed[] = entries.map((entry, at) => {
-        const remaining = entries.length - at - 1;
-        let parts = pathParts(entry.path);
-        if (parts.length === 0) parts = entry.directory ? [] : [entry.path || '_'];
-        // Too deep, or past what the archive may spend in all: listed flat, under its whole path.
-        // Each entry still to come is owed at least one part, so the last ones list flat, never past the cap.
-        if (parts.length > LIST_DEPTH_MAX || parts.length + remaining > budget)
-            parts = [entry.path || '_'];
-        budget -= parts.length;
-        const name = parts[parts.length - 1] ?? '';
-        const support = supportOf(entry);
-        return {
+export function listEntries(entries: ZipEntry[]): { listed: Listed[]; folders: Folders } {
+    const count = entries.length;
+    // Each entry's folder, and the span of its current part in its text (its name once done).
+    const folder = new Uint32Array(count);
+    const nameAt = new Uint32Array(count);
+    const nameEnd = new Uint32Array(count);
+    const hidden = new Uint8Array(count);
+    const depth = new Uint16Array(count);
+    // The folder reached so far (this level's parent), and the folder this level's part is (0: none).
+    const node = new Uint32Array(count);
+    const made = new Uint32Array(count);
+    const flat = new Uint8Array(count);
+    let active = new Uint32Array(count);
+    let next = new Uint32Array(count);
+    const order = new Uint32Array(count);
+    const bucket = new Uint32Array(count + 2);
+    let activeCount = 0;
+    const flats: number[] = [];
+    // At most a folder for every part but a file's last: the room the folders are given at once.
+    let most = 0;
+    entries.forEach((entry, i) => {
+        let parts = 0;
+        for (
+            let at = nextPart(entry.path, 0);
+            at >= 0 && parts <= LIST_DEPTH_MAX;
+            at = nextPart(entry.path, partEnd)
+        )
+            parts++;
+        depth[i] = parts;
+        if (parts > LIST_DEPTH_MAX || (parts === 0 && !entry.directory)) {
+            flat[i] = 1;
+            nameEnd[i] = entry.path ? entry.path.length : 1;
+            flats.push(i);
+        } else if (parts > 0) {
+            active[activeCount++] = i;
+            most += entry.directory ? parts : parts - 1;
+        }
+    });
+    // A flat entry with no path is named `_`.
+    const text = (i: number) => entries[i]!.path || '_';
+    const parents = new Uint32Array(most + 1);
+    const levels: string[] = [];
+    let folders = 1;
+    // This level's parents: the folders [first, end). Level 0 hangs from the top alone, and runs
+    // even with nothing nested: the flat entries are names of the top too.
+    let first = 0;
+    let end = 1;
+    for (let level = 0; level === 0 || activeCount > 0; level++) {
+        let items = activeCount;
+        for (let k = 0; k < activeCount; k++) {
+            const i = active[k]!;
+            nameAt[i] = nextPart(entries[i]!.path, level === 0 ? 0 : nameEnd[i]!);
+            nameEnd[i] = partEnd;
+        }
+        if (level === 0) for (const i of flats) active[items++] = i;
+        // Sorted into groups by parent, by counting.
+        bucket.fill(0, 0, end - first + 1);
+        for (let k = 0; k < items; k++) bucket[node[active[k]!]! - first + 1]!++;
+        for (let g = 1; g <= end - first; g++) bucket[g]! += bucket[g - 1]!;
+        for (let k = 0; k < items; k++) order[bucket[node[active[k]!]! - first]!++] = active[k]!;
+        const named: string[] = [];
+        const macs: number[] = [];
+        const levelFirst = folders;
+        let nextCount = 0;
+        for (let g0 = 0; g0 < items;) {
+            const parent = node[order[g0]!]!;
+            let g1 = g0;
+            while (g1 < items && node[order[g1]!] === parent) g1++;
+            const byName = g1 - g0 > GROUP_SCAN ? new Map<string, number>() : null;
+            // The first item of the group with the same name as `text(i)` from `from` to `to`, or -1.
+            const twinOf = (i: number, from: number, to: number, upTo: number, add: boolean) => {
+                const own = text(i);
+                if (byName) {
+                    const key = own.slice(from, to);
+                    const found = byName.get(key);
+                    if (found !== undefined) return found;
+                    if (add) byName.set(key, i);
+                    return -1;
+                }
+                for (let q = g0; q < upTo; q++) {
+                    const j = order[q]!;
+                    if (sameName(own, from, to, text(j), nameAt[j]!, nameEnd[j]!)) return j;
+                }
+                return -1;
+            };
+            for (let k = g0; k < g1; k++) {
+                const i = order[k]!;
+                const entry = entries[i]!;
+                const twin = twinOf(i, nameAt[i]!, nameEnd[i]!, k, true);
+                made[i] = 0;
+                if (flat[i]) continue;
+                const last = level + 1 === depth[i];
+                if (
+                    level === 0 &&
+                    sameName(entry.path, nameAt[i]!, nameEnd[i]!, '__MACOSX', 0, 8)
+                ) {
+                    // Mac resource entries: hidden, in no folder, and no folder made for them (named
+                    // by their last part once the level's names are done with).
+                    hidden[i] = 1;
+                    macs.push(i);
+                    continue;
+                }
+                if (last && !entry.directory) {
+                    folder[i] = parent;
+                    continue;
+                }
+                let id = twin >= 0 ? made[twin]! : 0;
+                if (!id) {
+                    id = folders++;
+                    parents[id] = parent;
+                    named.push(entry.path.slice(nameAt[i], nameEnd[i]));
+                    if (twin >= 0) made[twin] = id;
+                }
+                made[i] = id;
+                if (last) folder[i] = parent;
+                else next[nextCount++] = i;
+            }
+            // A `._x` is hidden only beside an `x`: a file or folder of this level in the same folder.
+            for (let k = g0; k < g1; k++) {
+                const i = order[k]!;
+                if (hidden[i] || entries[i]!.directory || (!flat[i] && level + 1 !== depth[i]))
+                    continue;
+                const own = text(i);
+                const from = nameAt[i]!;
+                if (own.charCodeAt(from) !== 0x2e || own.charCodeAt(from + 1) !== 0x5f) continue;
+                if (Array.from(own.slice(from, nameEnd[i])).length <= 2) continue;
+                if (twinOf(i, from + 2, nameEnd[i]!, g1, false) >= 0) hidden[i] = 1;
+            }
+            g0 = g1;
+        }
+        for (const i of macs)
+            for (
+                let more = nextPart(entries[i]!.path, nameEnd[i]!);
+                more >= 0;
+                more = nextPart(entries[i]!.path, partEnd)
+            ) {
+                nameAt[i] = more;
+                nameEnd[i] = partEnd;
+            }
+        // The next level's entries hang from the folders this one made.
+        for (let k = 0; k < nextCount; k++) node[next[k]!] = made[next[k]!]!;
+        if (named.length) levels.push(`${named.join('/')}/`);
+        [active, next] = [next, active];
+        activeCount = nextCount;
+        first = levelFirst;
+        end = folders;
+    }
+    const listed: Listed[] = [];
+    entries.forEach((entry, i) => {
+        if (depth[i] === 0 && entry.directory) return;
+        const name = entry.path ? entry.path.slice(nameAt[i], nameEnd[i]) : '_';
+        listed.push({
             index: entry.index,
             path: entry.path,
-            parts,
+            folder: folder[i]!,
+            name,
             directory: entry.directory,
             size: entry.size,
             packed: entry.packed,
             dos: entry.dos,
             mtime: entry.mtime,
             lock: entry.lock,
-            support,
+            support: supportOf(entry),
             link: entry.link && !entry.directory,
             nested: !entry.directory && !entry.link && ARCHIVE_EXTENSIONS.has(extensionOf(name)),
-            hidden: false,
+            hidden: hidden[i] === 1,
             stored: !entry.directory && !entry.link && entry.method === 0 && entry.lock === 'none',
             saveName: saveName(name),
-        };
+        });
     });
-    // Every path, explicit or implied by a deeper one, so a `._x` is hidden only beside an `x`.
-    const tree = new NameTree();
-    for (const item of listed) {
-        let node = 0;
-        for (const part of item.parts) node = tree.child(node, part, true);
-    }
-    for (const item of listed) {
-        if (item.parts[0] === '__MACOSX') {
-            item.hidden = true;
-            continue;
-        }
-        const name = item.parts[item.parts.length - 1];
-        if (!item.directory && name && name.startsWith('._') && name.length > 2) {
-            const parent = item.parts.length > 1 ? tree.find(item.parts.slice(0, -1)) : 0;
-            if ((item.parts.length === 1 || parent) && tree.child(parent, name.slice(2)))
-                item.hidden = true;
-        }
-    }
-    return listed.filter((item) => item.parts.length > 0 || !item.directory);
+    return {
+        listed,
+        folders: {
+            parents: folders < parents.length ? parents.slice(0, folders) : parents,
+            names: levels.join(''),
+        },
+    };
 }
 
 /* Mac resource files hidden from the list (directories not counted). */
@@ -707,9 +863,10 @@ export function hiddenCount(listed: Listed[]) {
 // ---------------------------------------------------------------------------------------------
 
 /*
- * Held to the entry's declared size at the byte that passes it, and for a preview to 200 times
- * the compressed bytes read so far once 1 MiB has come out. A download is held to its size only:
- * a large one past the ratio asks first instead (`asksFirst`).
+ * Held to the entry's declared size at the byte that passes it. With `ratio`, to 200 times the
+ * compressed bytes read so far as well, once 1 MiB has come out, which zip entries never ask for:
+ * a preview refuses an entry by its declared ratio before reading a byte (`declaresTooMuch`), the
+ * declared size bounds the rest, and a large download past the ratio asks first (`asksFirst`).
  */
 export class InflateCounter {
     produced = 0;
@@ -739,7 +896,6 @@ export class InflateCounter {
             throw new ZipError('ratio');
     }
 
-    /* At the end: fewer bytes than declared is damage too. */
     /* At the end: fewer bytes than declared is damage too, said as such. */
     finish() {
         if (this.produced > this.declared) throw new ZipError('size');

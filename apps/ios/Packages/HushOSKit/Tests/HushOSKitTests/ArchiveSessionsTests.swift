@@ -210,6 +210,34 @@ import Testing
         #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("ZipCrypto"))
     }
 
+    @Test func aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() async throws {
+        // A family's file, kept to its family folder as it stood when the open began.
+        let workspace = UUID().uuidString.lowercased()
+        let archive = try await Self.open("locked-ratio.zip")
+        archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
+        #expect(try await archive.unlock("correct horse battery"))
+        let zeros = try #require(archive.entries.first)
+        let pieces = Counter()
+        await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) {
+            try await archive.download(zeros, into: ArchiveSink { _ in
+                // The family is let go of (a removal, a fork) while the first piece is written.
+                if pieces.next() == 1 { TemporaryCopies.forgetFamily([workspace]) }
+            })
+        }
+        #expect(pieces.value == 1)
+        // The archive closed with it: its password gone, and every later call refused before it reads.
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!archive.unlocked)
+        await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) { try await archive.preview(zeros, limit: 1024) }
+    }
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.withLock { count } }
+        func next() -> Int { lock.withLock { count += 1; return count } }
+    }
+
     @Test func signingOutWipesEveryOpenArchivesPassword() async throws {
         let archive = try await Self.open("aes.zip", registered: true)
         #expect(try await archive.unlock("correct horse battery"))
@@ -275,40 +303,80 @@ import Testing
         #expect(cut.joined(separator: "\n").replacingOccurrences(of: "\n", with: "") == String(decoding: long, as: UTF8.self))
     }
 
-    @Test func aDeepPathCostsItsPartsNotItsPrefixes() {
+    /*
+     * Entries and folders for `paths` (a trailing `/` a directory) listed as the core lists them: a
+     * folder for each name under each parent, numbered as made, each entry in its folder; one under
+     * `__MACOSX/` hidden and in none. The core's own listing is held to the shared table in its tests.
+     */
+    static func listed(_ paths: [String]) -> ([ArchiveEntry], ArchiveFolders) {
+        var ids: [String: UInt32] = [:]
+        var parents = Data(count: 4)
+        var names = ""
+        func folder(_ parent: UInt32, _ name: String) -> UInt32 {
+            if let id = ids["\(parent)/\(name)"] { return id }
+            let id = UInt32(ids.count + 1)
+            ids["\(parent)/\(name)"] = id
+            withUnsafeBytes(of: parent.littleEndian) { parents.append(contentsOf: $0) }
+            names += name + "/"
+            return id
+        }
+        let entries = paths.enumerated().map { index, path in
+            let directory = path.hasSuffix("/")
+            let parts = path.split(separator: "/").map(String.init)
+            var node: UInt32 = 0
+            let macos = parts.first == "__MACOSX"
+            if !macos {
+                for part in parts.dropLast() { node = folder(node, part) }
+                if directory { _ = folder(node, parts.last!) }
+            }
+            return ArchiveEntry(
+                index: UInt32(index), path: path, folder: node, name: parts.last ?? path, directory: directory,
+                size: 1, packed: 1, dos: 0, mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false,
+                hidden: macos, stored: false, saveName: parts.last ?? path
+            )
+        }
+        return (entries, ArchiveFolders(parents: parents, names: names))
+    }
+
+    @Test func aDeepPathIsOneFolderALevel() {
         // 256 parts deep (the core's cap): every folder on the way, one child each.
-        let parts = (0 ..< 255).map { "d\($0)" } + ["z"]
-        let deep = ArchiveEntry(index: 0, path: parts.joined(separator: "/"), parts: parts, directory: false, size: 1, packed: 1,
-                                dos: 0, mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false,
-                                stored: true, saveName: "z")
-        let tree = ArchiveTree([deep])
-        #expect(tree.rows(at: []) == [.folder(name: "d0", count: 1)])
-        #expect(tree.rows(at: Array(parts.dropLast())).map(\.name) == ["z"])
+        let (entries, folders) = Self.listed([(0 ..< 255).map { "d\($0)" }.joined(separator: "/") + "/z"])
+        let tree = ArchiveTree(entries, folders: folders)
+        var id: UInt32 = 0
+        for depth in 0 ..< 255 {
+            guard case .folder(let next, let name, 1) = tree.rows(in: id).first, tree.rows(in: id).count == 1 else {
+                Issue.record("no folder at \(depth)")
+                return
+            }
+            #expect(name == "d\(depth)")
+            id = next
+        }
+        #expect(tree.rows(in: id).map(\.name) == ["z"])
     }
 
     @Test func theTreeListsFoldersFirstWithCountsAndLeavesMacFilesOut() {
-        func entry(_ index: UInt32, _ path: String, directory: Bool = false, hidden: Bool = false) -> ArchiveEntry {
-            ArchiveEntry(
-                index: index, path: path, parts: path.split(separator: "/").map(String.init), directory: directory,
-                size: 1, packed: 1, dos: 0, mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false,
-                hidden: hidden, stored: false, saveName: path.split(separator: "/").last.map(String.init) ?? path
-            )
-        }
-        let tree = ArchiveTree([
-            entry(0, "z.txt"),
-            entry(1, "docs/", directory: true),
-            entry(2, "docs/readme.txt"),
-            entry(3, "docs/notes/todo.md"),
-            entry(4, "__MACOSX/._z.txt", hidden: true),
-            entry(5, "a.txt"),
-            entry(6, "empty/", directory: true),
+        let (entries, folders) = Self.listed([
+            "z.txt", "docs/", "docs/readme.txt", "docs/notes/todo.md", "__MACOSX/._z.txt", "a.txt", "empty/",
         ])
-        #expect(tree.rows(at: []).map(\.name) == ["docs", "empty", "a.txt", "z.txt"])
-        #expect(tree.rows(at: []).first == .folder(name: "docs", count: 2))
-        #expect(tree.rows(at: ["empty"]).isEmpty)
+        let tree = ArchiveTree(entries, folders: folders)
+        let top = tree.rows(in: 0)
+        #expect(top.map(\.name) == ["docs", "empty", "a.txt", "z.txt"])
+        guard case .folder(let docs, "docs", 2) = top[0], case .folder(let empty, "empty", 0) = top[1] else {
+            Issue.record("folders: \(top)")
+            return
+        }
+        #expect(tree.rows(in: empty).isEmpty)
         // A folder no entry names but a deeper path implies.
-        #expect(tree.rows(at: ["docs", "notes"]).map(\.name) == ["todo.md"])
-        #expect(!tree.rows(at: []).contains { $0.name == "__MACOSX" })
+        guard case .folder(let notes, "notes", 1) = tree.rows(in: docs).first else {
+            Issue.record("no notes in docs")
+            return
+        }
+        #expect(tree.name(of: notes) == "notes")
+        #expect(tree.rows(in: notes).map(\.name) == ["todo.md"])
+        #expect(!top.contains { $0.name == "__MACOSX" })
+        // A folder the list doesn't hold is empty, not a crash.
+        #expect(tree.rows(in: 999).isEmpty)
+        #expect(tree.name(of: 999) == "")
     }
 
     @Test func everyRefusalTheListShowsHasTheWebsWords() {
@@ -337,7 +405,7 @@ import Testing
     }
 
     @Test func aZipEntrysDateIsItsUnixTimeOrItsDosDateAsLocalTime() {
-        var entry = ArchiveEntry(index: 0, path: "a", parts: ["a"], directory: false, size: 0, packed: 0,
+        var entry = ArchiveEntry(index: 0, path: "a", folder: 0, name: "a", directory: false, size: 0, packed: 0,
                                  dos: (UInt32((2026 - 1980) << 9 | 11 << 5 | 3) << 16) | UInt32(14 << 11 | 30 << 5),
                                  mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false, stored: true, saveName: "a")
         let calendar = Calendar(identifier: .gregorian)

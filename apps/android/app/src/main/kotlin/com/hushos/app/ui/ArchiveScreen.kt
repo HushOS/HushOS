@@ -107,6 +107,8 @@ internal fun archiveFailure(error: Throwable, entry: Boolean = false): String = 
     // The read underneath (the network, the kept copy, a close) in its own words.
     is ArchiveException.Failed -> error.reason.ifBlank { toolFailedMessage() }
     is ToolFailed -> error.message ?: toolFailedMessage()
+    // A family's file whose family folder was let go of meanwhile: the family's words.
+    is com.hushos.app.data.FamilyFailure -> error.message ?: toolFailedMessage()
     else -> toolFailedMessage()
 }
 
@@ -167,7 +169,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                         val entry = browse.opened
                         // At the top the bar already names the archive: the trail shows only inside it.
                         if (path.isNotEmpty() || entry != null) {
-                            Crumbs(item.name, path, entry) { to -> browse.opened = null; browse.path = to }
+                            Crumbs(item.name, path.map(tree::name), entry) { depth -> browse.opened = null; browse.path = path.take(depth) }
                             HorizontalDivider(color = alpine.rule)
                         }
                         Box(Modifier.weight(1f)) {
@@ -178,7 +180,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                                 onDownload = { download(entry) },
                                 onDownloadArchive = { sending = true },
                             )
-                            else EntryList(tree.rows(path), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = { browse.opened = it }, onDownload = ::download)
+                            else EntryList(tree.rows(path.lastOrNull() ?: 0), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = { browse.opened = it }, onDownload = ::download)
                         }
                         for (record in browse.downloads) DownloadBar(record) { browse.stop(record) }
                     }
@@ -212,21 +214,21 @@ private fun DownloadBar(record: EntryDownload, dismiss: () -> Unit) {
     val error by record.error
     val written by record.written
     Row(Modifier.fillMaxWidth().background(alpine.surface).heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S1), verticalAlignment = Alignment.CenterVertically) {
-        Text(error ?: ArchiveWords.downloading(record.entry.parts.last()), style = MaterialTheme.typography.bodyMedium, color = if (error != null) alpine.danger else alpine.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(error ?: ArchiveWords.downloading(record.entry.name), style = MaterialTheme.typography.bodyMedium, color = if (error != null) alpine.danger else alpine.ink, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (error == null && record.entry.size > 0uL) Text("${(written * 100 / record.entry.size.toLong()).coerceIn(0, 100)}%", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
         IconButton(onClick = dismiss) { Icon(Icons.Outlined.Close, if (error != null) "Dismiss" else ArchiveWords.STOP) }
     }
 }
 
-/* The archive's name, then each folder down to where you are: each one a step back up. */
+/* The archive's name, then each folder down to where you are: each one a step back up (`go` hears how many folders deep). */
 @Composable
-private fun Crumbs(name: String, path: List<String>, opened: ArchiveEntry?, go: (List<String>) -> Unit) {
+private fun Crumbs(name: String, path: List<String>, opened: ArchiveEntry?, go: (Int) -> Unit) {
     val alpine = Alpine.colors
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min = 48.dp).padding(horizontal = AlpineSpace.S2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val steps = listOf(name) + path + listOfNotNull(opened?.parts?.last())
+        val steps = listOf(name) + path + listOfNotNull(opened?.name)
         steps.forEachIndexed { index, step ->
             if (index > 0) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted, modifier = Modifier.size(18.dp))
             val last = index == steps.lastIndex
@@ -237,7 +239,7 @@ private fun Crumbs(name: String, path: List<String>, opened: ArchiveEntry?, go: 
                 color = if (last) alpine.ink else alpine.inkMuted,
                 maxLines = 1,
                 modifier = Modifier
-                    .then(if (last) Modifier else Modifier.clickable(role = Role.Button) { go(path.take(index)) })
+                    .then(if (last) Modifier else Modifier.clickable(role = Role.Button) { go(index) })
                     .heightIn(min = 48.dp).padding(horizontal = AlpineSpace.S2).wrapCenter(),
             )
         }
@@ -257,7 +259,7 @@ private fun EntryList(
     rows: List<ArchiveTree.Row>,
     unlocked: Boolean,
     hidden: Int,
-    onFolder: (String) -> Unit,
+    onFolder: (Int) -> Unit,
     onOpen: (ArchiveEntry) -> Unit,
     onDownload: (ArchiveEntry) -> Unit,
 ) {
@@ -269,7 +271,7 @@ private fun EntryList(
     LazyColumn(Modifier.fillMaxSize()) {
         items(rows, key = { row -> when (row) { is ArchiveTree.Row.Folder -> "d:${row.name}"; is ArchiveTree.Row.File -> "f:${row.entry.index}" } }) { row ->
             when (row) {
-                is ArchiveTree.Row.Folder -> EntryRow(row.name, ArchiveWords.items(row.count), folder = true, onClick = { onFolder(row.name) })
+                is ArchiveTree.Row.Folder -> EntryRow(row.name, ArchiveWords.items(row.count), folder = true, onClick = { onFolder(row.id) })
                 is ArchiveTree.Row.File -> {
                     val entry = row.entry
                     val locked = entry.lock != "none" && !unlocked
@@ -350,7 +352,7 @@ private fun EntryPane(
 ) {
     val alpine = Alpine.colors
     val context = LocalContext.current
-    val name = entry.parts.last()
+    val name = entry.name
     val kind = remember(name) { ArchiveTree.previewKind(name) }
     val limits = remember(kind) { zipEntryPreviewLimits(kind, deviceMemory(context).toULong()) }
     var continued by remember(entry.index) { mutableStateOf(false) }
@@ -372,14 +374,14 @@ private fun EntryPane(
                 entry.support == "method" -> Notice(name, ArchiveWords.METHOD) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 entry.support == "encryption" -> Notice(name, ArchiveWords.ENCRYPTION) { Button(onClick = onDownloadArchive) { Text(ArchiveWords.DOWNLOAD_ARCHIVE) } }
                 // An archive inside is never previewed; downloading a locked one asks for its password first.
-                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, if (reprompt) entry.index else null) {
+                entry.nested && (askFor || reprompt) && locked -> PasswordCard(archive, name, entry.index) {
                     attempt++
                     askFor = false
                     onUnlocked()
                     onDownload()
                 }
                 entry.nested -> Notice(name, ArchiveWords.NESTED) { Button(onClick = { if (locked) askFor = true else onDownload() }) { Text(ArchiveWords.DOWNLOAD) } }
-                locked -> PasswordCard(archive, name, if (reprompt) entry.index else null) { attempt++; onUnlocked() }
+                locked -> PasswordCard(archive, name, entry.index) { attempt++; onUnlocked() }
                 kind == "other" -> Notice(ArchiveWords.NO_PREVIEW, name) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 kind == "pdf" && Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> Notice(ArchiveWords.NO_PREVIEW, ArchiveWords.PDF_NEEDS_ANDROID_11) { Button(onClick = onDownload) { Text(ArchiveWords.DOWNLOAD) } }
                 // The large-file card: past the ceiling only Download; past the threshold, what opening costs and Continue.
@@ -404,7 +406,7 @@ private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String
         shown = try {
             val bytes = archive.preview(entry.index, limit)
             // Decoded off the main thread: an image or a PDF's first pages, the text cut into blocks.
-            withContext(Dispatchers.Default) { decode(kind, entry.parts.last(), bytes) }
+            withContext(Dispatchers.Default) { decode(kind, entry.name, bytes) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -453,6 +455,9 @@ internal fun textBlocks(text: String): List<String> {
     while (at <= text.length) {
         val end = text.indexOf('\n', at).let { if (it < 0) text.length else it }
         var line = at
+        // A line too long for what is left starts a block of its own: cut into this one, it would
+        // run on from the line before with its line break lost.
+        if (lines > 0 && end - line + 1 > TEXT_BLOCK_CHARS - block.length) flush()
         while (end - line > TEXT_BLOCK_CHARS - block.length) {
             val room = TEXT_BLOCK_CHARS - block.length
             block.append(text, line, line + room)
@@ -562,8 +567,9 @@ private fun PdfView(document: PdfDocumentHolder, onDownload: () -> Unit) {
     }
 }
 
+/* `index`: the item the password is asked for, tried on first, so a password that opens only some of the archive's items opens the one picked. */
 @Composable
-private fun PasswordCard(archive: OpenArchive, name: String, index: UInt?, onUnlocked: () -> Unit) {
+private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, onUnlocked: () -> Unit) {
     // Kept in memory only (remember, never saved state), and gone with the card.
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }

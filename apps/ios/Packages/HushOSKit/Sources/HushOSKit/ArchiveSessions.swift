@@ -38,17 +38,35 @@ public enum ArchiveSessions {
         let lock = NSLock()
         var archives: [UUID: @Sendable () -> Void] = [:]
         var calls: [UUID: RunControl] = [:]
+        /* Moved by every sign-out: an archive opened across one is never registered (PaddingDrains' rule). */
+        var generation: UInt64 = 0
     }
     private static let live = Live()
 
-    static func track(archive id: UUID, close: @escaping @Sendable () -> Void) { live.lock.withLock { live.archives[id] = close } }
+    /* Taken before an archive starts opening, and given back when it registers. */
+    static var generation: UInt64 { live.lock.withLock { live.generation } }
+
+    /*
+     * Registers an archive opened since `born`; false, and nothing registered, when a sign-out came
+     * between: its open call had ended, so the sign-out had nothing of it to close.
+     */
+    static func track(archive id: UUID, born: UInt64, close: @escaping @Sendable () -> Void) -> Bool {
+        live.lock.withLock {
+            guard live.generation == born else { return false }
+            live.archives[id] = close
+            return true
+        }
+    }
     static func untrack(archive id: UUID) { _ = live.lock.withLock { live.archives.removeValue(forKey: id) } }
     static func track(call id: UUID, _ control: RunControl) { live.lock.withLock { live.calls[id] = control } }
     static func untrack(call id: UUID) { _ = live.lock.withLock { live.calls.removeValue(forKey: id) } }
 
     /* Sign-out: every call in flight is cancelled, and every archive is closed, its password wiped. */
     public static func closeAll() {
-        let (closes, controls) = live.lock.withLock { (Array(live.archives.values), Array(live.calls.values)) }
+        let (closes, controls) = live.lock.withLock {
+            live.generation &+= 1
+            return (Array(live.archives.values), Array(live.calls.values))
+        }
         for control in controls { control.cancel() }
         for close in closes { close() }
     }
@@ -263,6 +281,13 @@ public final class OpenArchive: @unchecked Sendable {
     public let kept: Bool
     /* The row it was opened from: for a family's file, the vault's current row, which may be newer than the one tapped. */
     public private(set) var row: Opened?
+    /*
+     * For a Drive file: kept to the session, and a family's file to its family folder, as they stood
+     * before the open began (FamilyCopyGate, taken first). Every call asks before it starts and
+     * before it hands anything back, a download before each piece, and the archive closes at the
+     * first refusal: a family's removal or fork leaves no listing, password or bytes behind.
+     */
+    var gate: FamilyCopyGate?
     private let session: ZipArchiveSession
     private let turns = ArchiveTurns()
     private let calls = ArchiveCalls()
@@ -273,7 +298,8 @@ public final class OpenArchive: @unchecked Sendable {
     /* Reached by a sign-out (`ArchiveSessions.closeAll`). Every archive the app opens is; a test's own may not be, so another suite's sign-out can't close it mid-test. */
     private let registered: Bool
 
-    init(session: ZipArchiveSession, kept: Bool = false, watchdog: Duration, poll: Duration, registered: Bool = true) {
+    /* `born`: the sign-out generation taken before the open began. A sign-out since closes it here and throws. */
+    init(session: ZipArchiveSession, born: UInt64, kept: Bool = false, watchdog: Duration, poll: Duration, registered: Bool = true) throws {
         self.session = session
         self.kept = kept
         entries = session.entries()
@@ -282,11 +308,13 @@ public final class OpenArchive: @unchecked Sendable {
         self.poll = poll
         self.registered = registered
         if registered {
-            ArchiveSessions.track(archive: id) { [session, calls, siblings] in
+            let tracked = ArchiveSessions.track(archive: id, born: born) { [session, calls, siblings] in
                 calls.cancelAll()
                 for sibling in siblings.takeAll() { OpenArchive.closeOffMain(sibling) }
                 OpenArchive.closeOffMain(session)
             }
+            // Signed out while it opened: closed now (deinit does it), never shown.
+            guard tracked else { throw CancellationError() }
         }
     }
 
@@ -296,6 +324,9 @@ public final class OpenArchive: @unchecked Sendable {
         OpenArchive.closeOffMain(session)
         if registered { ArchiveSessions.untrack(archive: id) }
     }
+
+    /* The list's folders, handed over once: the core keeps none after (ArchiveTree holds them). */
+    public func takeFolders() -> ArchiveFolders { session.takeFolders() }
 
     /* The core's close, never on the main thread: it doesn't wait on a read, but it is still the core's work. */
     static func closeOffMain(_ session: ZipArchiveSession) {
@@ -308,8 +339,14 @@ public final class OpenArchive: @unchecked Sendable {
      * from the store. Throws ArchiveFailure.
      */
     public static func open(_ item: Opened, vault: Vault, watchdog: Duration = .milliseconds(Int(toolWatchdogMillis())), poll: Duration = .seconds(1)) async throws -> OpenArchive {
+        let born = ArchiveSessions.generation
+        let family = await vault.isFamilyWorkspace(item.node.workspaceId)
+        let gate = vault.copyGate(familyWorkspace: family ? item.node.workspaceId : nil)
         if let url = Offline.localCopy(of: item), let copy = try? KeptCopy(url: url) {
-            return try await open(local: copy, watchdog: watchdog, poll: poll)
+            let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
+            archive.gate = gate
+            try archive.stands()
+            return archive
         }
         try await vault.holdForCopy(item)
         let current = try await currentRow(item, vault: vault)
@@ -319,8 +356,10 @@ public final class OpenArchive: @unchecked Sendable {
         let session = try await call(watchdog: watchdog, poll: poll) { control in
             try ZipArchiveSession.open(source: source, content: content, control: control)
         }
-        let archive = OpenArchive(session: session, watchdog: watchdog, poll: poll)
+        let archive = try OpenArchive(session: session, born: born, watchdog: watchdog, poll: poll)
         archive.row = current
+        archive.gate = gate
+        try archive.stands()
         return archive
     }
 
@@ -346,18 +385,20 @@ public final class OpenArchive: @unchecked Sendable {
 
     /* An archive over any source (the tests' sealed fixtures). */
     static func open(source: ObjectSource, content: Content, watchdog: Duration, poll: Duration = .seconds(1), registered: Bool = true) async throws -> OpenArchive {
+        let born = ArchiveSessions.generation
         let session = try await call(watchdog: watchdog, poll: poll, registered: registered) { control in
             try ZipArchiveSession.open(source: source, content: content, control: control)
         }
-        return OpenArchive(session: session, watchdog: watchdog, poll: poll, registered: registered)
+        return try OpenArchive(session: session, born: born, watchdog: watchdog, poll: poll, registered: registered)
     }
 
     /* An archive over a copy kept on the phone (or a test's bytes). */
     static func open(local: LocalSource, watchdog: Duration, poll: Duration = .seconds(1), registered: Bool = true) async throws -> OpenArchive {
+        let born = ArchiveSessions.generation
         let session = try await call(watchdog: watchdog, poll: poll, registered: registered) { control in
             try ZipArchiveSession.openLocal(source: local, control: control)
         }
-        return OpenArchive(session: session, kept: true, watchdog: watchdog, poll: poll, registered: registered)
+        return try OpenArchive(session: session, born: born, kept: true, watchdog: watchdog, poll: poll, registered: registered)
     }
 
     /* Whether a password is held. */
@@ -387,6 +428,7 @@ public final class OpenArchive: @unchecked Sendable {
      * and on sign-out; never on the main thread.
      */
     public func download(_ entry: ArchiveEntry, into sink: ArchiveSink) async throws {
+        try stands()
         let key = UUID()
         let sibling: ZipArchiveSession
         do { sibling = try session.sibling() } catch { throw ArchiveFailure.from(error, control: RunControl(watchdogMillis: 1, clock: nil), scope: .entry) }
@@ -396,9 +438,17 @@ public final class OpenArchive: @unchecked Sendable {
             throw ArchiveFailure.closed
         }
         defer { if let done = siblings.remove(key) { OpenArchive.closeOffMain(done) } }
-        try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
-            try sibling.download(index: entry.index, sink: sink, control: control)
+        // Asked of every piece too: a family let go of mid-download writes nothing more.
+        let held: EntrySink = gate.map { gate in ArchiveSink { chunk in try gate.check(); try sink.write(chunk: chunk) } } ?? sink
+        do {
+            try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
+                try sibling.download(index: entry.index, sink: held, control: control)
+            }
+        } catch {
+            try stands()
+            throw error
         }
+        try stands()
     }
 
     /*
@@ -413,9 +463,27 @@ public final class OpenArchive: @unchecked Sendable {
     }
 
     private func turn<T: Sendable>(scope: ArchiveWords.Scope, _ work: @escaping @Sendable (RunControl) throws -> T) async throws -> T {
+        try stands()
         do { try await turns.take() } catch { throw ArchiveFailure(code: nil, message: "Cancelled.") }
         defer { Task { await turns.give() } }
-        return try await Self.call(watchdog: watchdog, poll: poll, scope: scope, on: calls, registered: registered, work)
+        let value: T
+        do { value = try await Self.call(watchdog: watchdog, poll: poll, scope: scope, on: calls, registered: registered, work) } catch {
+            // Failed because the family went: said as that.
+            try stands()
+            throw error
+        }
+        try stands()
+        return value
+    }
+
+    /* Throws, and closes the archive, once its session or its family folder was let go of since the open began (`gate`). */
+    func stands() throws {
+        guard let gate else { return }
+        do { try gate.check() } catch {
+            close()
+            if let family = error as? FamilyFailure { throw ArchiveFailure(code: nil, message: family.message) }
+            throw ArchiveFailure.closed
+        }
     }
 
     /*
@@ -511,69 +579,86 @@ private actor ArchiveAddress {
 
 // MARK: - What the list shows
 
-/* A row of an archive's folder: a folder with how many items it holds, or a file. */
+/* A row of an archive's folder: a folder (its number in the list's folders) with how many items it holds, or a file. */
 public enum ArchiveRow: Equatable, Sendable {
-    case folder(name: String, count: Int)
+    case folder(id: UInt32, name: String, count: Int)
     case file(ArchiveEntry)
 
     public var name: String {
         switch self {
-        case .folder(let name, _): name
-        case .file(let entry): entry.parts.last ?? entry.path
+        case .folder(_, let name, _): name
+        case .file(let entry): entry.name
         }
     }
 }
 
 /*
- * The archive's folders, as the web's archive view builds them (archive-view.tsx, treeOf): every
- * folder an entry's path names, explicit or not; Mac resource entries left out; folders first,
- * then files, each by name as Files sorts them. A tree of nodes, each holding its own children,
- * so memory grows with the entries' parts and never with every prefix of a path; each folder's
- * rows are sorted once, when the tree is made.
+ * The archive's list as folders (the web's rowsOf in archive-view.tsx), from the core's
+ * ArchiveFolders: each folder's parent and name in one array and one run of bytes, never an object
+ * a folder, so a listing of millions of folders costs a few bytes each. A folder's rows (its
+ * folders, then its files, each by name as Files sorts them) are made the first time they are
+ * asked for and kept. Mac resource entries are left out.
  */
-public struct ArchiveTree: Sendable {
-    private final class Node: @unchecked Sendable {
-        var folders: [String: Node] = [:]
-        var files: [ArchiveEntry] = []
-        var rows: [ArchiveRow] = []
-    }
+public final class ArchiveTree: @unchecked Sendable {
+    private let parents: [UInt32]
+    private let names: [UInt8]
+    /* Where each folder's name starts in `names`; the next one's start, less its `/`, is where it ends. */
+    private let starts: [Int]
+    /* What each folder holds, folders and files. */
+    private let counts: [Int32]
+    private let files: [ArchiveEntry]
+    private let lock = NSLock()
+    private var made: [UInt32: [ArchiveRow]] = [:]
 
-    private let top: Node
-
-    public init(_ entries: [ArchiveEntry]) {
-        let top = Node()
-        for entry in entries where !entry.hidden {
-            let depth = entry.directory ? entry.parts.count : entry.parts.count - 1
-            guard depth >= 0 else { continue }
-            var node = top
-            for part in entry.parts.prefix(depth) {
-                if let child = node.folders[part] { node = child } else {
-                    let child = Node()
-                    node.folders[part] = child
-                    node = child
-                }
+    public init(_ entries: [ArchiveEntry], folders: ArchiveFolders) {
+        let count = max(folders.parents.count / 4, 1)
+        var parents = [UInt32](repeating: 0, count: count)
+        folders.parents.withUnsafeBytes { raw in
+            for k in 0 ..< folders.parents.count / 4 {
+                parents[k] = UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: 4 * k, as: UInt32.self))
             }
-            if !entry.directory { node.files.append(entry) }
         }
-        let byName: (String, String) -> Bool = { $0.localizedStandardCompare($1) == .orderedAscending }
-        var pending = [top]
-        while let node = pending.popLast() {
-            let names = node.folders.keys.sorted(by: byName)
-            let files = node.files.sorted { byName($0.parts.last ?? $0.path, $1.parts.last ?? $1.path) }
-            node.rows = names.map { name in
-                let child = node.folders[name]!
-                return .folder(name: name, count: child.folders.count + child.files.count)
-            } + files.map { .file($0) }
-            pending.append(contentsOf: node.folders.values)
+        let names = Array(folders.names.utf8)
+        var starts = [Int](repeating: 0, count: count + 1)
+        var at = 0
+        for k in 1 ..< count {
+            starts[k] = at
+            while at < names.count, names[at] != 0x2F { at += 1 }
+            at = min(at + 1, names.count)
         }
-        self.top = top
+        starts[count] = at
+        let files = entries.filter { !$0.hidden && !$0.directory && Int($0.folder) < count }
+        var counts = [Int32](repeating: 0, count: count)
+        for k in 1 ..< count where Int(parents[k]) < count { counts[Int(parents[k])] += 1 }
+        for file in files { counts[Int(file.folder)] += 1 }
+        self.parents = parents
+        self.names = names
+        self.starts = starts
+        self.counts = counts
+        self.files = files
     }
 
-    /* The rows of the folder at `path` (empty: the top), sorted when the tree was made. */
-    public func rows(at path: [String]) -> [ArchiveRow] {
-        var node: Node? = top
-        for part in path { node = node?.folders[part] }
-        return node?.rows ?? []
+    /* Folder `id`'s name ("" for the top). */
+    public func name(of id: UInt32) -> String {
+        let k = Int(id)
+        guard k > 0, k < parents.count, starts[k + 1] > starts[k] else { return "" }
+        return String(decoding: names[starts[k] ..< starts[k + 1] - 1], as: UTF8.self)
+    }
+
+    /* The rows of folder `id` (0: the top), empty for one the list doesn't hold. */
+    public func rows(in id: UInt32) -> [ArchiveRow] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let rows = made[id] { return rows }
+        guard Int(id) < parents.count else { return [] }
+        let byName: (String, String) -> Bool = { $0.localizedStandardCompare($1) == .orderedAscending }
+        var inside: [(id: UInt32, name: String)] = []
+        for k in 1 ..< parents.count where parents[k] == id { inside.append((UInt32(k), name(of: UInt32(k)))) }
+        let folderRows: [ArchiveRow] = inside.sorted { byName($0.name, $1.name) }.map { .folder(id: $0.id, name: $0.name, count: Int(counts[Int($0.id)])) }
+        let fileRows: [ArchiveRow] = files.filter { $0.folder == id }.sorted { byName($0.name, $1.name) }.map { .file($0) }
+        let rows = folderRows + fileRows
+        made[id] = rows
+        return rows
     }
 }
 

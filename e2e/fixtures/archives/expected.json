@@ -1,5 +1,5 @@
 {
-    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (the ratio counter on); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as. `check` holds an entry to its declared ratio (at most 200:1 once it declares over 1 MiB), not a running one. `count` and `flatFrom` say, for a listing too large to spell out, how many entries it has and from which one on they are listed flat.",
+    "about": "What HushOS makes of each fixture in this folder, on the web (apps/web/src/lib/archives/zip-archive.test.ts) and in the core (crates/hushos-core/src/archive.rs). `check` is a preview's rules without its size limit (its refusal of a declared ratio past 200:1 included); `download` is held to the declared size only. Locked entries are read with `password`. `parts` is how the list splits a path (`/` and `\\` both separate; empty and `.` parts dropped). `downloadSha256` pins an entry's bytes; `partsLength` how many parts the list splits a path into (at most 256, deeper paths listed flat); `saveNames` the name a download is saved as. `check` holds an entry to its declared ratio (at most 200:1 once it declares over 1 MiB), not a running one. `unlockWith` tries another `password`: aimed at each entry `at` (its index given, as the clients do once that entry's password is asked for), and aimed at none (`anywhere`). `unlockSkips` names an entry an unlock with `password` reads less of than its packed bytes: it is never inflated to probe. `count` says, for a listing too large to spell out, how many entries it has (none of them listed flat).",
     "password": "correct horse battery",
     "fixtures": {
         "basic.zip": {
@@ -884,12 +884,11 @@
                 }
             ]
         },
-        "flat-budget.zip": {
+        "wide.zip": {
             "generated": true,
             "listing": "ok",
             "hidden": 0,
-            "count": 1000,
-            "flatFrom": 976
+            "count": 1000
         },
         "zeros-1g.zip": {
             "generated": true,
@@ -940,6 +939,96 @@
                     "path": "compressible.txt",
                     "check": "ok",
                     "download": "ok"
+                }
+            ]
+        },
+        "name-eocd.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "planted-PK\u0005\u0006\u0000\u0000\u0000\u0000\u0001\u0000\u0001\u00006\u0000\u0000\u0000╘\u0000\u0001\u0000.\u0000.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "plain.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "signatures.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "extra.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "locator-PK\u0006\u0007\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000PK\u0006\u0006\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "central-PK\u0001\u0002\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000PK\u0003\u0004\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "two-passwords.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "unlockWith": {
+                "password": "second password",
+                "anywhere": false,
+                "at": {
+                    "second.txt": true,
+                    "first.txt": false
+                }
+            },
+            "entries": [
+                {
+                    "path": "first.txt",
+                    "lock": "aes",
+                    "check": "ok",
+                    "download": "ok",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                },
+                {
+                    "path": "second.txt",
+                    "lock": "aes",
+                    "check": "wrong-password",
+                    "download": "wrong-password",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                }
+            ]
+        },
+        "locked-ratio.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "unlockSkips": "zeros.bin",
+            "entries": [
+                {
+                    "path": "zeros.bin",
+                    "lock": "aes",
+                    "check": "ratio",
+                    "download": "ok",
+                    "withoutPassword": "ratio",
+                    "wrongPassword": "ratio"
                 }
             ]
         }

@@ -129,7 +129,7 @@ describe('finding the directory', () => {
         }
     });
 
-    it('refuses a directory over 64 MiB, and takes one of exactly 64 MiB', async () => {
+    it('refuses a directory over 16 MiB, and takes one of exactly 16 MiB', async () => {
         for (const [size, outcome] of [
             [ZIP_LIMITS.directoryBytes, 'accepted'],
             [ZIP_LIMITS.directoryBytes + 1, 'directory-too-large'],
@@ -274,7 +274,7 @@ describe('the list', () => {
             { name: 'd/._x', data: utf8('r') },
             { name: 'd/x/y.txt', data: utf8('y') },
         ]);
-        const listed = listEntries(await list(zip));
+        const { listed } = listEntries(await list(zip));
         expect(listed.filter((item) => item.hidden).map((item) => item.path)).toEqual([
             '__MACOSX/._a.jpg',
             '._a.jpg',
@@ -296,7 +296,7 @@ describe('the list', () => {
                 externalAttributes: (0o120777 << 16) >>> 0,
             },
         ]);
-        const listed = listEntries(await list(zip));
+        const { listed } = listEntries(await list(zip));
         expect(listed.map((item) => [item.path, item.nested, item.link, item.stored])).toEqual([
             ['in.zip', true, false, true],
             ['site.tar.gz', true, false, false],

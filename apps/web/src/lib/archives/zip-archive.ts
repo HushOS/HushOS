@@ -23,6 +23,7 @@ import {
     crc32,
     supportOf,
     ZipError,
+    type Folders,
     type Listed,
     type Read,
     type ZipEntry,
@@ -213,8 +214,13 @@ function refusalOf(error: unknown): ZipError {
     return new ZipError(codes[message] ?? 'damaged');
 }
 
-/* The most an unlock decrypts in full to be sure of a password: more than the two-byte check AES and ZipCrypto give. */
+/*
+ * The most an unlock inflates of an entry, by what it declares, to be sure of a password: more
+ * than the two-byte check AES and ZipCrypto give. An entry past it, or past the declared ratio,
+ * is never inflated to probe: a 16 MiB stream of zeros can declare gigabytes.
+ */
 const UNLOCK_CHECK_BYTES = 16 * 1024 * 1024;
+const probes = (entry: ZipEntry) => entry.size <= UNLOCK_CHECK_BYTES && !declaresTooMuch(entry);
 /* How far one try of a password goes: at most three entries and 32 MiB read, however many are locked. */
 export const UNLOCK_ENTRIES_MAX = 3;
 export const UNLOCK_READ_MAX = 32 * 1024 * 1024;
@@ -224,14 +230,27 @@ export class ZipArchive {
     #password: string | null = null;
     #closed = false;
     #nested: Set<number>;
+    /* The list's folders until the worker sends them on: nothing here reads them after. */
+    #folders: Folders | null;
 
     private constructor(
         source: Source,
         readonly entries: ZipEntry[],
-        readonly listed: Listed[],
+        { listed, folders }: { listed: Listed[]; folders: Folders },
     ) {
         this.#source = source;
+        this.listed = listed;
+        this.#folders = folders;
         this.#nested = new Set(listed.filter((item) => item.nested).map((item) => item.index));
+    }
+
+    readonly listed: Listed[];
+
+    /* The list's folders, handed over once (an empty set after). */
+    takeFolders(): Folders {
+        const folders = this.#folders ?? { parents: new Uint32Array(1), names: '' };
+        this.#folders = null;
+        return folders;
     }
 
     /* Reads the directory, with every cap and refusal of section 3, and lists it. */
@@ -300,7 +319,10 @@ export class ZipArchive {
             const entries = await new ZipReader(
                 new EntryReader(this.#source, entry, start, counter),
                 {
-                    strictness: 'balanced',
+                    // The one-entry archive is ours, written from a record our parser checked: zip.js
+                    // judges none of it. Balanced refuses an end record it finds twice, and a name
+                    // may carry one (e2e/fixtures/archives, name-eocd.zip).
+                    strictness: 'tolerant',
                     filenameValidation: 'tolerant',
                 } as ConstructorParameters<typeof ZipReader>[1],
             ).getEntries();
@@ -418,11 +440,13 @@ export class ZipArchive {
     }
 
     /*
-     * Tries `password`, on the entry `index` first when given (an entry whose own password was
-     * asked for), then on the locked entries with bytes, smallest first: in full when at most
-     * 16 MiB (its CRC or authentication code then proves the password), otherwise to its password
-     * check. An empty entry proves nothing (ZipCrypto's one check byte passes 1 in 256 wrong
-     * passwords), so it is never the probe. A wrong password ends it; an entry that fails for
+     * Tries `password`, on the entry `index` first when given (the entry the password was asked
+     * for), then on the locked entries with bytes: first those it may inflate in full (declaring
+     * at most 16 MiB, within the declared ratio), smallest first, whose CRC or authentication code
+     * then proves the password; then the rest, to their password check alone. So when no entry
+     * qualifies, the password verifier alone decides (AES's two bytes; ZipCrypto's one check
+     * byte, which passes 1 wrong password in 256: a download then fails its CRC). An empty entry
+     * proves nothing, so it is never the probe. A wrong password ends it; an entry that fails for
      * another reason (damage, tampering: a bad authentication code or CRC) says nothing certain
      * of the password, and the next is tried, at most three entries and 32 MiB read in all; past
      * that a try reads only an entry's password check. Kept only if an entry opens with it.
@@ -437,14 +461,18 @@ export class ZipArchive {
                     !entry.link &&
                     supportOf(entry) === 'ok',
             )
-            .sort((a, b) => a.packed - b.packed || a.index - b.index);
+            .sort(
+                (a, b) =>
+                    Number(probes(b)) - Number(probes(a)) ||
+                    a.packed - b.packed ||
+                    a.index - b.index,
+            );
         const first = candidates.findIndex((entry) => entry.index === index);
         if (first > 0) candidates.unshift(...candidates.splice(first, 1));
         let read = 0;
         for (const entry of candidates.slice(0, UNLOCK_ENTRIES_MAX)) {
             if (this.#closed) return false;
-            const checkOnly =
-                entry.packed > UNLOCK_CHECK_BYTES || read + entry.packed > UNLOCK_READ_MAX;
+            const checkOnly = !probes(entry) || read + entry.packed > UNLOCK_READ_MAX;
             read += checkOnly ? 0 : entry.packed;
             try {
                 await this.#inflate(entry, {

@@ -43,7 +43,7 @@ class ArchiveBrowseTest {
             ArchiveSubject("a", "basic.zip"),
             scope,
             open = { sessions.openLocal(kept("basic.zip")).also { opened.complete(it) } },
-            build = { building.complete(Unit); awaitCancellation() },
+            build = { _, _ -> building.complete(Unit); awaitCancellation() },
         )
         withTimeout(10_000) { building.await() }
         // Back while the tree builds: the archive isn't handed over yet, and its session must not outlive it.

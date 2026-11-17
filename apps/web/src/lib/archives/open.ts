@@ -122,7 +122,7 @@ export function entryWhen(entry: Pick<ArchiveEntry, 'dos' | 'mtime'>) {
  * viewer remembers is the entry's and goes on lock with the rest.
  */
 export function entryNode(archive: DriveNode, entry: ArchiveEntry): DriveNode {
-    const name = entry.parts.at(-1) ?? entry.path;
+    const name = entry.name;
     const version = archive.currentVersion!;
     return {
         ...archive,

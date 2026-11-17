@@ -7,7 +7,14 @@ import table from '../../../../../e2e/fixtures/archives/expected.json';
 import { FIXTURE_DIR, FIXTURES } from '../../../../../e2e/fixtures/archives/make';
 import { ZipArchive } from './zip-archive';
 import { readListing } from './session';
-import { asksFirst, LIST_PARTS_MAX, ZipError } from './zip-format';
+import {
+    asksFirst,
+    LIST_DEPTH_MAX,
+    pathParts,
+    ZipError,
+    type Folders,
+    type Listed,
+} from './zip-format';
 
 /*
  * Every fixture of e2e/fixtures/archives against the outcomes in its expected.json, the table
@@ -20,10 +27,11 @@ type Expected = {
     listing: string;
     hidden?: number;
     unlock?: { right: boolean; wrong: boolean };
+    unlockWith?: { password: string; anywhere: boolean; at: Record<string, boolean> };
+    unlockSkips?: string;
     parts?: Record<string, string[]>;
     partsLength?: Record<string, number>;
     count?: number;
-    flatFrom?: number;
     saveNames?: Record<string, string>;
     entries?: {
         path: string;
@@ -77,6 +85,49 @@ async function outcome(work: () => Promise<unknown>) {
     }
 }
 
+/* Each folder's parent and name (folder 0, the top, has none). */
+function folderTable({ parents, names }: Folders) {
+    const split = names.split('/');
+    expect(split.pop()).toBe('');
+    expect(split.length + 1).toBe(parents.length);
+    return [...parents].map((parent, k) => ({ parent, name: k === 0 ? '' : split[k - 1]! }));
+}
+
+type FolderTable = ReturnType<typeof folderTable>;
+
+/* An entry's folders and name, from the top, as the list shows them. */
+function partsOf(table: FolderTable, item: Listed) {
+    const parts = [item.name];
+    for (let at = item.folder; at !== 0; at = table[at]!.parent) parts.unshift(table[at]!.name);
+    return parts;
+}
+
+function expectListedWhereItsPathSays(listed: Listed[], table: FolderTable, name: string) {
+    const seen = new Set<string>();
+    table.forEach((folder, k) => {
+        if (k === 0) return;
+        expect(folder.parent, `${name}: folder ${k} after its parent`).toBeLessThan(k);
+        expect(folder.name === '' || folder.name === '.' || /[\\/]/.test(folder.name)).toBe(false);
+        expect(
+            seen.has(`${folder.parent}/${folder.name}`),
+            `${name}: one ${folder.name} a folder`,
+        ).toBe(false);
+        seen.add(`${folder.parent}/${folder.name}`);
+    });
+    for (const item of listed) {
+        const parts = pathParts(item.path);
+        if (item.hidden && parts[0] === '__MACOSX') {
+            expect(item.folder, `${name}: ${item.path} in no folder`).toBe(0);
+            continue;
+        }
+        const want =
+            parts.length === 0 || parts.length > LIST_DEPTH_MAX ? [item.path || '_'] : parts;
+        expect(partsOf(table, item), `${name}: where ${item.path.slice(0, 40)} is listed`).toEqual(
+            want,
+        );
+    }
+}
+
 describe('every fixture, as expected.json says', () => {
     it('covers every fixture make.ts writes, and nothing else', () => {
         expect(Object.keys(fixtures).sort()).toEqual(FIXTURES.map((item) => item.name).sort());
@@ -90,16 +141,17 @@ describe('every fixture, as expected.json says', () => {
                 expect(listing).toBe(expected.listing);
                 if (expected.listing !== 'ok') return;
                 const archive = await open(name);
-                // Every listing stays within the parts the page accepts, the last entries listed flat.
-                expect(
-                    archive.listed.reduce((sum, item) => sum + item.parts.length, 0),
-                ).toBeLessThanOrEqual(LIST_PARTS_MAX);
+                const folders = archive.takeFolders();
+                const tree = folderTable(folders);
+                // Every entry sits where its path puts it, or flat at the top, through one folder per name.
+                expectListedWhereItsPathSays(archive.listed, tree, name);
                 if (expected.count !== undefined) {
                     expect(archive.listed).toHaveLength(expected.count);
-                    const flat = archive.listed.findIndex((item) => item.parts.length === 1);
-                    expect(flat).toBe(expected.flatFrom);
                     expect(
-                        archive.listed.slice(flat).every((item) => item.parts.length === 1),
+                        archive.listed.every(
+                            (item) => partsOf(tree, item).length === LIST_DEPTH_MAX,
+                        ),
+                        'none flat',
                     ).toBe(true);
                     expect(
                         readListing(
@@ -108,7 +160,8 @@ describe('every fixture, as expected.json says', () => {
                                     ({
                                         index,
                                         path,
-                                        parts,
+                                        folder,
+                                        name,
                                         directory,
                                         size,
                                         packed,
@@ -124,7 +177,8 @@ describe('every fixture, as expected.json says', () => {
                                     }) => ({
                                         index,
                                         path,
-                                        parts,
+                                        folder,
+                                        name,
                                         directory,
                                         size,
                                         packed,
@@ -140,6 +194,8 @@ describe('every fixture, as expected.json says', () => {
                                     }),
                                 ),
                                 hidden: archive.hidden,
+                                parents: folders.parents,
+                                names: folders.names,
                             },
                             bytesOf(name).length,
                         ),
@@ -192,15 +248,12 @@ describe('every fixture, as expected.json says', () => {
                             want.wrongPassword,
                         );
                 }
+                const listedAt = (path: string) =>
+                    archive.listed.find((item) => item.path === path)!;
                 for (const [path, parts] of Object.entries(expected.parts ?? {}))
-                    expect(archive.listed.find((item) => item.path === path)?.parts, path).toEqual(
-                        parts,
-                    );
+                    expect(partsOf(tree, listedAt(path)), path).toEqual(parts);
                 for (const [path, length] of Object.entries(expected.partsLength ?? {}))
-                    expect(
-                        archive.listed.find((item) => item.path === path)?.parts.length,
-                        path.slice(0, 20),
-                    ).toBe(length);
+                    expect(partsOf(tree, listedAt(path)).length, path.slice(0, 20)).toBe(length);
                 for (const [path, name] of Object.entries(expected.saveNames ?? {}))
                     expect(archive.listed.find((item) => item.path === path)?.saveName, path).toBe(
                         name,
@@ -210,6 +263,33 @@ describe('every fixture, as expected.json says', () => {
                         expected.unlock.right,
                     );
                     expect(await (await open(name)).unlock('not it')).toBe(expected.unlock.wrong);
+                }
+                if (expected.unlockSkips) {
+                    const bytes = bytesOf(name);
+                    let read = 0;
+                    const counted = await ZipArchive.open({
+                        size: bytes.length,
+                        read: async (offset, length) => {
+                            read += length;
+                            return bytes.slice(offset, offset + length);
+                        },
+                    });
+                    read = 0;
+                    expect(await counted.unlock(table.password)).toBe(true);
+                    const skipped = counted.entries.find(
+                        (entry) => entry.path === expected.unlockSkips,
+                    )!;
+                    expect(read, 'what the unlock read').toBeLessThan(skipped.packed);
+                }
+                if (expected.unlockWith) {
+                    const { password, anywhere, at } = expected.unlockWith;
+                    expect(await (await open(name)).unlock(password), 'aimed at none').toBe(
+                        anywhere,
+                    );
+                    for (const [path, right] of Object.entries(at)) {
+                        const index = archive.entries.findIndex((entry) => entry.path === path);
+                        expect(await (await open(name)).unlock(password, index), path).toBe(right);
+                    }
                 }
             },
             120_000,

@@ -34,7 +34,8 @@ function wire(opened: ZipArchive): WireEntry[] {
     return opened.listed.map((item) => ({
         index: item.index,
         path: item.path,
-        parts: item.parts,
+        folder: item.folder,
+        name: item.name,
         directory: item.directory,
         size: item.size,
         packed: item.packed,
@@ -117,11 +118,17 @@ scope.onmessage = (event) => {
             opening.then(
                 (opened) => {
                     archive = opened;
-                    scope.postMessage({
-                        type: 'listing',
-                        entries: wire(opened),
-                        hidden: opened.hidden,
-                    });
+                    const { parents, names } = opened.takeFolders();
+                    scope.postMessage(
+                        {
+                            type: 'listing',
+                            entries: wire(opened),
+                            hidden: opened.hidden,
+                            parents,
+                            names,
+                        },
+                        [parents.buffer],
+                    );
                 },
                 (error: unknown) => fail(null, error),
             );

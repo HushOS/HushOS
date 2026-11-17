@@ -1001,7 +1001,8 @@ function compressibleFixture() {
 // that sets every field by hand, with fixed salts so a rewrite gives the same bytes.
 
 type Raw = {
-    name: string;
+    /* As text (UTF-8), or as the bytes themselves. */
+    name: string | Uint8Array;
     packed: Uint8Array;
     size: number;
     crc: number;
@@ -1012,12 +1013,12 @@ type Raw = {
     localExtra?: Uint8Array;
 };
 
-function writeRaw(specs: Raw[]) {
+function writeRaw(specs: Raw[], comment = new Uint8Array(0)) {
     const body: Uint8Array[] = [];
     const directory: Uint8Array[] = [];
     let at = 0;
     for (const spec of specs) {
-        const name = utf8(spec.name);
+        const name = typeof spec.name === 'string' ? utf8(spec.name) : spec.name;
         const flags = spec.flags ?? 0;
         const localFlags = spec.localFlags ?? flags;
         const centralExtra = spec.centralExtra ?? new Uint8Array(0);
@@ -1079,8 +1080,144 @@ function writeRaw(specs: Raw[]) {
     end.u16(specs.length);
     end.u32(dir.length);
     end.u32(at);
-    end.u16(0);
-    return concat([...body, dir, end.done()]);
+    end.u16(comment.length);
+    return concat([...body, dir, end.done(), comment]);
+}
+
+// Round 3: Fable's shapes (scratchpad make_r3.ts), and two passwords in one archive.
+
+/* An end record's signature, then 20 zeros: the shape a reader scanning for it finds. */
+const signature = (value: number) => {
+    const out = new Bytes();
+    out.u32(value);
+    out.push(new Uint8Array(20));
+    return out.done();
+};
+
+/*
+ * An end record planted in an entry's name. zip.js reads each entry from a one-entry archive the
+ * worker writes from its record (zip-archive.ts): the planted record's comment reaches that
+ * archive's end, and its directory's offset and size point at the record itself, so a reader
+ * that scans for the end finds two. Both entries open, on every client.
+ */
+function nameEndRecordFixture() {
+    const packed = FOX_PACKED();
+    const prefix = utf8('planted-');
+    const suffix = utf8('.txt');
+    const nameLength = prefix.length + 22 + suffix.length;
+    // Where the worker's one-entry archive puts its directory: header, name, data, then its gap.
+    const span = 30 + nameLength + packed.length + 65_557 + 64;
+    const planted = new Bytes();
+    planted.u32(0x06054b50);
+    planted.u16(0);
+    planted.u16(0);
+    planted.u16(1);
+    planted.u16(1);
+    planted.u32(46 + prefix.length);
+    planted.u32(span);
+    planted.u16(suffix.length + 20 + 22);
+    return writeRaw([
+        {
+            name: concat([prefix, planted.done(), suffix]),
+            packed,
+            size: FOX.length,
+            crc: crc32(FOX),
+            method: 8,
+        },
+        { name: 'plain.txt', packed, size: FOX.length, crc: crc32(FOX), method: 8 },
+    ]);
+}
+
+/* The directory's signatures elsewhere: in a local extra field, in names, in the archive's comment. */
+function signaturesFixture() {
+    const packed = FOX_PACKED();
+    const entry = (name: string | Uint8Array, localExtra?: Uint8Array): Raw => ({
+        name,
+        packed,
+        size: FOX.length,
+        crc: crc32(FOX),
+        method: 8,
+        centralExtra: new Uint8Array(0),
+        localExtra,
+    });
+    return writeRaw(
+        [
+            entry(
+                'extra.txt',
+                field(
+                    0x4242,
+                    concat([signature(0x06054b50), signature(0x07064b50), signature(0x06064b50)]),
+                ),
+            ),
+            entry(
+                concat([
+                    utf8('locator-'),
+                    signature(0x07064b50),
+                    signature(0x06064b50),
+                    utf8('.txt'),
+                ]),
+            ),
+            entry(
+                concat([
+                    utf8('central-'),
+                    signature(0x02014b50),
+                    signature(0x04034b50),
+                    utf8('.txt'),
+                ]),
+            ),
+        ],
+        concat([
+            utf8('a comment holding '),
+            signature(0x06054b50).subarray(0, 4),
+            utf8(' and more'),
+        ]),
+    );
+}
+
+/* The second password of `twoPasswordsFixture`. */
+export const SECOND_PASSWORD = 'second password';
+
+/*
+ * Two entries locked with two passwords: an unlock aimed at the second one with its own password
+ * opens; the same password tried from the smallest entry, the first, is wrong.
+ */
+function twoPasswordsFixture() {
+    const first = aesAt(FOX, 3, 601);
+    const second = aesAt(concat([FOX, FOX]), 3, 602, SECOND_PASSWORD);
+    const locked = (name: string, bytes: Uint8Array, size: number): Raw => ({
+        name,
+        packed: bytes,
+        size,
+        crc: 0,
+        method: 99,
+        flags: 1,
+        centralExtra: aesFieldAt(2, 3, 0),
+    });
+    return writeRaw([
+        locked('first.txt', first.bytes, FOX.length),
+        locked('second.txt', second.bytes, FOX.length * 2),
+    ]);
+}
+
+/*
+ * One locked entry that declares 256 MiB of zeros in about 256 KB, past the declared ratio: an
+ * unlock never inflates it to probe the password (a 16 MiB stream could declare gigabytes), and
+ * reads only its password check.
+ */
+function lockedRatioFixture() {
+    const size = 256 * MiB;
+    const encrypted = aesAt(deflatedZeros(size), 3, 701);
+    return writeRaw([
+        {
+            name: 'zeros.bin',
+            packed: encrypted.bytes,
+            size,
+            crc: 0,
+            method: 99,
+            flags: 1,
+            centralExtra: aesFieldAt(2, 3, 8),
+        },
+    ]);
 }
 
 /* WinZip AES at any strength, the salt fixed by `seed`. */
@@ -1321,8 +1458,8 @@ function sizesFixture() {
     ]);
 }
 
-/* 1,000 entries of 256 parts: more than the listing's 250,000 parts, so the last ones are listed flat, every one of them. */
-function flatBudgetFixture() {
+/* 1,000 entries of 256 parts, 256,000 in all: every one listed in its folder, none flat. */
+function wideFixture() {
     const specs: Spec[] = [];
     for (let i = 0; i < 1_000; i++)
         specs.push({
@@ -1369,8 +1506,12 @@ export const FIXTURES: Fixture[] = [
     { name: 'ciphers.zip', large: false, build: ciphersFixture },
     { name: 'aes-tampered.zip', large: false, build: aesTamperedFixture },
     { name: 'sizes.zip', large: false, build: sizesFixture },
+    { name: 'name-eocd.zip', large: false, build: nameEndRecordFixture },
+    { name: 'signatures.zip', large: false, build: signaturesFixture },
+    { name: 'two-passwords.zip', large: false, build: twoPasswordsFixture },
+    { name: 'locked-ratio.zip', large: false, build: lockedRatioFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
-    { name: 'flat-budget.zip', large: true, build: flatBudgetFixture },
+    { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'compressible.zip', large: true, build: compressibleFixture },
     { name: 'zeros-1g.zip', large: true, build: zeros1GiB },
     { name: 'zip64-5g.zip', large: true, build: zip64FiveGiB },

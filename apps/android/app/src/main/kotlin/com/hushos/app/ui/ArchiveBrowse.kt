@@ -10,6 +10,7 @@ import com.hushos.app.data.ArchiveTree
 import com.hushos.app.data.OpenArchive
 import com.hushos.app.data.Opened
 import com.hushos.core.ArchiveEntry
+import com.hushos.core.ArchiveFolders
 import com.hushos.core.ArchiveException
 import com.hushos.core.EntrySink
 import com.hushos.core.FetchException
@@ -50,7 +51,9 @@ class ArchiveBrowse(
      */
     private val open: suspend (resolved: (ArchiveSubject) -> Unit) -> OpenArchive,
     /* Builds the folder tree, off the main thread; the tests stop it part-way. */
-    private val build: suspend (List<ArchiveEntry>) -> ArchiveTree = { entries -> withContext(Dispatchers.Default) { ArchiveTree(entries) } },
+    private val build: suspend (List<ArchiveEntry>, ArchiveFolders) -> ArchiveTree = { entries, folders ->
+        withContext(Dispatchers.Default) { ArchiveTree(entries, folders) }
+    },
 ) {
     /* The id it was opened for: the app's state names it, and a later resolution never changes it. */
     val id = subject.id
@@ -64,7 +67,8 @@ class ArchiveBrowse(
         private set
     var failure by mutableStateOf<String?>(null)
         private set
-    var path by mutableStateOf(listOf<String>())
+    /* The folders from the top to the one shown, by their numbers in the tree. */
+    var path by mutableStateOf(listOf<Int>())
     var opened by mutableStateOf<ArchiveEntry?>(null)
     var unlocked by mutableStateOf(false)
     var asking by mutableStateOf<ArchiveEntry?>(null)
@@ -96,7 +100,7 @@ class ArchiveBrowse(
             try {
                 opened = open { now -> if (!closed) subject = now }
                 if (closed) return@launch
-                val built = build(opened.entries)
+                val built = build(opened.entries, opened.takeFolders())
                 // The archive before its tree: whoever sees the tree may already use the archive.
                 hidden = opened.hidden
                 archive = opened

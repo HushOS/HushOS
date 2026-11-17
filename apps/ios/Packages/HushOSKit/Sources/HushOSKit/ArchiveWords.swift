@@ -1,4 +1,5 @@
 import Foundation
+import HushOSCore
 
 /*
  * What the archive viewer says (docs/file-tools-design.md, section 1 (a)), word for word the web's
@@ -43,7 +44,7 @@ public enum ArchiveWords {
     public static let refusals: [String: String] = [
         "damaged": "This archive is damaged, or isn’t a zip archive HushOS can read.",
         "directory-too-large": "This archive’s list of contents is too large to open here. Download it to open it on your computer.",
-        "too-many-entries": "This archive has more than 100,000 items, too many to list here. Download it to open it on your computer.",
+        "too-many-entries": "This archive has more than \(Int(zipEntriesMax()).formatted()) items, too many to list here. Download it to open it on your computer.",
         "encrypted-directory": encryptedDirectory,
         "split": "This is one part of an archive split into several. HushOS can’t open it.",
         "overlap": "This archive’s items overlap each other, which is how some zip bombs work. HushOS won’t open it.",

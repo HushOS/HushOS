@@ -1,4 +1,5 @@
 import { formatBytes } from '@/lib/format';
+import { ZIP_LIMITS } from './zip-format';
 
 /*
  * What the archive viewer says (docs/file-tools-design.md, section 1 (a), whose strings are used
@@ -39,8 +40,7 @@ export const refusalWords: Record<string, string> = {
     damaged: 'This archive is damaged, or isn’t a zip archive HushOS can read.',
     'directory-too-large':
         'This archive’s list of contents is too large to open here. Download it to open it on your computer.',
-    'too-many-entries':
-        'This archive has more than 100,000 items, too many to list here. Download it to open it on your computer.',
+    'too-many-entries': `This archive has more than ${ZIP_LIMITS.entries.toLocaleString('en-US')} items, too many to list here. Download it to open it on your computer.`,
     'encrypted-directory': archiveWords.encryptedDirectory,
     split: 'This is one part of an archive split into several. HushOS can’t open it.',
     overlap:

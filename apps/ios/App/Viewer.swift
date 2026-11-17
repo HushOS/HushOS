@@ -85,7 +85,7 @@ struct FileViewer: View {
             ZStack {
                 if isArchive {
                     // A zip opens as the list of what is inside it, read by range; it is never fetched whole to a file.
-                    ArchiveScreen(item: current)
+                    ArchiveScreen(item: current, adopted: { current = $0 })
                 } else if let url {
                     // Markdown as a document (MarkdownView); QuickLook shows it as raw text. Past the limit, QuickLook.
                     // The limit is the opened file's own size: an earlier version's isn't the current one's.

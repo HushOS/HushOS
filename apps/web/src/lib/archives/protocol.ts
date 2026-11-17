@@ -25,7 +25,9 @@ export type ToArchive =
 export type WireEntry = {
     index: number;
     path: string;
-    parts: string[];
+    /* Its folder (`parents` and `names` of the listing; 0 is the top) and its name there. */
+    folder: number;
+    name: string;
     directory: boolean;
     size: number;
     packed: number;
@@ -41,7 +43,8 @@ export type WireEntry = {
 };
 
 export type FromArchive =
-    | { type: 'listing'; entries: WireEntry[]; hidden: number }
+    /* `parents` and `names`: the folders, as zip-format.ts's Folders. */
+    | { type: 'listing'; entries: WireEntry[]; hidden: number; parents: Uint32Array; names: string }
     | { type: 'progress'; id: number }
     | { type: 'unlocked'; id: number; ok: boolean }
     | { type: 'bytes'; id: number; bytes: ArrayBuffer }

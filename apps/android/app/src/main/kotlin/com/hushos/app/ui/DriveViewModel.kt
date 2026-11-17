@@ -2537,6 +2537,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         _state.update { it.copy(archive = null) }
     }
 
+    /*
+     * A family's clear (FamiliesModel.clear): the archive open from one of `workspaces`, or from one
+     * of `nodes` (a kept copy has only its id), closes with the family's other plaintext.
+     */
+    override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
+        val subject = state.value.archive ?: return
+        val workspace = subject.item?.node?.workspaceId
+        val inFamily = workspace != null && workspaces.any { it.equals(workspace, ignoreCase = true) }
+        if (inFamily || nodes.any { it.equals(subject.id, ignoreCase = true) }) closeArchive()
+    }
+
     /* Every path that ends a session ends the archive open in it: its sessions closed, its downloads stopped, nothing kept. */
     private fun endArchive() {
         archiveBrowse?.close()
