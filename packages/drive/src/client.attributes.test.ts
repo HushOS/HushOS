@@ -82,6 +82,8 @@ function harness() {
     for (const [parent, children] of Object.entries(tree))
         for (const child of children) parentOf.set(child.id, parent);
     let made = 0;
+    /* The ids each createFolders request sent, in order. */
+    const created: string[][] = [];
     const api = {
         workspace: async () => ({
             workspaceId: WS,
@@ -96,9 +98,10 @@ function harness() {
             nextCursor: null,
         }),
         allocateEpochs: async (_ws: string, count: number) => ({ from: 10, to: 10 + count - 1 }),
-        createFolders: async (_ws: string, specs: { id: string; parentId: string }[]) => ({
-            nodes: specs.map((spec) => node(spec.id, spec.parentId)),
-        }),
+        createFolders: async (_ws: string, specs: { id: string; parentId: string }[]) => {
+            created.push(specs.map((spec) => spec.id));
+            return { nodes: specs.map((spec) => node(spec.id, spec.parentId)) };
+        },
         copy: async (_ws: string, _source: string, input: { node: { id: string } }) => ({
             node: node(input.node.id, DEST, 'file'),
         }),
@@ -167,7 +170,7 @@ function harness() {
                 throw new Error(`unexpected ${operation}`);
         }
     }) as unknown as Rpc;
-    return { api, rpc, sealed, renamed };
+    return { api, rpc, sealed, renamed, created };
 }
 
 async function opened() {
@@ -315,5 +318,26 @@ describe('a folder’s colour', () => {
         expect(sealed.map((s) => s.metadata)).toEqual([
             { name: 'Recovered', mime: null, size: null, modified: null },
         ]);
+    });
+});
+
+describe('a new folder’s id', () => {
+    /* A save run records a folder before its creation goes out; fails if the hook runs after the send, or a throw still sends. */
+    test('is heard before its creation is sent, and a throw from the hearer sends nothing', async () => {
+        const { client, dest, created } = await opened();
+        const heard: { ids: string[]; sentBefore: number }[] = [];
+        const [made] = await client.createFolderPath(dest, ['Out'], {
+            onMinted: (ids) => void heard.push({ ids, sentBefore: created.length }),
+        });
+        expect(heard).toEqual([{ ids: [made!.id], sentBefore: 0 }]);
+        expect(created).toEqual([[made!.id]]);
+        await expect(
+            client.createFolderPath(dest, ['Refused'], {
+                onMinted: () => {
+                    throw new Error('not recorded');
+                },
+            }),
+        ).rejects.toThrow('not recorded');
+        expect(created).toHaveLength(1);
     });
 });

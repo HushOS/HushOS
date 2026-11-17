@@ -46,6 +46,10 @@ actor FakeWriter: SaveRunWriter {
     /* Uploads the server is still completing: an abort is answered `unknown` (Vault.abortUpload after its tries). */
     var completing = Set<String>()
     var roomHook: (@Sendable () async -> Void)?
+    /* A folder created whose answer never comes back. */
+    var loseAnswer = false
+    var namesFail = false
+    var uploading: (@Sendable () async -> Void)?
     private var count = 0
 
     init(room: SaveRoom = .own(1 << 40)) { roomIs = room }
@@ -73,17 +77,25 @@ actor FakeWriter: SaveRunWriter {
     func completing(_ uploadId: String) { completing.insert(uploadId) }
     func names(in folder: Opened) async throws -> [String] {
         await listing?()
+        if namesFail { throw DriveAPIError.transport("The network connection was lost.") }
         return names
     }
-    func makeFolder(in folder: Opened, name: String, signing: Signing) async throws -> Opened {
+    func makeFolder(in folder: Opened, name: String, signing: Signing, minted: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
         folderEpochs.append(folder.node.keyEpoch)
         if !folderAnswers.isEmpty { try folderAnswers.removeFirst()() }
+        // Its id heard before the creation is sent, as the vault's createFolder does.
+        try minted("made-\(name)")
         await making?()
         live.insert("made-\(name)")
+        if loseAnswer { throw DriveAPIError.transport("The network connection was lost.") }
         return opened("made-\(name)", parent: folder.id)
     }
+    func set(loseAnswer: Bool) { self.loseAnswer = loseAnswer }
+    func set(namesFail: Bool) { self.namesFail = namesFail }
+    func set(uploading: @escaping @Sendable () async -> Void) { self.uploading = uploading }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
-                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void) async throws -> Opened {
+                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void,
+                      onCompleting: @escaping @Sendable (String) -> Void) async throws -> Opened {
         count += 1
         let n = count
         uploads.append((name, folder.id, replacing?.id, replacing?.node.keyEpoch, startedFrom, signing))
@@ -99,7 +111,10 @@ actor FakeWriter: SaveRunWriter {
             aborted.append("up-\(n)")
             throw error
         }
+        // Its parts on their way, the completion not yet sent.
+        await uploading?()
         if !answers.isEmpty { try answers.removeFirst()(n) }
+        onCompleting("up-\(n)")
         await landing?()
         finish("up-\(n)")
         if replacing == nil { live.insert(nodeId) }
@@ -520,7 +535,7 @@ let own = SaveSources.ownWriting
     @Test func aRowTheDiskRefusesStopsTheRunBeforeAnythingIsSentAndOneRefusalIsWrittenAgain() async throws {
         struct Full: Error {}
         let refusing = journal()
-        refusing.fault = { throw Full() }
+        refusing.fault = { _ in throw Full() }
         do {
             _ = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: refusing)
             Issue.record("started without a row")
@@ -531,7 +546,7 @@ let own = SaveSources.ownWriting
         let writer = FakeWriter()
         let rows = journal()
         let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
-        rows.fault = { throw Full() }
+        rows.fault = { _ in throw Full() }
         do {
             _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
             Issue.record("a result went up that no row names")
@@ -547,7 +562,7 @@ let own = SaveSources.ownWriting
         let once = journal()
         let flaky = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: once)
         let refusals = Locked(1)
-        once.fault = {
+        once.fault = { _ in
             if refusals.value > 0 {
                 refusals.value -= 1
                 throw Full()
@@ -622,6 +637,107 @@ let own = SaveSources.ownWriting
         let folders = try await SaveRun.start(writer: folderBroken, targets: [opened("fam")], results: [], journal: journal(), pause: { _ in })
         await #expect(throws: SaveRunStopped.self) { _ = try await folders.folder("Archive", sources: own) }
         await #expect(throws: SaveRunStopped.self) { _ = try await folders.file(Data([1]), name: "b", mime: nil, sources: own) }
+    }
+
+    /* Two runs starting at once through separate journals on one file: neither loses the other's row. */
+    @Test func journalsOnOneFileNeverLoseEachOthersRows() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let session = SaveRunJournal.Epoch()
+        let journals = [SaveRunJournal(url: url, epoch: session), SaveRunJournal(url: url, epoch: session)]
+        DispatchQueue.concurrentPerform(iterations: 200) { n in
+            try? journals[n % 2].put(SaveRunRow(id: "run-\(n)", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "l"))
+        }
+        #expect(journals[0].list().count == 200)
+        DispatchQueue.concurrentPerform(iterations: 100) { n in
+            journals[n % 2].retire(SaveRunRow(id: "run-\(n)", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "l"))
+        }
+        #expect(Set(journals[1].list().map(\.id)) == Set((100 ..< 200).map { "run-\($0)" }))
+    }
+
+    /* A finished run whose row the disk won't remove is marked done, never offered for deletion, and dropped later. */
+    @Test func aFinishedRunWhoseRowWontGoIsNeverOfferedForDeletion() async throws {
+        struct Full: Error {}
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        let id = run.id
+        // Every write that would leave the run's row out is refused.
+        rows.fault = { written in if !written.contains(where: { $0.id == id }) { throw Full() } }
+        try await run.finish()
+        #expect(rows.list().first?.done == true)
+        let other = SaveRunRow(id: "other", workspaceId: "ws", nodeIds: ["node-1"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        rows.fault = nil
+        try rows.put(SaveRunRow(id: id, workspaceId: "ws", nodeIds: ["node-1"], uploadIds: [], at: Date(), launch: "an-earlier-launch", done: true))
+        try rows.put(other)
+        #expect(SaveRuns.interrupted(rows).map(\.id) == ["other"])
+        #expect(rows.list().map(\.id) == ["other"])
+        #expect(await writer.live.contains("node-1"))
+    }
+
+    /* A folder's id is on disk before its creation goes out, so one created whose answer was lost is still removed. */
+    @Test func aFolderWhoseAnswerWasLostIsStillRemovedByItsRow() async throws {
+        let writer = FakeWriter()
+        await writer.set(loseAnswer: true)
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        do {
+            _ = try await run.folder("Out", sources: own)
+            Issue.record("a lost answer passed")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .failed)
+        }
+        #expect(await writer.purged == ["made-Out"])
+        #expect(rows.list().isEmpty)
+    }
+
+    /* A listing that fails after a result landed stops the run and removes it: all or nothing. */
+    @Test func aListingThatFailsStopsTheRunAndRemovesWhatItMade() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        await writer.set(namesFail: true)
+        do {
+            _ = try await run.file(Data([1]), name: "b", mime: nil, sources: own, in: opened("g"))
+            Issue.record("a failed listing left the run open")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.reason == .failed)
+        }
+        #expect(await writer.purged == ["node-1"])
+        #expect(rows.list().isEmpty)
+        await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+    }
+
+    /* A clean-up that leaves a published file says what may remain, never "nothing was saved". */
+    @Test func aCleanUpThatLeavesAFileSaysWhatMayRemain() async throws {
+        let writer = FakeWriter()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal())
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        await writer.refuse("node-1")
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.message == "Cancelled. Some of what was made may still be there. You’ll be asked about it next time.")
+    }
+
+    /* The network went while a version's parts went up: its completion was never sent, so it isn't said to maybe be saved. */
+    @Test func aVersionWhoseCompletionWasNeverSentIsNotSaidToMaybeBeSaved() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(uploading: { await gate.wait() })
+        let rows = journal()
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [], journal: rows)
+        let saving = Task { try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        await writer.set(offline: true)
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.uncertainVersions == 0)
+        #expect(stopped.message == SaveRuns.cancelled)
+        #expect(rows.list().map(\.uploadIds) == [["up-1"]])
+        await gate.open()
+        _ = try? await saving.value
     }
 
     @Test func aResultOfSeveralSourcesIsSignedAsTheirWeakestUncheckedResealed() throws {
@@ -822,6 +938,23 @@ extension OnFakeDrive {
             #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .finished)
             server.abortReplies = [(409, ["code": "conflict", "message": "Something else."])]
             #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .unknown)
+        }
+
+        /* A new folder's id is heard before its creation is sent; a throw from the hearer sends nothing. */
+        @Test func aNewFoldersIdIsHeardBeforeItsCreationIsSent() async throws {
+            struct Refused: Error {}
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let existedWhenHeard = Locked<[Bool]>([])
+            let made = try await vault.createFolder(in: server.root, name: "Out", onMinted: { id in existedWhenHeard.value.append(server.nodes[id] != nil) })
+            #expect(existedWhenHeard.value == [false])
+            #expect(server.nodes[made.id] != nil)
+            let heard = Locked<String?>(nil)
+            await #expect(throws: Refused.self) {
+                _ = try await vault.createFolder(in: server.root, name: "Refused", onMinted: { id in heard.value = id; throw Refused() })
+            }
+            #expect(heard.value != nil)
+            #expect(server.nodes[heard.value!] == nil)
         }
 
         /* The run's row refused at begin: no part, no completion, the reservation aborted. */

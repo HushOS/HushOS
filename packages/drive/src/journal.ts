@@ -150,6 +150,11 @@ export type RunRow = {
      * how another tab tells a live run from an interrupted one.
      */
     beat: number;
+    /*
+     * The run finished (or its results were kept, or cleaned up) but its row could not be
+     * removed: never offered as interrupted, dropped by the next open.
+     */
+    done?: boolean;
 };
 
 export interface RunJournal {

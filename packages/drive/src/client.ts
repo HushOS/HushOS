@@ -1083,7 +1083,15 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
     async function createFolderPath(
         parent: DriveNode,
         path: string[],
-        options: { signAs?: SignatureForm; attributes?: NodeAttributes } = {},
+        options: {
+            signAs?: SignatureForm;
+            attributes?: NodeAttributes;
+            /*
+             * The ids minted for the folders, before their creation is sent: a caller that must be
+             * able to remove them (a save run) records them first. A throw sends nothing.
+             */
+            onMinted?: (ids: string[]) => Promise<void> | void;
+        } = {},
     ) {
         const ws = parent.workspaceId;
         const names = path.map((name) => checkName(name));
@@ -1121,6 +1129,7 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
                 })),
             }),
         );
+        await options.onMinted?.(specs.map((spec) => spec.id));
         const created = await api.createFolders(
             ws,
             specs.map((spec, index) => ({

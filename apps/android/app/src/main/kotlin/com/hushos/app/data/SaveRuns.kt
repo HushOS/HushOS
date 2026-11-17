@@ -28,15 +28,20 @@ import java.util.concurrent.atomic.AtomicInteger
  * writing (SaveSources.OwnWriting), into family folders too, as on the web and iOS.
  */
 
-/* A run's row: ids only, never a name or a byte. `launch` is the process that ran it. */
-data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List<String>, val uploadIds: List<String>, val at: Long, val launch: String) {
+/*
+ * A run's row: ids only, never a name or a byte. `launch` is the process that ran it. `done`: the run finished (or its
+ * results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next.
+ */
+data class SaveRunRow(val id: String, val workspaceId: String, val nodeIds: List<String>, val uploadIds: List<String>, val at: Long, val launch: String,
+                      val done: Boolean = false) {
     fun json(): JSONObject = JSONObject().put("id", id).put("workspaceId", workspaceId).put("nodeIds", JSONArray(nodeIds))
-        .put("uploadIds", JSONArray(uploadIds)).put("at", at).put("launch", launch)
+        .put("uploadIds", JSONArray(uploadIds)).put("at", at).put("launch", launch).also { if (done) it.put("done", true) }
 
     companion object {
         fun from(json: JSONObject): SaveRunRow {
             fun list(name: String) = json.getJSONArray(name).let { array -> (0 until array.length()).map(array::getString) }
-            return SaveRunRow(json.getString("id"), json.getString("workspaceId"), list("nodeIds"), list("uploadIds"), json.getLong("at"), json.getString("launch"))
+            return SaveRunRow(json.getString("id"), json.getString("workspaceId"), list("nodeIds"), list("uploadIds"), json.getLong("at"), json.getString("launch"),
+                json.optBoolean("done", false))
         }
     }
 }
@@ -54,20 +59,23 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     }
 
     private val born = epoch.current
+    /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
+    private val lock: Any = locks.computeIfAbsent(file.absoluteFile.normalize().path) { Any() }
 
     /* Whether this journal still belongs to the session it was opened in. */
     val live: Boolean get() = born == epoch.current
 
-    /* Tests only: runs before each write, and a throw refuses it as a full disk would. */
-    @Volatile internal var fault: (() -> Unit)? = null
+    /* Tests only: runs before each write with the rows it would write, and a throw refuses it as a full disk would. */
+    @Volatile internal var fault: ((List<SaveRunRow>) -> Unit)? = null
 
-    @Synchronized fun list(): List<SaveRunRow> = read()
+    /* Every row, those of finished runs (`done`) included. */
+    fun list(): List<SaveRunRow> = synchronized(lock) { read() }
 
     /*
      * Writes the row, once more if the first write is refused (rows are whole), and throws SaveUnrecorded when that one is
      * too: the run then stops, publishing nothing it doesn't name. After a sign-out it writes nothing and throws nothing.
      */
-    @Synchronized fun put(row: SaveRunRow) {
+    fun put(row: SaveRunRow): Unit = synchronized(lock) {
         if (!live) return
         val rows = read().filter { it.id != row.id } + row
         try {
@@ -79,10 +87,23 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
         if (!live) runCatching { write(read().filter { it.id != row.id }) }
     }
 
-    @Synchronized fun remove(id: String) {
+    /*
+     * A run's row goes: removed, asked again once; if the disk still refuses, marked `done` so no open offers what a
+     * finished run made for deletion (and the next open drops it). Never fails what it retires.
+     */
+    fun retire(row: SaveRunRow): Unit = synchronized(lock) {
         if (!live) return
-        val rows = read().filter { it.id != id }
-        if (runCatching { write(rows) }.isFailure) runCatching { write(rows) }
+        val others = read().filter { it.id != row.id }
+        if (runCatching { write(others) }.isSuccess || runCatching { write(others) }.isSuccess) return
+        val done = others + row.copy(done = true)
+        if (runCatching { write(done) }.isFailure) runCatching { write(done) }
+    }
+
+    /* Rows of finished runs that couldn't be removed then, removed now. */
+    fun dropDone(): Unit = synchronized(lock) {
+        if (!live) return
+        val rows = read()
+        if (rows.any { it.done }) runCatching { write(rows.filter { !it.done }) }
     }
 
     private fun read(): List<SaveRunRow> = runCatching {
@@ -91,7 +112,7 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     }.getOrDefault(emptyList())
 
     private fun write(rows: List<SaveRunRow>) {
-        fault?.invoke()
+        fault?.invoke(rows)
         if (rows.isEmpty()) { if (file.exists() && !file.delete()) throw java.io.IOException("The save record couldn’t be removed."); return }
         file.parentFile?.mkdirs()
         val next = File(file.parentFile, file.name + ".tmp")
@@ -105,6 +126,7 @@ class SaveRunJournal(val file: File, internal val epoch: Epoch = account) {
     companion object {
         const val FILE = "save-runs.json"
         val account = Epoch()
+        private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
         fun of(context: android.content.Context) = SaveRunJournal(File(context.filesDir, FILE))
 
         /* Sign-out, deletion, removal: no journal opened before writes again (the file goes with the account's files). */
@@ -160,9 +182,10 @@ interface SaveRunWriter {
     fun refusal(target: Opened): String?
     fun room(workspaceId: String): SaveRoom
     fun names(folder: Opened): List<String>
-    fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened
+    /* `minted` hears the folder's id before its creation is sent (the run records it first); a throw sends nothing. */
+    fun makeFolder(folder: Opened, name: String, copy: Prior?, minted: (String) -> Unit): Opened
     fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
-                     thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened
+                     thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened
     /* `file` as the server lists its folder now (its keys after a key change), or null when it is no longer there. */
     fun fresh(file: Opened, folder: Opened): Opened?
     /* `folder` and the chain above it as the server holds them now (a family's synced again first), to seal afresh under. */
@@ -223,14 +246,20 @@ object SaveRuns {
     }
 
     /* What a stopped run says: never "nothing was saved" once a new version landed, or while one may (the web's stoppedWords). */
-    fun words(reason: SaveRunStopped.Reason, shared: Boolean, failure: String?, kept: Int, uncertain: Int = 0): String {
+    fun words(reason: SaveRunStopped.Reason, shared: Boolean, failure: String?, kept: Int, uncertain: Int = 0, remains: SaveCleanup? = null): String {
+        // New files or folders that may still be there: the row kept for the next launch (LEFT), or out of reach.
+        val left = when (remains) {
+            SaveCleanup.LEFT -> " Some of what was made may still be there. You’ll be asked about it next time."
+            SaveCleanup.NO_ACCESS -> " Some of what was made may still be there, and you can no longer remove it."
+            else -> ""
+        }
         val opening = when (reason) {
             SaveRunStopped.Reason.CANCELLED -> "Cancelled."
             SaveRunStopped.Reason.NO_ROOM -> if (shared) "There isn’t enough room in this shared folder for this." else "There isn’t enough room for this."
             SaveRunStopped.Reason.SIGNED_OUT -> "You signed out before this was saved."
             SaveRunStopped.Reason.FAILED -> (failure ?: "This couldn’t be saved.").trim()
         }
-        if (kept == 0 && uncertain == 0) return if (reason == SaveRunStopped.Reason.FAILED && failure == null) FAILED else "$opening Nothing was saved."
+        if (kept == 0 && uncertain == 0 && left.isEmpty()) return if (reason == SaveRunStopped.Reason.FAILED && failure == null) FAILED else "$opening Nothing was saved."
         val versions = when (kept) {
             0 -> ""
             1 -> " The new version saved before that was kept."
@@ -241,7 +270,7 @@ object SaveRuns {
             1 -> " ${if (kept == 0) "A" else "Another"} new version may have been saved."
             else -> " $uncertain ${if (kept == 0) "" else "other "}new versions may have been saved."
         }
-        return "$opening$versions$maybe Nothing else was saved."
+        return "$opening$versions$maybe${left.ifEmpty { " Nothing else was saved." }}"
     }
 
     internal fun signedOut() = SaveRunStopped(SaveRunStopped.Reason.SIGNED_OUT, words(SaveRunStopped.Reason.SIGNED_OUT, false, null, 0), SaveCleanup.NOTHING)
@@ -276,10 +305,14 @@ object SaveRuns {
     }
 
     /* Runs another launch left behind, for the next open to offer to delete or keep what they made. */
-    fun interrupted(journal: SaveRunJournal): List<SaveRunRow> = journal.list().filter { it.launch != launch }
+    fun interrupted(journal: SaveRunJournal): List<SaveRunRow> {
+        // A finished run whose row couldn't be removed is never offered, and goes now.
+        journal.dropDone()
+        return journal.list().filter { it.launch != launch && !it.done }
+    }
 
     /* Removes what an interrupted run made, as a cancel would have, then its row. */
-    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): SaveCleanup = clean(row, writer, journal, emptySet()).cleanup
+    fun cleanUp(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal): SaveCleanup = clean(row, writer, journal, emptySet(), null).cleanup
 
     /*
      * Keeps what an interrupted run made: its row always goes. Its open uploads are still asked to abort; one with no answer
@@ -288,36 +321,46 @@ object SaveRuns {
      */
     fun keep(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal) {
         for (uploadId in row.uploadIds) abort(writer, uploadId, row.workspaceId)
-        journal.remove(row.id)
+        journal.retire(row)
     }
 
     private fun abort(writer: SaveRunWriter, uploadId: String, workspaceId: String) =
         runCatching { writer.abortUpload(uploadId, workspaceId) }.getOrDefault(SaveAbortFate.UNKNOWN)
 
-    /* What a clean-up did, how many new versions it found landed, and how many may have. */
-    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int)
+    /*
+     * What a clean-up did, how many new versions it found landed, how many may have, and whether new files or folders may
+     * still be there (`remains`: LEFT with the row kept, NO_ACCESS out of reach).
+     */
+    internal data class Cleaned(val cleanup: SaveCleanup, val kept: Int, val uncertain: Int, val remains: SaveCleanup? = null)
 
-    /* Aborts every upload the row names, removes its nodes; the row goes unless something is left. */
-    internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>): Cleaned {
+    /*
+     * Aborts every upload the row names, removes its nodes; the row goes unless something is left. `completing`: the uploads
+     * whose completion was sent (null for an interrupted run: any may have been); only those can land after an abort that
+     * got no answer.
+     */
+    internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>, completing: Set<String>?): Cleaned {
         var unsettled = false
         var denied = false
         var kept = 0
         var uncertain = 0
+        var othersMayLand = false
         for (uploadId in row.uploadIds) when (abort(writer, uploadId, row.workspaceId)) {
             SaveAbortFate.UNKNOWN, SaveAbortFate.FINISHING -> {
-                // No answer: it may land yet, and a new version is never said not to have.
+                // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
-                if (uploadId in versions) uncertain++
+                if (completing?.contains(uploadId) != false) { if (uploadId in versions) uncertain++ else othersMayLand = true }
             }
             SaveAbortFate.DENIED -> denied = true
             SaveAbortFate.FINISHED -> if (uploadId in versions) kept++
             else -> {}
         }
-        var cleanup = discard(row.nodeIds, row.workspaceId, writer)
+        val discarded = discard(row.nodeIds, row.workspaceId, writer)
+        var cleanup = discarded
         if (unsettled) cleanup = SaveCleanup.LEFT
         else if (denied && (cleanup == SaveCleanup.NOTHING || cleanup == SaveCleanup.NO_ACCESS)) cleanup = SaveCleanup.NO_ACCESS
-        if (cleanup != SaveCleanup.LEFT) journal.remove(row.id)
-        return Cleaned(cleanup, kept, uncertain)
+        val someRemain = othersMayLand || discarded == SaveCleanup.LEFT || discarded == SaveCleanup.NO_ACCESS
+        if (cleanup != SaveCleanup.LEFT) journal.retire(row)
+        return Cleaned(cleanup, kept, uncertain, if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS)
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter): SaveCleanup {
@@ -362,6 +405,8 @@ class SaveRun private constructor(
     private val claimed = HashMap<String, MutableSet<String>>()
     private val settledUploads = HashSet<String>()
     private val versionUploads = HashSet<String>()
+    /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
+    private val completing = HashSet<String>()
     private var stopping: CompletableFuture<SaveRunStopped>? = null
     private var sealed = false
     /* A sign-out: nothing is written, cleaned up or deleted for this run again. */
@@ -431,16 +476,6 @@ class SaveRun private constructor(
     }
 
     /*
-     * Each change is in the row in memory (what a stop cleans up from) before it is written, and a write the journal refused
-     * throws SaveUnrecorded: the run stops, and nothing is sent that no row names.
-     */
-    private fun change(body: (SaveRunRow) -> SaveRunRow) = synchronized(lock) {
-        if (sealed) return@synchronized
-        row = body(row)
-        journal.put(row)
-    }
-
-    /*
      * After the stop, a new file or folder that landed too late to go with the rest and then couldn't be removed: a row names
      * it for the next open, the one the stop kept (its clean-up left things too) or, when that one went, a row of its own.
      * Every late one joins the same row.
@@ -496,8 +531,35 @@ class SaveRun private constructor(
         open()
         val copy = SaveRuns.signing(sources)
         val into = parent ?: first
+        return try {
+            makeFolder(name, into, copy)
+        } catch (error: Exception) {
+            throw failed(error)
+        }
+    }
+
+    /*
+     * A failure on the run's own way to a result (a folder's listing, a folder's creation): the run stops and cleans up as an
+     * upload's failure does, all or nothing. A stale version stays what it is.
+     */
+    private fun failed(error: Exception): Exception {
+        if (error is SaveRunStopped || error is SaveStale) return error
+        synchronized(lock) { stopping }?.let { return it.get() }
+        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else null)
+    }
+
+    /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
+    private fun recordFolder(id: String) = synchronized(lock) {
+        if (sealed) throw IllegalStateException("This save run is stopping.")
+        row = row.copy(nodeIds = row.nodeIds + id)
+        journal.put(row)
+    }
+
+    private fun makeFolder(name: String, into: Opened, copy: Prior?): Opened {
         val given = claim(name, into)
         open()
+        // A folder inside one the run made goes with it and needs no row of its own.
+        val recordIt = synchronized(lock) { into.id !in madeFolders }
         // A destination a key change is still walking takes the run: its folders wait it out as its uploads do, the folder
         // looked up again before each try.
         var parentNow = into
@@ -506,7 +568,10 @@ class SaveRun private constructor(
         var madeHere: Opened? = null
         while (madeHere == null) {
             try {
-                madeHere = writer.makeFolder(parentNow, given, copy)
+                // Its id on disk before its creation is sent, or the creation is not sent.
+                madeHere = writer.makeFolder(parentNow, given, copy) { id ->
+                    if (recordIt) recordFolder(id) else if (!journal.live) throw IllegalStateException("Signed out.")
+                }
             } catch (error: Exception) {
                 if (!FamilyUploads.waits(error, since != null)) throw error
                 synchronized(lock) { stopping }?.let { throw it.get() }
@@ -534,10 +599,6 @@ class SaveRun private constructor(
         synchronized(lock) {
             madeFolders.add(made.id)
             claimed[made.id] = HashSet()
-        }
-        if (into.id !in madeFolders) {
-            // Not on disk: the run stops, removing this folder with the rest (it is in the row it cleans up from).
-            try { change { it.copy(nodeIds = it.nodeIds + made.id) } } catch (_: SaveUnrecorded) { throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED) }
         }
         return made
     }
@@ -575,7 +636,7 @@ class SaveRun private constructor(
         val copy = SaveRuns.signing(sources)
         val thumb = takeThumbnail(thumbnail)
         val into = folder ?: first
-        val given = claim(name, into)
+        val given = try { claim(name, into) } catch (error: Exception) { throw failed(error) }
         open()
         val tracked = synchronized(lock) { into.id !in madeFolders }
         return upload(bytes, given, mime, into, null, null, copy, thumb, tracked)
@@ -608,10 +669,12 @@ class SaveRun private constructor(
                 val version = replacing != null
                 try {
                     // The begin's ids are on disk before a part is sent (a refused write aborts the upload there).
-                    val landed = writer.uploadResult(bytes, name, mime, folderNow, replacing, startedFrom, copy, thumbnail) { ids ->
-                        started = ids
-                        noteBegun(ids, tracked, version)
-                    }
+                    val landed = writer.uploadResult(bytes, name, mime, folderNow, replacing, startedFrom, copy, thumbnail,
+                        onBegun = { ids ->
+                            started = ids
+                            noteBegun(ids, tracked, version)
+                        },
+                        onCompleting = { uploadId -> synchronized(lock) { completing += uploadId } })
                     val recorded = runCatching { settled(started, landed.id, tracked) }.isSuccess
                     val waiting = synchronized(lock) {
                         if (version) keptVersions++
@@ -686,9 +749,11 @@ class SaveRun private constructor(
         }
         if (!owner) return future.get()
         val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
-        val cleaned = SaveRuns.clean(held, writer, journal, versions)
+        val sent = synchronized(lock) { completing.toSet() }
+        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent)
         val total = keptBefore + cleaned.kept
-        val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain), cleaned.cleanup, total, cleaned.uncertain)
+        val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains), cleaned.cleanup, total,
+            cleaned.uncertain)
         future.complete(done)
         return done
     }
@@ -700,7 +765,7 @@ class SaveRun private constructor(
                 if (inFlight > 0) throw SaveRunStopped(SaveRunStopped.Reason.FAILED, "Some results are still being saved.", SaveCleanup.NOTHING)
                 finished = true
                 sealed = true
-                journal.remove(row.id)
+                journal.retire(row)
                 null
             }
         }
@@ -768,11 +833,12 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         } while (after != null)
     }
 
-    override fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened = vault.createFolder(folder.id, name, copy, result = true)
+    override fun makeFolder(folder: Opened, name: String, copy: Prior?, minted: (String) -> Unit): Opened =
+        vault.createFolder(folder.id, name, copy, result = true, onMinted = minted)
 
     override fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
-                              thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened =
-        vault.uploadResult(bytes, name, mime, folder.id, replacing, startedFrom, copy, thumbnail = thumbnail, onBegun = onBegun)
+                              thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened =
+        vault.uploadResult(bytes, name, mime, folder.id, replacing, startedFrom, copy, thumbnail = thumbnail, onBegun = onBegun, onCompleting = onCompleting)
 
     /* A row as the server serves it now, opened afresh (through the family's ledger in a family folder). */
     private fun openServed(node: NodeView): Opened =

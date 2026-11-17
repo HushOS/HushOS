@@ -69,6 +69,8 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
     public var uploadIds: [String]
     public let at: Date
     public let launch: String
+    /* The run finished (or its results were kept, or cleaned up) but its row couldn't be removed: never offered, dropped next. */
+    public var done: Bool?
 }
 
 /*
@@ -91,7 +93,19 @@ public final class SaveRunJournal: @unchecked Sendable {
     let url: URL
     let epoch: Epoch
     private let born: Int
-    private let lock = NSLock()
+    /* One lock per file, shared by every journal on it: two runs starting at once never lose each other's row. */
+    private let lock: NSLock
+    private static let locksLock = NSLock()
+    nonisolated(unsafe) private static var locks: [String: NSLock] = [:]
+    static func lock(for url: URL) -> NSLock {
+        locksLock.withLock {
+            let path = url.standardizedFileURL.path
+            if let held = locks[path] { return held }
+            let made = NSLock()
+            locks[path] = made
+            return made
+        }
+    }
 
     static var defaultURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -102,26 +116,29 @@ public final class SaveRunJournal: @unchecked Sendable {
         url = Self.defaultURL
         epoch = Self.account
         born = epoch.current
+        lock = Self.lock(for: url)
     }
 
     init(url: URL, epoch: Epoch = SaveRunJournal.account) {
         self.url = url
         self.epoch = epoch
         born = epoch.current
+        lock = Self.lock(for: url)
     }
 
     /* Sign-out, deletion, removal: the rows go, and no journal opened before writes again. */
     public static func endAccount() {
         account.end()
-        try? FileManager.default.removeItem(at: defaultURL)
+        lock(for: defaultURL).withLock { try? FileManager.default.removeItem(at: defaultURL) }
     }
 
     /* Whether this journal still belongs to the session it was opened in. */
     var live: Bool { born == epoch.current }
 
-    /* Tests only: runs before each write, and a throw refuses it as a full disk would. */
-    var fault: (@Sendable () throws -> Void)?
+    /* Tests only: runs before each write with the rows it would write, and a throw refuses it as a full disk would. */
+    var fault: (@Sendable ([SaveRunRow]) throws -> Void)?
 
+    /* Every row, those of finished runs (`done`) included. */
     public func list() -> [SaveRunRow] {
         lock.withLock { read() }
     }
@@ -144,11 +161,27 @@ public final class SaveRunJournal: @unchecked Sendable {
         }
     }
 
-    func remove(_ id: String) {
+    /*
+     * A run's row goes: removed, asked again once; if the disk still refuses, marked `done` so no open offers
+     * what a finished run made for deletion (and the next open drops it). Never fails what it retires.
+     */
+    func retire(_ row: SaveRunRow) {
         lock.withLock {
             guard live else { return }
-            let rows = read().filter { $0.id != id }
-            if (try? write(rows)) == nil { try? write(rows) }
+            let others = read().filter { $0.id != row.id }
+            if (try? write(others)) != nil || (try? write(others)) != nil { return }
+            var done = row
+            done.done = true
+            if (try? write(others + [done])) == nil { try? write(others + [done]) }
+        }
+    }
+
+    /* Rows of finished runs that couldn't be removed then, removed now. */
+    func dropDone() {
+        lock.withLock {
+            guard live else { return }
+            let rows = read()
+            if rows.contains(where: { $0.done == true }) { try? write(rows.filter { $0.done != true }) }
         }
     }
 
@@ -158,7 +191,7 @@ public final class SaveRunJournal: @unchecked Sendable {
     }
 
     private func write(_ rows: [SaveRunRow]) throws {
-        try fault?()
+        try fault?(rows)
         if rows.isEmpty {
             if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
             return
@@ -199,9 +232,11 @@ public protocol SaveRunWriter: Sendable {
     func gate(_ target: Opened) async -> SaveGate
     func room(_ workspaceId: String) async throws -> SaveRoom
     func names(in folder: Opened) async throws -> [String]
-    func makeFolder(in folder: Opened, name: String, signing: Signing) async throws -> Opened
+    /* `minted` hears the folder's id before its creation is sent (the run records it first); a throw sends nothing. */
+    func makeFolder(in folder: Opened, name: String, signing: Signing, minted: @escaping @Sendable (String) throws -> Void) async throws -> Opened
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
-                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void) async throws -> Opened
+                      signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void,
+                      onCompleting: @escaping @Sendable (String) -> Void) async throws -> Opened
     /* `file` as the server lists its folder now (its keys after a key change), or nil when it is no longer there. */
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened?
     /* `folder` and the chain above it as the server holds them now (a family's checked again first), to seal afresh under. */
@@ -285,7 +320,11 @@ public enum SaveRuns {
     }
 
     /* What a stopped run says: never "nothing was saved" once a new version landed, or while one may (the web's stoppedWords). */
-    static func words(_ reason: SaveRunStopped.Reason, shared: Bool, failure: String?, kept: Int, uncertain: Int = 0) -> String {
+    static func words(_ reason: SaveRunStopped.Reason, shared: Bool, failure: String?, kept: Int, uncertain: Int = 0,
+                      remains: SaveCleanup? = nil) -> String {
+        // New files or folders that may still be there: the row kept for the next launch (`left`), or out of reach.
+        let left = remains == .left ? " Some of what was made may still be there. You’ll be asked about it next time."
+            : remains == .noAccess ? " Some of what was made may still be there, and you can no longer remove it." : ""
         let opening: String
         switch reason {
         case .cancelled: opening = "Cancelled."
@@ -293,12 +332,12 @@ public enum SaveRuns {
         case .signedOut: opening = "You signed out before this was saved."
         case .failed: opening = (failure ?? "This couldn’t be saved.").trimmingCharacters(in: .whitespaces)
         }
-        if kept == 0, uncertain == 0 { return reason == .failed && failure == nil ? failed : "\(opening) Nothing was saved." }
+        if kept == 0, uncertain == 0, left.isEmpty { return reason == .failed && failure == nil ? failed : "\(opening) Nothing was saved." }
         let versions = kept == 0 ? "" : kept == 1 ? " The new version saved before that was kept." : " The \(kept) new versions saved before that were kept."
         let maybe = uncertain == 0 ? ""
             : uncertain == 1 ? " \(kept == 0 ? "A" : "Another") new version may have been saved."
             : " \(uncertain) \(kept == 0 ? "" : "other ")new versions may have been saved."
-        return "\(opening)\(versions)\(maybe) Nothing else was saved."
+        return "\(opening)\(versions)\(maybe)\(left.isEmpty ? " Nothing else was saved." : left)"
     }
 
     static func signedOut() -> SaveRunStopped {
@@ -333,12 +372,14 @@ public enum SaveRuns {
 
     /* Runs another launch left behind, for the next open to offer to delete or keep what they made. */
     public static func interrupted(_ journal: SaveRunJournal = SaveRunJournal()) -> [SaveRunRow] {
-        journal.list().filter { $0.launch != launch }
+        // A finished run whose row couldn't be removed is never offered, and goes now.
+        journal.dropDone()
+        return journal.list().filter { $0.launch != launch && $0.done != true }
     }
 
     /* Removes what an interrupted run made, as a cancel would have, then its row. */
     public static func cleanUp(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async -> SaveCleanup {
-        await clean(row, writer: writer, journal: journal, versions: []).cleanup
+        await clean(row, writer: writer, journal: journal, versions: [], completing: nil).cleanup
     }
 
     /*
@@ -348,31 +389,39 @@ public enum SaveRuns {
      */
     public static func keep(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async {
         for uploadId in row.uploadIds { _ = await writer.abortUpload(uploadId, in: row.workspaceId) }
-        journal.remove(row.id)
+        journal.retire(row)
     }
 
     /* Aborts every upload the row names, removes its nodes; the row goes unless something is left. */
-    static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal,
-                      versions: Set<String>) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int) {
+    /*
+     * `completing`: the uploads whose completion was sent (nil for an interrupted run: any may have been); only those
+     * can land after an abort that got no answer. `remains`: new files or folders that may still be there.
+     */
+    static func clean(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>,
+                      completing: Set<String>?) async -> (cleanup: SaveCleanup, kept: Int, uncertain: Int, remains: SaveCleanup?) {
         var unsettled = false
         var denied = false
         var kept = 0
         var uncertain = 0
+        var othersMayLand = false
         for uploadId in row.uploadIds {
             switch await writer.abortUpload(uploadId, in: row.workspaceId) {
             case .unknown, .finishing:
-                // No answer: it may land yet, and a new version is never said not to have.
+                // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
-                if versions.contains(uploadId) { uncertain += 1 }
+                guard completing?.contains(uploadId) ?? true else { break }
+                if versions.contains(uploadId) { uncertain += 1 } else { othersMayLand = true }
             case .denied: denied = true
             case .finished: if versions.contains(uploadId) { kept += 1 }
             default: break
             }
         }
-        var cleanup = await discard(row.nodeIds, in: row.workspaceId, writer: writer)
+        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer)
+        var cleanup = discarded
         if unsettled { cleanup = .left } else if denied, cleanup == .nothing || cleanup == .noAccess { cleanup = .noAccess }
-        if cleanup != .left { journal.remove(row.id) }
-        return (cleanup, kept, uncertain)
+        let someRemain = othersMayLand || discarded == .left || discarded == .noAccess
+        if cleanup != .left { journal.retire(row) }
+        return (cleanup, kept, uncertain, someRemain ? (cleanup == .left ? .left : .noAccess) : nil)
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter) async -> SaveCleanup {
@@ -410,6 +459,8 @@ final class RunState: @unchecked Sendable {
     private var abandonedHere = false
     private var settledUploads = Set<String>()
     private(set) var versionUploads = Set<String>()
+    /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
+    private var completingHere = Set<String>()
     /* After a stop: what landed or was made too late to go with it and then couldn't be removed. */
     private var lateRow: SaveRunRow?
     let journal: SaveRunJournal
@@ -421,18 +472,6 @@ final class RunState: @unchecked Sendable {
 
     var snapshot: SaveRunRow { lock.withLock { row } }
 
-    /*
-     * Each change is in the row in memory (what a stop cleans up from) before it is written, and a write
-     * the journal refused throws SaveUnrecorded: the run stops, and nothing is sent that no row names.
-     */
-    func change(_ body: (inout SaveRunRow) -> Void) throws {
-        try lock.withLock {
-            guard !sealed else { return }
-            body(&row)
-            try journal.put(row)
-        }
-    }
-
     /* Begin landed: its upload (and a new file's node) are in the row, on disk, before anything is sent. */
     func begun(_ ids: Vault.BegunIds, tracked: Bool, version: Bool) throws {
         try lock.withLock {
@@ -440,6 +479,22 @@ final class RunState: @unchecked Sendable {
             if version { versionUploads.insert(ids.uploadId) }
             if !row.uploadIds.contains(ids.uploadId) { row.uploadIds.append(ids.uploadId) }
             if tracked, !row.nodeIds.contains(ids.nodeId) { row.nodeIds.append(ids.nodeId) }
+            try journal.put(row)
+        }
+    }
+
+    /* A completion is about to be sent. */
+    func completing(_ uploadId: String) { lock.withLock { _ = completingHere.insert(uploadId) } }
+    var completingUploads: Set<String> { lock.withLock { completingHere } }
+
+    /*
+     * A new folder's id, minted and on disk before its creation is sent; a run stopping (sealed) or a refused write
+     * throws, and the creation is not sent.
+     */
+    func recordFolder(_ id: String) throws {
+        try lock.withLock {
+            guard !sealed else { throw CancellationError() }
+            row.nodeIds.append(id)
             try journal.put(row)
         }
     }
@@ -616,8 +671,30 @@ public actor SaveRun {
         try await open()
         let signing = try SaveRuns.signing(sources)
         let into = parent ?? first
+        do {
+            return try await makeFolder(name, into: into, signing: signing.metadata)
+        } catch {
+            throw await failed(error)
+        }
+    }
+
+    /*
+     * A failure on the run's own way to a result (a folder's listing, a folder's creation): the run stops and cleans up
+     * as an upload's failure does, all or nothing. A stale version stays what it is.
+     */
+    private func failed(_ error: Error) async -> Error {
+        if error is SaveRunStopped || error is SaveStale { return error }
+        if let stopping { return await stopping.value }
+        if let stopped { return stopped }
+        return await stop(.failed, error is SaveUnrecorded ? SaveRuns.unrecorded : nil)
+    }
+
+    private func makeFolder(_ name: String, into: Opened, signing: Signing) async throws -> Opened {
         let given = try await claim(name, in: into)
         try await open()
+        // A folder inside one the run made goes with it and needs no row of its own.
+        let recordIt = !madeFolders.contains(into.id)
+        let state = self.state
         // A destination a key change is still walking takes the run: its folders wait it out as its uploads do,
         // the folder looked up again before each try.
         var parentNow = into
@@ -626,7 +703,10 @@ public actor SaveRun {
         var made: Opened
         while true {
             do {
-                made = try await writer.makeFolder(in: parentNow, name: given, signing: signing.metadata)
+                // Its id on disk before its creation is sent, or the creation is not sent.
+                made = try await writer.makeFolder(in: parentNow, name: given, signing: signing) { id in
+                    if recordIt { try state.recordFolder(id) } else if !state.journal.live { throw CancellationError() }
+                }
                 break
             } catch where KeyChangeWait.meets(error, waited: since != nil) {
                 if let stopping { throw await stopping.value }
@@ -651,10 +731,6 @@ public actor SaveRun {
         if let stopped { throw stopped }
         madeFolders.insert(made.id)
         claimed[made.id] = []
-        if !madeFolders.contains(into.id) {
-            // Not on disk: the run stops, removing this folder with the rest (it is in the row it cleans up from).
-            do { try state.change { $0.nodeIds.append(made.id) } } catch { throw await stop(.failed, SaveRuns.unrecorded) }
-        }
         return made
     }
 
@@ -694,7 +770,8 @@ public actor SaveRun {
         let signing = try SaveRuns.signing(sources)
         let thumb = try takeThumbnail(thumbnail)
         let into = folder ?? first
-        let given = try await claim(name, in: into)
+        let given: String
+        do { given = try await claim(name, in: into) } catch { throw await failed(error) }
         try await open()
         return try await upload(bytes, name: given, mime: mime, in: into, replacing: nil, startedFrom: nil, thumbnail: thumb,
                                 signing: signing, tracked: !madeFolders.contains(into.id))
@@ -731,7 +808,8 @@ public actor SaveRun {
                 // The begin's ids are on disk before a part is sent (a refused write aborts the upload there).
                 let landed = try await writer.uploadResult(bytes, name: name, mime: mime, in: folderNow, replacing: replacing, startedFrom: startedFrom,
                                                            thumbnail: thumbnail, signing: signing,
-                                                           onBegun: { ids in begun.ids = ids; try state.begun(ids, tracked: tracked, version: version) })
+                                                           onBegun: { ids in begun.ids = ids; try state.begun(ids, tracked: tracked, version: version) },
+                                                           onCompleting: { state.completing($0) })
                 if version { keptVersions += 1 }
                 let recorded = (try? state.settled(begun.ids, landed: landed.id, tracked: tracked)) != nil
                 if stopped != nil || stopping != nil {
@@ -798,9 +876,11 @@ public actor SaveRun {
         let keptBefore = keptVersions
         let task = Task<SaveRunStopped, Never> {
             let row = state.seal()
-            let (cleanup, kept, uncertain) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads)
+            let (cleanup, kept, uncertain, remains) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
+                                                                           completing: state.completingUploads)
             let total = keptBefore + kept
-            var done = SaveRunStopped(reason: reason, message: SaveRuns.words(reason, shared: shared, failure: failure, kept: total, uncertain: uncertain),
+            var done = SaveRunStopped(reason: reason, message: SaveRuns.words(reason, shared: shared, failure: failure, kept: total, uncertain: uncertain,
+                                                                              remains: remains),
                                       cleanup: cleanup)
             done.keptVersions = total
             done.uncertainVersions = uncertain
@@ -819,7 +899,7 @@ public actor SaveRun {
         guard inFlight == 0 else { throw SaveRunStopped(reason: .failed, message: "Some results are still being saved.", cleanup: .nothing) }
         finished = true
         let row = state.seal()
-        state.journal.remove(row.id)
+        state.journal.retire(row)
     }
 
     /*
@@ -891,14 +971,15 @@ extension Vault: SaveRunWriter {
         try await listChildren(of: folder.id, in: folder.node.workspaceId).children.compactMap { opened[$0.ref]?.name }
     }
 
-    public func makeFolder(in folder: Opened, name: String, signing: Signing) async throws -> Opened {
-        try await createFolder(in: folder.id, name: name, signing: signing)
+    public func makeFolder(in folder: Opened, name: String, signing: Signing, minted: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
+        try await createFolder(in: folder.id, name: name, signing: signing, onMinted: minted)
     }
 
     public func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
-                             signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (BegunIds) throws -> Void) async throws -> Opened {
+                             signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (BegunIds) throws -> Void,
+                             onCompleting: @escaping @Sendable (String) -> Void) async throws -> Opened {
         try await uploadResult(bytes, name: name, mime: mime, in: folder.id, replacing: replacing, startedFrom: startedFrom, thumbnail: thumbnail,
-                               signing: signing, onBegun: onBegun)
+                               signing: signing, onBegun: onBegun, onCompleting: onCompleting)
     }
 
     /* From the server itself, never the catalogue (which may not have heard of a key change or another device's save yet). */

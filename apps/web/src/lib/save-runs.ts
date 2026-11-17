@@ -115,14 +115,13 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                 })
             ).children.map((child) => child.name),
         nextName,
-        makeFolder: async (parent, name, signAs) => {
+        makeFolder: async (parent, name, signAs, minted) => {
             const writable = await untilWritable(queryClient, parent);
             const [made] = await clientFor(writable.workspaceId).createFolderPath(
                 writable,
                 [name],
-                {
-                    signAs,
-                },
+                // The run records the folder's id before its creation is sent.
+                { signAs, onMinted: ([id]) => minted(id!) },
             );
             return made!;
         },

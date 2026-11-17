@@ -297,7 +297,11 @@ A cancel, a refusal, a 402, a watchdog or a closed tab:
     - A clean-up that cannot finish (no answer, an item refused, a delete forever left busy) keeps the run's row for the next open, which offers to delete what was made or keep it. One refused because the folder is no longer the person's (the share ended, the family was left) drops the row.
     - An upload the server is still completing after about ten seconds of asking is no answer, never taken as finished: the server publishes its node only once the store completes it, so it may still land. Its row stays, and the run says a new version among them may have been saved.
     - "Keep" at the next open always drops the row. Uploads it could not abort are left to the server's expiry.
-    - The row is written before anything it names is published. A write the device refuses is tried once more, and a second refusal stops the run.
+    - The row is written before anything it names is published: every id (an upload's, a new folder's, minted on the device) is on disk before the request that would publish it is sent. A write the device refuses is tried once more, and a second refusal stops the run.
+    - One writer per journal file, removals included, so two runs starting at once never lose each other's row.
+    - Every failure after a run starts, a folder's listing or creation included, stops it and cleans up.
+    - What a stopped run says comes from what its clean-up found: "may still be there" for new files or folders it couldn't remove, "may have been saved" only for a new version whose completion was sent.
+    - A finished run's row that the device won't remove is marked done: never offered for deletion, dropped by the next open.
 5. removes the run's journal row.
 
 After a closed tab, steps 3 and 4 happen on the next open from the run's journal row, and the 24-hour upload expiry covers what is left.

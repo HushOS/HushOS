@@ -1706,8 +1706,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
     /* `result`: a folder a tool makes for its results (SaveRuns.kt), signed by their sources, into a family folder too. */
+    /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
     fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false,
-                     result: Boolean = false): Opened = writing {
+                     result: Boolean = false, onMinted: (String) -> Unit = {}): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
         val parent = resolve(parentId)
         val ws = parent.node.workspaceId
@@ -1723,6 +1724,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
             val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
             val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
+            onMinted(id)
             sendingIntoFamily(ws)
             val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
                 .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
@@ -2070,12 +2072,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun uploadResult(bytes: ByteArray, name: String, mime: String?, parentId: String, replacing: Opened?, startedFrom: String?,
                      copy: Prior?, thumbnail: ByteArray? = null, modified: Long = System.currentTimeMillis(),
-                     onBegun: (BegunIds) -> Unit = {}, progress: (Float) -> Unit = {}): Opened {
+                     onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {}, progress: (Float) -> Unit = {}): Opened {
         if (replacing != null && replacing.node.currentVersion?.id != startedFrom) throw SaveStale(replacing.node.currentVersion?.id)
         try {
             return writing {
                 uploadInside(Plain.InMemory(bytes, modified), name, mime, parentId, replacing, thumbnail, copy, emptyMap(), "", null, progress,
-                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, result = true)
+                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, onCompleting = onCompleting, result = true)
             }
         } catch (error: ApiError) {
             // Begin refused `stale`, or completion `conflict` (aborted there, its room released). A new file refused so was only
@@ -2116,7 +2118,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     private fun uploadInside(plain: Plain, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
                              attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit,
-                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}, result: Boolean = false): Opened {
+                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {},
+                             result: Boolean = false): Opened {
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
         val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
         // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
@@ -2226,7 +2229,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 throw error
             }
             return uploadReserved(plain, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
-                family, job, moveOf != null, progress, result)
+                family, job, moveOf != null, progress, result, onCompleting)
         } finally {
             Reservations.idle(begun.uploadId)
         }
@@ -2236,7 +2239,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun uploadReserved(plain: Plain, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
                                thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
-                               moved: Boolean, progress: (Float) -> Unit, result: Boolean = false): Opened {
+                               moved: Boolean, progress: (Float) -> Unit, result: Boolean = false, onCompleting: (String) -> Unit = {}): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
@@ -2271,6 +2274,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
         // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
         // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
+        // Its completion goes out from here: what a save run's clean-up may then find landed.
+        onCompleting(begun.uploadId)
         var node = try {
             UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { abortReserved(begun.uploadId, ws) })
         } catch (refused: UploadFinish.RefusedHere) {

@@ -21,7 +21,9 @@ extension Vault {
      * A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name.
      * `attributes` are a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:]) async throws -> Opened {
+    /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
+    public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:],
+                             onMinted: @Sendable (String) throws -> Void = { _ in }) async throws -> Opened {
         return try await writing {
             _ = try await loadWorkspace()
             let parent = try await resolve(parentId)
@@ -36,6 +38,7 @@ extension Vault {
                 let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
                 let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
                 let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
+                try onMinted(id)
                 // Right before it leaves: a sync may have committed while this awaited (FamilyGuard.swift).
                 try sendingIntoFamily(workspace.workspaceId)
                 let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
@@ -892,7 +895,7 @@ extension Vault {
         source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
         moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) throws -> Void = { _ in },
-        progress: @Sendable (Double) -> Void
+        onCompleting: @Sendable (String) -> Void = { _ in }, progress: @Sendable (Double) -> Void
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
@@ -937,6 +940,8 @@ extension Vault {
                 await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
                 throw error
             }
+            // Its completion goes out from here: what a save run's clean-up may then find landed.
+            onCompleting(begun.uploadId)
             do {
                 // A move's completion is asked again when no answer came: the server may have deleted the source already, and a
                 // repeated completion is answered with the node as it landed. Taken for a failure, the move would say it failed.
@@ -976,7 +981,8 @@ extension Vault {
     public func uploadResult(
         _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
-        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void = { _ in }
+        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, onCompleting: @escaping @Sendable (String) -> Void = { _ in },
+        progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
         if let replacing, replacing.node.currentVersion?.id != startedFrom {
             throw SaveStale(currentVersionId: replacing.node.currentVersion?.id)
@@ -986,7 +992,7 @@ extension Vault {
             return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
                                     thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
                                     expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
-                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, progress: progress)
+                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, onCompleting: onCompleting, progress: progress)
         } catch {
             let raced: Bool
             switch error {

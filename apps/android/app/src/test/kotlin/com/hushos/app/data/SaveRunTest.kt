@@ -84,20 +84,31 @@ class SaveRunTest {
         /* Uploads the server is still completing: an abort is answered UNKNOWN (VaultSaveWriter.abortUpload after its tries). */
         val completing = HashSet<String>()
         var roomHook: (() -> Unit)? = null
+        /* A folder created whose answer never comes back. */
+        var loseAnswer = false
+        var namesFail = false
+        var uploading: (() -> Unit)? = null
         private var count = 0
 
         override fun refusal(target: Opened) = refusal
         override fun room(workspaceId: String): SaveRoom { roomHook?.invoke(); return room }
-        override fun names(folder: Opened): List<String> { listing?.invoke(); return names }
-        override fun makeFolder(folder: Opened, name: String, copy: Prior?): Opened {
+        override fun names(folder: Opened): List<String> {
+            listing?.invoke()
+            if (namesFail) throw Unreachable()
+            return names
+        }
+        override fun makeFolder(folder: Opened, name: String, copy: Prior?, minted: (String) -> Unit): Opened {
             folderEpochs += folder.node.keyEpoch
             folderAnswers.removeFirstOrNull()?.invoke()
+            // Its id heard before the creation is sent, as the vault's createFolder does.
+            minted("made-$name")
             making?.invoke()
             live += "made-$name"
+            if (loseAnswer) throw Unreachable()
             return Opened(NodeView("made-$name", "ws", folder.id, "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, null, null, null, emptyMap()))
         }
         override fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
-                                  thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit): Opened {
+                                  thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened {
             val n = ++count
             uploads.add(Triple(name, replacing, copy))
             folderEpochs += folder.node.keyEpoch
@@ -113,7 +124,10 @@ class SaveRunTest {
                 aborted += "up-$n"
                 throw error
             }
+            // Its parts on their way, the completion not yet sent.
+            uploading?.invoke()
             answers.removeFirstOrNull()?.invoke(n)
+            onCompleting("up-$n")
             landing?.invoke()
             open -= "up-$n"
             finished += "up-$n"
@@ -581,6 +595,99 @@ class SaveRunTest {
         flaky.finish()
     }
 
+    /* Two runs starting at once through separate journals on one file: neither loses the other's row. */
+    @Test
+    fun journalsOnOneFileNeverLoseEachOthersRows() {
+        val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
+        val session = SaveRunJournal.Epoch()
+        val journals = listOf(SaveRunJournal(file, session), SaveRunJournal(file, session))
+        val pool = Executors.newFixedThreadPool(8)
+        (0 until 200).map { n -> pool.submit { journals[n % 2].put(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l")) } }.forEach { it.get() }
+        assertEquals(200, journals[0].list().size)
+        (0 until 100).map { n -> pool.submit { journals[n % 2].retire(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l")) } }.forEach { it.get() }
+        assertEquals((100 until 200).map { "run-$it" }.toSet(), journals[1].list().map { it.id }.toSet())
+        pool.shutdown()
+    }
+
+    /* A finished run whose row the disk won't remove is marked done, never offered for deletion, and dropped later. */
+    @Test
+    fun aFinishedRunWhoseRowWontGoIsNeverOfferedForDeletion() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        // Every write that would leave the run's row out is refused.
+        rows.fault = { written -> if (written.none { it.id == run.id }) throw java.io.IOException("full") }
+        run.finish()
+        assertTrue(rows.list().single().done)
+        rows.fault = null
+        rows.put(SaveRunRow(run.id, "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", done = true))
+        rows.put(SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch"))
+        assertEquals(listOf("other"), SaveRuns.interrupted(rows).map { it.id })
+        assertEquals(listOf("other"), rows.list().map { it.id })
+        assertTrue("node-1" in writer.live)
+    }
+
+    /* A folder's id is on disk before its creation goes out, so one created whose answer was lost is still removed. */
+    @Test
+    fun aFolderWhoseAnswerWasLostIsStillRemovedByItsRow() {
+        val writer = FakeWriter().apply { loseAnswer = true }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        assertEquals(SaveRunStopped.Reason.FAILED, assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }.reason)
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+    }
+
+    /* A listing that fails after a result landed stops the run and removes it: all or nothing. */
+    @Test
+    fun aListingThatFailsStopsTheRunAndRemovesWhatItMade() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.namesFail = true
+        assertEquals(SaveRunStopped.Reason.FAILED, assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "b", null, own, folder = opened("g")) }.reason)
+        assertEquals(setOf("node-1"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+        assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }
+    }
+
+    /* A clean-up that leaves a published file says what may remain, never "nothing was saved". */
+    @Test
+    fun aCleanUpThatLeavesAFileSaysWhatMayRemain() {
+        val writer = FakeWriter()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal())
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.refuse += "node-1"
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertEquals("Cancelled. Some of what was made may still be there. You’ll be asked about it next time.", stopped.message)
+    }
+
+    /* The network went while a version's parts went up: its completion was never sent, so it isn't said to maybe be saved. */
+    @Test
+    fun aVersionWhoseCompletionWasNeverSentIsNotSaidToMaybeBeSaved() {
+        val doc = opened("doc", parent = "f", version = "v1")
+        val uploading = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.uploading = { uploading.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), rows)
+        val pool = Executors.newSingleThreadExecutor()
+        val saving = pool.submit<VersionSaved> { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+        assertTrue(uploading.await(5, TimeUnit.SECONDS))
+        writer.offline = true
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertEquals(0, stopped.uncertainVersions)
+        assertEquals(SaveRuns.CANCELLED, stopped.message)
+        assertEquals(listOf(listOf("up-1")), rows.list().map { it.uploadIds })
+        go.countDown()
+        runCatching { saving.get(5, TimeUnit.SECONDS) }
+        pool.shutdown()
+    }
+
     /* A begin still on its way at the cancel: the empty row went, the file lands, can't be removed, and a row names it. */
     @Test
     fun aLateFileThatCannotBeRemovedAfterTheRowWentGetsARowOfItsOwn() {
@@ -776,6 +883,18 @@ class SaveResultTest {
         }
         assertEquals(SaveAbortFate.FINISHED, writer.abortUpload("up", server.workspace, 0L))
         assertEquals(SaveAbortFate.UNKNOWN, writer.abortUpload("up", server.workspace, 0L))
+    }
+
+    /* A new folder's id is heard before its creation is sent; a throw from the hearer sends nothing. */
+    @Test
+    fun aNewFoldersIdIsHeardBeforeItsCreationIsSent() {
+        val existedWhenHeard = ArrayList<Boolean>()
+        val made = vault.createFolder(server.root, "Out", onMinted = { id -> existedWhenHeard += server.requests.any { it.startsWith("POST") && it.contains("/folders") } })
+        assertEquals(listOf(false), existedWhenHeard)
+        assertEquals("Out", server.record(made.id).name)
+        val sent = server.requests.count { it.startsWith("POST") && it.contains("/folders") }
+        assertThrows(IllegalStateException::class.java) { vault.createFolder(server.root, "Refused", onMinted = { throw IllegalStateException("not recorded") }) }
+        assertEquals(sent, server.requests.count { it.startsWith("POST") && it.contains("/folders") })
     }
 
     /*

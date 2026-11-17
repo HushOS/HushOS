@@ -483,9 +483,11 @@ function world(
         room: async () => options.room ?? { kind: 'own', free: 1e12 },
         namesIn: async () => options.names ?? [],
         nextName,
-        makeFolder: async (parent, name, signAs) => {
+        makeFolder: async (parent, name, signAs, minted) => {
+            const made = folder(`made-${madeFolders.length + 1}`, parent.workspaceId);
+            // Its id heard before the creation is sent, as createFolderPath's onMinted does.
+            await minted(made.id);
             madeFolders.push({ parent: parent.id, name, signAs });
-            const made = folder(`made-${madeFolders.length}`, parent.workspaceId);
             server.live.add(made.id);
             return made;
         },
@@ -885,13 +887,15 @@ describe('a save run', () => {
         const [version, file] = w.ids();
         w.begin(version!, 'up-v', 'doc');
         w.begin(file!, 'up-f', 'node-f');
-        await tick();
+        // Both completions sent: the server is completing them.
+        await w.queued.get(version!)!.input.produced!.beforeComplete!();
+        await w.queued.get(file!)!.input.produced!.beforeComplete!();
         const stopped = await run.cancel();
         expect(stopped.cleanup).toBe('left');
         expect(stopped.keptVersions).toBe(0);
         expect(stopped.uncertainVersions).toBe(1);
         expect(stopped.message).toBe(
-            'Cancelled. A new version may have been saved. Nothing else was saved.',
+            'Cancelled. A new version may have been saved. Some of what was made may still be there. You’ll be asked about it next time.',
         );
         // The row still names both: the file that lands later is the next open's to remove.
         expect(w.runs.rows.get(run.id)).toMatchObject({
@@ -1220,6 +1224,165 @@ describe('a save run', () => {
         ]);
     });
 
+    test('a version whose completion was never sent is not said to maybe be saved, though its abort got no answer', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await tick();
+        // The network went while its parts went up: no completion was sent, and the abort gets no answer.
+        w.server.offline = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.uncertainVersions).toBe(0);
+        expect(stopped.message).toBe(RUN_CANCELLED);
+        // Its reservation is still the next open's to abort.
+        expect(w.runs.rows.get(run.id)?.uploadIds).toEqual(['up-v']);
+    });
+
+    test('a clean-up that leaves a published file says what may remain, never “nothing was saved”', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.server.refuse.add('node-a');
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(
+            'Cancelled. Some of what was made may still be there. You’ll be asked about it next time.',
+        );
+        // The space no longer the person's: it may remain, and they can no longer remove it.
+        const gone = world();
+        const other = await startRun(gone.deps, { targets: [folder('f')], results: [] });
+        const result = other.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        gone.begin(gone.ids()[0]!, 'up-a', 'node-a');
+        gone.land(gone.ids()[0]!, 'node-a', 'up-a');
+        await result;
+        gone.server.denied = true;
+        const denied = await other.cancel();
+        expect(denied.cleanup).toBe('no-access');
+        expect(denied.message).toBe(
+            'Cancelled. Some of what was made may still be there, and you can no longer remove it.',
+        );
+    });
+
+    test('a finished run whose row the journal won’t remove is never offered for deletion', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const remove = w.runs.remove.bind(w.runs);
+        w.runs.remove = () => Promise.reject(new DOMException('closed', 'InvalidStateError'));
+        await run.finish();
+        expect(w.runs.rows.get(run.id)?.done).toBe(true);
+        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        // Keep is retired the same way.
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        await keepInterrupted(w.deps, left);
+        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        // Once the journal works again the next open drops them.
+        w.runs.remove = remove;
+        await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a folder’s id is on disk before its creation is sent, so a lost answer still leaves a row that removes it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const make = w.deps.makeFolder;
+        const recordedAtSend: string[][] = [];
+        w.deps.makeFolder = async (parent, name, signAs, minted) =>
+            make(parent, name, signAs, async (id) => {
+                await minted(id);
+                recordedAtSend.push([...(w.runs.rows.get(run.id)?.nodeIds ?? [])]);
+            }).then(() => {
+                // Created, but the answer never came back.
+                throw new TypeError('Failed to fetch');
+            });
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        expect(recordedAtSend).toEqual([['made-1']]);
+        expect(stopped).toBeInstanceOf(RunStopped);
+        expect(stopped.reason).toBe('failed');
+        expect(w.server.purged.has('made-1')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('two late folders that both can’t be removed are both named by the row', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const finishers: ((made: DriveNode) => void)[] = [];
+        w.deps.makeFolder = () =>
+            new Promise<DriveNode>((resolve) => {
+                finishers.push(resolve);
+            });
+        const first = run.folder('One', own);
+        const second = run.folder('Two', own);
+        await tick();
+        expect((await run.cancel()).cleanup).toBe('nothing');
+        for (const id of ['late-1', 'late-2']) {
+            w.server.live.add(id);
+            w.server.refuse.add(id);
+        }
+        finishers[0]!(folder('late-1'));
+        await expect(first).rejects.toBeInstanceOf(RunStopped);
+        finishers[1]!(folder('late-2'));
+        await expect(second).rejects.toBeInstanceOf(RunStopped);
+        expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([['late-1', 'late-2']]);
+    });
+
+    test('a folder listing or creation that fails stops the run and removes what it made, all or nothing', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.deps.namesIn = () => Promise.reject(new TypeError('Failed to fetch'));
+        await expect(
+            run.file({ name: 'b', bytes: bytes(), mime: null, ...own, into: folder('g') }),
+        ).rejects.toMatchObject({ reason: 'failed' });
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+        expect(resultsWaiting()).toBe(false);
+
+        const v = world();
+        const other = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const kept = other.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await kept;
+        v.deps.makeFolder = () => Promise.reject(new Error('This folder is read-only.'));
+        await expect(other.folder('Out', own)).rejects.toMatchObject({ reason: 'failed' });
+        expect(v.server.purged.has('node-a')).toBe(true);
+        await expect(
+            other.file({ name: 'c', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toBeInstanceOf(RunStopped);
+    });
+
     test('a row the journal refuses to write stops the run: nothing is attached or completed that it does not name', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
@@ -1317,8 +1480,8 @@ describe('a save run', () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
         const make = w.deps.makeFolder;
-        w.deps.makeFolder = async (parent, name, signAs) => {
-            const made = await make(parent, name, signAs);
+        w.deps.makeFolder = async (parent, name, signAs, minted) => {
+            const made = await make(parent, name, signAs, minted);
             w.signOut();
             w.runs.rows.clear();
             return made;

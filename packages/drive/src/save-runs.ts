@@ -142,8 +142,11 @@ const OPENINGS: Record<Exclude<StopReason, 'failed'>, string> = {
 };
 
 /*
- * What a stopped run says: never "nothing was saved" once a new version
- * landed, or while one may still land.
+ * What a stopped run says, from what its clean-up found: never "nothing was
+ * saved" once a new version landed, while one may still land, or while new
+ * files or folders it made may still be there (`remains`: `left` when the
+ * row stays for the next open, `no-access` when the space is no longer the
+ * person's to clean up).
  */
 export function stoppedWords(
     reason: StopReason,
@@ -152,17 +155,24 @@ export function stoppedWords(
         failure?: string | null;
         keptVersions?: number;
         uncertainVersions?: number;
+        remains?: 'left' | 'no-access' | null;
     } = {},
 ) {
     const kept = options.keptVersions ?? 0;
     const uncertain = options.uncertainVersions ?? 0;
+    const remains =
+        options.remains === 'left'
+            ? ' Some of what was made may still be there. You’ll be asked about it next time.'
+            : options.remains === 'no-access'
+              ? ' Some of what was made may still be there, and you can no longer remove it.'
+              : '';
     const opening =
         reason === 'failed'
             ? (options.failure ?? 'This couldn’t be saved.').replace(/\s*$/, '')
             : reason === 'no-room' && options.shared
               ? 'There isn’t enough room in this shared folder for this.'
               : OPENINGS[reason];
-    if (!kept && !uncertain)
+    if (!kept && !uncertain && !remains)
         return reason === 'failed' && !options.failure
             ? RUN_FAILED
             : `${opening} Nothing was saved.`;
@@ -176,7 +186,7 @@ export function stoppedWords(
         : uncertain === 1
           ? ` ${kept ? 'Another' : 'A'} new version may have been saved.`
           : ` ${uncertain} ${kept ? 'other ' : ''}new versions may have been saved.`;
-    return `${opening}${versions}${maybe} Nothing else was saved.`;
+    return `${opening}${versions}${maybe}${remains || ' Nothing else was saved.'}`;
 }
 
 type TransferEvent = Parameters<NonNullable<TransferManagerOptions['onEvent']>>[0];
@@ -312,7 +322,16 @@ export type SaveRunDeps = {
     /* The next free name among `taken` ("name (2).ext"), matching whatever the case. */
     nextName: (name: string, taken: Set<string>) => string;
     /* A new folder, signed as `signAs`; waits out a family folder's key change, refuses otherwise. */
-    makeFolder: (parent: DriveNode, name: string, signAs: SignatureForm) => Promise<DriveNode>;
+    /*
+     * `minted` hears the folder's id before its creation is sent (the run records it first);
+     * a throw from it sends nothing.
+     */
+    makeFolder: (
+        parent: DriveNode,
+        name: string,
+        signAs: SignatureForm,
+        minted: (id: string) => Promise<void>,
+    ) => Promise<DriveNode>;
     /* Never throws: what the server said, or `unknown`. */
     abortUpload: (workspaceId: string, uploadId: string) => Promise<AbortFate>;
     /*
@@ -510,6 +529,14 @@ function createRun(
     const pending = new Map<string, Pending>();
     /* Uploads of new versions: one the server finished is a version kept, not a file to delete. */
     const versionUploads = new Set<string>();
+    /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
+    const completing = new Set<string>();
+    /*
+     * After a stop: folders made too late to go with it that then couldn't be removed, in one
+     * row (the stop's, when it kept one), each write after the last.
+     */
+    let late: RunRow | null = null;
+    let lateWriting = Promise.resolve();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
     /*
@@ -718,6 +745,7 @@ function createRun(
                         beforeComplete: async () => {
                             await recorded();
                             if (stopping) throw new Error('This save run is stopping.');
+                            if (output.uploadId) completing.add(output.uploadId);
                         },
                     },
                 },
@@ -768,6 +796,7 @@ function createRun(
                 },
                 written: () => writing,
                 versionUploads,
+                completing,
                 current,
             });
             keptVersions += result.keptVersions;
@@ -778,6 +807,7 @@ function createRun(
                     failure: reason === 'failed' ? (failure ?? item?.error ?? null) : null,
                     keptVersions,
                     uncertainVersions: result.uncertainVersions,
+                    remains: result.remains,
                 }),
                 result.cleanup,
                 keptVersions,
@@ -791,6 +821,28 @@ function createRun(
         })();
         return stopping;
     }
+    /*
+     * A failure on the run's own way to a result (a folder's listing, a folder's creation): the
+     * run stops and cleans up as an upload's failure does, all or nothing.
+     */
+    async function failed(error: unknown): Promise<never> {
+        if (error instanceof RunStopped) throw error;
+        if (stopping) throw await stopping;
+        throw await stop('failed');
+    }
+    /* A late folder that couldn't be removed joins the late row (keepLate on the phones). */
+    function keepLate(nodeId: string, stopKeptRow: boolean) {
+        if (!current()) return lateWriting;
+        late ??= stopKeptRow
+            ? { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds] }
+            : { ...row, nodeIds: [], uploadIds: [] };
+        if (!late.nodeIds.includes(nodeId)) late.nodeIds.push(nodeId);
+        const snapshot = { ...late, nodeIds: [...late.nodeIds], beat: now() };
+        lateWriting = lateWriting
+            .then(() => (current() ? deps.runs.put(snapshot) : undefined))
+            .catch(() => {});
+        return lateWriting;
+    }
     function end() {
         clearInterval(beat);
         unsubscribe();
@@ -803,52 +855,52 @@ function createRun(
         async folder(name, { into = plan.targets[0]!, sources }) {
             await open();
             const signAs = resultSignatures(sources).metadata;
-            const taken = await namesTaken(into);
-            const given = claim(taken, name);
-            await open();
-            const made = await deps.makeFolder(into, given, signAs);
+            // A folder inside one the run made goes with it and needs no row of its own.
+            const recordIt = !madeFolders.has(into.id);
+            let made: DriveNode;
+            try {
+                const given = claim(await namesTaken(into), name);
+                await open();
+                made = await deps.makeFolder(into, given, signAs, async (id) => {
+                    // Its id on disk before its creation is sent, or the creation is not sent.
+                    if (stopping || !current()) throw new Error('This save run is stopping.');
+                    if (!recordIt) return;
+                    row.nodeIds.push(id);
+                    void persist();
+                    await recorded();
+                    if (stopping) throw new Error('This save run is stopping.');
+                });
+            } catch (error) {
+                return failed(error);
+            }
             if (!current() && !stopping) run.abandon();
             if (stopping) {
                 const done = await stopping;
                 // Signed out meanwhile: nothing is asked of the server or written for that account.
                 if (abandoned) throw done;
-                // Stopped while it was being made: it goes the way the rest of the run went, and
-                // if it cannot, a row names it for the next open: added to the row the stop kept
-                // (its clean-up left things too), or a row of its own when the stop's went.
+                // Made while the run stopped: it goes the way the rest of the run went, and if it
+                // cannot, a row names it for the next open (keepLate).
                 const fate = await discard(deps, row.workspaceId, [made.id]).catch(
                     (): Cleanup => 'left',
                 );
-                if (fate === 'left' && current())
-                    await deps.runs
-                        .put(
-                            done.cleanup === 'left'
-                                ? { ...row, nodeIds: [...row.nodeIds, made.id], beat: now() }
-                                : { ...row, nodeIds: [made.id], uploadIds: [], beat: now() },
-                        )
-                        .catch(() => {});
+                if (fate === 'left') await keepLate(made.id, done.cleanup === 'left');
                 throw done;
             }
             madeFolders.add(made.id);
             claimed.set(made.id, Promise.resolve(new Set()));
-            if (!madeFolders.has(into.id)) {
-                row.nodeIds.push(made.id);
-                void persist();
-                try {
-                    await recorded();
-                } catch (error) {
-                    // Not recorded: the run stops (set by persist meanwhile), removing this folder with the rest.
-                    const halted = stopping as Promise<RunStopped> | null;
-                    throw halted ? await halted : error;
-                }
-            }
             return made;
         },
         async file(result) {
             await open();
             const into = result.into ?? plan.targets[0]!;
             const thumbnail = takeThumbnail(result.thumbnail);
-            const name = claim(await namesTaken(into), result.name);
-            const file = memoryFile(name, result.bytes, result.mime, thumbnail, result.modified);
+            let file: MemoryFile;
+            try {
+                const name = claim(await namesTaken(into), result.name);
+                file = memoryFile(name, result.bytes, result.mime, thumbnail, result.modified);
+            } catch (error) {
+                return failed(error);
+            }
             // Checked again with nothing awaited before the enqueue: a stop that began while the
             // folder was listed refuses this result, which then never reaches the queue.
             await open();
@@ -877,7 +929,7 @@ function createRun(
             finished = true;
             sealed = true;
             await writing;
-            if (current()) await deps.runs.remove(row.id).catch(() => {});
+            if (current()) await retire(deps.runs, row);
             end();
         },
         async cancel() {
@@ -925,33 +977,73 @@ async function cleanUp(
         seal?: () => void;
         written?: () => Promise<void>;
         versionUploads?: Set<string>;
+        /* Uploads whose completion was sent; without it (an interrupted run), any may have been. */
+        completing?: Set<string>;
         current?: () => boolean;
     } = {},
-): Promise<{ cleanup: Cleanup; keptVersions: number; uncertainVersions: number }> {
+): Promise<{
+    cleanup: Cleanup;
+    keptVersions: number;
+    uncertainVersions: number;
+    /* New files or folders that may still be there: `left` with the row kept, `no-access` without. */
+    remains: 'left' | 'no-access' | null;
+}> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
     let denied = false;
     let keptVersions = 0;
     let uncertainVersions = 0;
+    let othersMayLand = false;
     for (const uploadId of row.uploadIds) {
         const fate = await deps.abortUpload(row.workspaceId, uploadId);
         if (fate === 'unknown') {
             unsettled = true;
-            // No answer: it may still land, and a new version is never said not to have.
+            // No answer: once its completion was sent it may still land, and a new version is
+            // never said not to have; one whose completion was never sent cannot.
+            if (!(options.completing?.has(uploadId) ?? true)) continue;
             if (options.versionUploads?.has(uploadId)) uncertainVersions += 1;
+            else othersMayLand = true;
         } else if (fate === 'denied') denied = true;
         else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
-    let cleanup = await discard(deps, row.workspaceId, row.nodeIds).catch((): Cleanup => 'left');
+    const discarded = await discard(deps, row.workspaceId, row.nodeIds).catch(
+        (): Cleanup => 'left',
+    );
+    let cleanup = discarded;
     if (unsettled) cleanup = 'left';
     else if (denied && (cleanup === 'nothing' || cleanup === 'no-access')) cleanup = 'no-access';
+    const someRemain = othersMayLand || discarded === 'left' || discarded === 'no-access';
+    const remains = !someRemain ? null : cleanup === 'left' ? 'left' : 'no-access';
     if (cleanup !== 'left') {
         // After the last row the run wrote, so none lands after this one goes.
         options.seal?.();
         await options.written?.();
-        if (options.current?.() ?? true) await deps.runs.remove(row.id).catch(() => {});
+        if (options.current?.() ?? true) await retire(deps.runs, row);
     }
-    return { cleanup, keptVersions, uncertainVersions };
+    return { cleanup, keptVersions, uncertainVersions, remains };
+}
+
+/*
+ * A run's row goes: removed, asked again once; if the journal still refuses,
+ * marked `done` so no open offers what a finished run made for deletion (and
+ * the next open drops it). Never fails what it retires.
+ */
+async function retire(runs: RunJournal, row: RunRow) {
+    for (let tries = 0; tries < 2; tries++)
+        try {
+            await runs.remove(row.id);
+            return;
+        } catch {
+            // Asked again, then marked done.
+        }
+    const done = { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds], done: true };
+    for (let tries = 0; tries < 2; tries++)
+        try {
+            await runs.put(done);
+            return;
+        } catch {
+            // Asked again; past that the row stays as it was.
+        }
 }
 
 /* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
@@ -986,6 +1078,11 @@ export async function interruptedRuns(deps: Pick<SaveRunDeps, 'runs' | 'isLive' 
     const rows = await deps.runs.list();
     const left: RunRow[] = [];
     for (const row of rows) {
+        // A finished run whose row couldn't be removed: never offered, dropped now.
+        if (row.done) {
+            await deps.runs.remove(row.id).catch(() => {});
+            continue;
+        }
         if (live.has(row.id)) continue;
         if (deps.isLive) {
             if (await deps.isLive(row.id)) continue;
@@ -1012,6 +1109,6 @@ export async function keepInterrupted(
     row: RunRow,
 ): Promise<'kept'> {
     for (const uploadId of row.uploadIds) await deps.abortUpload(row.workspaceId, uploadId);
-    await deps.runs.remove(row.id).catch(() => {});
+    await retire(deps.runs, row);
     return 'kept';
 }
