@@ -74,3 +74,78 @@ class KitScanTest {
         assertNull(KitScan.phrase(ByteArray(400 * 400) { 200.toByte() }, 400, 400))
     }
 }
+
+/*
+ * Another device's approval request, as the approving phone's camera sees it: every real one reads.
+ * ZXing's usual reader alone misses about one code in seventy of these (it takes data for a finder
+ * square), clean or not; these fail on that and hold the fallback to every one.
+ */
+class ApprovalScanTest {
+    /* A request's code as every client draws it: `hushos-approve:` and 48 bytes, level H, square modules. */
+    private fun request(random: java.util.Random): String {
+        val bytes = ByteArray(48).also(random::nextBytes)
+        return "hushos-approve:" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+
+    private fun matrix(text: String) = com.google.zxing.qrcode.encoder.Encoder.encode(text, com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.H).matrix
+
+    /* Codes drawn `unit` pixels a module, side by side, with four modules of white round each, on a white frame. */
+    private fun drawn(texts: List<String>, unit: Int = 8): Triple<ByteArray, Int, Int> {
+        val codes = texts.map(::matrix)
+        val width = codes.sumOf { (it.width + 8) * unit }
+        val height = codes.maxOf { (it.height + 8) * unit }
+        val pixels = ByteArray(width * height) { 255.toByte() }
+        var left = 0
+        for (code in codes) {
+            for (y in 0 until code.height) for (x in 0 until code.width) if (code.get(x, y).toInt() == 1) {
+                for (dy in 0 until unit) for (dx in 0 until unit) pixels[((y + 4) * unit + dy) * width + left + (x + 4) * unit + dx] = 0
+            }
+            left += (code.width + 8) * unit
+        }
+        return Triple(pixels, width, height)
+    }
+
+    /* As a camera frame: 640 × 480, grey round it, the picture scaled, turned and smoothed by bilinear sampling. */
+    private fun camera(picture: Triple<ByteArray, Int, Int>, scale: Double, turn: Double): ByteArray {
+        val (pixels, width, height) = picture
+        val cos = kotlin.math.cos(turn)
+        val sin = kotlin.math.sin(turn)
+        return ByteArray(640 * 480) { i ->
+            val fx = (i % 640) - 320.0
+            val fy = (i / 640) - 240.0
+            val x = (cos * fx + sin * fy) / scale + width / 2.0
+            val y = (-sin * fx + cos * fy) / scale + height / 2.0
+            if (x < 0 || y < 0 || x >= width - 1 || y >= height - 1) return@ByteArray 170.toByte()
+            val x0 = x.toInt()
+            val y0 = y.toInt()
+            fun at(px: Int, py: Int) = pixels[py * width + px].toInt() and 0xff
+            val top = at(x0, y0) * (1 - (x - x0)) + at(x0 + 1, y0) * (x - x0)
+            val bottom = at(x0, y0 + 1) * (1 - (x - x0)) + at(x0 + 1, y0 + 1) * (x - x0)
+            (top * (1 - (y - y0)) + bottom * (y - y0)).toInt().toByte()
+        }
+    }
+
+    private fun approval(text: String) = text.startsWith("hushos-approve:")
+
+    @Test
+    fun everyRealRequestReadsCleanAndThroughACamera() {
+        val random = java.util.Random(7)
+        val missed = (0 until 300).map { request(random) }.flatMap { text ->
+            val picture = drawn(listOf(text))
+            listOfNotNull(
+                "clean $text".takeIf { KitScan.decode(picture.first, picture.second, picture.third, accept = ::approval) != text },
+                "camera $text".takeIf { KitScan.decode(camera(picture, 0.85, 0.12), 640, 480, accept = ::approval) != text },
+            )
+        }
+        assertEquals(emptyList<String>(), missed)
+    }
+
+    @Test
+    fun theRequestIsFoundBesideAnotherCode() {
+        val text = request(java.util.Random(3))
+        val (pixels, width, height) = drawn(listOf("https://hushos.com/s/5f0c2a9e-4b7d-4c1e-9a3b-2d8e6f1a7c40#k=abc", text), unit = 6)
+        assertEquals(text, KitScan.decode(pixels, width, height, accept = ::approval))
+        // Asked for something no code in the frame holds: nothing.
+        assertNull(KitScan.decode(pixels, width, height) { it == "something else" })
+    }
+}

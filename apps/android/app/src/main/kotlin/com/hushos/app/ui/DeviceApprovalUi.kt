@@ -952,7 +952,7 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
                 }
                 ApprovalAnswer.Phase.SCANNING -> Column(Modifier.padding(horizontal = AlpineSpace.S6), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
                     // Only an approval's own code ends the scan; any other code in view is passed over.
-                    QrCamera({ bytes, width, height, stride -> KitScan.decode(bytes, width, height, stride)?.takeIf { approvalQrRead(it) != null } }) { answer.scanned(it) }
+                    QrCamera({ bytes, width, height, stride -> KitScan.decode(bytes, width, height, stride) { approvalQrRead(it) != null } }) { answer.scanned(it) }
                     TextButton(onClick = { answer.choose() }, enabled = !busy) { Text("Cancel") }
                 }
                 ApprovalAnswer.Phase.WAITING -> Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = AlpineSpace.S6), verticalAlignment = Alignment.CenterVertically) {
