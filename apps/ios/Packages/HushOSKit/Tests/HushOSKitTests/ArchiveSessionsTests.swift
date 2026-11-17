@@ -580,13 +580,21 @@ import Testing
         #expect(ArchiveEntries.limits(.image, memory: 3 << 30).ceiling * 2 == ArchiveEntries.limits(.image, memory: 6 << 30).ceiling)
     }
 
-    @Test func aZipEntrysDateIsItsUnixTimeOrItsDosDateAsLocalTime() {
+    @Test func aZipEntrysDateIsItsUnixTimeOrItsDosDateAsLocalTime() throws {
         var entry = ArchiveEntry(index: 0, path: "a", folder: 0, name: "a", directory: false, size: 0, packed: 0,
                                  dos: (UInt32((2026 - 1980) << 9 | 11 << 5 | 3) << 16) | UInt32(14 << 11 | 30 << 5),
                                  mtimeMillis: nil, lock: "none", support: "ok", link: false, nested: false, hidden: false, stored: true, saveName: "a")
-        let calendar = Calendar(identifier: .gregorian)
-        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: ArchiveEntries.date(entry, calendar: calendar)!)
+        let zone = TimeZone(identifier: "Asia/Bangkok")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let when = try #require(ArchiveEntries.date(entry, timeZone: zone))
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: when)
         #expect([parts.year, parts.month, parts.day, parts.hour, parts.minute] == [2026, 11, 3, 14, 30])
+        // A phone on the Buddhist calendar shows the same moment as its own year, 2569, never 2026 read as its year.
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = zone
+        let shown = buddhist.dateComponents([.year, .month, .day], from: when)
+        #expect([shown.year, shown.month, shown.day] == [2569, 11, 3])
         entry.mtimeMillis = 1_000
         #expect(ArchiveEntries.date(entry) == Date(timeIntervalSince1970: 1))
         entry.mtimeMillis = nil

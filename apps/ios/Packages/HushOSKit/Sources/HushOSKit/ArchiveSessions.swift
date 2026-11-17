@@ -734,12 +734,18 @@ public enum ArchiveEntries {
         return type == "application/zip" || type == "application/x-zip-compressed" || (name as NSString).pathExtension.lowercased() == "zip"
     }
 
-    /* When it last changed: its Unix time when the archive kept one, else its MS-DOS date and time, as local time. */
-    public static func date(_ entry: ArchiveEntry, calendar: Calendar = .current) -> Date? {
+    /*
+     * When it last changed: its Unix time when the archive kept one, else its MS-DOS date and time,
+     * as local time. The DOS fields are Gregorian whatever calendar the phone shows (a Buddhist
+     * one would read 2026 as its own year, 1483 in ours): only the formatting uses the person's.
+     */
+    public static func date(_ entry: ArchiveEntry, timeZone: TimeZone = .current) -> Date? {
         if let millis = entry.mtimeMillis { return Date(timeIntervalSince1970: Double(millis) / 1000) }
         let date = entry.dos >> 16, time = entry.dos & 0xffff
         let month = Int((date >> 5) & 0xf), day = Int(date & 0x1f)
         guard month > 0, day > 0 else { return nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
         return calendar.date(from: DateComponents(
             year: Int((date >> 9) & 0x7f) + 1980, month: month, day: day,
             hour: Int(time >> 11), minute: Int((time >> 5) & 0x3f), second: Int(time & 0x1f) * 2

@@ -55,6 +55,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -512,7 +513,8 @@ private fun decode(kind: String, name: String, bytes: ByteArray): Shown = when (
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
         }.asImageBitmap()
     }.map { Shown.Picture(it) as Shown }.getOrDefault(Shown.Undecodable)
-    "pdf" -> PdfDocumentHolder.open(bytes)?.let { Shown.Pdf(it) } ?: Shown.Undecodable
+    // memfd_create is Android 11's: before it the pane says so and never decodes (see EntryPane).
+    "pdf" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) PdfDocumentHolder.open(bytes)?.let { Shown.Pdf(it) } ?: Shown.Undecodable else Shown.Undecodable
     else -> {
         val text = bytes.decodeToString().removePrefix("\uFEFF")
         if (MarkdownDocument.handles(name, null) && bytes.size <= MarkdownDocument.LIMIT) Shown.Markdown(MarkdownDocument.parse(text))
@@ -554,6 +556,7 @@ internal class PdfDocumentHolder private constructor(private val renderer: PdfRe
     }
 
     companion object {
+        @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
         fun open(bytes: ByteArray): PdfDocumentHolder? = runCatching {
             val fd = Os.memfd_create("archive-entry", 0)
             FileOutputStream(fd).let { out -> out.write(bytes); out.flush() }
@@ -585,8 +588,9 @@ private fun PdfView(document: PdfDocumentHolder, onDownload: () -> Unit) {
 /* `index`: the item the password is asked for, tried on first, so a password that opens only some of the archive's items opens the one picked. */
 @Composable
 private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: String?, failed: (Throwable, Boolean) -> String, onUnlocked: () -> Unit) {
-    // Kept in memory only (remember, never saved state), and gone with the card.
-    var password by remember { mutableStateOf("") }
+    // Kept across a rotation or a fold (retain: in memory only, never the saved-state bundle), for
+    // this archive's item alone, and gone with the card.
+    var password by retain(archive, index) { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     // `note` first (why it is asked again), until something is typed.
     var error by remember(note) { mutableStateOf(note) }
