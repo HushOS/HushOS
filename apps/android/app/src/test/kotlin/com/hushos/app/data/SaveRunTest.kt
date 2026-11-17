@@ -495,14 +495,16 @@ class SaveRunTest {
         val making = CountDownLatch(1)
         val go = CountDownLatch(1)
         writer.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
-        val pool = Executors.newSingleThreadExecutor()
+        val pool = Executors.newFixedThreadPool(2)
         val folder = pool.submit<Opened> { run.folder("Archive", own) }
         assertTrue(making.await(5, TimeUnit.SECONDS))
-        // The stop's clean-up fails for the file it made, and later for the late folder too.
+        // The stop's clean-up fails for the file it made and for the folder, whose creation it waits for.
         writer.refuse += "node-1"
         writer.refuse += "made-Archive"
-        assertEquals(SaveCleanup.LEFT, run.cancel().cleanup)
+        val cancelling = pool.submit<SaveRunStopped> { run.cancel() }
+        Thread.sleep(50)
         go.countDown()
+        assertEquals(SaveCleanup.LEFT, cancelling.get(5, TimeUnit.SECONDS).cleanup)
         runCatching { folder.get(5, TimeUnit.SECONDS) }
         assertEquals(listOf(listOf("node-1", "made-Archive")), rows.list().map { it.nodeIds })
         pool.shutdown()
@@ -804,6 +806,30 @@ class SaveRunTest {
         pool.shutdown()
     }
 
+    /* A cancel that overtakes a folder's creation waits for its answer: a folder made after the clean-up looked is still removed. */
+    @Test
+    fun aCancelThatOvertakesAFoldersCreationWaitsForIt() {
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply {
+            loseAnswer = true
+            this.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
+        }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newFixedThreadPool(2)
+        val folder = pool.submit<Opened> { run.folder("Out", own) }
+        assertTrue(making.await(5, TimeUnit.SECONDS))
+        val cancel = pool.submit<SaveRunStopped> { run.cancel() }
+        Thread.sleep(50)
+        go.countDown()
+        assertEquals(SaveCleanup.DELETED, cancel.get(5, TimeUnit.SECONDS).cleanup)
+        runCatching { folder.get(5, TimeUnit.SECONDS) }
+        assertEquals(setOf("made-Out"), writer.purged)
+        assertTrue(rows.list().isEmpty())
+        pool.shutdown()
+    }
+
     /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */
     @Test
     fun anOfflineCleanUpOfAFileNeverCompletedSaysNothingRemains() {
@@ -1035,6 +1061,20 @@ class SaveResultTest {
         val settled = ArrayList<String>()
         Reservations.settleAll(context) { id, ws -> settled += id; vault.api.abortUpload(id, ws) }
         assertEquals(begun, settled)
+    }
+
+    /* The next free name comes from each row as served now: a child another device renamed is taken by its new name. */
+    @Test
+    fun theNextFreeNameSeesAChildRenamedElsewhere() {
+        val id = server.file(server.root, "report.pdf", "x".toByteArray())
+        val root = vault.listChildren(server.root)
+        assertTrue(root.any { it.name == "report.pdf" })
+        server.renameAs(id, "summary.pdf")
+        val folder = vault.nodes.row(server.workspace, server.root) ?: Opened(NodeView(server.root, server.workspace, null, "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null),
+            com.hushos.core.NodeMetadata("root", null, null, null, emptyMap()))
+        val names = VaultSaveWriter(vault) { throw IllegalStateException("not asked") }.names(folder)
+        assertTrue(names.toString(), "summary.pdf" in names)
+        assertFalse(names.toString(), "report.pdf" in names)
     }
 
     /* A new file's 409 that is not the completion's `conflicted` ("This upload was cancelled") is no key change. */

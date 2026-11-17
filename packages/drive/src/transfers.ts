@@ -253,8 +253,13 @@ export type TransferManagerOptions = {
      * the Drive client; the engine never lists folders itself. A queued entry has
      * no keys yet and only needs its parent (and the file it replaces) looked up.
      */
+    /*
+     * `fresh`: asked of the server now, never a listing another upload fetched moments ago
+     * (a version race is told from a key change by what the server holds now).
+     */
     openNodes?: (
         entry: JournalEntry | QueuedEntry,
+        options?: { fresh?: boolean },
     ) => Promise<{ parent: DriveNode; replaces?: DriveNode }>;
     /*
      * Why nothing may be written into `target` now, or null: asked again at
@@ -1076,8 +1081,10 @@ export function createTransferManager(options: TransferManagerOptions) {
         const lookup = options.openNodes;
         const row = u.entry ?? u.queued;
         if (!lookup || !row) return error;
-        const fresh = await lookup(row).catch(() => null);
-        if (!fresh?.replaces) return error;
+        const fresh = await lookup(row, { fresh: true }).catch(() => null);
+        // No answer: as it was. The file gone from its folder: stale with no version, as an attach finds it.
+        if (!fresh) return error;
+        if (!fresh.replaces) return new StaleVersionError(null);
         const current = fresh.replaces.currentVersion?.id ?? null;
         return current === expectedOf(u) ? error : new StaleVersionError(current);
     }
@@ -1162,7 +1169,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                 // The folder as it was when queued (or when the server last refused it) may be
                 // under an older key than it is now (the walk may have reached it since): looked
                 // up afresh, then asked again.
-                const fresh = await options.openNodes(u.queued);
+                // After a key-only refusal, from the server itself: a listing fetched moments ago
+                // would still carry the key the server just refused.
+                const fresh = await options.openNodes(u.queued, { fresh: keyOnlyLooked });
                 if (u.generation !== generation) return;
                 // Looked at again for its keys, a replaced file must still be at the version this
                 // upload set out to replace: one someone else made meanwhile is never overwritten.

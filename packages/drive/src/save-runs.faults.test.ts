@@ -47,20 +47,37 @@ type Point =
     | 'abort'
     | 'trash'
     | 'purge';
-type Fault = 'network' | 'lost' | 'refused' | 'full' | 'death';
+/*
+ * `crash`: the server (or the disk) acts, then the process dies before hearing. `outage`: the
+ * network goes for good while the process lives on (its clean-up meets it too). `cancel`,
+ * `signout`, `lock`: the person cancels, signs out (the journal goes with the account), or the
+ * device locks just as that wait is reached.
+ */
+type Fault =
+    | 'network'
+    | 'lost'
+    | 'refused'
+    | 'full'
+    | 'death'
+    | 'crash'
+    | 'outage'
+    | 'cancel'
+    | 'signout'
+    | 'lock';
 
+const PEOPLE: Fault[] = ['cancel', 'signout', 'lock'];
 const FAULTS: Record<Point, Fault[]> = {
-    listing: ['network', 'refused', 'death'],
-    folder: ['network', 'lost', 'refused', 'death'],
-    begin: ['network', 'lost', 'refused', 'death'],
-    part: ['network', 'death'],
-    complete: ['network', 'lost', 'refused', 'death'],
-    attach: ['network', 'lost', 'refused', 'death'],
-    'journal-put': ['refused', 'full', 'death'],
-    'journal-remove': ['refused', 'full', 'death'],
-    abort: ['network', 'lost', 'refused', 'death'],
-    trash: ['network', 'lost', 'refused', 'death'],
-    purge: ['network', 'lost', 'refused', 'death'],
+    listing: ['network', 'refused', 'death', 'outage', ...PEOPLE],
+    folder: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    begin: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    part: ['network', 'death', 'outage', ...PEOPLE],
+    complete: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    attach: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    'journal-put': ['refused', 'full', 'death', 'crash', ...PEOPLE],
+    'journal-remove': ['refused', 'full', 'death', 'crash', ...PEOPLE],
+    abort: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    trash: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
+    purge: ['network', 'lost', 'refused', 'death', 'crash', 'outage', ...PEOPLE],
 };
 
 type Plan = { point: Point; k: number; fault: Fault } | null;
@@ -207,22 +224,27 @@ function processOf(
     plan: Plan,
 ) {
     const counts = new Map<Point, number>();
-    const state = { dead: false, full: false };
+    const state = { dead: false, full: false, outage: false, signedOut: false };
+    let interrupt: (fault: Fault) => void = () => {};
     function faultAt(point: Point) {
         const k = (counts.get(point) ?? 0) + 1;
         counts.set(point, k);
         const fault = plan && plan.point === point && plan.k === k ? plan.fault : null;
         if (fault === 'death') state.dead = true;
         if (fault === 'full') state.full = true;
+        if (fault === 'outage') state.outage = true;
+        if (fault && PEOPLE.includes(fault)) interrupt(fault);
         return fault;
     }
     async function call<T>(point: Point, effect: () => T, refusal: () => T): Promise<T> {
         await Promise.resolve();
         const fault = faultAt(point);
-        if (state.dead || fault === 'network') throw new TypeError('Failed to fetch');
+        if (state.dead || state.outage || fault === 'network')
+            throw new TypeError('Failed to fetch');
         if (fault === 'refused') return refusal();
         const result = effect();
-        if (fault === 'lost') {
+        if (fault === 'lost' || fault === 'crash') {
+            if (fault === 'crash') state.dead = true;
             if (point === 'begin') srv.lostBegins.add(result as string);
             throw new TypeError('Failed to fetch');
         }
@@ -234,6 +256,7 @@ function processOf(
         if (state.dead || state.full || fault === 'refused')
             throw new DOMException('refused', 'QuotaExceededError');
         await apply();
+        if (fault === 'crash') state.dead = true;
     }
     const runs: RunJournal = {
         list: () => disk.list(),
@@ -270,7 +293,7 @@ function processOf(
         };
         try {
             await tick();
-            if (h.over) return;
+            if (h.over || state.signedOut) return;
             const version = Boolean(h.input.replaces);
             const nodeId = h.input.replaces?.id ?? `node-${id}`;
             const uploadId = await call(
@@ -387,38 +410,79 @@ function processOf(
                 () => new Map(ids.map((id) => [id, 'refused' as const])),
             ),
         mayPurge: async () => true,
-        current: () => !state.dead,
+        current: () => !state.dead && !state.signedOut,
         beatMs: 1e9,
     };
-    return { deps, counts, state };
+    return {
+        deps,
+        counts,
+        state,
+        onInterrupt(hook: (fault: Fault) => void) {
+            interrupt = hook;
+        },
+        /* The device locked: the worker and its keys go, and each upload still on its way hears so. */
+        lock() {
+            for (const h of held.values())
+                if (!h.over) {
+                    h.over = true;
+                    h.item.status = 'paused';
+                    emit({ type: 'locked', item: h.item });
+                }
+        },
+        /* A sign-out: the queue lets every upload go, and the journal goes with the account. */
+        signOut() {
+            state.signedOut = true;
+            for (const h of held.values()) h.over = true;
+            disk.rows.clear();
+        },
+    };
 }
 
 /* Representative runs: several new files, a folder tree, a new version, and a mix (an attach among them). */
-const SCENARIOS: Record<string, (run: SaveRun) => Promise<unknown>> = {
-    'several new files': (run) =>
-        Promise.all(
-            ['a', 'b', 'c'].map((name) => run.file({ name, bytes: bytes(), mime: null, ...own })),
+/* Each returns the new files and folders it was given, and how many new versions were saved. */
+type Made = { nodes: string[]; versions: number };
+const ids = (made: (NodeView | DriveNode | null)[]) => made.map((n) => n!.id);
+const SCENARIOS: Record<string, (run: SaveRun) => Promise<Made>> = {
+    'several new files': async (run) => ({
+        nodes: ids(
+            await Promise.all(
+                ['a', 'b', 'c'].map((name) =>
+                    run.file({ name, bytes: bytes(), mime: null, ...own }),
+                ),
+            ),
         ),
+        versions: 0,
+    }),
     'a folder tree': async (run) => {
         const out = await run.folder('Out', own);
         const inner = await run.folder('Inner', { into: out, ...own });
-        await run.file({ name: 'a', bytes: bytes(), mime: null, into: inner, ...own });
-        await run.file({ name: 'b', bytes: bytes(), mime: null, into: out, ...own });
+        const a = await run.file({ name: 'a', bytes: bytes(), mime: null, into: inner, ...own });
+        const b = await run.file({ name: 'b', bytes: bytes(), mime: null, into: out, ...own });
+        return { nodes: ids([out, inner, a, b]), versions: 0 };
     },
-    'a new version': (run) =>
-        run.version({ file: DOC, folder: F, startedFrom: 'v1', bytes: bytes(), ...own }),
+    'a new version': async (run) => {
+        const saved = await run.version({
+            file: DOC,
+            folder: F,
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        return { nodes: [], versions: saved.status === 'saved' ? 1 : 0 };
+    },
     'a mix': async (run) => {
         const out = await run.folder('Out', own);
-        await Promise.all([
+        const [saved, a, b] = await Promise.all([
             run.version({ file: DOC, folder: F, startedFrom: 'v1', bytes: bytes(), ...own }),
             run.file({ name: 'rekey-a', bytes: bytes(), mime: null, ...own }),
             run.file({ name: 'b', bytes: bytes(), mime: null, into: out, ...own }),
         ]);
+        return { nodes: ids([out, a, b]), versions: saved.status === 'saved' ? 1 : 0 };
     },
 };
 
 type Outcome =
-    | { kind: 'finished' }
+    | { kind: 'finished'; made: Made }
     | { kind: 'not-started' }
     | { kind: 'stopped'; stopped: RunStopped }
     | { kind: 'unrecorded' };
@@ -430,6 +494,14 @@ async function play(scenario: string, plan: Plan) {
     let outcome: Outcome;
     const escaped: unknown[] = [];
     let run: SaveRun | null = null;
+    app.onInterrupt((fault) => {
+        if (fault === 'cancel') void run?.cancel();
+        if (fault === 'lock') app.lock();
+        if (fault === 'signout') {
+            app.signOut();
+            abandonRuns();
+        }
+    });
     try {
         run = await startRun(app.deps, { targets: [F, DOC], results: [] });
     } catch {
@@ -437,9 +509,9 @@ async function play(scenario: string, plan: Plan) {
     }
     if (run) {
         try {
-            await SCENARIOS[scenario]!(run);
+            const made = await SCENARIOS[scenario]!(run);
             await run.finish();
-            outcome = { kind: 'finished' };
+            outcome = { kind: 'finished', made };
         } catch (error) {
             if (error instanceof RecordNotUpdated) outcome = { kind: 'unrecorded' };
             else if (error instanceof RunStopped) outcome = { kind: 'stopped', stopped: error };
@@ -466,27 +538,53 @@ async function violations(scenario: string, plan: Plan) {
     // A process that died said nothing, whatever its code went on to do: only its journal and
     // the server speak for it.
     const dead = app.state.dead;
+    const signedOut = app.state.signedOut;
     const message = outcome.kind === 'stopped' && !dead ? outcome.stopped.message : null;
-    const mayRemain = message?.includes('may still be there') ?? false;
+    // "You'll be asked about it next time" promises a row the next open removes it by; only
+    // "can no longer remove it", and a sign-out's "may still be there", excuse an unnamed node.
+    const excused =
+        (message?.includes('can no longer remove it') ?? false) ||
+        (signedOut && (message?.includes('may still be there') ?? false));
+    if (message && outcome.kind === 'stopped') {
+        const { keptVersions, uncertainVersions } = outcome.stopped;
+        // Never claiming more than is so.
+        if (message.includes('Nothing was saved') && (published.length || srv.versions()))
+            found.push(
+                `says nothing was saved: ${published.length} there, ${srv.versions()} versions`,
+            );
+        if (message.includes('Nothing else was saved') && published.length)
+            found.push(`says nothing else was saved: ${published.join(', ')} there`);
+        if (keptVersions > srv.versions())
+            found.push(`says ${keptVersions} versions kept, ${srv.versions()} exist`);
+        if (srv.versions() > keptVersions + uncertainVersions)
+            found.push(
+                `${srv.versions()} versions published, ${keptVersions + uncertainVersions} said`,
+            );
+    }
     // The next open is a new process: nothing of this one's runs is live there.
     abandonRuns();
-    if (outcome.kind === 'finished' && !dead) {
+    // Finished for good: its row retired before anything else happened (a death after that changes nothing).
+    if (outcome.kind === 'finished' && !rows.length) {
+        for (const id of outcome.made.nodes)
+            if (!published.includes(id)) found.push(`a saved result ${id} isn't there`);
+        if (srv.versions() < outcome.made.versions) found.push('a saved version is not there');
         const reopened = processOf(srv, disk, null);
         const offered = await interruptedRuns({
             runs: reopened.deps.runs,
             isLive: async () => false,
         });
         if (offered.length) found.push('a finished save is offered for deletion');
+    } else if (signedOut) {
+        // The journal went with the account: only what it said may remain may be there.
+        for (const id of published)
+            if (!excused && !dead) found.push(`${id} is there after a sign-out that didn't say so`);
     } else {
         // Named by a row itself, or inside a folder a row names (it goes with that folder).
         for (const id of published)
-            if (!srv.lineage(id).some((at) => named.has(at)) && !mayRemain)
-                found.push(`${id} is published, named by no row, and not said to remain`);
-        if (outcome.kind === 'stopped' && !dead) {
-            const said = outcome.stopped.keptVersions + outcome.stopped.uncertainVersions;
-            if (srv.versions() > said)
-                found.push(`${srv.versions()} versions published, ${said} said`);
-        }
+            if (!srv.lineage(id).some((at) => named.has(at)) && !excused)
+                found.push(
+                    `${id} is published, named by no row${message ? ` (said: ${message})` : ''}`,
+                );
         // The next open, from the journal alone, on a working network.
         const reopened = processOf(srv, disk, null);
         for (const row of await interruptedRuns({
@@ -496,7 +594,7 @@ async function violations(scenario: string, plan: Plan) {
             await cleanUpInterrupted(reopened.deps, row);
         await settle();
         for (const id of srv.published())
-            if (!mayRemain) found.push(`${id} is still there after the next open's clean-up`);
+            if (!excused) found.push(`${id} is still there after the next open's clean-up`);
         if ((await disk.list()).length) found.push('a row survived the next open’s clean-up');
     }
     // A reservation no row ever named (its begin's answer lost, or the process gone before its
@@ -505,7 +603,7 @@ async function violations(scenario: string, plan: Plan) {
     const known = srv
         .openReservations()
         .filter((id) => srv.recorded.has(id) && !srv.lostBegins.has(id));
-    if ((outcome.kind !== 'finished' || dead) && known.length)
+    if ((outcome.kind !== 'finished' || rows.length) && !signedOut && known.length)
         found.push(`reservations left open: ${known.join(', ')}`);
     return found;
 }

@@ -49,10 +49,10 @@ export function bindTransfersToQueries(client: QueryClient) {
  */
 const LOOK_SHARED_MS = 2_000;
 const looks = new Map<string, { at: number; listing: ReturnType<DriveClient['listFolder']> }>();
-function lookUp(workspaceId: string, folderId: string) {
+function lookUp(workspaceId: string, folderId: string, fresh = false) {
     const key = `${workspaceId}:${folderId}`;
     const held = looks.get(key);
-    if (held && Date.now() - held.at < LOOK_SHARED_MS) return held.listing;
+    if (!fresh && held && Date.now() - held.at < LOOK_SHARED_MS) return held.listing;
     // A family folder's upload is opened by that folder's client, which checks by its member list.
     const listing = clientFor(workspaceId).listFolder(folderId);
     looks.set(key, { at: Date.now(), listing });
@@ -64,9 +64,10 @@ function lookUp(workspaceId: string, folderId: string) {
     return listing;
 }
 
-async function openNodes(entry: JournalEntry | QueuedEntry) {
+async function openNodes(entry: JournalEntry | QueuedEntry, options: { fresh?: boolean } = {}) {
     const client = clientFor(entry.workspaceId);
-    const listing = await lookUp(entry.workspaceId, entry.parentId);
+    // `fresh`: the server's answer now (telling a version race from a key change), shared from then on.
+    const listing = await lookUp(entry.workspaceId, entry.parentId, options.fresh);
     if (!('uploadId' in entry)) {
         const replaces = entry.replacesId
             ? listing.children.find((child) => child.id === entry.replacesId)

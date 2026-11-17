@@ -33,6 +33,9 @@ object Resumable {
         else -> false
     }
 
+    /* How an upload's retry waits by default; a test that fails the network on purpose sets it to not wait. */
+    @Volatile internal var pause: (Long) -> Unit = Thread::sleep
+
     fun online(context: Context?): Boolean =
         context == null || context.getSystemService(ConnectivityManager::class.java)?.activeNetwork != null
 
@@ -42,7 +45,7 @@ object Resumable {
      */
     fun <T> run(
         online: () -> Boolean = { true },
-        sleep: (Long) -> Unit = Thread::sleep,
+        sleep: (Long) -> Unit = { pause(it) },
         onExpired: () -> Unit = {},
         step: () -> T,
     ): T {

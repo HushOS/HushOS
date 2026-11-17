@@ -348,6 +348,13 @@ final class FakeDrive: @unchecked Sendable {
     var rekeyAtComplete = false
     /* What aborts answer, in order, before the usual answer (a test's upload still finishing). */
     var abortReplies: [(Int, Any)] = []
+    /*
+     * A test's own answer before any route (a fault, or a route this fake doesn't serve), and its look after one: a throw
+     * there drops the answer (the server acted, the reply lost). Both run outside the fake's lock; `locked` takes it.
+     */
+    var intercept: ((_ method: String, _ parts: [String], _ body: [String: Any]) throws -> (Int, Any)?)?
+    var afterAnswer: ((_ method: String, _ parts: [String]) throws -> Void)?
+    func locked<T>(_ body: () throws -> T) rethrows -> T { try lock.withLock(body) }
     private let lock = NSLock()
     private var target: UInt64 = 0
     /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
@@ -563,6 +570,10 @@ final class FakeDrive: @unchecked Sendable {
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
             if !abortReplies.isEmpty { return abortReplies.removeFirst() }
+            // As packages/db abortUpload answers: a finished upload is never aborted, and says so.
+            if completed.contains(rest[1]) {
+                return (409, ["code": "conflict", "message": "This upload already finished.", "data": ["upload": "completed"]])
+            }
             if uploads[rest[1]] == nil { return (404, ["code": "not-found", "message": "This upload no longer exists."]) }
             aborted.append(rest[1])
             return (200, ["aborted": true])
@@ -617,6 +628,17 @@ final class FakeDrive: @unchecked Sendable {
     }
 
     func answer(_ request: URLRequest, body: Data?) throws -> (Int, Any) {
+        let method = request.httpMethod ?? "GET"
+        let path = (request.url?.path ?? "").split(separator: "/").map(String.init)
+        if let intercept, let reply = try intercept(method, path, (try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any]) ?? [:]) {
+            return reply
+        }
+        let reply = try routed(request, body: body)
+        try afterAnswer?(method, path)
+        return reply
+    }
+
+    private func routed(_ request: URLRequest, body: Data?) throws -> (Int, Any) {
         lock.lock()
         defer { lock.unlock() }
         let parts = (request.url?.path ?? "").split(separator: "/").map(String.init) // api, drive, nodes, <id>, …

@@ -491,12 +491,13 @@ let own = SaveSources.ownWriting
         await writer.set(making: { await gate.wait() })
         let making = Task { try await run.folder("Archive", sources: own) }
         try await Task.sleep(for: .milliseconds(50))
-        // The stop's clean-up fails for the file it made, and later for the late folder too.
+        // The stop's clean-up fails for the file it made and for the folder, whose creation it waits for.
         await writer.refuse("node-1")
         await writer.refuse("made-Archive")
-        let stopped = await run.cancel()
-        #expect(stopped.cleanup == .left)
+        let cancelling = Task { await run.cancel() }
+        try await Task.sleep(for: .milliseconds(50))
         await gate.open()
+        #expect(await cancelling.value.cleanup == .left)
         _ = try? await making.value
         #expect(rows.list().map(\.nodeIds) == [["node-1", "made-Archive"]])
     }
@@ -691,6 +692,25 @@ let own = SaveSources.ownWriting
         } catch let stopped as SaveRunStopped {
             #expect(stopped.message.hasPrefix(DriveAPIError.transport("The network connection was lost.").localizedDescription.trimmingCharacters(in: .whitespaces)))
         }
+    }
+
+    /* A cancel that overtakes a folder's creation waits for its answer: a folder made after the clean-up looked is still removed. */
+    @Test func aCancelThatOvertakesAFoldersCreationWaitsForIt() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        await writer.set(loseAnswer: true)
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let folder = Task { try await run.folder("Out", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let cancel = Task { await run.cancel() }
+        try await Task.sleep(for: .milliseconds(50))
+        await gate.open()
+        #expect(await cancel.value.cleanup == .deleted)
+        _ = try? await folder.value
+        #expect(await writer.purged == ["made-Out"])
+        #expect(rows.list().isEmpty)
     }
 
     /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */

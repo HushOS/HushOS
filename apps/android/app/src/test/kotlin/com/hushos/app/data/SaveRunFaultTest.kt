@@ -27,18 +27,31 @@ import java.util.concurrent.Executors
  */
 class SaveRunFaultTest {
     enum class Point(val faults: List<Fault>) {
-        LISTING(listOf(Fault.NETWORK, Fault.REFUSED, Fault.DEATH)),
-        FOLDER(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
-        BEGIN(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
-        PART(listOf(Fault.NETWORK, Fault.DEATH)),
-        COMPLETE(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
-        JOURNAL(listOf(Fault.REFUSED, Fault.FULL, Fault.DEATH)),
-        ABORT(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
-        TRASH(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
-        PURGE(listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH)),
+        LISTING(listOf(Fault.NETWORK, Fault.REFUSED, Fault.DEATH, Fault.OUTAGE) + PEOPLE),
+        FOLDER(SERVER),
+        BEGIN(SERVER),
+        PART(listOf(Fault.NETWORK, Fault.DEATH, Fault.OUTAGE) + PEOPLE),
+        COMPLETE(SERVER),
+        JOURNAL(listOf(Fault.REFUSED, Fault.FULL, Fault.DEATH, Fault.CRASH) + PEOPLE),
+        ABORT(SERVER),
+        TRASH(SERVER),
+        PURGE(SERVER),
     }
 
-    enum class Fault { NETWORK, LOST, REFUSED, FULL, DEATH }
+    /*
+     * CRASH: the drive (or the disk) acts, then the process dies before hearing. OUTAGE: the network goes for good while
+     * the process lives on. CANCEL, SIGNOUT, LOCK: the person cancels, signs out (the journal goes with the account), or the
+     * device locks (every later call refused) just as that wait is reached.
+     */
+    enum class Fault { NETWORK, LOST, REFUSED, FULL, DEATH, CRASH, OUTAGE, CANCEL, SIGNOUT, LOCK }
+
+    companion object {
+        val PEOPLE = listOf(Fault.CANCEL, Fault.SIGNOUT, Fault.LOCK)
+        val SERVER = listOf(Fault.NETWORK, Fault.LOST, Fault.REFUSED, Fault.DEATH, Fault.CRASH, Fault.OUTAGE) + PEOPLE
+    }
+
+    /* The device locked: the vault's keys are gone, and every later call is refused. */
+    class VaultLocked : Exception("This device locked.")
 
     data class Plan(val point: Point, val k: Int, val fault: Fault)
 
@@ -49,6 +62,15 @@ class SaveRunFaultTest {
         @Volatile var dead = false
             private set
         private var full = false
+        @Volatile var outage = false
+            private set
+        @Volatile var locked = false
+            private set
+        @Volatile var signedOut = false
+        @Volatile var interrupt: ((Fault) -> Unit)? = null
+        fun die() { dead = true }
+        /* After a fault is counted, outside the lock: the person's own act. */
+        fun act(fault: Fault?) { if (fault in PEOPLE) interrupt?.invoke(fault!!) }
 
         data class Node(var state: String, val parent: String)
         data class Upload(var status: String, val nodeId: String, val version: Boolean, val parent: String)
@@ -64,6 +86,8 @@ class SaveRunFaultTest {
             if (plan == null || plan.point != point || plan.k != k) return null
             if (plan.fault == Fault.DEATH) dead = true
             if (plan.fault == Fault.FULL) full = true
+            if (plan.fault == Fault.OUTAGE) outage = true
+            if (plan.fault == Fault.LOCK) locked = true
             plan.fault
         }
         val reached: Map<Point, Int> get() = synchronized(lock) { HashMap(counts) }
@@ -71,9 +95,12 @@ class SaveRunFaultTest {
         /* The journal's hook: a write the disk refuses, or one a dead process never makes. */
         fun journalWrite(rows: List<SaveRunRow>) {
             val fault = fault(Point.JOURNAL)
+            act(fault)
             synchronized(lock) {
                 if (dead || full || fault == Fault.REFUSED) throw java.io.IOException("No space left on device")
                 for (row in rows) recorded += row.uploadIds
+                // This write lands; the process is gone before it hears so.
+                if (fault == Fault.CRASH) dead = true
             }
         }
 
@@ -126,10 +153,13 @@ class SaveRunFaultTest {
     class FaultyDrive(private val world: World, private val healthy: Boolean) : SaveRunWriter {
         private fun <T> call(point: Point, effect: () -> T, refused: () -> T): T {
             val fault = if (healthy) null else world.fault(point)
-            if (!healthy && (world.dead || fault == Fault.NETWORK)) throw Unreachable()
+            if (!healthy) world.act(fault)
+            if (!healthy && (world.dead || world.outage || fault == Fault.NETWORK)) throw Unreachable()
+            if (!healthy && world.locked) throw VaultLocked()
             if (fault == Fault.REFUSED) return refused()
             val result = effect()
-            if (fault == Fault.LOST) {
+            if (fault == Fault.LOST || fault == Fault.CRASH) {
+                if (fault == Fault.CRASH) world.die()
                 if (point == Point.BEGIN) world.lostBegin(result as String)
                 throw Unreachable()
             }
@@ -182,32 +212,41 @@ class SaveRunFaultTest {
     private val doc = node("doc", "f", "v1")
     private val pool = Executors.newFixedThreadPool(4)
 
-    /* Results saved at once, as a tool hands them in from its own threads. */
-    private fun together(vararg work: () -> Unit) {
-        val futures = work.map { pool.submit(Callable { it() }) }
-        var first: Throwable? = null
-        for (future in futures) runCatching { future.get() }.onFailure { first = first ?: (it.cause ?: it) }
-        first?.let { throw it }
-    }
+    /*
+     * Results handed in one after another, on a thread of their own each but never two at once: the k-th begin is the
+     * same one every time, so a failure replays (concurrent results are SaveRunTest's).
+     */
+    private fun <T> together(vararg work: () -> T): List<T> = work.map { pool.submit(Callable { it() }).let { future ->
+        try { future.get() } catch (error: java.util.concurrent.ExecutionException) { throw error.cause ?: error }
+    } }
+
+    /* What a run was given: its new files and folders, and how many new versions were saved. */
+    data class Made(val nodes: List<String> = emptyList(), val versions: Int = 0)
+    private fun saved(result: VersionSaved) = if (result is VersionSaved.Saved) 1 else 0
 
     /* Representative runs: several new files, a folder tree, a new version, and a mix. */
-    private val scenarios: List<Pair<String, (SaveRun) -> Unit>> = listOf(
-        "several new files" to { run -> together({ run.file(byteArrayOf(1), "a", null, own) }, { run.file(byteArrayOf(1), "b", null, own) }, { run.file(byteArrayOf(1), "c", null, own) }) },
+    private val scenarios: List<Pair<String, (SaveRun) -> Made>> = listOf(
+        "several new files" to { run ->
+            Made(together({ run.file(byteArrayOf(1), "a", null, own) }, { run.file(byteArrayOf(1), "b", null, own) }, { run.file(byteArrayOf(1), "c", null, own) }).map { it.id })
+        },
         "a folder tree" to { run ->
             val out = run.folder("Out", own)
             val inner = run.folder("Inner", own, out)
-            run.file(byteArrayOf(1), "a", null, own, folder = inner)
-            run.file(byteArrayOf(1), "b", null, own, folder = out)
+            val a = run.file(byteArrayOf(1), "a", null, own, folder = inner)
+            val b = run.file(byteArrayOf(1), "b", null, own, folder = out)
+            Made(listOf(out.id, inner.id, a.id, b.id))
         },
-        "a new version" to { run -> run.version(byteArrayOf(1), doc, f, "v1", own) },
+        "a new version" to { run -> Made(versions = saved(run.version(byteArrayOf(1), doc, f, "v1", own))) },
         "a mix" to { run ->
             val out = run.folder("Out", own)
-            together({ run.version(byteArrayOf(1), doc, f, "v1", own) }, { run.file(byteArrayOf(1), "a", null, own) }, { run.file(byteArrayOf(1), "b", null, own, folder = out) })
+            val version = together({ saved(run.version(byteArrayOf(1), doc, f, "v1", own)) }).single()
+            val files = together({ run.file(byteArrayOf(1), "a", null, own) }, { run.file(byteArrayOf(1), "b", null, own, folder = out) })
+            Made(listOf(out.id) + files.map { it.id }, version)
         },
     )
 
     sealed class Outcome {
-        object Finished : Outcome()
+        class Finished(val made: Made) : Outcome()
         object NotStarted : Outcome()
         object Unrecorded : Outcome()
         class Stopped(val stopped: SaveRunStopped) : Outcome()
@@ -215,22 +254,31 @@ class SaveRunFaultTest {
 
     class Played(val world: World, val file: java.io.File, val session: SaveRunJournal.Epoch, val outcome: Outcome, val escaped: List<String>)
 
-    private fun play(scenario: (SaveRun) -> Unit, plan: Plan?): Played {
+    private fun play(scenario: (SaveRun) -> Made, plan: Plan?): Played {
         val world = World(plan)
         val file = Files.createTempDirectory("save-faults").resolve(SaveRunJournal.FILE).toFile()
         val session = SaveRunJournal.Epoch()
         val rows = SaveRunJournal(file, session).apply { fault = { written -> world.journalWrite(written) } }
         val drive = FaultyDrive(world, healthy = false)
         val escaped = ArrayList<String>()
+        var started: SaveRun? = null
+        world.interrupt = { fault ->
+            when (fault) {
+                Fault.CANCEL -> started?.let { run -> pool.submit { run.cancel() } }
+                // As AccountStore.wipe does, on this journal's own session: runs abandoned, the journal gone.
+                Fault.SIGNOUT -> { world.signedOut = true; SaveRuns.abandonAll(session); session.end(); file.delete() }
+                else -> Unit
+            }
+        }
         val run = try {
-            SaveRun.start(drive, listOf(f, doc), emptyList(), rows, pause = {})
+            SaveRun.start(drive, listOf(f, doc), emptyList(), rows, pause = {}).also { started = it }
         } catch (_: Exception) {
             return Played(world, file, session, Outcome.NotStarted, escaped)
         }
         val outcome = try {
-            scenario(run)
+            val made = scenario(run)
             run.finish()
-            Outcome.Finished
+            Outcome.Finished(made)
         } catch (stopped: SaveRunStopped) {
             Outcome.Stopped(stopped)
         } catch (_: SaveRecordNotUpdated) {
@@ -244,7 +292,7 @@ class SaveRunFaultTest {
     }
 
     /* The invariant, as violations (empty when it holds). */
-    private fun violations(scenario: (SaveRun) -> Unit, plan: Plan?): List<String> {
+    private fun violations(scenario: (SaveRun) -> Made, plan: Plan?): List<String> {
         val played = play(scenario, plan)
         val world = played.world
         val found = played.escaped.map { "a failure escaped the run's stop: $it" }.toMutableList()
@@ -253,20 +301,34 @@ class SaveRunFaultTest {
         val rows = disk.list()
         val named = rows.flatMap { it.nodeIds }.toSet()
         val dead = world.dead
+        val signedOut = world.signedOut
         val outcome = played.outcome
-        val mayRemain = outcome is Outcome.Stopped && !dead && outcome.stopped.message?.contains("may still be there") == true
-        if (outcome is Outcome.Stopped && !dead) {
-            val said = outcome.stopped.keptVersions + outcome.stopped.uncertainVersions
+        val message = if (outcome is Outcome.Stopped && !dead) outcome.stopped.message.orEmpty() else null
+        // "You'll be asked about it next time" promises a row; only "can no longer remove it", and a sign-out's "may still be
+        // there", excuse an unnamed node.
+        val excused = message != null && ("can no longer remove it" in message || (signedOut && "may still be there" in message))
+        if (outcome is Outcome.Stopped && message != null) {
+            val stopped = outcome.stopped
+            val said = stopped.keptVersions + stopped.uncertainVersions
             if (world.versions > said) found += "${world.versions} versions published, $said said"
+            // Never claiming more than is so.
+            if ("Nothing was saved" in message && (world.published.isNotEmpty() || world.versions > 0))
+                found += "says nothing was saved: ${world.published.size} there, ${world.versions} versions"
+            if ("Nothing else was saved" in message && world.published.isNotEmpty()) found += "says nothing else was saved: ${world.published} there"
+            if (stopped.keptVersions > world.versions) found += "says ${stopped.keptVersions} versions kept, ${world.versions} exist"
         }
         val offered = rows.filter { !it.done }
-        if (outcome is Outcome.Finished && !dead) {
-            if (offered.isNotEmpty()) found += "a finished save is offered for deletion"
+        if (outcome is Outcome.Finished && offered.isEmpty()) {
+            for (id in outcome.made.nodes) if (id !in world.published) found += "a saved result $id isn't there"
+            if (world.versions < outcome.made.versions) found += "a saved version isn't there"
+        } else if (signedOut) {
+            // The journal went with the account: only what it said may remain may be there.
+            if (!dead && !excused) for (id in world.published) found += "$id is there after a sign-out that didn't say so"
         } else {
-            for (id in world.published) if (world.lineage(id).none { it in named } && !mayRemain) found += "$id is published, named by no row, and not said to remain"
+            for (id in world.published) if (world.lineage(id).none { it in named } && !excused) found += "$id is published, named by no row"
             val healthy = FaultyDrive(world, healthy = true)
             for (row in offered) SaveRuns.cleanUp(row, healthy, disk)
-            if (!mayRemain) for (id in world.published) found += "$id is still there after the next launch's clean-up"
+            if (!excused) for (id in world.published) found += "$id is still there after the next launch's clean-up"
             if (disk.list().any { !it.done }) found += "a row survived the next launch's clean-up"
             // A reservation no row ever named is the server's expiry's: nothing is completed before its row is on disk.
             val known = world.openReservations.filter { it in world.recorded && it !in world.lostBegins }

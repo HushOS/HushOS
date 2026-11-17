@@ -1331,6 +1331,32 @@ describe('a save run', () => {
         expect(w.runs.rows.size).toBe(0);
     });
 
+    test('a cancel that overtakes a folder’s creation waits for its answer, so a folder made after the clean-up looked is never left untracked', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The server creates it once the cancel's clean-up would already have looked, and the answer is lost.
+            await new Promise<void>((resolve) => {
+                create = resolve;
+            });
+            w.server.live.add('slow');
+            throw new TypeError('Failed to fetch');
+        };
+        const making = run.folder('Out', own).catch((error: unknown) => error);
+        await tick();
+        await tick();
+        const cancelled = run.cancel();
+        await tick();
+        create();
+        const stopped = await cancelled;
+        await making;
+        expect(stopped.cleanup).toBe('deleted');
+        expect(w.server.purged.has('slow')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
     test('two late folders that both can’t be removed are both named by the row', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });

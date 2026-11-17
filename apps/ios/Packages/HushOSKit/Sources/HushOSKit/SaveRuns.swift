@@ -35,6 +35,16 @@ public struct SaveRekeyed: Error, Equatable {
     public init() {}
 }
 
+/* Whether a folder's creation was sent, set from its minted closure. */
+final class SentFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+    var value: Bool {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
+}
+
 /* The ids begin made, handed from the upload's closure to the run. */
 final class BegunBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -210,7 +220,8 @@ public final class SaveRunJournal: @unchecked Sendable {
         let handle = try FileHandle(forWritingTo: next)
         do {
             try handle.write(contentsOf: try JSONEncoder().encode(rows))
-            try handle.synchronize()
+            // To stable storage: fsync alone leaves it in the drive's cache on Apple platforms (F_FULLFSYNC).
+            if fcntl(handle.fileDescriptor, F_FULLFSYNC) == -1 { try handle.synchronize() }
             try handle.close()
         } catch {
             try? handle.close()
@@ -223,7 +234,7 @@ public final class SaveRunJournal: @unchecked Sendable {
     private static func flush(folder: URL) {
         let descriptor = open(folder.path, O_RDONLY)
         guard descriptor >= 0 else { return }
-        fsync(descriptor)
+        if fcntl(descriptor, F_FULLFSYNC) == -1 { fsync(descriptor) }
         close(descriptor)
     }
 }
@@ -548,6 +559,13 @@ final class RunState: @unchecked Sendable {
         }
     }
 
+    /* Folder creations sent and not yet answered: a stop's clean-up waits for them. */
+    private var creatingHere = 0
+    func creating(_ sent: Bool) { lock.withLock { creatingHere += sent ? 1 : -1 } }
+    func creationsSettled() async {
+        while lock.withLock({ creatingHere }) > 0 { try? await Task.sleep(for: .milliseconds(5)) }
+    }
+
     /* A completion is about to be sent; once the run stopped it is not sent (the vault aborts the upload). */
     func completing(_ uploadId: String) throws {
         try lock.withLock {
@@ -795,9 +813,18 @@ public actor SaveRun {
         while true {
             do {
                 // Its id on disk before its creation is sent, or the creation is not sent.
-                made = try await writer.makeFolder(in: parentNow, name: given, signing: signing) { id in
-                    if recordIt { try state.recordFolder(id) } else if !state.journal.live { throw CancellationError() } else { try state.sending(id) }
+                let sent = SentFlag()
+                do {
+                    made = try await writer.makeFolder(in: parentNow, name: given, signing: signing) { id in
+                        if recordIt { try state.recordFolder(id) } else if !state.journal.live { throw CancellationError() } else { try state.sending(id) }
+                        state.creating(true)
+                        sent.value = true
+                    }
+                } catch {
+                    if sent.value { state.creating(false) }
+                    throw error
                 }
+                if sent.value { state.creating(false) }
                 break
             } catch where KeyChangeWait.meets(error, waited: since != nil) {
                 if let stopping { throw await stopping.value }
@@ -969,6 +996,9 @@ public actor SaveRun {
         // answers finished, and it is counted there), never dropped from the row after `keptBefore` was taken.
         let row = state.seal()
         let task = Task<SaveRunStopped, Never> {
+            // Folder creations already sent settle first (a lost answer included): one the server creates after the
+            // clean-up looked would otherwise be left with its row gone.
+            await state.creationsSettled()
             let (cleanup, kept, uncertain, remains) = await SaveRuns.clean(row, writer: writer, journal: state.journal, versions: state.versionUploads,
                                                                            completing: state.completingUploads, published: state.published)
             let total = keptBefore + kept

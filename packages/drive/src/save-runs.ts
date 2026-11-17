@@ -563,6 +563,12 @@ function createRun(
      */
     let late: RunRow | null = null;
     let lateWriting = Promise.resolve();
+    /*
+     * Folder creations sent and not yet answered: a stop waits for each to settle before its
+     * clean-up asks the server, so a folder the server creates after the clean-up looked (and
+     * found nothing) is never left behind with its row gone.
+     */
+    const creating = new Set<Promise<unknown>>();
     /* Folders this run made: what is inside one goes with it and needs no row of its own. */
     const madeFolders = new Set<string>();
     /*
@@ -825,6 +831,8 @@ function createRun(
         // cancels the clean-up sends are heard here without stopping it twice.
         stopping = (async () => {
             await Promise.resolve();
+            // Settled one way or the other before the clean-up looks (a lost answer included).
+            await Promise.allSettled(creating);
             const open = [...pending.keys()];
             const result = await cleanUp(deps, row, open, {
                 seal: () => {
@@ -898,7 +906,10 @@ function createRun(
             try {
                 const given = claim(await namesTaken(into), name);
                 await open();
-                made = await deps.makeFolder(into, given, signAs, async (id) => {
+                // Waited for by a stop only once its creation is sent: a folder still waiting out a
+                // key change (untilWritable) never holds a cancel up.
+                let sent: Promise<unknown> | null = null;
+                const making = deps.makeFolder(into, given, signAs, async (id) => {
                     // Its id on disk before its creation is sent, or the creation is not sent.
                     if (stopping || !current()) throw new Error('This save run is stopping.');
                     if (recordIt) {
@@ -906,9 +917,17 @@ function createRun(
                         void persist();
                         await recorded();
                     }
+                    await Promise.resolve();
                     if (stopping) throw new Error('This save run is stopping.');
                     mayBePublished.add(id);
+                    if (sent) creating.add(sent);
                 });
+                sent = making.catch(() => {});
+                try {
+                    made = await making;
+                } finally {
+                    creating.delete(sent);
+                }
             } catch (error) {
                 return failed(error);
             }

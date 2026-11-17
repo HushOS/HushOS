@@ -452,6 +452,8 @@ class SaveRun private constructor(
     private val versionUploads = HashSet<String>()
     /* Uploads whose completion was sent: only these can land after a stop that got no answer. */
     private val completing = HashSet<String>()
+    /* Folder creations sent and not yet answered: a stop's clean-up waits for them. */
+    private val creating = AtomicInteger()
     /* Nodes whose publication was sent (a folder's creation, a file's completion) or that landed. */
     private val published = HashSet<String>()
     /* New files' nodes, by their upload: what a completion publishes. */
@@ -546,6 +548,8 @@ class SaveRun private constructor(
         row = row.copy(uploadIds = if (ids.uploadId in row.uploadIds) row.uploadIds else row.uploadIds + ids.uploadId,
             nodeIds = if (tracked && ids.nodeId !in row.nodeIds) row.nodeIds + ids.nodeId else row.nodeIds)
         journal.put(row)
+        // Stopped or signed out while it was written: nothing is sent, the vault aborts it.
+        if (sealed) throw IllegalStateException("This save run is stopping.")
     }
 
     /* An upload is over: its id leaves the row; a new file that landed under another node is kept by that one. */
@@ -611,6 +615,8 @@ class SaveRun private constructor(
         if (sealed) throw IllegalStateException("This save run is stopping.")
         row = row.copy(nodeIds = row.nodeIds + id)
         journal.put(row)
+        // Stopped or signed out while it was written: the creation is not sent.
+        if (sealed) throw IllegalStateException("This save run is stopping.")
         published += id
     }
 
@@ -641,8 +647,15 @@ class SaveRun private constructor(
         while (madeHere == null) {
             try {
                 // Its id on disk before its creation is sent, or the creation is not sent.
-                madeHere = writer.makeFolder(parentNow, given, copy) { id ->
-                    if (recordIt) recordFolder(id) else if (!journal.live) throw IllegalStateException("Signed out.") else sending(id)
+                var sent = false
+                try {
+                    madeHere = writer.makeFolder(parentNow, given, copy) { id ->
+                        if (recordIt) recordFolder(id) else if (!journal.live) throw IllegalStateException("Signed out.") else sending(id)
+                        creating.incrementAndGet()
+                        sent = true
+                    }
+                } finally {
+                    if (sent) creating.decrementAndGet()
                 }
             } catch (error: Exception) {
                 if (!FamilyUploads.waits(error, since != null)) throw error
@@ -811,12 +824,18 @@ class SaveRun private constructor(
     private fun stop(reason: SaveRunStopped.Reason, failure: String? = null): SaveRunStopped {
         val (future, owner) = synchronized(lock) {
             stopping?.let { return@synchronized it to false }
+            // Finished in the meantime (a cancel that checked just before finish took the lock): it was saved, and stays.
+            if (finished) return SaveRunStopped(SaveRunStopped.Reason.CANCELLED,
+                if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions)
             val made = CompletableFuture<SaveRunStopped>()
             stopping = made
             sealed = true
             made to true
         }
         if (!owner) return future.get()
+        // Folder creations already sent settle first (a lost answer included): one the server creates after the clean-up
+        // looked would otherwise be left with its row gone.
+        while (creating.get() > 0) Thread.sleep(5)
         val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
         val (sent, out) = synchronized(lock) { completing.toSet() to published.toSet() }
         val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out)
@@ -906,7 +925,8 @@ class VaultSaveWriter(private val vault: Vault, private val storage: () -> Stora
         var after: String? = null
         do {
             val page = vault.api.children(folder.id, folder.node.workspaceId, after)
-            for (child in page.children) runCatching { vault.open(child) }.getOrNull()?.let { add(it.name) }
+            // Each row as served now, never a copy this process opened before (another device may have renamed it).
+            for (child in page.children) runCatching { openServed(child) }.getOrNull()?.let { add(it.name) }
             after = page.nextCursor
         } while (after != null)
     }
