@@ -1,0 +1,49 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_c7c27c6913d090 77-81,83,185-186,188
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveScreen.kt
+  s_c60e24772e04af::t_d503c19c4a0c1b 354,408,421-424
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveSessionsTest.kt
+  s_c60e24772e04af::t_d000fbb6618303 127-163
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_b04b674b59a4ec 301-302,305,350,355,511-513,515
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_70a23852f62933 763-791
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_d989e0ab9f9bea 246-298,343-349
+apps/web/src/components/drive/archive-view.tsx
+  s_c60e24772e04af::t_44315013534be9 202-206,208,217-218,220,590,619-624
+apps/web/src/lib/archives/differential.ts
+  s_c60e24772e04af::t_60d2f59f692cd1 15,146-147,151-156
+apps/web/src/lib/archives/fixtures.test.ts
+  s_c60e24772e04af::t_a339070ad527aa 117-118
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_ba4a1f4c86001a 7,33,282-298,358-421
+apps/web/src/lib/archives/zip-archive.ts
+  s_c60e24772e04af::t_f2645a457bd445 224-228,238-242,288,416,434-436,438-443,447,456-457,460,495-508,512-513,524-526,529-530,543,553-554,570
+crates/hushos-core/fuzz/src/targets.rs
+  s_c60e24772e04af::t_c8b7d1830fb576 2230-2231,2320-2321,2325-2329
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_31f55ce338a0ce 51-55,1548-1550,1556,1830-1832,1836-1837,1844,1847,1858,1869-1872,1906-1908,1920-1923,1926-1927,2034-2054,2149,2177
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_dc6cd7ce55de6f 464-484,941-994
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_416120b5531700 2,630-637,1096-1147
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_ce6f926b4cb1f5 1253-1284,1613-1614
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b7cd37bb8740999bb154c56d405b2dcd3fb725d0",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

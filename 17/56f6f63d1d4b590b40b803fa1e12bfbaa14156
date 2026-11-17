@@ -1,0 +1,33 @@
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_199c5475dd9551 344-345,351-352,411-495
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_8603f34e48e19e 64-66,68-70,182-189,195-196,310-311,348,359,402,408,531-532,559-562,569,576,582,591
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_8bc70c197c325f 3-5,36,210-213,352-377
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_c7b69228569b13 172-186,217-218,221-222
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_7fc65c94ea765b 282-292,295,339-341,348-353
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_43a9ec98be8bbc 212-215,340-342,359-362
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_986cd449b0a460 2,941-947
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_596d3d41042a89 763-773,1633
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1756f6f63d1d4b590b40b803fa1e12bfbaa14156",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
