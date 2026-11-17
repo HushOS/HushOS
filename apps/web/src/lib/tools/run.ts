@@ -2,6 +2,7 @@ import { PREVIEW_LIMITS } from '@/lib/preview-limits';
 import { trackToolRun } from './active';
 import { toolBudget, type PlaintextBudget } from './budget';
 import {
+    DONE_RESULT_MAX_BYTES,
     RESULT_MAX_BYTES,
     TOOL_FAILED,
     TOOL_WATCHDOG_MS,
@@ -126,6 +127,35 @@ function advance() {
     }
 }
 
+/*
+ * Whether a run's result is a plain summary: null, booleans, numbers, strings, arrays and plain
+ * objects, nested at most 32 deep, at most DONE_RESULT_MAX_BYTES as JSON. A worker taken over
+ * could otherwise hand back plaintext as the result, past the per-result limit and the budget,
+ * and the page would keep it after a lock or sign-out.
+ */
+function isSummary(value: unknown) {
+    const plain = (item: unknown, depth: number): boolean => {
+        if (depth > 32) return false;
+        if (item === null || item === undefined) return true;
+        const kind = typeof item;
+        if (kind === 'boolean' || kind === 'number' || kind === 'string') return true;
+        if (kind !== 'object') return false;
+        if (Array.isArray(item)) return item.every((entry) => plain(entry, depth + 1));
+        const prototype = Object.getPrototypeOf(item);
+        if (prototype !== Object.prototype && prototype !== null) return false;
+        return Object.values(item as object).every((entry) => plain(entry, depth + 1));
+    };
+    if (!plain(value, 0)) return false;
+    try {
+        return (
+            new TextEncoder().encode(JSON.stringify(value) ?? '').byteLength <=
+            DONE_RESULT_MAX_BYTES
+        );
+    } catch {
+        return false;
+    }
+}
+
 /* Detaches a buffer, freeing its bytes wherever a reference to it is kept. */
 function drop(buffer: ArrayBuffer) {
     try {
@@ -221,6 +251,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     function begin() {
         if (ended) return;
         set({ status: 'running', done: 0, total: null });
+        // A listener told it is running may have cancelled it (or every run): nothing is started.
+        if (ended) return;
         const watchdog = createWatchdog(options.watchdogMs ?? TOOL_WATCHDOG_MS, failed);
         let worker: Worker;
         try {
@@ -329,6 +361,11 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                     take(msg);
                     return;
                 case 'done':
+                    // A summary only: bytes come as outputs, counted and dropped on a lock.
+                    if (!isSummary(msg.result)) {
+                        failed();
+                        return;
+                    }
                     finish({ ok: true, value: msg.result as R });
                     return;
                 case 'fail': {

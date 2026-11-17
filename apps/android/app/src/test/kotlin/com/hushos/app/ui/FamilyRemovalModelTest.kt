@@ -1,5 +1,7 @@
 package com.hushos.app.ui
 
+import com.hushos.app.UnconfinedScopes
+import org.junit.After
 import com.hushos.app.data.FamilyMemberRef
 import com.hushos.app.data.Opened
 import com.hushos.app.data.Vault
@@ -23,11 +25,15 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FamilyRemovalModelTest {
+    /* Every unconfined scope this test made ends with it (UnconfinedScopes). */
+    @After
+    fun cancelUnconfinedScopes() = UnconfinedScopes.cancelAll()
+
     private class Host : FamilyHost {
         override val currentVault: Vault? = null
         override val cacheDir: File = RuntimeEnvironment.getApplication().cacheDir
         override val state = MutableStateFlow(DriveState())
-        override val familyScope = CoroutineScope(Dispatchers.Unconfined)
+        override val familyScope = UnconfinedScopes.create()
         override fun item(id: String): Opened? = null
         override fun updateState(change: (DriveState) -> DriveState) = state.update(change)
         override fun lostSession() {}

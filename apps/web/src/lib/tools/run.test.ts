@@ -370,6 +370,29 @@ describe('ending a run', () => {
         expect(waiting.made).toBe(0);
     });
 
+    test('a result is a plain summary; bytes in it fail the run', async () => {
+        const fine = run();
+        fine.worker.send({ type: 'done', result: { files: 3, names: ['a.txt'], skipped: null } });
+        await expect(fine.handle.result).resolves.toEqual({
+            files: 3,
+            names: ['a.txt'],
+            skipped: null,
+        });
+        // A worker taken over hands plaintext back as the result instead of as an output.
+        for (const result of [
+            new ArrayBuffer(16),
+            { data: new Uint8Array(16) },
+            [new Blob(['secret'])],
+            new Map([['a', 1]]),
+            'x'.repeat(65 * 1024),
+        ]) {
+            const bad = run();
+            bad.worker.send({ type: 'done', result });
+            await expect(bad.handle.result).rejects.toThrow(TOOL_FAILED);
+            expect(bad.worker.terminated).toBe(true);
+        }
+    });
+
     test('a refusal is shown in the page’s words, never the worker’s', async () => {
         const refusals = { password: 'This PDF has a password.' };
         const known = run({ refusals });
@@ -494,6 +517,19 @@ describe('one run at a time', () => {
         first.handle.cancel();
         expect(second.handle.getState().status).toBe('running');
         expect(third.handle.getState()).toEqual({ status: 'waiting', behind: 'B' });
+    });
+
+    test('a run cancelled by a listener as it is let in starts no worker', async () => {
+        const first = run({}, 'First');
+        const second = run({}, 'Second');
+        second.handle.subscribe((state) => {
+            if (state.status === 'running') cancelAllToolRuns();
+        });
+        first.worker.send({ type: 'done', result: null });
+        await first.handle.result;
+        await expect(second.handle.result).rejects.toBeInstanceOf(ToolCancelled);
+        expect(second.made).toBe(0);
+        expect(second.handle.getState()).toEqual({ status: 'cancelled' });
     });
 
     test('a run that ends settles first, whatever the next does when it starts', async () => {

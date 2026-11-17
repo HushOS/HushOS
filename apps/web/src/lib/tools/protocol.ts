@@ -25,6 +25,11 @@ export const RANGE_READ_MAX = 64 * 1024 * 1024;
 export const READS_IN_FLIGHT = 2;
 /* The largest result a worker may hand back: what can be held as one in-memory upload (section 3). */
 export const RESULT_MAX_BYTES = 256 * 1024 * 1024;
+/*
+ * What a run's `done` may carry: a summary (counts, names, flags), plain data only and at most
+ * this much as JSON. Bytes travel as outputs, under the budget, never as the result.
+ */
+export const DONE_RESULT_MAX_BYTES = 64 * 1024;
 
 /* From the page, on the worker itself. */
 export type ToWorker =
@@ -45,6 +50,7 @@ export type ToPage =
     | { type: 'progress'; done: number; total: number | null }
     /* Ids count from 0, one at a time: the next only once the page accepted this one. */
     | { type: 'output'; id: number; name: string; mime: string | null; bytes: ArrayBuffer }
+    /* A plain summary, DONE_RESULT_MAX_BYTES at most as JSON: no ArrayBuffer, typed array, Blob or class instance. */
     | { type: 'done'; result: unknown }
     /* `code` names a refusal the tool understood; the page turns it into words, or TOOL_FAILED. Never text for the person. */
     | { type: 'fail'; code: string | null };

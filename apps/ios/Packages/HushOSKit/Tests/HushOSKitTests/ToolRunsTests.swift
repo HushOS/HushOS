@@ -129,14 +129,17 @@ import Testing
     @Test func aTaskCancelledBeforeItAsksNeverStarts() async throws {
         let runs = ToolRuns()
         let log = Log()
+        let states = Log()
         let task = Task {
             // Busy with something that doesn't look, until cancelled; then it asks for a run.
             while !Task.isCancelled { await Task.yield() }
-            return try await runs.run("Too late") { _ in log.add("ran"); return 0 }
+            return try await runs.run("Too late", state: { states.add("\($0)") }) { _ in log.add("ran"); return 0 }
         }
         task.cancel()
         await #expect(throws: ToolCancelled.self) { try await task.value }
         #expect(log.items.isEmpty)
+        // Never said to be running: only cancelled.
+        #expect(states.items == ["\(ToolRunState.cancelled)"])
         try await eventually { await runs.running == nil }
         #expect(try await runs.run("Next") { _ in 3 } == 3)
     }

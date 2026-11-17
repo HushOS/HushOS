@@ -284,6 +284,8 @@ pub struct ToolBudget {
 #[derive(Debug, Default)]
 struct Waiting {
     bytes: u64,
+    /* Moves on at each clear: a release from before it is from another account, and takes nothing. */
+    generation: u64,
     /* Producers waiting for room now: what a test waits on instead of sleeping. */
     producers: u32,
 }
@@ -306,8 +308,9 @@ impl ToolBudget {
     /// The wait stops the watchdog's clock (a paused upload is no hang) and
     /// ends, failing, when the run does. Counts as progress. It fails only
     /// before counting: once it answers Ok the bytes are counted, and the
-    /// caller hands the result on so whoever takes it releases them.
-    pub fn produce(&self, bytes: u64, control: Arc<RunControl>) -> CoreResult<()> {
+    /// caller hands the result on so whoever takes it releases them. What it
+    /// returns is the budget's generation, which that release passes back.
+    pub fn produce(&self, bytes: u64, control: Arc<RunControl>) -> CoreResult<u64> {
         control.check()?;
         let mut waiting = lock(&self.waiting);
         if waiting.bytes >= self.limit {
@@ -325,21 +328,28 @@ impl ToolBudget {
         // The last chance to fail, and nothing is counted yet.
         control.progress()?;
         waiting.bytes = waiting.bytes.saturating_add(bytes);
-        Ok(())
+        Ok(waiting.generation)
     }
 
-    /// A result of `bytes` was uploaded or dropped: its room goes back.
-    pub fn release(&self, bytes: u64) {
+    /// A result of `bytes`, produced in `generation`, was uploaded or dropped:
+    /// its room goes back. One produced before the last [`clear`](Self::clear)
+    /// belonged to another account and takes nothing from this one's count.
+    pub fn release(&self, bytes: u64, generation: u64) {
         let mut waiting = lock(&self.waiting);
+        if generation != waiting.generation {
+            return;
+        }
         waiting.bytes = waiting.bytes.saturating_sub(bytes);
         self.room.notify_all();
     }
 
     /// Sign-out: every result is gone with the account, uploaded or not, so
-    /// nothing is counted any more. A release that arrives later takes nothing.
+    /// nothing is counted any more, and a release of one of them that arrives
+    /// later, after the next account produced, takes nothing from it.
     pub fn clear(&self) {
         let mut waiting = lock(&self.waiting);
         waiting.bytes = 0;
+        waiting.generation = waiting.generation.wrapping_add(1);
         self.room.notify_all();
     }
 
@@ -988,11 +998,11 @@ mod tests {
         };
         until_waiting(&budget, 1);
         assert!(!producer.is_finished(), "a full budget holds the next result back");
-        budget.release(10);
+        budget.release(10, 0);
         assert_eq!(budget.waiting(), 110);
         assert!(!producer.is_finished(), "110 is still over 100");
         assert_eq!(budget.producers(), 1);
-        budget.release(60);
+        budget.release(60, 0);
         producer.join().unwrap().unwrap();
         assert_eq!(budget.waiting(), 60);
     }
@@ -1010,7 +1020,7 @@ mod tests {
         };
         until_waiting(&budget, 1);
         assert!(!producer.is_finished());
-        budget.release(150);
+        budget.release(150, 0);
         producer.join().unwrap().unwrap();
         assert_eq!(budget.waiting(), 1);
     }
@@ -1043,9 +1053,17 @@ mod tests {
         // The 40 belonged to a run whose result the save path never released: sign-out clears it.
         budget.clear();
         assert_eq!(budget.waiting(), 0);
-        budget.release(40);
-        assert_eq!(budget.waiting(), 0, "a release after the clear takes nothing");
-        assert!(budget.produce(100, RunControl::new(60_000, None)).is_ok());
+        // The next account produces 100; then the old 40 is released, late.
+        let next = budget.produce(100, RunControl::new(60_000, None)).unwrap();
+        assert_ne!(next, 0);
+        budget.release(40, 0);
+        assert_eq!(
+            budget.waiting(),
+            100,
+            "a release from before the clear takes nothing from the next account"
+        );
+        budget.release(100, next);
+        assert_eq!(budget.waiting(), 0);
     }
 
     #[test]
@@ -1109,7 +1127,7 @@ mod tests {
             clock.advance(1_000);
             assert!(!control.check_watchdog(), "uploads paused for two minutes");
         }
-        budget.release(10);
+        budget.release(10, 0);
         producer.join().unwrap().unwrap();
     }
 

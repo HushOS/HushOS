@@ -29,7 +29,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestRule
+import org.junit.runner.Description
+import org.junit.runners.model.Statement
 
 /*
  * The harness file tools run in: the core's reader over an object served through StoreSource,
@@ -41,6 +45,10 @@ import org.junit.Test
  * this machine is.
  */
 class ToolRunsTest {
+    /* A hang explains itself: every thread's stack, in the failure. */
+    @get:Rule
+    val timeout = DumpOnTimeout(60)
+
     private val chunk = 8L * 1024 * 1024
 
     /* A second each time the core reads it: each watchdog check, and each progress. */
@@ -253,6 +261,20 @@ class ToolRunsTest {
         assertEquals(0, ran.get())
     }
 
+    @Test fun aStateCallbackThatThrowsLeavesNothingBehind() = runBlocking {
+        val runs = ToolRuns()
+        val ran = AtomicInteger()
+        try {
+            runs.run("Careless", state = { if (it == ToolRunState.Running) throw IllegalStateException("a careless listener") }) { ran.incrementAndGet() }
+            fail("the run went on")
+        } catch (_: IllegalStateException) {
+        }
+        assertEquals(0, ran.get())
+        assertEquals("nothing for a sign-out to end", 0, runs.tracked)
+        assertEquals(3, withTimeout(5_000) { runs.run("Next") { 3 } })
+        assertEquals(0, runs.tracked)
+    }
+
     @Test fun theWatchdogFailsARunThatReportsNoProgress() = runBlocking {
         val runs = ToolRuns()
         val log = Collections.synchronizedList(ArrayList<String>())
@@ -365,6 +387,32 @@ class ToolRunsTest {
             assertFalse("the fetch outlived its run", reading.isAlive)
             assertEquals(1, failed.get())
             assertTrue((System.nanoTime() - cancelled) / 1_000_000 < 2_000)
+        }
+    }
+}
+
+/* Fails a test that runs past `seconds`, with every thread's stack in the failure: a hang that explains itself. */
+class DumpOnTimeout(private val seconds: Long) : TestRule {
+    override fun apply(base: Statement, description: Description): Statement = object : Statement() {
+        override fun evaluate() {
+            val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+            val runner = Thread({
+                try {
+                    base.evaluate()
+                } catch (error: Throwable) {
+                    failure.set(error)
+                }
+            }, "test ${description.methodName}")
+            runner.isDaemon = true
+            runner.start()
+            runner.join(seconds * 1_000)
+            if (runner.isAlive) {
+                val dump = Thread.getAllStackTraces().entries.joinToString("\n\n") { (thread, frames) ->
+                    "\"${thread.name}\" ${thread.state}\n" + frames.joinToString("\n") { "    at $it" }
+                }
+                throw AssertionError("${description.methodName} did not finish in $seconds s. Every thread:\n\n$dump")
+            }
+            failure.get()?.let { throw it }
         }
     }
 }

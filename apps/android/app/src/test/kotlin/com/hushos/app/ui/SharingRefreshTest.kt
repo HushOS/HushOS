@@ -1,5 +1,7 @@
 package com.hushos.app.ui
 
+import com.hushos.app.UnconfinedScopes
+import org.junit.After
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +22,10 @@ import org.junit.Test
  * it, or the marks keep what the server said before the restore.
  */
 class SharingRefreshTest {
+    /* Every unconfined scope this test made ends with it (UnconfinedScopes). */
+    @After
+    fun cancelUnconfinedScopes() = UnconfinedScopes.cancelAll()
+
     /* A clock the test moves: a wait ends when the time passes its deadline (or at `finish`). */
     private class Time {
         var now = 0L
@@ -164,7 +170,7 @@ class SharingRefreshTest {
      * nor stay recorded once it ran (every later change inside an interval left without a load).
      */
     private fun CoroutineScope.immediate(server: Server, time: Time) =
-        SharingRefresh(CoroutineScope(Dispatchers.Unconfined), interval = 10_000, clock = { time.now }, wait = { }) { server.load() }
+        SharingRefresh(UnconfinedScopes.create(), interval = 10_000, clock = { time.now }, wait = { }) { server.load() }
 
     @Test
     fun aLoadDueAtOnceWhileAnotherRunsIsNotLost() = runBlocking {

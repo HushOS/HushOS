@@ -60,6 +60,9 @@ class ToolRuns {
     /* The run going now, by its label; null when none is. */
     val running: StateFlow<String?> get() = current
 
+    /* Runs a sign-out would end now: none once every run has finished. */
+    internal val tracked: Int get() = live.size
+
     private fun track(end: () -> Unit): () -> Unit {
         live.add(end)
         return { live.remove(end) }
@@ -121,7 +124,6 @@ class ToolRuns {
                 // A sign-out from the Running callback, or any time until the thread starts: nothing starts.
                 if (control.isEnded()) throw CancellationException("Cancelled.")
             } catch (error: CancellationException) {
-                untrack()
                 state(ToolRunState.Cancelled)
                 throw error
             }
@@ -147,12 +149,11 @@ class ToolRuns {
                 thread.start()
             } catch (error: Throwable) {
                 handedOver = false
-                untrack()
                 throw ToolFailed(cause = error)
             }
             try {
                 // On a timer thread of its own: a watchdog on a shared pool waits behind whatever else runs there.
-                val watchdog = Timers.every(pollMillis) {
+                val watchdog = Timers.watchdogs.every(pollMillis) {
                     if (control.checkWatchdog()) outcome.complete(Result.failure(ToolFailed()))
                 }
                 val value = try {
@@ -168,9 +169,14 @@ class ToolRuns {
                 throw error
             }
         } finally {
-            if (!handedOver && slot.holdsLock(token)) {
-                current.value = null
-                slot.unlock(token)
+            // However this ended before the thread took over (a cancel, a state callback that threw,
+            // a thread that would not start): the run is forgotten and the slot given back here.
+            if (!handedOver) {
+                untrack()
+                if (slot.holdsLock(token)) {
+                    current.value = null
+                    slot.unlock(token)
+                }
             }
         }
     }
@@ -199,18 +205,26 @@ class StoreSource(private val fetchRange: (ByteRange) -> ByteArray) : ObjectSour
     }
 }
 
-/* The harness's own timer thread: the watchdogs and the cut-offs, never behind a shared pool. */
-private object Timers {
-    private val timer = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, "tool-timers").apply { isDaemon = true } }
+/*
+ * Timer threads of the harness's own, never behind a shared pool: one for the watchdogs and one
+ * for the cut-offs, so a disconnect that blocks never holds up the next run's watchdog.
+ */
+private class Timers(name: String) {
+    private val timer = Executors.newSingleThreadScheduledExecutor { task -> Thread(task, name).apply { isDaemon = true } }
 
     fun every(millis: Long, task: () -> Unit): java.util.concurrent.ScheduledFuture<*> =
         timer.scheduleWithFixedDelay({ runCatching(task) }, millis, millis, TimeUnit.MILLISECONDS)
+
+    companion object {
+        val watchdogs = Timers("tool-watchdog")
+        val cutoffs = Timers("tool-cutoff")
+    }
 }
 
 /* Cuts off a connection whose run has ended, within a tenth of a second. */
 private object Cutoff {
     fun <T> whileRunning(control: RunControl, connection: HttpURLConnection, block: () -> T): T {
-        val watch = Timers.every(100) { if (control.isEnded()) connection.disconnect() }
+        val watch = Timers.cutoffs.every(100) { if (control.isEnded()) connection.disconnect() }
         try {
             return block()
         } finally {

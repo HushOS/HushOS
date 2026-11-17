@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import com.hushos.app.UnconfinedScopes
 import com.hushos.app.data.DriveApi
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
@@ -42,6 +43,10 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FamilyManageModelTest {
+    /* Every unconfined scope this test made ends with it (UnconfinedScopes). */
+    @After
+    fun cancelUnconfinedScopes() = UnconfinedScopes.cancelAll()
+
     private val server = FakeDrive()
     private lateinit var family: FamilyFixture
 
@@ -49,7 +54,7 @@ class FamilyManageModelTest {
         override val currentVault: Vault get() = vault
         override val cacheDir: File = RuntimeEnvironment.getApplication().cacheDir
         override val state = MutableStateFlow(DriveState())
-        override val familyScope = CoroutineScope(Dispatchers.Unconfined)
+        override val familyScope = UnconfinedScopes.create()
         /* As the app shows them: one notice on screen (DriveState.notice), until-read ones waiting their turn. */
         @Volatile var shown: Notice? = null
         val notices = NoticeQueue { shown = it }

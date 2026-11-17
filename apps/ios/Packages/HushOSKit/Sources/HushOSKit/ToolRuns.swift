@@ -93,6 +93,9 @@ public actor ToolRuns {
      */
     public static let budget = ToolBudget(limitBytes: toolBudgetBytes())
 
+    /* The watchdogs' own queue: their timers never wait on the cooperative pool. */
+    private static let watchdogQueue = DispatchQueue(label: "com.hushos.tool-watchdog")
+
     private struct Waiter {
         let id: UUID
         let label: String
@@ -146,22 +149,24 @@ public actor ToolRuns {
         // The handler is in place before the thread starts: a task cancelled already, or a run
         // ended while it waited or was being let in, ends here and never starts its work.
         let result = await withTaskCancellationHandler {
-            state(.running)
-            // Checked after the announcement too: a sign-out from the .running callback starts nothing.
-            if Task.isCancelled || control.isEnded() {
+            // Checked before announcing it, so a run cancelled while it waited is never called running,
+            // and after, so a sign-out from the .running callback starts nothing.
+            let stop = { [live] () -> Result<T, Error> in
                 live.untrack(id)
-                leave()
-                return Result<T, Error>.failure(ToolCancelled())
+                self.leave()
+                return .failure(ToolCancelled())
             }
-            let watcher = Task.detached {
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: poll)
-                    if control.checkWatchdog() {
-                        outcome.finish(.failure(ToolFailed()))
-                        return
-                    }
-                }
+            if Task.isCancelled || control.isEnded() { return stop() }
+            state(.running)
+            if Task.isCancelled || control.isEnded() { return stop() }
+            // On a dispatch timer of its own: a watchdog on the cooperative pool waits behind whatever else runs there.
+            let watcher = DispatchSource.makeTimerSource(queue: Self.watchdogQueue)
+            let interval = DispatchTimeInterval.milliseconds(Int(poll.components.seconds) * 1000 + Int(poll.components.attoseconds / 1_000_000_000_000_000))
+            watcher.schedule(deadline: .now() + interval, repeating: interval)
+            watcher.setEventHandler {
+                if control.checkWatchdog() { outcome.finish(.failure(ToolFailed())) }
             }
+            watcher.resume()
             let live = self.live
             let thread = Thread {
                 let result = Result { try work(control) }

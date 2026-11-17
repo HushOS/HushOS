@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import com.hushos.app.UnconfinedScopes
 import com.hushos.app.data.DriveApi
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
@@ -37,6 +38,10 @@ import kotlin.concurrent.thread
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class FamiliesModelSessionTest {
+    /* Every unconfined scope this test made ends with it (UnconfinedScopes). */
+    @After
+    fun cancelUnconfinedScopes() = UnconfinedScopes.cancelAll()
+
     private val server = FakeDrive()
     private lateinit var family: FamilyFixture
     /* Listings of the family folder the server answered after the account switched. */
@@ -47,7 +52,7 @@ class FamiliesModelSessionTest {
         override val currentVault: Vault? get() = vault
         override val cacheDir: File = RuntimeEnvironment.getApplication().cacheDir
         override val state = MutableStateFlow(DriveState())
-        override val familyScope = CoroutineScope(Dispatchers.Unconfined)
+        override val familyScope = UnconfinedScopes.create()
         @Volatile var lost = 0
         override fun item(id: String): Opened? = vault?.item(id)
         override fun updateState(change: (DriveState) -> DriveState) = state.update(change)

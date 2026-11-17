@@ -666,6 +666,40 @@ describe('download manager', () => {
         expect((await read).byteLength).toBe(10);
     });
 
+    test('a tool’s reader closed as it reads the tail still fetches every padding chunk', async () => {
+        // Two chunks of file and, with the trailer, a chunk of padding after them.
+        const size = 2 * CHUNK - 10;
+        const thumbnailBytes = 1000;
+        const h = harness({ sealed: { 'o-cl': { plaintextSize: size, thumbnailBytes } } });
+        const reader = h.manager.openReader(paddedFile('cl', size, thumbnailBytes), 1, {
+            tool: true,
+        });
+        const total = chunkCount(contentLength(3, size, thumbnailBytes));
+        expect(total).toBeGreaterThan(2);
+        // A zip's directory asked for, and the run cancelled and its source closed while the
+        // tail is still on its way.
+        const read = reader.read(size - 22, 22);
+        read.catch(() => {});
+        await settle(10);
+        const closing = reader.close();
+        await settle(1_000);
+        await closing;
+        for (let index = 2; index < total; index++) expect(h.attempts.get(`o-cl:${index}`)).toBe(1);
+        expect(h.attempts.has('o-cl:0')).toBe(false);
+        // And a tool that never read the tail fetches none of it when closed.
+        const other = harness({ sealed: { 'o-hd': { plaintextSize: size, thumbnailBytes } } });
+        const head = other.manager.openReader(paddedFile('hd', size, thumbnailBytes), 1, {
+            tool: true,
+        });
+        const first = head.read(0, 10);
+        await settle(100);
+        await first;
+        const shut = head.close();
+        await settle(100);
+        await shut;
+        expect([...other.attempts.keys()]).toEqual(['o-hd:0']);
+    });
+
     test('a tool’s reader made to seek without end stops at four times the object', async () => {
         const size = 4 * CHUNK;
         const h = harness({});

@@ -238,3 +238,27 @@ tasks.withType<Test>().configureEach {
     // so route 18's role changes run in unit tests as on a phone.
     jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
 }
+
+/*
+ * The file tools harness's tests implement the core's foreign traits (ObjectSource, ToolClock). UniFFI
+ * keeps one callback table per process, set by whichever class loader loaded the bindings last, and
+ * Robolectric loads them again in its sandbox: in the shared test JVM a callback could reach the other
+ * loader's objects (seen as garbled answers and a watchdog that never fired). So those tests run in a
+ * JVM of their own, right after the rest: `./gradlew :app:testDebugUnitTest` runs both, and
+ * `:app:testDebugToolRuns` runs them alone.
+ */
+afterEvaluate {
+    val unit = tasks.named<Test>("testDebugUnitTest")
+    val toolRuns = tasks.register<Test>("testDebugToolRuns") {
+        description = "The file tools harness's tests, in a JVM of their own."
+        group = "verification"
+        testClassesDirs = unit.get().testClassesDirs
+        classpath = unit.get().classpath
+        filter.includeTestsMatching("com.hushos.app.data.ToolRunsTest")
+    }
+    unit.configure {
+        filter.excludeTestsMatching("com.hushos.app.data.ToolRunsTest")
+        finalizedBy(toolRuns)
+    }
+}
+

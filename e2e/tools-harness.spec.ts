@@ -142,6 +142,11 @@ test.beforeAll(async ({ browser }) => {
     test.setTimeout(120_000);
     await buildFixture();
     server = serve();
+    // A WebSocket's handshake never reaches the request handler: it is logged, and refused, here.
+    server.on('upgrade', (request, socket) => {
+        requests.push(request.url ?? '');
+        socket.destroy();
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const address = server.address();
     origin = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;

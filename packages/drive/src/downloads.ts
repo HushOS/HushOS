@@ -504,6 +504,12 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         let trailing: Promise<void> | null = null;
         let paddingFailed: unknown = null;
         let fetches = 0;
+        /* Waits for the tail, if one was asked for, and its padding, failed or not. */
+        async function settleTail() {
+            if (!tail) return;
+            await tail.catch(() => {});
+            await trailing;
+        }
         function fetchOne(index: number) {
             if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
                 return Promise.reject(
@@ -517,11 +523,13 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                     const pending = fetchOne(index);
                     pending.then(
                         () => {
+                            // To the end, even if the reader is closed meanwhile (close waits
+                            // for it): a tool cancelled after reading the tail would otherwise
+                            // show the store where the file ends. Ciphertext the size of the
+                            // padding, a few percent of the object at most.
                             trailing ??= (async () => {
-                                for (let pad = source.fileChunks; pad < source.total; pad++) {
-                                    if (closed) return;
+                                for (let pad = source.fileChunks; pad < source.total; pad++)
                                     await fetchOne(pad);
-                                }
                             })().catch((error: unknown) => {
                                 paddingFailed = error;
                             });
@@ -575,8 +583,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
             async drain() {
                 if (closed) return;
                 if (options.tool) {
-                    await chunk(source.fileChunks - 1);
-                    await trailing;
+                    // Only a tail that was read brings its padding; one never asked for stays unasked.
+                    await settleTail();
                     if (paddingFailed) throw paddingFailed;
                     return;
                 }
@@ -584,6 +592,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 await (padding ??= fetchPadding());
             },
             async close() {
+                // A tool's tail, once asked for, brings all of its padding before the reader goes.
+                if (options.tool) await settleTail();
                 closed = true;
                 cache.clear();
                 tail = null;
