@@ -42,6 +42,9 @@ class ArchiveSessions {
     internal fun add(archive: OpenArchive) = open.add(archive)
     internal fun remove(archive: OpenArchive) = open.remove(archive)
 
+    /* Tests only: heard on the call's thread once a session is made and handed to its archive, before the caller hears. */
+    @Volatile internal var made: ((ZipArchiveSession) -> Unit)? = null
+
     /*
      * Opens the archive whose object `source` reads and `content` opens, reading its directory under
      * the first call. `current` is where the source looks for the control of the call reading (on its thread).
@@ -63,7 +66,9 @@ class ArchiveSessions {
         add(archive)
         try {
             // The content (which carries the key) is the core's from here; nothing in Kotlin keeps it.
-            archive.session = archive.call { control -> ZipArchiveSession.open(source, content, control) }
+            // Handed to the archive on the call's thread, so a result its caller never hears (a
+            // cancel, a sign-out, the watchdog) is still closed with the archive.
+            archive.call { control -> archive.adopt(ZipArchiveSession.open(source, content, control)) }
             if (archive.closed) throw CancellationException("Closed.")
             return archive
         } catch (error: Throwable) {
@@ -87,7 +92,7 @@ class ArchiveSessions {
         archive.stands = stands
         add(archive)
         try {
-            archive.session = archive.call { control -> ZipArchiveSession.openLocal(source, control) }
+            archive.call { control -> archive.adopt(ZipArchiveSession.openLocal(source, control)) }
             if (archive.closed) throw CancellationException("Closed.")
             return archive
         } catch (error: Throwable) {
@@ -151,8 +156,21 @@ class OpenArchive internal constructor(
     private val clock: ToolClock?,
 ) {
     @Volatile internal var session: ZipArchiveSession? = null
+        private set
     @Volatile var closed = false
         private set
+    /* The session and `closed` change together: a session handed over after the close is closed at once. */
+    private val life = Any()
+
+    /*
+     * Takes the session the core made, on the call's thread: kept if the archive is open, closed at
+     * once (its key wiped) if not, so no session outlives an archive whose caller stopped waiting.
+     */
+    internal fun adopt(made: ZipArchiveSession) {
+        val kept = synchronized(life) { if (closed) false else { session = made; true } }
+        if (!kept) made.closeArchive()
+        owner.made?.invoke(made)
+    }
     /*
      * For a family's file: null while its family folder stands, the family's words once it was let
      * go of (its invalidation count moved: a removal, a fork, a forget). Every call asks before it
@@ -211,7 +229,7 @@ class OpenArchive internal constructor(
         child.parent = this
         try {
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + kotlinx.coroutines.Dispatchers.IO) {
-                child.session = parent.sibling()
+                child.adopt(parent.sibling())
             }
         } catch (error: Throwable) {
             child.close()
@@ -229,13 +247,16 @@ class OpenArchive internal constructor(
 
     /* Wipes the password, ends the call going (it fails at its next read) and forgets the archive; its siblings close with it. */
     fun close() {
-        closed = true
+        val held = synchronized(life) {
+            closed = true
+            session
+        }
         for (child in ArrayList(children)) child.close()
         children.clear()
         parent?.children?.remove(this)
         // Copied by iterating, never by size then elements: a call's thread may remove itself meanwhile.
         for (end in ArrayList(calls)) end()
-        session?.closeArchive()
+        held?.closeArchive()
         owner.remove(this)
     }
 

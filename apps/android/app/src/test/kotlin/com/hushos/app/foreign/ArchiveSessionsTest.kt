@@ -194,6 +194,35 @@ class ArchiveSessionsTest {
         }
     }
 
+    @Test fun aSessionMadeAsItsOpenIsCancelledIsClosedNotLeftWithItsKey() = runBlocking {
+        val (content, stored) = sealed(File(fixtures, "aes.zip").readBytes())
+        val sessions = ArchiveSessions()
+        val made = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val produced = java.util.concurrent.atomic.AtomicReference<com.hushos.core.ZipArchiveSession?>()
+        // Held on the call's thread once the core has made the session, before the caller hears of it.
+        sessions.made = { session ->
+            produced.set(session)
+            made.countDown()
+            release.await(30, TimeUnit.SECONDS)
+        }
+        val opening = async(kotlinx.coroutines.Dispatchers.IO) { sessions.open(store(stored), content) }
+        assertTrue(made.await(30, TimeUnit.SECONDS))
+        // Exactly then, Back (or a sign-out) cancels the open.
+        opening.cancel()
+        try {
+            opening.await()
+            fail("opened after a cancel")
+        } catch (_: CancellationException) {
+        }
+        release.countDown()
+        // The session the caller never heard of is closed: its listing and its key are gone.
+        val session = produced.get()!!
+        assertTrue(session.entries().isEmpty())
+        assertFalse(session.unlocked())
+        sessions.closeAll()
+    }
+
     @Test fun aFamilyLetGoOfClosesItsArchiveAndWritesNothingMore() = runBlocking {
         // A family's file: its folder let go of (a removal, a fork) while a download streams it.
         val words = java.util.concurrent.atomic.AtomicReference<String?>(null)
