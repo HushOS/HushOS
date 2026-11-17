@@ -1,0 +1,64 @@
+packages/drive/src/save-runs.engine.test.ts
+  s_c60e24772e04af::t_541edb49d016dc 1-679
+  s_c60e24772e04af::t_f0436e1a75995e 680-874
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunEngineTest.kt
+  s_c60e24772e04af::t_dce4f37dfb0e2c 1-303
+  s_c60e24772e04af::t_4a395272142923 304-340
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunEngineTests.swift
+  s_c60e24772e04af::t_cdf6a2e55d0f92 1-310
+  s_c60e24772e04af::t_8accae652b4ecd 311-317
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_ebea1ed926f2e6 1647
+apps/android/app/src/main/kotlin/com/hushos/app/data/Resumable.kt
+  s_c60e24772e04af::t_649de463213fb8 36-38,48
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_8cd59236044ef3 455-456,551-552,618-619,650-658,827-829,836-838,928-929
+apps/android/app/src/main/kotlin/com/hushos/app/data/UploadFinish.kt
+  s_c60e24772e04af::t_cdc44e9e5351c1 31-32
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunFaultTest.kt
+  s_c60e24772e04af::t_8bd7e22912ffce 30-38,41-54,65-73,89-90,98,102-103,156-158,161-162,215-225,228-231,235-237,239,242-244,249,257,264-272,274,279,281,295,304,306-312,314-318,321-326,328,331
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_e8f257cf19a26f 498,501,504-505,507,809-832,1066-1079
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_984d30d700958b 1264
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_3fa4bbeb52f2aa 38-47,223-224,237,562-568,816-825,827,999-1001
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_c60e24772e04af::t_8ea4f5dec6e013 351-357,573-576,631-641
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunFaultTests.swift
+  s_c60e24772e04af::t_990659ec4992c6 27-31,33,38,40-43,48-50,64-69,89-90,94-100,106,110-111,199-201,204-205,257-266,272-276,278-282,288-290,293-295,299-308,313,323,332-347,350,352,354,371,376-377,382-383,385-388,391-396,399-404,406-407,411
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_082f0b7dcf2e06 494,497-498,500,697-715
+apps/web/src/lib/transfers.ts
+  s_c60e24772e04af::t_217a2a5d632407 52,55,67,69-70
+docs/file-tools-design.md
+  s_c60e24772e04af::t_0cb66800271291 307-308
+packages/drive/src/save-runs.faults.test.ts
+  s_c60e24772e04af::t_2dd2f05c964796 50-66,68,70-80,227-228,235-236,242-243,246-247,259,296,413,416-438,442-452,454-455,459-471,475,480,485,497-504,512,514,541,543-563,566-570,577-580,584-587,597,606
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_397775cf4ba13e 1334-1359
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_bfc66669091dc8 566-571,834-835,909-912,920,923,925-930
+packages/drive/src/transfers.harness.ts
+  s_c60e24772e04af::t_4f3b52b6a4d5f5 1-508
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_fa1111aa441a9d 2,5-6,9,11-20,2109-2151
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_af244f72893dc6 256-259,262,1084-1087,1172-1174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5ad1c3996e79d63eefb44ea2479c9b35af2b8493",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

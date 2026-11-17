@@ -1,0 +1,47 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_44f9d4d4bfd629 1651
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_6de2236076a6b7 38-39,44,51-52,241-245,373-376,382,386,390-393,397-419,434-439,462-463,500-503,513-514,718-727,1108-1126
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunFaultTest.kt
+  s_c60e24772e04af::t_2e4e31f3b55295 146-147,198
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_2cae87c06ec82f 94-96,166-170,841,843,845-846,848,850-860,866-900
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_35e90ca148c437 1267
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_a97d432fac0cca 110-111,382-386,545,547-550,555-562,566-612,629-631,633-635,637,661-662,695-698,710,1058-1060,1309,1441-1451
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunFaultTests.swift
+  s_c60e24772e04af::t_3ad5f9fff50f24 179-180,246
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_56f65a2ae4e3c3 172-182,458,926,928,930-931,933,935-946,971,976-1027
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_976045bcd7639b 1,139-156
+docs/file-tools-design.md
+  s_c60e24772e04af::t_92be193bd393c0 312
+packages/drive/src/journal.ts
+  s_c60e24772e04af::t_259003acf8a11e 165-168,171
+packages/drive/src/save-runs.engine.test.ts
+  s_c60e24772e04af::t_10de1899aed7bf 16,463,720-731,1016,1019-1021,1041-1043
+packages/drive/src/save-runs.faults.test.ts
+  s_c60e24772e04af::t_c45e9e6337f22b 13,402-413,586-587,605-607
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_5708b004515150 39,448-449,535-538,861,1496,1498,1500-1501,1503,1505-1516,1518,1520-1589
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_74997be7754f81 380-384,626-627,982-992,994-1009,1011-1028,1030-1041,1043-1072,1110-1111,1145,1213-1214,1253-1258,1279,1343,1354-1382,1385-1386,1389-1414,1430-1444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8fa4cff832157e074f4163d63b5da7fcfe6a67bb",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

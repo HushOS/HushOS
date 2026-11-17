@@ -1,0 +1,47 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_7a0cb2df14b25d 1651
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_ac33b7479d7af5 83-87,174-176,1240-1250,1272-1278
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyWritesTest.kt
+  s_c60e24772e04af::t_5ff3c24c0fe3dc 61-117
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_3a55be0c6e5aff 993-1004
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_cb02a3a7ed60b7 1267
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_d459b33763e269 1571-1575,1577-1583,1605,1607-1613
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilySyncTests.swift
+  s_9fb935311e39d2::t_c4bbfa09992591 1585-1596
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWriteTests.swift
+  s_9fb935311e39d2::t_9a7efbe5669d18 50-82
+docs/file-tools-design.md
+  s_c60e24772e04af::t_b7d8d13d967ef0 312
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_815e49971b8054 1685-1735
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_0d54c412506b95 1320,1323,1333,1574,1576-1583,1585-1586
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "971e0905e7825555cbbed20266d79b90401e43bf",
+  "prompts": {},
+  "sessions": {
+    "s_9fb935311e39d2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1eb5e-250f-7e80-b492-cddbce57b978",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

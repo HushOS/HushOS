@@ -1,0 +1,52 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunFaultTests.swift
+  s_c60e24772e04af::t_10b18fed4b623f 1-358
+packages/drive/src/save-runs.faults.test.ts
+  s_c60e24772e04af::t_ac96891ca4f1a0 1-465
+  s_c60e24772e04af::t_d4521e414297f3 466-574
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunFaultTest.kt
+  s_c60e24772e04af::t_150c86039fdfee 1-299
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_f862a195631a66 1646
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_7c2d204eeb6b82 92-93,95-96,98,100,115-118,121-132,137-143,157-162,280-281,288,304-311,351,360-361,378-379,391-395,403-407,455-458,521,541-544,552-556,560,562,572,606,614-627,645,749-751,821-822,834,837-838,851-854,864-866,868-870
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_4f7bc46b156fb6 2236-2244
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_0f621383bd7897 91-92,130,133-140,158,212-214,704-707,709,719-723,725-820
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_4eca72fc24ac3c 1263
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_77337991761f68 166-167,169-170,172,174,177,195-198,201,204,207-227,231-242,278,365,367-368,374,384-392,432,440,442-443,452,465-469,477-481,522-525,540-543,551-558,560-569,580-588,597,733,738,780,799,903,968-970,973,992,995-996,1005-1007,1018-1021,1023,1080
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_d535dbdefd465b 898,943-950,990
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_dc08fafcae8c9a 53-54,100,117,120-127,226-227,230,425,434,588-592,602-606,608-707
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_ba337b3c491597 49
+docs/file-tools-design.md
+  s_c60e24772e04af::t_0fa33ebce1dba7 304-307
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_1090fe65ed3bd7 26,29,1388-1506
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_08ed4bf71d4aa6 136-148,171,181-183,186,207-212,555-559,661-667,703,775-776,784,836,868,904-908,910,971-973,977,979-984,993-997,1000-1004,1007,1039-1040,1065-1071,1079-1083,1088-1089,1091,1098-1099,1105,1113,1117,1181,1183-1184
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_bb522f086613e7 2545-2594
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_96715e239b4d60 197-199,1155-1156,1311-1323
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "642f8a3f89d1f893a97b5a04510179d0dc162f4f",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
