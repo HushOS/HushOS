@@ -172,11 +172,15 @@ public enum BrandQR {
                 let two = CGPoint(x: next(), y: next())
                 current = CGPoint(x: next(), y: next())
                 path.addCurve(to: current, control1: one, control2: two)
-            case "Z": path.closeSubpath()
+            // A number straight after Z belongs to no command: skipped, never read again.
+            case "Z": path.closeSubpath(); command = ""
             default: index += 1
             }
         }
     }
+
+    /* One Core Image context for every code: making one costs about as much as drawing the code. Core Image contexts are thread-safe. */
+    nonisolated(unsafe) static let renderer = CIContext(options: [.workingColorSpace: NSNull()])
 
     /* The code's modules at error correction H, without a quiet zone: CoreImage's encoder, read back module by module. */
     static func matrix(_ text: String) -> [[Bool]]? {
@@ -187,20 +191,25 @@ public enum BrandQR {
         let width = Int(output.extent.width)
         let height = Int(output.extent.height)
         guard width == height, width > 0 else { return nil }
-        var pixels = [UInt8](repeating: 255, count: width * height)
+        // The context owns its buffer: one handed in from Swift is only valid during the call that takes it.
         guard let space = CGColorSpace(name: CGColorSpace.linearGray),
-              let rendered = CIContext(options: [.workingColorSpace: NSNull()]).createCGImage(output, from: output.extent),
-              let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width, space: space, bitmapInfo: CGImageAlphaInfo.none.rawValue)
+              let rendered = renderer.createCGImage(output, from: output.extent),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width, space: space, bitmapInfo: CGImageAlphaInfo.none.rawValue)
         else { return nil }
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.draw(rendered, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let data = context.data else { return nil }
+        let stride = context.bytesPerRow
+        let pixels = data.bindMemory(to: UInt8.self, capacity: stride * height)
         // CoreImage leaves a quiet zone of its own: find the first dark module, the finder's corner.
         var border = -1
-        for i in 0..<width where pixels[i * width + i] < 128 { border = i; break }
+        for i in 0..<width where pixels[i * stride + i] < 128 { border = i; break }
         guard border >= 0 else { return nil }
         let inner = width - 2 * border
         guard inner >= 21, (inner - 17) % 4 == 0 else { return nil }
         // CGContext rows run top to bottom in memory here, as the code's do.
-        return (0..<inner).map { y in (0..<inner).map { x in pixels[(y + border) * width + x + border] < 128 } }
+        return (0..<inner).map { y in (0..<inner).map { x in pixels[(y + border) * stride + x + border] < 128 } }
     }
 
     /* Where a version's alignment squares are centred, on each axis (ISO/IEC 18004, as qrcodegen works it out). */
