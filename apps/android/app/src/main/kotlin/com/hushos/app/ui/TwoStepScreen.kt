@@ -110,8 +110,8 @@ import java.time.format.DateTimeFormatter
  * added, named, replaced and removed, one kind is made the default, new codes are made, and the
  * account's recent security activity is listed. Codes are checked on the server; the recovery phrase
  * is signed on this phone and never leaves it; a passkey or security key answers through the
- * system's own sheet (`PasskeySheet`), which opens only on a press. The words are the web's and the
- * server's own.
+ * system's own sheet (`PasskeySheet`): at a sign-in whose usual way it is, as the step opens, and
+ * otherwise on a press. The words are the web's and the server's own.
  */
 
 private val StepMethod.label: String get() = when (this) {

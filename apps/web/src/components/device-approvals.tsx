@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import {
     Dialog,
     DialogContent,
+    DialogDescription,
     DialogFooter,
     DialogHeader,
     DialogTitle,
@@ -292,8 +293,10 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                         <DialogTitle>{details?.what ?? ''}</DialogTitle>
                     </DialogHeader>
                     {details && (
-                        <dl
-                            className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm"
+                        // The dialog's description: a screen reader hears who asks, and from where, as it opens.
+                        <DialogDescription
+                            render={<dl />}
+                            className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5 text-sm text-foreground"
                             data-approval-details
                         >
                             {details.rows.map((row) => (
@@ -302,7 +305,7 @@ function AnswerDialog({ asked, onClose }: { asked: ApprovalPrompt | null; onClos
                                     <dd className="min-w-0 break-words">{row.value}</dd>
                                 </div>
                             ))}
-                        </dl>
+                        </DialogDescription>
                     )}
                     {asked?.chosen && !over && (
                         <p className="text-sm" data-approval-chosen>

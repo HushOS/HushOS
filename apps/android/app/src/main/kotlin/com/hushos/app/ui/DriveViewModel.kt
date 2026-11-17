@@ -579,7 +579,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     /*
      * Asks another device to approve this sign-in, with the key the sign-in holds for it (the phone's own, or the
-     * one made for this sign-in). Only from a press. Once approved the step is answered with the request and the
+     * one made for this sign-in). As the step opens when it is the account's usual way, otherwise from a press. Once approved the step is answered with the request and the
      * app is signed in; `step-pending` from that answer keeps waiting. `done` hears what the screen does when the
      * request could not be made or its answer did not pass (StepOutcome), and the answer itself when nothing judged
      * it (no reply, a lost one, the address's limit): the approval is kept and the same one goes again

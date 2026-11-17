@@ -91,6 +91,12 @@ export function StepFields({
     const id = useId();
     // The other ways stay behind one button until asked for; choosing one puts them away again.
     const [choosing, setChoosing] = useState(false);
+    // Opened from the keyboard, the cursor goes into the list: it comes before Back in the page.
+    const list = useRef<HTMLUListElement>(null);
+    const [opened, setOpened] = useState(0);
+    useEffect(() => {
+        if (opened) list.current?.querySelector('button')?.focus();
+    }, [opened]);
     // Another device is asked on a press, or as the sign-in step opens on it (`start`). Choosing
     // it among the other ways is that press; a dialog that merely opened on it shows a button first.
     const [pressed, setPressed] = useState(start);
@@ -102,6 +108,15 @@ export function StepFields({
     const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
     // The draft follows the methods on offer (`draftFor`); this only guards a render between.
     const method = methods.includes(draft.method) ? draft.method : methods[0];
+    // A refusal, or a way taken away, puts the list back too: the field it shows is the news.
+    // Noticed while rendering (React's "adjusting state when a prop changes"), not in an effect.
+    const [seen, setSeen] = useState({ refocus, method });
+    if (seen.refocus !== refocus || seen.method !== method) {
+        setSeen({ refocus, method });
+        setChoosing(false);
+    }
+    // With one way left there is nothing to choose: never a list with no way back out of it.
+    const open = choosing && methods.length > 1;
     // After the person switched to another way, or the one they used was withdrawn, or an
     // answer was refused: the cursor goes to the field now shown, so the next thing typed
     // lands there and a screen reader is not left on a control that is gone.
@@ -147,7 +162,7 @@ export function StepFields({
              * it (`actions`, the sign-in page). A dialog's own button stays pressable, and what it
              * checks (an empty code, say) must stay in sight.
              */}
-            <div className="flex flex-col gap-1.5" hidden={choosing && Boolean(actions)}>
+            <div className="flex flex-col gap-1.5" hidden={open && Boolean(actions)}>
                 {!bare && (
                     <div className="flex items-baseline justify-between gap-3">
                         {typed ? (
@@ -259,9 +274,10 @@ export function StepFields({
                     </p>
                 )}
             </div>
-            {!choosing && actions}
-            {choosing && (
+            {!open && actions}
+            {open && (
                 <ul
+                    ref={list}
                     aria-label="Other ways"
                     className="divide-y divide-rule overflow-hidden rounded-lg border border-rule"
                 >
@@ -295,11 +311,14 @@ export function StepFields({
                         <button
                             type="button"
                             disabled={disabled}
-                            aria-expanded={choosing}
-                            onClick={() => setChoosing((open) => !open)}
+                            aria-expanded={open}
+                            onClick={() => {
+                                if (!open) setOpened((count) => count + 1);
+                                setChoosing(!open);
+                            }}
                             className={stepAction}
                         >
-                            {choosing ? 'Back' : 'Use another way'}
+                            {open ? 'Back' : 'Use another way'}
                         </button>
                     )}
                     {aside && <div className="ml-auto">{aside}</div>}

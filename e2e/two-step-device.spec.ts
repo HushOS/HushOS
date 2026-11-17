@@ -232,8 +232,8 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(b.locator('[data-step-note]')).toHaveCount(0);
     await openAccount(a);
     await expect(waiting(a)).toHaveCount(1, { timeout: 30_000 });
-    // The other ways are behind Use another way, and coming back asks again: a new request
-    // replaces the first, so A still has one to answer.
+    // The other ways are behind Use another way, and coming back shows the same request: it is
+    // not made again, so A still has the one to answer.
     await b.getByRole('button', { name: 'Use another way' }).click();
     await expect(b.getByRole('button', { name: /^Use (your|a) / })).toHaveText([
         'Use a backup code',

@@ -25,14 +25,12 @@ import {
  * The second step of a sign-in (docs/two-step-design.md 4, 12): the password was right, and
  * the account asks for its passkey, a code, a backup code or the recovery phrase before
  * anything is handed over. Another device answers by approving: this page shows a code for
- * it, and signs in by itself once that device has approved. It opens on the account's usual way. A passkey is a button, Use
- * your passkey: the browser's sheet opens on the press, never when the page loads. A wrong answer stays here and can be tried again. A step that is over, or a reply
+ * it, and signs in by itself once that device has approved. It opens on the account's usual way
+ * and starts it by itself: a passkey's sheet opens as the step does, the other device is asked.
+ * A wrong answer stays here and can be tried again. A step that is over, or a reply
  * that never arrived, goes back to the password with the reason (`onOver`): the person is
  * never left on a form that can no longer be answered.
  */
-/* The step whose usual way this page already started: once per step, however often React mounts it. */
-let started = '';
-
 export function SignInStep({
     challenge,
     onSignedIn,
@@ -60,6 +58,7 @@ export function SignInStep({
     useEffect(
         () => {
             const locked = whenBrowserLocks(() => {
+                left.current = true;
                 setDraft(emptyDraft(challenge.methods));
                 onOver('This browser was locked. Sign in again.');
             });
@@ -106,14 +105,19 @@ export function SignInStep({
     }
     useEffect(() => {
         left.current = false;
-        if (started !== challenge.token && methods[0] === 'webauthn') {
-            started = challenge.token;
-            const running = submit(true).finally(() => {
-                if (auto.current === running) auto.current = null;
-            });
-            auto.current = running;
-        }
+        // A task later, and only if this mount is still the one on screen: React mounts a form
+        // twice in development, and the first mount's cleanup must not close the sheet it opened.
+        const timer =
+            methods[0] === 'webauthn'
+                ? setTimeout(() => {
+                      const running = submit(true).finally(() => {
+                          if (auto.current === running) auto.current = null;
+                      });
+                      auto.current = running;
+                  }, 0)
+                : undefined;
         return () => {
+            clearTimeout(timer);
             left.current = true;
             void settle();
         };
@@ -147,8 +151,12 @@ export function SignInStep({
         } catch (cause) {
             // Left meanwhile: the sign-in this answered is gone, and the page shows the password now.
             if (left.current) return;
-            // The sheet the page opened by itself, closed or refused: nothing went wrong yet.
-            if (quiet && cause instanceof StepFailure && cause.reason === 'wrong') return;
+            // The sheet the page opened by itself, closed before anything was sent: nothing went
+            // wrong yet. A key the server refused is a wrong answer like any other, and is said.
+            const unsent =
+                (cause instanceof StepFailure &&
+                    (cause.cause as { kept?: unknown } | undefined)?.kept) === true;
+            if (quiet && unsent) return;
             cue('error');
             if (cause instanceof StepFailure && cause.again) {
                 // What is offered and what the draft is for change together: an answer is

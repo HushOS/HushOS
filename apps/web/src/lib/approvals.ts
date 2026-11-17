@@ -50,13 +50,24 @@ export function approvalDetails(asked: Parameters<typeof approvalAsks>[0]) {
                 label: 'Calls itself',
                 value: added ? `“${name}”, added ${added}` : `“${name}”, new`,
             };
-    const place = asked.location?.trim().replace(/^near\s+/, '');
+    // The server words a place "near Lyon, France", or "in France" when only the country is
+    // known: the row says which.
+    const where = asked.location?.trim();
+    const near = where?.match(/^near\s+(.+)$/i);
+    const within = where?.match(/^in\s+(.+)$/i);
+    const place = where
+        ? near
+            ? { label: 'Near', value: near[1]! }
+            : within
+              ? { label: 'In', value: within[1]! }
+              : { label: 'Where', value: where }
+        : undefined;
     return {
         what:
             asked.purpose === 'login'
                 ? 'Approve this sign-in?'
                 : (WHAT[asked.purpose] ?? 'A change to your account'),
-        rows: [device, ...(place ? [{ label: 'Near', value: place }] : [])],
+        rows: [device, ...(place ? [place] : [])],
     };
 }
 

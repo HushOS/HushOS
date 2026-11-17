@@ -9,8 +9,9 @@ import { authError } from '@/lib/form';
  * Asking another device to approve a step (docs/two-step-design.md 12): at a sign-in, before a
  * change, and when the method is turned on. This browser commits first and shows a QR code of
  * that; once a device opens the request it shows the code, two digits and a word, for the
- * person to type there. Nothing is sent until a press asks for it: a form that merely opens on
- * this method must not spend the day's requests.
+ * person to type there. A sign-in step that opens on this method asks at once (it is the
+ * account's usual way); a dialog that merely opens on it waits for a press, so it does not spend
+ * the day's requests. Either way a step asks once: coming back to it shows the same request.
  *
  * Turning the method on (`approver`) is answered the other way round. This browser shows no
  * code and no QR code: the device that approves draws a code and shows it, and the person types

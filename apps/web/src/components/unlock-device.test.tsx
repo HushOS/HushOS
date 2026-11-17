@@ -129,7 +129,10 @@ describe('unlocking an account that asks for a second step', () => {
         // A passkey first is asked as the step opens: here its sheet is closed, which says nothing.
         if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
             answerStep.mockRejectedValueOnce(
-                new StepFailure('wrong', 'Your passkey or security key wasn’t used.'),
+                new StepFailure('wrong', 'Your passkey or security key wasn’t used.', {
+                    // Closed on this device: nothing was sent (the auth client's `kept`).
+                    cause: { kept: true },
+                }),
             );
         const user = userEvent.setup();
         render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);
@@ -357,7 +360,10 @@ describe('the step opens on the account’s usual way', () => {
         // A passkey first is asked as the step opens: here its sheet is closed, which says nothing.
         if ((challenge as { methods?: string[] }).methods?.[0] === 'webauthn')
             answerStep.mockRejectedValueOnce(
-                new StepFailure('wrong', 'Your passkey or security key wasn’t used.'),
+                new StepFailure('wrong', 'Your passkey or security key wasn’t used.', {
+                    // Closed on this device: nothing was sent (the auth client's `kept`).
+                    cause: { kept: true },
+                }),
             );
         const user = userEvent.setup();
         render(<UnlockDevice user={{ email: 'maya@example.com' }} onUnlocked={onUnlocked} />);

@@ -606,8 +606,9 @@ data class StepDraft(
 
     /*
      * The answer to `challenge`, made as it is sent. A key is asked here and nowhere else: the phone's
-     * sheet opens on the press that sends the answer, never when the step appears. One that did not
-     * answer (a closed sheet, no key) is `KeyUnused`: nothing goes out, and the step stays.
+     * sheet opens with the answer being sent, which is the press, or the step opening when a key is its
+     * usual way. One that did not answer (a closed sheet, no key) is `KeyUnused`: nothing goes out, and
+     * the step stays.
      */
     suspend fun proved(challenge: StepChallenge, method: StepMethod, sheet: KeySheet): StepAnswer {
         if (method != StepMethod.WEBAUTHN) return answer(challenge, method)
