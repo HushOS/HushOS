@@ -26,6 +26,7 @@ const memory = vi.hoisted(() => ({
     spaces: vi.fn(),
     thumbnails: vi.fn(),
     previews: vi.fn(),
+    tools: vi.fn(),
 }));
 /* Family work stopped at the start of a sign-out: no memory a page draws from goes with it. */
 const stopSpaces = vi.hoisted(() => vi.fn());
@@ -45,6 +46,7 @@ vi.mock('@/lib/drive', () => ({
 }));
 vi.mock('@/lib/thumbnails', () => ({ forgetThumbnails: memory.thumbnails }));
 vi.mock('@/lib/previews', () => ({ forgetPreviews: memory.previews }));
+vi.mock('@/lib/tools/active', () => ({ cancelAllToolRuns: memory.tools }));
 vi.mock('@/lib/groups/store', () => ({ deleteGroupDevice: stores.groups }));
 vi.mock('@/lib/auth-client', () => ({ authClient: auth }));
 vi.mock('@/lib/return-to', () => ({ forgetReturn: vi.fn() }));
@@ -534,6 +536,8 @@ describe('signing out of the app', () => {
         // The person is on the sign-in page by now: nothing there says signing out failed.
         await expect(leaveApp(router)).resolves.toBeUndefined();
         expect(memory.previews).toHaveBeenCalledOnce();
+        // File tools' runs end too: no worker parsing, no result waiting for upload.
+        expect(memory.tools).toHaveBeenCalledOnce();
         expect(memory.close).toHaveBeenCalledOnce();
         expect(memory.spaces).toHaveBeenCalledOnce();
         expect(clear).toHaveBeenCalledOnce();

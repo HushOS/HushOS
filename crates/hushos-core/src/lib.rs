@@ -47,6 +47,7 @@ mod shares;
 mod signatures;
 mod signup;
 mod succession_path;
+mod tools;
 mod two_step;
 
 pub use account::*;
@@ -81,6 +82,7 @@ pub use rotation_records::*;
 pub use shares::*;
 pub use signatures::*;
 pub use signup::*;
+pub use tools::*;
 pub use two_step::*;
 
 /// The statement grammar's parser and encoder, for the fuzz targets in

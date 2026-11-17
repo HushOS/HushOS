@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { CryptoRequests, CryptoResults, DownloadChunkResult } from '@hushos/crypto';
-import { chunkCount, contentLength } from '@hushos/crypto/drive';
+import { chunkCount, chunkRange, contentLength } from '@hushos/crypto/drive';
 import type { DriveApi } from './api';
 import type { DriveNode, FolderListing, Rpc } from './client';
-import { createDownloadManager, type DownloadSink, type ZipEntry } from './downloads';
+import {
+    createDownloadManager,
+    fetchCiphertextRange,
+    type DownloadSink,
+    type ZipEntry,
+} from './downloads';
 
 /*
  * The download engine against a fake worker, a fake API and a recording sink:
@@ -107,8 +112,12 @@ function harness(options: {
     sealed?: Record<string, { plaintextSize: number; thumbnailBytes: number }>;
     /* Opening a file's folder, which a test can hold. */
     ensureOpen?: () => Promise<void>;
+    /* How the store answers a ciphertext-only fetch (a tool's padding), by version and chunk; null for the default. */
+    raw?: (version: string, index: number) => Promise<{ status: number; length: number }> | null;
 }) {
     const calls: string[] = [];
+    /* Ciphertext-only fetches, as `version:index`: never opened, never through the worker. */
+    const raw: string[] = [];
     const attempts = new Map<string, number>();
     const pendingChunks = new Map<string, () => void>();
     const closed: string[] = [];
@@ -255,6 +264,15 @@ function harness(options: {
         lookahead: options.lookahead,
         maxAttempts: 3,
         offline: options.offline,
+        fetchCiphertext: async (url, start, end) => {
+            const version = url.split('/')[3]!;
+            const index = Math.floor(start / (CHUNK + 16));
+            raw.push(`${version}:${index}`);
+            const decided = options.raw?.(version, index);
+            if (decided) return decided;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return { status: 206, length: end - start + 1 };
+        },
     });
     const release = (objectId: string, index: number) =>
         pendingChunks.get(`${objectId}:${index}`)?.();
@@ -274,10 +292,17 @@ function harness(options: {
         get peakInFlight() {
             return peakInFlight;
         },
+        raw,
         get urlsIssued() {
             return urlsIssued;
         },
     };
+}
+
+/* The ciphertext length of chunk `index` of a suite 3 object: what a full answer for its range holds. */
+function rawLength(plaintextSize: number, thumbnailBytes: number, index: number) {
+    const range = chunkRange(3, plaintextSize, thumbnailBytes, index);
+    return range.end - range.start + 1;
 }
 
 async function settle(ms: number) {
@@ -604,6 +629,192 @@ describe('download manager', () => {
         await reader.close();
     });
 
+    test('a tool’s reader keeps the file’s last chunk and fetches its padding once, never opened', async () => {
+        const size = 2 * CHUNK - 10;
+        const h = harness({ sealed: { 'o-tl': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        const reader = h.manager.openReader(paddedFile('tl', size, 1000), 1, { tool: true });
+        // A zip's directory first, then the entries, then the directory again.
+        for (const offset of [size - 100, 0, size - 50, 10, size - 1]) {
+            const read = reader.read(offset, 10);
+            await settle(100);
+            await read;
+        }
+        expect(h.attempts.get('o-tl:1')).toBe(1);
+        // The padding: fetched once, as ciphertext, never through the worker's key.
+        expect(h.raw).toEqual(['v-tl:2']);
+        expect(h.attempts.has('o-tl:2')).toBe(false);
+        // Chunk 0 shares the one cache slot with nothing else: fetched once too.
+        expect(h.attempts.get('o-tl:0')).toBe(1);
+        await reader.close();
+    });
+
+    test('a tool’s tail arrives without waiting for the padding; once that fails, reads fail', async () => {
+        const size = CHUNK - 10;
+        const sealed = { 'o-pf': { plaintextSize: size, thumbnailBytes: 1000 } };
+        let failPadding: (() => void) | null = null;
+        const tool = harness({
+            sealed,
+            raw: () =>
+                new Promise((resolve) => (failPadding = () => resolve({ status: 404, length: 0 }))),
+        }).manager.openReader(paddedFile('pf', size, 1000), 1, { tool: true });
+        // The padding is still on its way, and the tail is already here.
+        const first = tool.read(size - 10, 10);
+        await settle(100);
+        expect((await first).byteLength).toBe(10);
+        expect(failPadding).not.toBeNull();
+        failPadding!();
+        await settle(10);
+        await expect(tool.read(0, 10)).rejects.toThrow();
+        // A viewer ignores a padding failure, as before.
+        const viewer = harness({
+            sealed,
+            decide: (_o: string, index: number) =>
+                index === 1
+                    ? { ok: false as const, status: 404, retryable: false, message: 'gone' }
+                    : null,
+        }).manager.openReader(paddedFile('pf', size, 1000), 1);
+        const read = viewer.read(0, 10);
+        await settle(100);
+        expect((await read).byteLength).toBe(10);
+    });
+
+    test('a tool’s reader closed as it reads the tail lets go of its key first and still fetches the padding', async () => {
+        // Two chunks of file and, with the trailer, a chunk of padding after them.
+        const size = 2 * CHUNK - 10;
+        const thumbnailBytes = 1000;
+        let release: (() => void) | null = null;
+        const h = harness({
+            sealed: { 'o-cl': { plaintextSize: size, thumbnailBytes } },
+            raw: (_v, index) =>
+                new Promise(
+                    (resolve) =>
+                        (release = () =>
+                            resolve({
+                                status: 206,
+                                length: index === 2 ? rawLength(size, thumbnailBytes, 2) : 0,
+                            })),
+                ),
+        });
+        const reader = h.manager.openReader(paddedFile('cl', size, thumbnailBytes), 1, {
+            tool: true,
+        });
+        expect(chunkCount(contentLength(3, size, thumbnailBytes))).toBe(3);
+        // A zip's directory asked for, and the run cancelled (its source closed) while the tail
+        // is still on its way.
+        const read = reader.read(size - 22, 22);
+        read.catch(() => {});
+        await settle(10);
+        let closed = false;
+        const closing = reader.close().then(() => (closed = true));
+        await settle(1_000);
+        // The padding was asked for with the tail, and the key is already gone while it is out.
+        expect(h.raw).toEqual(['v-cl:2']);
+        expect(h.closed).toEqual(['o-cl']);
+        expect(closed).toBe(false);
+        release!();
+        await settle(10);
+        await closing;
+        expect(h.attempts.has('o-cl:0')).toBe(false);
+        // And a tool that never read the tail fetches none of it when closed.
+        const other = harness({ sealed: { 'o-hd': { plaintextSize: size, thumbnailBytes } } });
+        const head = other.manager.openReader(paddedFile('hd', size, thumbnailBytes), 1, {
+            tool: true,
+        });
+        const first = head.read(0, 10);
+        await settle(100);
+        await first;
+        const shut = head.close();
+        await settle(100);
+        await shut;
+        expect([...other.attempts.keys()]).toEqual(['o-hd:0']);
+        expect(other.raw).toEqual([]);
+    });
+
+    test('a tool that used up its fetches before the tail still fetches all the padding', async () => {
+        // Three chunks of file and, with the trailer, one of padding: four, so sixteen fetches.
+        const size = 3 * CHUNK - 10;
+        const h = harness({ sealed: { 'o-ex': { plaintextSize: size, thumbnailBytes: 1000 } } });
+        expect(chunkCount(contentLength(3, size, 1000))).toBe(4);
+        const reader = h.manager.openReader(paddedFile('ex', size, 1000), 1, { tool: true });
+        // Chunks 0 and 1 in turn past a cache of one: fifteen fetches, then the tail, the sixteenth.
+        for (let i = 0; i < 15; i++) {
+            const read = reader.read((i % 2) * CHUNK, 1);
+            await settle(100);
+            await read;
+        }
+        const tail = reader.read(size - 10, 10);
+        await settle(100);
+        expect((await tail).byteLength).toBe(10);
+        await settle(100);
+        expect(h.raw).toEqual(['v-ex:3']);
+        await reader.close();
+    });
+
+    test('a padding chunk that fails leaves the rest asked for, and is retried while the reader is open', async () => {
+        // Just under 512 MiB with the trailer: two chunks of padding alone after the file.
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-big': { plaintextSize: size, thumbnailBytes: 1000 } };
+        expect(chunkCount(contentLength(3, size, 1000)) - chunkCount(size)).toBe(2);
+        // The first padding chunk is refused for good: the second is still asked for.
+        const gone = harness({
+            sealed,
+            raw: (_v, index) => (index === 64 ? Promise.resolve({ status: 404, length: 0 }) : null),
+        });
+        const reader = gone.manager.openReader(paddedFile('big', size, 1000), 1, { tool: true });
+        const tail = reader.read(size - 10, 10);
+        await settle(500);
+        await tail;
+        expect(gone.raw).toEqual(['v-big:64', 'v-big:65']);
+        await expect(reader.read(0, 1)).rejects.toThrow();
+
+        // A busy store: retried while the reader is open, and nothing fails.
+        let tries = 0;
+        const busy = harness({
+            sealed,
+            raw: (_v, index) =>
+                index === 64 && ++tries === 1 ? Promise.resolve({ status: 503, length: 0 }) : null,
+        });
+        const open = busy.manager.openReader(paddedFile('big', size, 1000), 1, { tool: true });
+        const read = open.read(size - 10, 10);
+        await settle(10_000);
+        await read;
+        expect(busy.raw).toEqual(['v-big:64', 'v-big:64', 'v-big:65']);
+        const later = open.read(0, 1);
+        await settle(100);
+        expect((await later).byteLength).toBe(1);
+    });
+
+    test('after the reader closed, each padding chunk is tried once', async () => {
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-cz': { plaintextSize: size, thumbnailBytes: 1000 } };
+        const h = harness({ sealed, raw: () => Promise.resolve({ status: 503, length: 0 }) });
+        const reader = h.manager.openReader(paddedFile('cz', size, 1000), 1, { tool: true });
+        const read = reader.read(size - 10, 10);
+        read.catch(() => {});
+        const closing = reader.close();
+        await settle(10_000);
+        await closing;
+        expect(h.raw).toEqual(['v-cz:64', 'v-cz:65']);
+    });
+
+    test('a tool’s reader made to seek without end stops at four times the object', async () => {
+        const size = 4 * CHUNK;
+        const h = harness({});
+        const reader = h.manager.openReader(file('cy', size), 1, { tool: true });
+        let error: unknown = null;
+        let reads = 0;
+        // Chunks 0, 1 and 2 in turn past a cache of one: every read a fetch.
+        while (!error && reads < 40) {
+            const read = reader.read((reads++ % 3) * CHUNK, 1);
+            read.catch((e: unknown) => (error = e));
+            await settle(100);
+        }
+        expect(String(error)).toMatch(/more times than a tool needs/);
+        const fetched = [...h.attempts.values()].reduce((sum, n) => sum + n, 0);
+        expect(fetched).toBe(16);
+        await reader.close();
+    });
+
     test('a version whose envelope promises another chunk count than the listing is refused', async () => {
         // The listing said no thumbnail (one chunk); the envelope opened says a trailer (two).
         const size = CHUNK - 10;
@@ -639,5 +850,60 @@ describe('download manager', () => {
         expect(h.sinks[0]!.writes.length).toBe(4);
         // Every chunk was fetched exactly once: a pause is not a retry.
         expect([...h.attempts.values()].every((n) => n === 1)).toBe(true);
+    });
+});
+
+describe('fetching a range as ciphertext only', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    test('a store that sends the whole object is cut off past the length asked for', async () => {
+        let pulled = 0;
+        let cancelled = false;
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async () =>
+                    new Response(
+                        new ReadableStream<Uint8Array>({
+                            pull(controller) {
+                                pulled++;
+                                controller.enqueue(new Uint8Array(1024 * 1024));
+                            },
+                            cancel() {
+                                cancelled = true;
+                            },
+                        }),
+                        { status: 200 },
+                    ),
+            ),
+        );
+        const answer = await fetchCiphertextRange('https://store/o', 0, 99);
+        expect(answer.length).toBeGreaterThan(100);
+        expect(cancelled).toBe(true);
+        // A megabyte or two, not the gigabytes it would have sent.
+        expect(pulled).toBeLessThanOrEqual(3);
+    });
+
+    test('a store that goes quiet is given up after the idle timeout', async () => {
+        vi.stubGlobal(
+            'fetch',
+            vi.fn(
+                async (_url: string, init: RequestInit) =>
+                    new Response(
+                        new ReadableStream<Uint8Array>({
+                            start(controller) {
+                                init.signal?.addEventListener('abort', () =>
+                                    controller.error(new DOMException('Aborted', 'AbortError')),
+                                );
+                            },
+                        }),
+                        { status: 206 },
+                    ),
+            ),
+        );
+        const answer = fetchCiphertextRange('https://store/o', 0, 99, 1_000);
+        const failed = expect(answer).rejects.toThrow();
+        await settle(1_500);
+        await failed;
     });
 });

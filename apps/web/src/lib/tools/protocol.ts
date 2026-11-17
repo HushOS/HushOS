@@ -1,0 +1,81 @@
+/*
+ * What the page and a tools worker say to each other (docs/file-tools-design.md, section 2,
+ * "Workers"). A tools worker holds no keys: it asks the page for byte ranges of its sources
+ * over one MessagePort each, and hands back what it produces, one result at a time, each
+ * transferred, never copied. Shared by the page side (run.ts) and the worker side (worker.ts),
+ * so it imports nothing.
+ *
+ * The page does not trust the worker to keep to any of this: the worker parses files anyone
+ * could have uploaded, and a parser bug could hand it to them. Every limit here is enforced
+ * by the page, and a worker that breaks one fails its run. The page is also the worker's only
+ * way in or out: its policy lets it fetch nothing and load nothing (apps/web/server/csp.ts).
+ */
+
+/* Produced plaintext waiting for upload, across every run of the tab, before producing pauses (section 3, "Memory"). */
+export const TOOL_BUDGET_BYTES = 512 * 1024 * 1024;
+/* A worker that reports no progress this long, not counting waits on the page, is stopped. */
+export const TOOL_WATCHDOG_MS = 30_000;
+/* How often the watchdog's clock is brought up to date, and the most one tick may add: a tab the browser froze for a minute adds two seconds, not the minute the worker never had. */
+export const WATCHDOG_TICK_MS = 1_000;
+export const WATCHDOG_TICK_CAP_MS = 2_000;
+/* What a run that hung, crashed or met something it could not read tells the person. */
+export const TOOL_FAILED = "This file couldn't be processed.";
+/* The longest range one read may ask for (the zip listing's cap on a central directory), and the most a run may have asked for and not yet received, in reads and in bytes. */
+export const RANGE_READ_MAX = 64 * 1024 * 1024;
+export const READS_IN_FLIGHT = 2;
+/* The largest result a worker may hand back: what can be held as one in-memory upload (section 3). */
+export const RESULT_MAX_BYTES = 256 * 1024 * 1024;
+/*
+ * What a run's `done` may carry: a summary (counts, names, flags), plain data only and at most
+ * this much as JSON. Bytes travel as outputs, under the budget, never as the result.
+ */
+export const DONE_RESULT_MAX_BYTES = 64 * 1024;
+/* A result's name and type: plain strings no longer than these (the bytes are counted; these are not). */
+export const OUTPUT_NAME_MAX = 1_024;
+export const OUTPUT_MIME_MAX = 255;
+/*
+ * What one result costs the budget at least, so empty ones are not free: a name and the
+ * record around it are memory too. 8,192 results fill the default budget, whatever their
+ * size, so at most 8,192 wait unreleased across the tab: the save path must release each
+ * result as it uploads it (or drops it), not once the run is done, or a run of more small
+ * results than that waits for room forever.
+ */
+export const OUTPUT_MIN_CHARGE = 64 * 1024;
+/* A run's results the save path has not released, at most (the extraction entry cap). */
+export const OUTPUTS_UNRELEASED_MAX = 10_000;
+/*
+ * A run's results in all, by count and by bytes, unless the run sets its own: section 3's
+ * extraction caps, held by the page, so a worker taken over can't produce past them.
+ */
+export const RUN_OUTPUTS_MAX = 10_000;
+export const RUN_TOTAL_BYTES_MAX = 4 * 1024 * 1024 * 1024;
+
+/* From the page, on the worker itself. */
+export type ToWorker =
+    | {
+          type: 'start';
+          input: unknown;
+          /* One per source file, in order: its size, and the port its ranges are read over. */
+          sources: { size: number; port: MessagePort }[];
+          /* WebAssembly the page compiled, and data files it fetched: a tools worker may fetch nothing itself. */
+          modules: Record<string, WebAssembly.Module>;
+          files: Record<string, ArrayBuffer>;
+      }
+    /* The output `id` was taken and the budget has room: the worker may produce the next. */
+    | { type: 'accepted'; id: number };
+
+/* From the worker, on the worker itself. */
+export type ToPage =
+    | { type: 'progress'; done: number; total: number | null }
+    /* Ids count from 0, one at a time: the next only once the page accepted this one. */
+    | { type: 'output'; id: number; name: string; mime: string | null; bytes: ArrayBuffer }
+    /* A plain summary, DONE_RESULT_MAX_BYTES at most as JSON: no ArrayBuffer, typed array, Blob or class instance. */
+    | { type: 'done'; result: unknown }
+    /* `code` names a refusal the tool understood; the page turns it into words, or TOOL_FAILED. Never text for the person. */
+    | { type: 'fail'; code: string | null };
+
+/* Over a source's port. */
+export type RangeRequest = { type: 'read'; id: number; offset: number; length: number };
+export type RangeAnswer =
+    | { type: 'data'; id: number; bytes: ArrayBuffer }
+    | { type: 'fail'; id: number; message: string };

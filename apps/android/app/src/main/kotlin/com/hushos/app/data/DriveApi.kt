@@ -22,6 +22,30 @@ class NotFound(message: String) : Exception(message)
 class Unreachable : Exception("Could not reach HushOS. Check your connection.")
 
 /*
+ * A range request in flight, which another thread may cut off without waiting on it. The JDK's
+ * disconnect() takes the lock a read in progress holds (and a reader looping on a trickling body
+ * takes it straight back), so it can block for as long as the body lasts: the read loop stops at
+ * its next read instead, and the connection is closed on a thread of its own. A body that stalls
+ * outright still ends only at the read timeout.
+ */
+class RangeCall internal constructor(private val connection: HttpURLConnection) {
+    @Volatile var isCut = false
+        private set
+
+    fun cut() {
+        if (isCut) return
+        isCut = true
+        closers.execute { runCatching { connection.disconnect() } }
+    }
+
+    private companion object {
+        val closers: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newCachedThreadPool { task ->
+            Thread(task, "range-cut").apply { isDaemon = true }
+        }
+    }
+}
+
+/*
  * What every request says this client is: its HushOS version (versionName, set by the release pull request),
  * which the server compares with its minimum for `android` (packages/drive's checkClient). Builds before 1.0.0
  * sent the Drive protocol number here ("android/3").
@@ -140,6 +164,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
     companion object {
         /* The server's 409 for an abort of an upload that completed (packages/drive/src/server.ts abortUpload). */
         const val ALREADY_FINISHED = "This upload already finished."
+        /* The most a cut-off-able JSON answer (an object's address) may be: a few hundred bytes in practice. */
+        const val CUT_BODY_MAX = 64 * 1024
     }
 
     private val origin = session.origin
@@ -166,13 +192,33 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return connection
     }
 
-    private fun finish(connection: HttpURLConnection): JSONObject {
+    /*
+     * With a `call`, the body is read in pieces, stopping at the first read after a cut and past
+     * `CUT_BODY_MAX` bytes, so a server that trickles its answer can't hold the caller.
+     */
+    private fun finish(connection: HttpURLConnection, call: RangeCall? = null): JSONObject {
         val status: Int
         val text: String
         try {
+            if (call?.isCut == true) throw Unreachable()
             status = connection.responseCode
             val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            text = when {
+                stream == null -> ""
+                call == null -> stream.bufferedReader().use { it.readText() }
+                else -> stream.use { input ->
+                    val out = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(8 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (call.isCut) throw Unreachable()
+                        if (read < 0) break
+                        if (out.size() + read > CUT_BODY_MAX) throw ApiError(status, "The answer was too long.")
+                        out.write(buffer, 0, read)
+                    }
+                    out.toString(Charsets.UTF_8.name())
+                }
+            }
         } catch (error: java.io.IOException) {
             throw Unreachable()
         }
@@ -228,8 +274,19 @@ class DriveApi(val session: Shared.Session) : RootApi {
                 it.getJSONArray("children").objects().map(NodeView::from), if (it.isNull("nextCursor")) null else it.getString("nextCursor"))
         }
 
-    fun versionUrl(versionId: String, workspaceId: String): String =
-        get("/versions/$versionId/url" + q("workspaceId" to workspaceId)).getString("url")
+    /*
+     * A version's presigned address. `guard` gets the request as a `RangeCall`, as `range`'s does, so
+     * a tool run, the drain deadline or a sign-out can cut off an answer that never finishes.
+     */
+    fun versionUrl(
+        versionId: String,
+        workspaceId: String,
+        guard: (RangeCall, () -> JSONObject) -> JSONObject = { _, request -> request() },
+    ): String {
+        val connection = open("/versions/$versionId/url" + q("workspaceId" to workspaceId), "GET")
+        val call = RangeCall(connection)
+        return guard(call) { finish(connection, call) }.getString("url")
+    }
 
     fun versions(nodeId: String, workspaceId: String): List<VersionListView> =
         get("/nodes/$nodeId/versions" + q("workspaceId" to workspaceId)).getJSONArray("versions").objects().map {
@@ -339,15 +396,53 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return if (urls.length() > 0) urls.getJSONObject(0).getString("url") else null
     }
 
-    /* One byte range of a stored object, from its presigned URL. */
-    fun range(url: String, range: ByteRange): ByteArray {
+    /*
+     * One byte range of a stored object, from its presigned URL. `guard` runs the request with the
+     * connection in hand, so a file tool's run can cut it off when it ends (toolReaderOf).
+     */
+    fun range(
+        url: String,
+        range: ByteRange,
+        guard: (RangeCall, () -> ByteArray) -> ByteArray = { _, request -> request() },
+    ): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.setRequestProperty("Range", "bytes=${range.start}-${range.end}")
         connection.connectTimeout = 30_000
         connection.readTimeout = 120_000
-        val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
-        if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
-        return try { connection.inputStream.use { it.readBytes() } } catch (error: java.io.IOException) { throw Unreachable() }
+        val wanted = (range.end - range.start + 1uL).toLong()
+        val call = RangeCall(connection)
+        return guard(call) {
+            if (call.isCut) throw Unreachable()
+            val status = try { connection.responseCode } catch (error: java.io.IOException) { throw Unreachable() }
+            if (status != 206 && status != 200) throw ApiError(status, "Range request failed")
+            // Streamed and counted: a store that ignores the Range and sends the whole object is cut off as soon
+            // as it says so or passes the length asked for, never read whole.
+            if (connection.contentLengthLong > wanted) {
+                connection.disconnect()
+                throw ApiError(status, "The store sent more than was asked for")
+            }
+            try {
+                connection.inputStream.use { input ->
+                    val out = java.io.ByteArrayOutputStream(minOf(wanted, 16L shl 20).toInt())
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (call.isCut) throw Unreachable()
+                        if (read < 0) break
+                        total += read
+                        if (total > wanted) {
+                            connection.disconnect()
+                            throw ApiError(status, "The store sent more than was asked for")
+                        }
+                        out.write(buffer, 0, read)
+                    }
+                    out.toByteArray()
+                }
+            } catch (error: java.io.IOException) {
+                throw Unreachable()
+            }
+        }
     }
 
     fun putPart(url: String, data: ByteArray): String {

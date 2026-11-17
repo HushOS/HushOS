@@ -1,5 +1,6 @@
 package com.hushos.app.data
 
+import com.hushos.app.UnconfinedScopes
 import androidx.work.Configuration
 import androidx.work.ListenableWorker
 import androidx.work.WorkInfo
@@ -35,6 +36,10 @@ import java.util.UUID
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class UploadWorkerTest {
+    /* Every unconfined scope this test made ends with it (UnconfinedScopes). */
+    @After
+    fun cancelUnconfinedScopes() = UnconfinedScopes.cancelAll()
+
     private val server = FakeDrive()
     private lateinit var family: FamilyFixture
     private val app get() = RuntimeEnvironment.getApplication()
@@ -219,7 +224,7 @@ class UploadWorkerTest {
     /* What the panel reads when it is told the rows changed: the list as it is at that moment. */
     private fun readWhenTold(): () -> List<FailedTransfer>? {
         var seen: List<FailedTransfer>? = null
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined).launch {
+        UnconfinedScopes.create().launch {
             FailedTransfers.changes.drop(1).first()
             seen = FailedTransfers.of(app).all()
         }

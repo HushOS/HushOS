@@ -1,0 +1,331 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
+import { describe, expect, test } from 'vitest';
+import type { CryptoRequests, CryptoResults } from '@hushos/crypto';
+import type { DriveApi } from '@hushos/drive/api';
+import type { DriveNode, Rpc } from '@hushos/drive/client';
+import { createDownloadManager } from '@hushos/drive/downloads';
+import type { ToPage, ToWorker } from './protocol';
+import { memoryReader, readAllowance, serveRanges, type RangeReader } from './ranges';
+import { serveTool, ToolError, type ToolContext } from './worker';
+
+/*
+ * Both ends of the range port, over a real MessageChannel: the worker runtime's sources
+ * (worker.ts) asking, the page's server (ranges.ts) answering from the download engine's
+ * real reader, whose chunks come from a stand-in crypto worker. Chunk i of the file is a
+ * pattern no other chunk repeats, so bytes from the wrong chunk or the wrong offset show.
+ */
+
+const CHUNK = 8 * 1024 * 1024;
+
+const patternAt = (index: number, i: number) => (index * 131 + i * 7 + (i >> 8)) & 0xff;
+function chunkBytes(index: number, size: number) {
+    const bytes = new Uint8Array(size);
+    for (let i = 0; i < size; i++) bytes[i] = patternAt(index, i);
+    return bytes;
+}
+
+function fileNode(size: number): DriveNode {
+    return {
+        id: 'f',
+        workspaceId: 'ws',
+        parentId: 'root',
+        kind: 'file',
+        keyEpoch: 1,
+        parentKeyEpoch: 1,
+        keyEnvelope: 'k',
+        prevKeyEnvelope: null,
+        prevKeyEpoch: null,
+        prevParentKeyEpoch: null,
+        metadataVersion: 1,
+        metadataEnvelope: 'm',
+        currentVersion: {
+            id: 'v-f',
+            objectId: 'o-f',
+            contentKeyEnvelope: 'c',
+            status: 'ready',
+            objectStatus: 'ready',
+            contentSuite: 1,
+            chunkSize: CHUNK,
+            chunkCount: Math.ceil(size / CHUNK),
+            contentNonce: 'n',
+            plaintextSize: String(size),
+            ciphertextSize: String(size + 16 * Math.ceil(size / CHUNK)),
+            readyAt: '',
+            signer: null,
+            signature: null,
+        },
+        trashedAt: null,
+        changeSeq: 1,
+        createdAt: '',
+        updatedAt: '',
+        metadata: { name: 'f.zip', mime: null, size, modified: null },
+        name: 'f.zip',
+        content: { plaintextSize: size, thumbnailBytes: 0 },
+        openError: null,
+        envelopeSuite: 1,
+        metadataSigner: null,
+        metadataSignature: null,
+        integrity: null,
+    };
+}
+
+/* The download engine's reader, its chunks decrypted by a stand-in worker. */
+function driveReader(size: number, fetched: number[]) {
+    const rpc: Rpc = async <K extends keyof CryptoRequests>(
+        operation: K,
+        input: CryptoRequests[K],
+    ): Promise<CryptoResults[K]> => {
+        if (operation === 'driveDownloadOpen')
+            return {
+                chunkCount: Math.ceil(size / CHUNK),
+                plaintextSize: size,
+                thumbnailBytes: 0,
+            } as CryptoResults[K];
+        if (operation === 'driveDownloadChunk') {
+            const { index } = input as CryptoRequests['driveDownloadChunk'];
+            fetched.push(index);
+            const length = Math.min(CHUNK, size - index * CHUNK);
+            return { ok: true, index, plaintext: chunkBytes(index, length) } as CryptoResults[K];
+        }
+        return { closed: true } as CryptoResults[K];
+    };
+    const api = {
+        downloadUrl: async () => ({
+            url: 'https://store/o-f',
+            urlExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        }),
+    } as unknown as DriveApi;
+    const manager = createDownloadManager({
+        rpc,
+        api,
+        openSink: async () => {
+            throw new Error('no downloads here');
+        },
+        listFolder: async () => {
+            throw new Error('no folders here');
+        },
+        ensureOpen: async () => {},
+    });
+    return manager.openReader(fileNode(size), 2);
+}
+
+/* A tool run by the real worker runtime on a scope the test plays the page for. */
+function runTool<R>(
+    sources: RangeReader[],
+    work: (input: unknown, context: ToolContext) => Promise<R>,
+) {
+    const sent: ToPage[] = [];
+    const scope = {
+        onmessage: null as ((event: MessageEvent<ToWorker>) => void) | null,
+        // Cloned and transferred as a worker's postMessage does.
+        postMessage: (message: ToPage, transfer: Transferable[] = []) =>
+            void sent.push(structuredClone(message, { transfer })),
+    };
+    serveTool(work, scope);
+    const stops: (() => void)[] = [];
+    // The page's limits as a run sets them: a worker runtime that broke one would be caught here.
+    const allowance = readAllowance();
+    const abused: number[] = [];
+    const channels = sources.map((reader) => {
+        const channel = new MessageChannel();
+        stops.push(
+            serveRanges(channel.port1, reader, { allowance, onAbuse: () => abused.push(1) }),
+        );
+        return { size: reader.size, port: channel.port2 };
+    });
+    scope.onmessage!({
+        data: { type: 'start', input: null, sources: channels, modules: {}, files: {} },
+    } as MessageEvent<ToWorker>);
+    const finished = new Promise<ToPage>((resolve) => {
+        const check = () => {
+            const last = sent.find((m) => m.type === 'done' || m.type === 'fail');
+            if (last) resolve(last);
+            else setTimeout(check, 1);
+        };
+        check();
+    });
+    const accept = (id: number) =>
+        scope.onmessage!({ data: { type: 'accepted', id } } as MessageEvent<ToWorker>);
+    return { sent, finished, accept, abused, stop: () => stops.forEach((stop) => stop()) };
+}
+
+const same = (a: Uint8Array, b: Uint8Array) => Buffer.from(a).equals(Buffer.from(b));
+
+describe('the range port', () => {
+    test('a range across a chunk boundary of a Drive file arrives whole and in order', async () => {
+        const size = 2 * CHUNK + 1000;
+        const fetched: number[] = [];
+        const reader = driveReader(size, fetched);
+        const { finished, stop } = runTool([reader], async (_input, { sources }) => {
+            const [source] = sources;
+            return {
+                size: source!.size,
+                across: await source!.read(CHUNK - 3, 10),
+                tail: await source!.read(2 * CHUNK + 990, 100),
+                twoBoundaries: await source!.read(CHUNK - 1, CHUNK + 2),
+                past: await source!.read(size, 10),
+            };
+        });
+        const done = await finished;
+        stop();
+        expect(done.type).toBe('done');
+        const result = (done as Extract<ToPage, { type: 'done' }>).result as Record<
+            string,
+            Uint8Array | number
+        >;
+        expect(result.size).toBe(size);
+        const expected = (offset: number, length: number) => {
+            const out = new Uint8Array(length);
+            for (let i = 0; i < length; i++) {
+                const at = offset + i;
+                out[i] = patternAt(Math.floor(at / CHUNK), at % CHUNK);
+            }
+            return out;
+        };
+        expect(same(result.across as Uint8Array, expected(CHUNK - 3, 10))).toBe(true);
+        // The short last chunk: clipped at the end of the file.
+        expect(same(result.tail as Uint8Array, expected(2 * CHUNK + 990, 10))).toBe(true);
+        expect(same(result.twoBoundaries as Uint8Array, expected(CHUNK - 1, CHUNK + 2))).toBe(true);
+        expect((result.past as Uint8Array).byteLength).toBe(0);
+        expect([...new Set(fetched)].sort((a, b) => a - b)).toEqual([0, 1, 2]);
+        await reader.close();
+    });
+
+    test('reads two sources at once, each from its own file', async () => {
+        const a = memoryReader(new TextEncoder().encode('first file'));
+        const b = memoryReader(new TextEncoder().encode('second'));
+        const { finished } = runTool([a, b], async (_input, { sources }) => {
+            const [x, y] = await Promise.all([sources[0]!.read(0, 5), sources[1]!.read(0, 6)]);
+            return new TextDecoder().decode(x) + '+' + new TextDecoder().decode(y);
+        });
+        expect(await finished).toEqual({ type: 'done', result: 'first+second' });
+    });
+
+    test('a memory reader’s bytes are copied, never moved out from under the page', async () => {
+        const bytes = new TextEncoder().encode('held by the page');
+        const { finished } = runTool([memoryReader(bytes)], async (_i, { sources }) =>
+            sources[0]!.read(0, 4),
+        );
+        await finished;
+        expect(bytes.byteLength).toBe(16);
+        expect(new TextDecoder().decode(bytes)).toBe('held by the page');
+    });
+
+    test('the page refuses a read it should not allocate, and the tool fails with the generic words', async () => {
+        const huge = { size: 2 ** 40, read: async () => new Uint8Array(0) };
+        const channel = new MessageChannel();
+        const stop = serveRanges(channel.port1, huge);
+        const answers: unknown[] = [];
+        channel.port2.onmessage = (event) => answers.push(event.data);
+        // A worker taken over by a hostile file asking for more than any tool reads at once.
+        channel.port2.postMessage({ type: 'read', id: 1, offset: 0, length: 65 * 1024 * 1024 });
+        channel.port2.postMessage({ type: 'read', id: 2, offset: -1, length: 1 });
+        channel.port2.postMessage({ type: 'read', id: 3, offset: 0.5, length: 1 });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(answers).toEqual([
+            { type: 'fail', id: 1, message: 'The read was too long.' },
+            { type: 'fail', id: 2, message: 'The read was not valid.' },
+            { type: 'fail', id: 3, message: 'The read was not valid.' },
+        ]);
+        stop();
+
+        // A read failing inside a tool is an error the tool did not understand: the generic words.
+        const failing = { size: 10, read: async () => Promise.reject(new Error('network')) };
+        const { finished } = runTool([failing], async (_i, { sources }) => sources[0]!.read(0, 4));
+        expect(await finished).toEqual({ type: 'fail', code: null });
+        // A refusal the tool understood is sent as its code, for the page to put into words.
+        const refused = runTool([memoryReader(new Uint8Array(4))], async () => {
+            throw new ToolError('password');
+        });
+        expect(await refused.finished).toEqual({ type: 'fail', code: 'password' });
+    });
+
+    test('a closed memory reader lets go of its bytes, never the caller’s, and reads nothing more', async () => {
+        const bytes = new Uint8Array([1, 2, 3, 4]);
+        const reader = memoryReader(bytes);
+        expect(await reader.read(1, 2)).toEqual(new Uint8Array([2, 3]));
+        await reader.close?.();
+        await expect(reader.read(0, 4)).rejects.toThrow();
+        expect(bytes).toEqual(new Uint8Array([1, 2, 3, 4]));
+    });
+
+    test('a read in flight keeps nothing else its request carried', async () => {
+        setFlagsFromString('--expose-gc');
+        const gc = runInNewContext('gc') as () => void;
+        const pending: ((bytes: Uint8Array) => void)[] = [];
+        const reader: RangeReader = {
+            size: 100,
+            read: () => new Promise<Uint8Array>((resolve) => pending.push(resolve)),
+        };
+        // The page's end, called directly: a real port would clone the request out of reach.
+        const port = {
+            onmessage: null as ((event: MessageEvent) => void) | null,
+            sent: [] as unknown[],
+            postMessage(message: unknown) {
+                this.sent.push(message);
+            },
+            close() {},
+        };
+        serveRanges(port as unknown as MessagePort, reader);
+        let ref: WeakRef<ArrayBuffer> | null = null;
+        (() => {
+            const extra = new ArrayBuffer(16 * 1024 * 1024);
+            ref = new WeakRef(extra);
+            port.onmessage!({
+                data: { type: 'read', id: 7, offset: 0, length: 4, extra },
+            } as MessageEvent);
+        })();
+        expect(pending).toHaveLength(1);
+        let gone = false;
+        for (let i = 0; i < 10 && !gone; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            gc();
+            gone = ref!.deref() === undefined;
+        }
+        expect(gone).toBe(true);
+        pending[0]!(new Uint8Array([1, 2, 3, 4]));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(port.sent).toMatchObject([{ type: 'data', id: 7 }]);
+    });
+
+    test('a tool asking for many ranges at once is paced within what the page allows', async () => {
+        const bytes = new Uint8Array(1000).map((_, i) => i & 0xff);
+        const { finished, abused } = runTool([memoryReader(bytes)], async (_i, { sources }) => {
+            const reads = await Promise.all(
+                Array.from({ length: 10 }, (_, i) => sources[0]!.read(i * 100, 100)),
+            );
+            return reads.every((read, i) => read[0] === ((i * 100) & 0xff));
+        });
+        expect(await finished).toEqual({ type: 'done', result: true });
+        expect(abused).toEqual([]);
+    });
+
+    test('a produced result is transferred to the page and the next waits for its acceptance', async () => {
+        let produced = 0;
+        let kept = -1;
+        const { sent, finished, accept } = runTool([], async (_i, { produce }) => {
+            const bytes = new Uint8Array(1024).fill(7);
+            await produce('a.bin', bytes);
+            kept = bytes.byteLength;
+            produced++;
+            await produce('b.bin', new Uint8Array(8));
+            produced++;
+            return 'ok';
+        });
+        const outputs = () =>
+            sent.filter((m): m is Extract<ToPage, { type: 'output' }> => m.type === 'output');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(outputs()).toHaveLength(1);
+        expect(outputs()[0]!.bytes.byteLength).toBe(1024);
+        expect(produced).toBe(0);
+        accept(0);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        // Moved, not copied: the worker no longer holds the first result.
+        expect(kept).toBe(0);
+        expect(produced).toBe(1);
+        expect(outputs()).toHaveLength(2);
+        accept(1);
+        expect(await finished).toEqual({ type: 'done', result: 'ok' });
+    });
+});

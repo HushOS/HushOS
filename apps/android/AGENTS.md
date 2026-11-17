@@ -634,6 +634,39 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
     - `TestListenableWorkerBuilder` takes the request `uploadRequest` builds.
     - The test WorkManager needs a synchronous task executor too, or the worker's foreground notice blocks on its own query.
 
+### File tools harness
+
+- `data/ToolRuns.kt`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, a connection in flight is disconnected and a retry's wait cut short, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns; a caller cancelled before the thread starts gives the slot back itself.
+- Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
+- When a run's thread returns, `ToolRuns` calls `control.finish()`: every `VersionReader` made under it drops its chunks and its key at once, not when its Kotlin wrapper is collected. A finished run is not `isCancelled()`: read the state before `finish()`.
+- `DriveApi.range` streams the body and refuses a store that sends more than the range, by its length or as it arrives.
+- Its `guard` gets a `RangeCall`; cut a request in flight with `call.cut()`, never `HttpURLConnection.disconnect()` from another thread. The JDK's disconnect waits on the lock a read in progress holds, and a reader looping on a trickling body takes it straight back, so it blocked a timer thread (and the sign-out's wipe) for seconds. `cut()` sets a flag the read loop checks after every read and disconnects on a thread of its own. A body that stalls outright still ends only at the 120 s read timeout.
+- `DriveApi.versionUrl` takes the same kind of `guard`: a tool run's address requests (the first and each renewal) go through `Cutoff.whileRunning`, and a drain's renewal through the drain's `watch`, so the run's end, the deadline and a sign-out cut those too. With a `RangeCall`, the JSON body is read in pieces, at most 64 KiB.
+- `toolReaderOf` copies the version id before building its functions: nothing a reader or a background drain keeps may hold the `OpenedVersion`, whose content carries the key (`nothingTheReaderKeepsHoldsTheVersionsKey`).
+- `ToolRuns.budget` is the process's one `ToolBudget`: tools produce into it with their run's control, which answers the budget's generation; whoever takes a result releases it with that generation when uploaded or dropped. A release from before a sign-out's `clear()` takes nothing from the next account.
+- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()` and `ToolRuns.budget.clear()`: nothing runs past a sign-out, and the budget starts empty. A run holds one cancellation from before it is announced until its thread ends, so a sign-out reaches it waiting, being let in or running.
+- The watchdog's clock is injectable (`clock =`); tests use one that moves a second per read. The watchdogs and the connection cut-offs run on timer threads of the harness's own (`Timers.watchdogs`, `Timers.cutoffs`), never a shared dispatcher, and never one behind the other.
+- Tests that implement one of the core's foreign traits (`ObjectSource`, `ToolClock`, and any added later) go in the test package `com.hushos.app.foreign`, which runs in a JVM of its own (`:app:testDebugForeignTraits`; `testDebugUnitTest` runs it after the rest). UniFFI keeps one callback table per process, set by whichever class loader loaded the bindings last, and Robolectric loads them again in its sandbox, so in the shared JVM a callback can reach the other loader's objects: garbled answers, a watchdog that never fires. A test elsewhere that implements a foreign trait passes alone and fails in the full run.
+    - One of them alone: `./gradlew :app:testDebugForeignTraits --tests 'com.hushos.app.foreign.ToolRunsTest'`. From Android Studio, the gutter's Run on a class or test there starts a JVM for it alone, which is fine.
+- Tests that run code on `Dispatchers.Unconfined` take their scope from `UnconfinedScopes` and cancel it after each test.
+- `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the `RangeCall` to cut off).
+- Tests: `ToolRunsTest`.
+
+### Tools on a device
+
+The unit tests use the host JVM's networking. `src/androidTest/.../ToolCutoffTest.kt` runs the cut-offs on Android's own: a run's end cutting off a trickling range and a trickling address request, and a padding drain's deadline cutting off a trickling range. CI runs no instrumented tests; run it by hand after changing `RangeCall`, `Cutoff`, `PaddingDrains` or `DriveApi.range`/`versionUrl`.
+
+- Boot an emulator of your own, headless and read-only, so nothing it installs is kept and nobody else's emulator is touched:
+    - `$ANDROID_HOME/emulator/emulator -avd Pixel_9_API_36 -port 5560 -read-only -no-window -no-audio -no-boot-anim -no-snapshot &`
+    - Wait for `adb -s emulator-5560 shell getprop sys.boot_completed` to print `1`.
+- Run it on that emulator only: `adb -s emulator-5560 logcat -c && ANDROID_SERIAL=emulator-5560 ./gradlew :app:connectedDebugAndroidTest`.
+    - Gradle exits 0 even when the APK did not install, so check the result: `grep -o 'tests="[0-9]*" failures="[0-9]*"' app/build/outputs/androidTest-results/connected/debug/TEST-*.xml` must say `tests="3" failures="0"`.
+    - `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (and `tests="0"`): the AVD already holds a build signed with another key. On the read-only emulator run `adb -s emulator-5560 uninstall com.hushos.app` and run the tests again; the uninstall may answer `DELETE_FAILED_INTERNAL_ERROR`, and the second run installs all the same (seen twice on 2026-11-17).
+- Read the timings: `adb -s emulator-5560 logcat -d -s EmulatorCutoff:I`. Each cut should take well under the tests' 2 s (on 2026-11-17, Android 16 arm64: 8 to 34 ms for a range or an address, 303 to 307 ms for a 300 ms drain deadline).
+- Stop it: `adb -s emulator-5560 emu kill`.
+
 ## Saves from other apps (write-backs)
 
 Another app's saves of one file through the provider are coalesced in `data/WriteBacks.kt`. Test: `FilesSaveOrderTest`.

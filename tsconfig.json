@@ -9,6 +9,10 @@
     ],
     "compilerOptions": {
         "lib": ["ES2022", "DOM", "DOM.Iterable"],
-        "types": ["bun"]
+        "types": ["bun"],
+        /* The e2e fixtures build web app modules, which import each other by this alias. */
+        "paths": {
+            "@/*": ["./apps/web/src/*"]
+        }
     }
 }

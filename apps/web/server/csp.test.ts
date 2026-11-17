@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { buildCsp, parseOrigins, storeOrigin } from './csp';
+import { buildCsp, buildToolWorkerCsp, isToolWorkerScript, parseOrigins, storeOrigin } from './csp';
 
 /*
  * The policy is the second line behind the sanitiser: it must name the store
@@ -71,5 +71,23 @@ describe('csp', () => {
             ),
         ).toEqual(['https://a.example', 'https://b.example:8443']);
         expect(parseOrigins(undefined)).toEqual([]);
+    });
+
+    test('a tools worker’s policy names no source: no fetch, no import, no workers', () => {
+        const policy = buildToolWorkerCsp();
+        expect(policy).toContain("default-src 'none'");
+        // WebAssembly the page compiled may be instantiated; no script may be loaded at all.
+        expect(policy).toContain("script-src 'wasm-unsafe-eval'");
+        expect(policy).not.toMatch(/'self'|https?:|\*/);
+        expect(policy).not.toContain("'unsafe-eval'");
+        expect(policy).not.toContain('connect-src');
+        expect(policy).toContain("worker-src 'none'");
+    });
+
+    test('only a tools worker’s script gets the narrower policy', () => {
+        expect(isToolWorkerScript('/assets/archive.tool-worker-Dq3_x-9a.js')).toBe(true);
+        expect(isToolWorkerScript('/assets/json.worker-DSHp7M8s.js')).toBe(false);
+        expect(isToolWorkerScript('/assets/archive.tool-worker-Dq3.js/../x')).toBe(false);
+        expect(isToolWorkerScript('/app/assets/archive.tool-worker-Dq3.js')).toBe(false);
     });
 });

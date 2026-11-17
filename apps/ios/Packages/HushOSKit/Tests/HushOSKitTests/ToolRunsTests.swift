@@ -1,0 +1,607 @@
+import CryptoKit
+import Foundation
+import HushOSCore
+import Testing
+@testable import HushOSKit
+
+/*
+ * The harness file tools run in: the core's reader over an object served by an async fetch (as
+ * the store's is), read across a chunk boundary on the run's own thread; one run at a time;
+ * cancel, cancelAll and the watchdog ending a run and the thread behind it; a task cancelled
+ * before it asks never starting; and ToolReaders against a stubbed Drive API and store,
+ * renewing an expired address and cancelling a request in flight when the run ends. Each test
+ * fails if its rule is broken. The watchdog runs on a clock that moves a second each time it is
+ * read, so no test depends on how fast this machine is.
+ */
+@Suite(.serialized) struct ToolRunsTests {
+    static let chunk: UInt64 = 8 * 1024 * 1024
+
+    /* A second each time the core reads it: each watchdog check, and each progress. */
+    final class Stepping: ToolClock, @unchecked Sendable {
+        private let lock = NSLock()
+        private var now: UInt64 = 0
+        func nowMillis() -> UInt64 { lock.lock(); defer { lock.unlock() }; now += 1000; return now }
+    }
+
+    /* A file of `size` bytes sealed as an upload stores it, and the bytes. */
+    static func sealed(_ size: UInt64) throws -> (content: Content, object: Data, plain: Data) {
+        // Not periodic in the chunk size, so bytes read from the wrong place change the digest.
+        var plain = Data(count: Int(size))
+        plain.withUnsafeMutableBytes { raw in
+            let bytes = raw.bindMemory(to: UInt8.self)
+            var x: UInt32 = 0x9e37_79b9
+            for i in 0 ..< bytes.count {
+                x ^= x << 13; x ^= x >> 17; x ^= x << 5
+                bytes[i] = UInt8(truncatingIfNeeded: x)
+            }
+        }
+        let content = Content(
+            workspaceId: "11111111-1111-4111-8111-111111111111", objectId: "66666666-6666-4666-8666-666666666666",
+            suite: 3, key: try randomBytes(length: 32), nonce: try randomBytes(length: 16), plaintextSize: size, thumbnailBytes: 0
+        )
+        let layout = try contentLayout(suite: 3, plaintextSize: size, thumbnailBytes: 0)
+        var object = Data()
+        for index in 0 ..< layout.chunkCount {
+            let start = Int(min(index * chunk, size))
+            let length = Int(chunkLength(plaintextSize: size, index: index))
+            object.append(try chunkEncrypt(content: content, index: index, plaintext: plain.subdata(in: start ..< start + length)))
+        }
+        return (content, object, plain)
+    }
+
+    /* Polls until `condition` holds, for up to five seconds. */
+    func eventually(_ condition: @Sendable () async -> Bool) async throws {
+        for _ in 0 ..< 500 {
+            if await condition() { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        Issue.record("the condition never held")
+    }
+
+    @Test func aRunReadsAcrossAChunkBoundaryThroughAnAsyncStore() async throws {
+        let size = Self.chunk + 5000
+        let (content, object, plain) = try Self.sealed(size)
+        let source = StoreSource { range in
+            // The store answers later, on another task, as a URLSession would.
+            try await Task.sleep(for: .milliseconds(5))
+            return object.subdata(in: Int(range.start) ..< Int(range.end) + 1)
+        }
+        let runs = ToolRuns()
+        let digest = try await runs.run("Digest") { control in
+            let reader = try VersionReader(source: source, content: content, control: control)
+            return try rangeDigest(reader: reader, control: control, offset: Self.chunk - 100, length: 300)
+        }
+        let start = Int(Self.chunk - 100)
+        #expect(digest == Data(SHA256.hash(data: plain.subdata(in: start ..< start + 300))))
+    }
+
+    @Test func aSecondRunWaitsBehindTheFirstAndStartsWhenItEnds() async throws {
+        let runs = ToolRuns()
+        let gate = DispatchSemaphore(value: 0)
+        let log = Log()
+        let first = Task {
+            try await runs.run("Extracting Photos.zip") { _ in
+                log.add("first started")
+                gate.wait()
+                log.add("first ended")
+                return 1
+            }
+        }
+        try await eventually { await runs.running == "Extracting Photos.zip" }
+        let states = Log()
+        let second = Task {
+            try await runs.run("Converting 3 photos", state: { states.add("\($0)") }) { _ in
+                log.add("second started")
+                return 2
+            }
+        }
+        try await eventually { states.items.contains("\(ToolRunState.waiting(behind: "Extracting Photos.zip"))") }
+        #expect(!log.items.contains("second started"))
+        gate.signal()
+        #expect(try await first.value == 1)
+        #expect(try await second.value == 2)
+        #expect(log.items == ["first started", "first ended", "second started"])
+        try await eventually { await runs.running == nil }
+    }
+
+    @Test func cancelEndsTheRunAndStopsItsThreadAtTheNextCall() async throws {
+        let runs = ToolRuns()
+        let log = Log()
+        let task = Task {
+            try await runs.run("Compressing") { control in
+                log.add("started")
+                // Busy, reporting progress: only the cancel can end it.
+                while true {
+                    do { try control.progress() } catch { log.add("stopped"); throw error }
+                    Thread.sleep(forTimeInterval: 0.005)
+                }
+            }
+        }
+        try await eventually { log.items.contains("started") }
+        task.cancel()
+        await #expect(throws: ToolCancelled.self) { try await task.value }
+        try await eventually { log.items.contains("stopped") }
+        // The slot is free again once the thread has returned.
+        try await eventually { await runs.running == nil }
+        #expect(try await runs.run("Next") { _ in 3 } == 3)
+    }
+
+    @Test func aTaskCancelledBeforeItAsksNeverStarts() async throws {
+        let runs = ToolRuns()
+        let log = Log()
+        let states = Log()
+        let task = Task {
+            // Busy with something that doesn't look, until cancelled; then it asks for a run.
+            while !Task.isCancelled { await Task.yield() }
+            return try await runs.run("Too late", state: { states.add("\($0)") }) { _ in log.add("ran"); return 0 }
+        }
+        task.cancel()
+        await #expect(throws: ToolCancelled.self) { try await task.value }
+        #expect(log.items.isEmpty)
+        // Never said to be running: only cancelled.
+        #expect(states.items == ["\(ToolRunState.cancelled)"])
+        try await eventually { await runs.running == nil }
+        #expect(try await runs.run("Next") { _ in 3 } == 3)
+    }
+
+    @Test func aWaitingRunCancelledNeverStarts() async throws {
+        let runs = ToolRuns()
+        let gate = DispatchSemaphore(value: 0)
+        let log = Log()
+        let first = Task { try await runs.run("First") { _ in gate.wait(); return 0 } }
+        try await eventually { await runs.running == "First" }
+        let states = Log()
+        let second = Task { try await runs.run("Second", state: { states.add("\($0)") }) { _ in log.add("second ran"); return 0 } }
+        try await eventually { states.items.contains("\(ToolRunState.waiting(behind: "First"))") }
+        second.cancel()
+        await #expect(throws: ToolCancelled.self) { try await second.value }
+        gate.signal()
+        _ = try await first.value
+        try await eventually { await runs.running == nil }
+        #expect(log.items.isEmpty)
+    }
+
+    @Test func cancelAllEndsTheRunningAndTheWaiting() async throws {
+        let runs = ToolRuns()
+        let log = Log()
+        let running = Task {
+            try await runs.run("Running") { control in
+                while true { try control.check(); Thread.sleep(forTimeInterval: 0.005) }
+            }
+        }
+        try await eventually { await runs.running == "Running" }
+        let states = Log()
+        let waiting = Task { try await runs.run("Waiting", state: { states.add("\($0)") }) { _ in log.add("waiting ran"); return 0 } }
+        try await eventually { states.items.contains("\(ToolRunState.waiting(behind: "Running"))") }
+        runs.cancelAll()
+        await #expect(throws: ToolCancelled.self) { try await running.value }
+        await #expect(throws: ToolCancelled.self) { try await waiting.value }
+        try await eventually { await runs.running == nil }
+        #expect(log.items.isEmpty)
+    }
+
+    @Test func aSignOutAsARunStartsWaitingEndsIt() async throws {
+        // cancelAll from the .waiting callback: the waiting run is reached, not only the running one.
+        let runs = ToolRuns()
+        let gate = DispatchSemaphore(value: 0)
+        let log = Log()
+        let first = Task { try await runs.run("First") { _ in gate.wait(); return 0 } }
+        try await eventually { await runs.running == "First" }
+        let second = Task {
+            try await runs.run("Second", state: { if case .waiting = $0 { runs.cancelAll() } }) { _ in log.add("second ran"); return 0 }
+        }
+        await #expect(throws: ToolCancelled.self) { try await second.value }
+        await #expect(throws: ToolCancelled.self) { try await first.value }
+        gate.signal()
+        try await eventually { await runs.running == nil }
+        #expect(log.items.isEmpty)
+    }
+
+    @Test func aSignOutAsARunIsLetInStartsNothing() async throws {
+        // cancelAll from the .running callback: after the slot is taken, before the thread starts.
+        let runs = ToolRuns()
+        let log = Log()
+        await #expect(throws: ToolCancelled.self) {
+            try await runs.run("Let in", state: { if case .running = $0 { runs.cancelAll() } }) { _ in log.add("ran"); return 0 }
+        }
+        #expect(log.items.isEmpty)
+        try await eventually { await runs.running == nil }
+        #expect(try await runs.run("Next") { _ in 3 } == 3)
+    }
+
+    @Test func theWatchdogFailsARunThatReportsNoProgress() async throws {
+        let runs = ToolRuns()
+        let log = Log()
+        let states = Log()
+        await #expect(throws: ToolFailed(toolFailedMessage())) {
+            try await runs.run("Stuck", poll: .milliseconds(5), clock: Stepping(), state: { states.add("\($0)") }) { control in
+                // A parser looping without progress; it only checks it has not been stopped.
+                while true {
+                    do { try control.check() } catch { log.add("stopped"); throw error }
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+            }
+        }
+        #expect(states.items.last == "\(ToolRunState.failed(toolFailedMessage()))")
+        try await eventually { log.items.contains("stopped") }
+    }
+
+    @Test func progressKeepsTheWatchdogAway() async throws {
+        let runs = ToolRuns()
+        // Many more checks than the watchdog's 30 seconds, each a second: only progress keeps the run alive.
+        let value = try await runs.run("Slow but alive", poll: .milliseconds(2), clock: Stepping()) { control in
+            for _ in 0 ..< 400 {
+                Thread.sleep(forTimeInterval: 0.001)
+                try control.progress()
+            }
+            return 7
+        }
+        #expect(value == 7)
+    }
+
+    /* The Drive API and store on a stub: version addresses that expire after one use, and ranges. */
+    static func stubbedAPI(_ object: Data) -> DriveAPI {
+        StoreStub.reset(object)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StoreStub.self]
+        return DriveAPI(session: SharedKeychain.Session(origin: "https://drive.test", token: "t", userId: "u"), configuration: configuration)
+    }
+
+    @Test func toolReadersReadRangesAndRenewAnExpiredAddress() async throws {
+        let size = Self.chunk + 5000
+        let (content, object, plain) = try Self.sealed(size)
+        let api = Self.stubbedAPI(object)
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control)
+        let read = try await Task.detached { try reader.readAt(offset: Self.chunk - 10, length: 20) }.value
+        let start = Int(Self.chunk - 10)
+        #expect(read == plain.subdata(in: start ..< start + 20))
+        #expect(StoreStub.state.refused == 1)
+        #expect(StoreStub.state.addresses == 2)
+        #expect(StoreStub.state.ranges.count == 2)
+    }
+
+    @Test func aRunCancelledAsTheTailComesStillFetchesThePadding() async throws {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        let size = Self.chunk - 100
+        let content = Content(
+            workspaceId: "11111111-1111-4111-8111-111111111111", objectId: "66666666-6666-4666-8666-666666666666",
+            suite: 3, key: try randomBytes(length: 32), nonce: try randomBytes(length: 16), plaintextSize: size, thumbnailBytes: 2000
+        )
+        let layout = try contentLayout(suite: 3, plaintextSize: size, thumbnailBytes: 2000)
+        #expect(layout.chunkCount == 2)
+        let tail = try chunkEncrypt(content: content, index: 0, plaintext: Data(count: Int(size)))
+        // The padding and the trailer are never opened: zeros of the right length do.
+        let object = tail + Data(count: Int(layout.ciphertextSize) - tail.count)
+        let api = Self.stubbedAPI(object)
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control)
+        StoreStub.state.stallAt = 0
+        StoreStub.state.stall = true
+        let reading = Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: size - 10, length: 10); return true } catch { return false }
+        }
+        // The tail is on its way when the run is cancelled.
+        try await eventually { StoreStub.state.stalled == 1 }
+        let cancelled = ContinuousClock.now
+        control.cancel()
+        // The read returns at once (the run's thread, and its slot, go free)...
+        #expect(await reading.value == false)
+        #expect(ContinuousClock.now - cancelled < .seconds(2))
+        // ...and the padding is still asked for, in the background, to the object's end.
+        try await eventually { StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)") }
+    }
+
+    @Test func aRunEndedBySignOutDuringItsTailFetchDrainsNothing() async throws {
+        // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
+        let size = Self.chunk - 100
+        let content = Content(
+            workspaceId: "11111111-1111-4111-8111-111111111111", objectId: "66666666-6666-4666-8666-666666666666",
+            suite: 3, key: try randomBytes(length: 32), nonce: try randomBytes(length: 16), plaintextSize: size, thumbnailBytes: 2000
+        )
+        let layout = try contentLayout(suite: 3, plaintextSize: size, thumbnailBytes: 2000)
+        let tail = try chunkEncrypt(content: content, index: 0, plaintext: Data(count: Int(size)))
+        let object = tail + Data(count: Int(layout.ciphertextSize) - tail.count)
+        let api = Self.stubbedAPI(object)
+        let drains = PaddingDrains()
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(
+            api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control, drains: drains
+        )
+        StoreStub.state.stallAt = 0
+        StoreStub.state.stall = true
+        let reading = Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: size - 10, length: 10); return true } catch { return false }
+        }
+        try await eventually { StoreStub.state.stalled == 1 }
+        // Sign-out with the tail in flight: the drains move on before the run's thread hands over
+        // the padding it owes, which comes in after, under the account that ended.
+        drains.cancelAll()
+        control.cancel()
+        #expect(await reading.value == false)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(await drains.idle)
+        #expect(!StoreStub.state.asked.contains("bytes=\(tail.count)-\(layout.ciphertextSize - 1)"),
+                "the ended account's padding was drained under the next")
+    }
+
+    @Test func aSignOutKeepsADrainTheNextAccountAlreadyQueued() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let range = ByteRange(start: 0, end: 9)
+        // The sign-out's clean-up and the next account's drain race onto the drains: in a loop, so
+        // either order comes up.
+        for round in 0 ..< 20 {
+            let gate = DispatchSemaphore(value: 0)
+            // The old account's drain is going, so what comes next waits behind it.
+            drains.enqueue([range], born: drains.generation) { _ in
+                log.add("old \(round)")
+                await withCheckedContinuation { c in DispatchQueue.global().async { gate.wait(); c.resume() } }
+            }
+            try await eventually { log.items.contains("old \(round)") }
+            // Sign-out, and the next account's run owes padding at once.
+            drains.cancelAll()
+            drains.enqueue([range], born: drains.generation) { _ in log.add("new \(round)") }
+            try await Task.sleep(for: .milliseconds(20))
+            gate.signal()
+            try await eventually { await drains.idle }
+            #expect(log.items.contains("new \(round)"), "round \(round): the next account's drain was dropped")
+        }
+    }
+
+    @Test func paddingDrainsRunOneAtATimeAndStopAtTheirCap() async throws {
+        let drains = PaddingDrains(maxBytes: 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let gate = DispatchSemaphore(value: 0)
+        let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
+        // The first drain's first fetch is held: the second waits behind it.
+        drains.enqueue([range(0), range(10), range(20), range(30)], born: drains.generation) { range in
+            log.add("a\(range.start)")
+            if range.start == 0 { await withCheckedContinuation { c in DispatchQueue.global().async { gate.wait(); c.resume() } } }
+        }
+        try await eventually { log.items == ["a0"] }
+        drains.enqueue([range(0)], born: drains.generation) { range in log.add("b\(range.start)") }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(log.items == ["a0"], "one drain at a time")
+        gate.signal()
+        // 20 bytes of padding, then the first gives up; the second runs after it.
+        try await eventually { await drains.idle }
+        #expect(log.items == ["a0", "a10", "b0"])
+    }
+
+    @Test func aSignOutStopsThePaddingDrainsAtOnce() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let range = { (start: UInt64) in ByteRange(start: start, end: start + 9) }
+        // The first range of the first drain is in flight (cancellable, as a request is).
+        drains.enqueue([range(0), range(10)], born: drains.generation) { range in
+            log.add("a\(range.start)")
+            try await Task.sleep(for: .seconds(30))
+        }
+        try await eventually { log.items == ["a0"] }
+        drains.enqueue([range(0)], born: drains.generation) { range in log.add("b\(range.start)") }
+        try await Task.sleep(for: .milliseconds(50))
+        drains.cancelAll()
+        try await eventually { await drains.idle }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(log.items == ["a0"], "the request in flight cancelled, the rest and the waiting drain dropped")
+    }
+
+    @Test func aDrainsDeadlineCutsOffARequestThatTrickles() async throws {
+        let (content, object, _) = try Self.sealed(1000)
+        _ = content
+        let api = Self.stubbedAPI(object)
+        StoreStub.state.stall = true
+        let drains = PaddingDrains(maxBytes: 1 << 20, maxDuration: .milliseconds(300), maxWaiting: 4)
+        let log = Log()
+        let started = ContinuousClock.now
+        // A store that never finishes answering: the request ends only when the client stops it.
+        drains.enqueue([ByteRange(start: 0, end: 9)], born: drains.generation) { range in
+            _ = try await api.range(URL(string: "https://store.test/o?n=2")!, range)
+        }
+        drains.enqueue([ByteRange(start: 0, end: 0)], born: drains.generation) { _ in log.add("next") }
+        try await eventually { log.items == ["next"] }
+        #expect(ContinuousClock.now - started < .seconds(3))
+        try await eventually { StoreStub.state.stopped >= 1 }
+    }
+
+    @Test func aMeteredDrainStaysSmall() async throws {
+        let drains = PaddingDrains(maxBytes: 1 << 20, meteredMaxBytes: 10, maxDuration: .seconds(60), maxWaiting: 4)
+        let log = Log()
+        let ranges = [0, 10, 20].map { ByteRange(start: UInt64($0), end: UInt64($0) + 9) }
+        drains.enqueue(ranges, born: drains.generation, metered: true) { range in log.add("m\(range.start)") }
+        try await eventually { log.items.count == 1 }
+        try await eventually { await drains.idle }
+        #expect(log.items == ["m0"])
+    }
+
+    @Test func aStoreThatSendsTheWholeObjectIsRefusedUnbuffered() async throws {
+        let api = Self.stubbedAPI(Data(count: 4 << 20))
+        StoreStub.state.whole = true
+        await #expect(throws: DriveAPIError.self) {
+            _ = try await api.range(URL(string: "https://store.test/o?n=2")!, ByteRange(start: 0, end: 9))
+        }
+    }
+
+    @Test func anAddressThatNeverComesEndsWhenTheRunDoes() async throws {
+        let (content, object, _) = try Self.sealed(1000)
+        // The reader's first address, then a renewal (the first address has expired).
+        for stalling in [1, 2] {
+            let api = Self.stubbedAPI(object)
+            StoreStub.state.stallAddress = stalling
+            let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+            let ended = Log()
+            Task.detached {
+                do {
+                    let reader = try await ToolReaders.reader(
+                        api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control
+                    )
+                    _ = try reader.readAt(offset: 0, length: 10)
+                } catch {}
+                ended.add("ended")
+            }
+            try await eventually { StoreStub.state.addresses == stalling }
+            try await Task.sleep(for: .milliseconds(200))
+            let cancelled = ContinuousClock.now
+            control.cancel()
+            try await eventually { ended.items == ["ended"] }
+            #expect(ContinuousClock.now - cancelled < .seconds(2), "address \(stalling) held the run")
+        }
+    }
+
+    @Test func aRangeForACallerAlreadyCancelledEndsEveryTime() async throws {
+        let (_, object, _) = try Self.sealed(1000)
+        let api = Self.stubbedAPI(object)
+        let log = Log()
+        // The request is cancelled before it starts, and can finish before range() waits on it:
+        // many at once, so that order comes up. Each must end, cancelled; a lost ending hangs.
+        let rounds = 200
+        for _ in 0 ..< rounds {
+            Task.detached {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    _ = try await api.range(URL(string: "https://store.test/o?n=2")!, ByteRange(start: 0, end: 9))
+                    log.add("answered")
+                } catch is CancellationError {
+                    log.add("cancelled")
+                } catch {
+                    log.add("other")
+                }
+            }
+        }
+        try await eventually { log.items.count == rounds }
+        #expect(log.items.allSatisfy { $0 == "cancelled" })
+
+        // The two orders the loop can only hope to hit, made to happen: the task's ending (or the
+        // caller's cancel) arrives before start() waits. Neither may be lost.
+        let session = URLSession(configuration: .ephemeral)
+        let ended = Log()
+        let early = RangeLoad(limit: 10)
+        let task = session.dataTask(with: URL(string: "https://store.test/o")!)
+        early.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+        let cancelled = RangeLoad(limit: 10)
+        let other = session.dataTask(with: URL(string: "https://store.test/o")!)
+        cancelled.cancel(other)
+        for (load, task, name) in [(early, task, "completed"), (cancelled, other, "cancelled")] {
+            Task.detached {
+                do { _ = try await load.start(task) } catch { ended.add(name) }
+            }
+        }
+        try await eventually { ended.items.count == 2 }
+    }
+
+    @Test func aReaderMadeInARunReadsNothingOnceTheRunReturns() async throws {
+        let size: UInt64 = 1000
+        let (content, object, _) = try Self.sealed(size)
+        let source = StoreSource { range in object.subdata(in: Int(range.start) ..< Int(range.end) + 1) }
+        let runs = ToolRuns()
+        // The work keeps its reader past the run, as a careless tool might.
+        let reader = try await runs.run("Keeps its reader") { control in
+            let reader = try VersionReader(source: source, content: content, control: control)
+            _ = try reader.readAt(offset: 0, length: 10)
+            return reader
+        }
+        #expect(throws: CoreError.self) { _ = try reader.readAt(offset: 0, length: 10) }
+    }
+
+    @Test func aRunThatEndsCancelsItsFetch() async throws {
+        let (content, object, _) = try Self.sealed(1000)
+        let api = Self.stubbedAPI(object)
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let reader = try await ToolReaders.reader(api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control)
+        StoreStub.state.stall = true
+        let reading = Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: 0, length: 10); return true } catch { return false }
+        }
+        // Held open by the store, past the expired address's renewal.
+        try await eventually { StoreStub.state.stalled == 1 }
+        let cancelled = ContinuousClock.now
+        control.cancel()
+        #expect(await reading.value == false)
+        #expect(ContinuousClock.now - cancelled < .seconds(2))
+        try await eventually { StoreStub.state.stopped >= 1 }
+    }
+}
+
+/* What the stub saw and how it answers; one test at a time (the suite is serialized). */
+final class StoreStubState: @unchecked Sendable {
+    var object = Data()
+    var addresses = 0
+    var refused = 0
+    var ranges: [String] = []
+    var stall = false
+    /* When set, the store ignores Range and sends the whole object with a 200. */
+    var whole = false
+    /* When set, only the range starting here stalls. */
+    var stallAt: Int?
+    var stalled = 0
+    /* Ranges every request asked for, stalled or not, in order. */
+    var asked: [String] = []
+    /* When set, the answer for this address (by number) never comes. */
+    var stallAddress: Int?
+    var stopped = 0
+}
+
+final class StoreStub: URLProtocol {
+    nonisolated(unsafe) static var state = StoreStubState()
+    static let lock = NSLock()
+
+    static func reset(_ object: Data) {
+        lock.lock(); state = StoreStubState(); state.object = object; lock.unlock()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    private func answer(_ status: Int, _ body: Data, headers: [String: String] = [:]) {
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func startLoading() {
+        let url = request.url!
+        let state = Self.state
+        if url.host == "drive.test" {
+            Self.lock.lock(); state.addresses += 1; let n = state.addresses; Self.lock.unlock()
+            if n == state.stallAddress { return }
+            answer(200, Data("{\"url\":\"https://store.test/o?n=\(n)\",\"urlExpiresAt\":null}".utf8), headers: ["Content-Type": "application/json"])
+            return
+        }
+        // The first address has expired by the time it is used.
+        if url.query == "n=1" {
+            Self.lock.lock(); state.refused += 1; Self.lock.unlock()
+            answer(403, Data())
+            return
+        }
+        let asking = request.value(forHTTPHeaderField: "Range") ?? ""
+        let startsAt = Int(asking.replacingOccurrences(of: "bytes=", with: "").split(separator: "-").first ?? "")
+        Self.lock.lock()
+        state.asked.append(asking)
+        let stall = state.stall && (state.stallAt == nil || state.stallAt == startsAt)
+        if stall { state.stalled += 1 }
+        Self.lock.unlock()
+        // A stalled store never answers; the request ends only when the client stops it.
+        if stall { return }
+        if state.whole {
+            answer(200, state.object, headers: ["Content-Length": String(state.object.count)])
+            return
+        }
+        let header = request.value(forHTTPHeaderField: "Range") ?? ""
+        Self.lock.lock(); state.ranges.append(header); Self.lock.unlock()
+        let bounds = header.replacingOccurrences(of: "bytes=", with: "").split(separator: "-").compactMap { Int($0) }
+        answer(206, state.object.subdata(in: bounds[0] ..< bounds[1] + 1))
+    }
+
+    override func stopLoading() {
+        Self.lock.lock(); Self.state.stopped += 1; Self.lock.unlock()
+    }
+}
+
+final class Log: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String] = []
+    func add(_ entry: String) { lock.lock(); entries.append(entry); lock.unlock() }
+    var items: [String] { lock.lock(); defer { lock.unlock() }; return entries }
+}

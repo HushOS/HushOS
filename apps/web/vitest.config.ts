@@ -24,6 +24,7 @@ export default defineConfig({
                         'src/**/*.test.{ts,tsx}',
                         'src/**/*.spec.{ts,tsx}',
                         'server/**/*.test.ts',
+                        'scripts/**/*.test.ts',
                     ],
                     exclude: [...configDefaults.exclude, 'src/**/*.db.test.ts'],
                     restoreMocks: true,

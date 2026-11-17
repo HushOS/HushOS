@@ -222,20 +222,32 @@ public final class DriveAPI: Sendable {
         try await perform(try request("/shares"), as: SharesResponse.self).shares
     }
 
-    /* One byte range of a stored object, from its presigned URL. */
+    /*
+     * One byte range of a stored object, from its presigned URL. Streamed and counted: a store
+     * that ignores the Range and sends the whole object is cut off as soon as it says so (its
+     * length) or passes the length asked for, never buffered whole. Cancelling the calling task
+     * cancels the request.
+     */
     public func range(_ url: URL, _ range: ByteRange) async throws -> Data {
         var request = URLRequest(url: url)
         request.setValue("bytes=\(range.start)-\(range.end)", forHTTPHeaderField: "Range")
         request.timeoutInterval = 120
-        let (data, response): (Data, URLResponse)
+        let load = RangeLoad(limit: Int(range.end - range.start + 1))
+        let task = http.dataTask(with: request)
+        task.delegate = load
+        let answer: RangeLoad.Answer
         do {
-            (data, response) = try await http.data(for: request)
+            answer = try await withTaskCancellationHandler {
+                try await load.start(task)
+            } onCancel: {
+                load.cancel(task)
+            }
         } catch {
             throw DriveAPI.noAnswer(error)
         }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 206 || status == 200 else { throw DriveAPIError.server(status, "Range request failed") }
-        return data
+        if answer.over { throw DriveAPIError.server(answer.status, "The store sent more than was asked for") }
+        guard answer.status == 206 || answer.status == 200 else { throw DriveAPIError.server(answer.status, "Range request failed") }
+        return answer.data
     }
 
     // MARK: Writes
@@ -376,3 +388,85 @@ final class WriteGateBox: @unchecked Sendable {
         if let gate = lock.withLock({ gate }) { try await gate(workspaceId) }
     }
 }
+
+/* One range request's body, gathered as it arrives and given up once it passes `limit`. */
+final class RangeLoad: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    struct Answer: Sendable {
+        let status: Int
+        let data: Data
+        let over: Bool
+    }
+
+    private let limit: Int
+    private let lock = NSLock()
+    private var status = 0
+    private var data = Data()
+    private var over = false
+    private var continuation: CheckedContinuation<Answer, Error>?
+    /*
+     * An end that came before start() was waiting: a caller cancelled before it began, or a task
+     * that completed first. Kept for start() to take, never dropped, or the caller waits forever.
+     */
+    private var early: Result<Answer, Error>?
+
+    init(limit: Int) { self.limit = limit }
+
+    func start(_ task: URLSessionDataTask) async throws -> Answer {
+        try await withCheckedThrowingContinuation { continuation in
+            let ended = lock.withLock { () -> Result<Answer, Error>? in
+                if let early { return early }
+                self.continuation = continuation
+                return nil
+            }
+            if let ended { continuation.resume(with: ended) } else { task.resume() }
+        }
+    }
+
+    /* The caller was cancelled: before start() or after, it gets a CancellationError, once. */
+    func cancel(_ task: URLSessionDataTask) {
+        let waiting = lock.withLock { () -> CheckedContinuation<Answer, Error>? in
+            defer { continuation = nil }
+            if continuation == nil, early == nil { early = .failure(CancellationError()) }
+            return continuation
+        }
+        task.cancel()
+        waiting?.resume(throwing: CancellationError())
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping @Sendable (URLSession.ResponseDisposition) -> Void) {
+        let expected = response.expectedContentLength
+        let tooLong = lock.withLock { () -> Bool in
+            status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if expected > Int64(limit) { over = true }
+            if !over, expected > 0 { data.reserveCapacity(Int(expected)) }
+            return over
+        }
+        completionHandler(tooLong ? .cancel : .allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive chunk: Data) {
+        let tooLong = lock.withLock { () -> Bool in
+            data.append(chunk)
+            if data.count > limit {
+                over = true
+                data = Data()
+            }
+            return over
+        }
+        if tooLong { dataTask.cancel() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let (continuation, result) = lock.withLock { () -> (CheckedContinuation<Answer, Error>?, Result<Answer, Error>) in
+            let answer = Answer(status: status, data: data, over: over)
+            let result: Result<Answer, Error> = answer.over || error == nil ? .success(answer) : .failure(error!)
+            let waiting = self.continuation
+            self.continuation = nil
+            if waiting == nil, early == nil { early = result }
+            return (waiting, result)
+        }
+        continuation?.resume(with: result)
+    }
+}
+

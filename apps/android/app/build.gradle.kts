@@ -112,6 +112,8 @@ android {
         for ((field, value) in firebaseOptions) buildConfigField("String", field, "\"${value.replace("\"", "")}\"")
         // Read by check-bundle.sh: a bundle for Play must carry notifications.
         manifestPlaceholders["pushConfigured"] = (firebaseMissing.isEmpty()).toString()
+        // The test APK's runner (src/androidTest): no part of the app's own build.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     signingConfigs {
@@ -212,6 +214,8 @@ dependencies {
     implementation(libs.commonmark.strikethrough)
     implementation(libs.commonmark.autolink)
     testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
     // JVM tests open real envelopes: JNA's desktop jar loads the core built for this machine.
     testImplementation(libs.jna)
     // android.jar's org.json is stubs that throw on the JVM; settings tests edit real JSON.
@@ -237,4 +241,28 @@ tasks.withType<Test>().configureEach {
     // The JVM's HttpURLConnection has no PATCH (Android's has): FamilyFixture.allowPatch adds it to the test JVM only,
     // so route 18's role changes run in unit tests as on a phone.
     jvmArgs("--add-opens=java.base/java.net=ALL-UNNAMED")
+}
+
+/*
+ * Tests that implement the core's foreign traits (ObjectSource, ToolClock, any later one) live in
+ * the test package com.hushos.app.foreign, and run in a JVM of their own. UniFFI keeps one callback
+ * table per process, set by whichever class loader loaded the bindings last, and Robolectric loads
+ * them again in its sandbox: in the shared test JVM a callback could reach the other loader's
+ * objects (seen as garbled answers and a watchdog that never fired). `testDebugUnitTest` runs
+ * everything else and then `testDebugForeignTraits`, which can also run alone.
+ */
+afterEvaluate {
+    val foreign = "com.hushos.app.foreign.*"
+    val unit = tasks.named<Test>("testDebugUnitTest")
+    val foreignTraits = tasks.register<Test>("testDebugForeignTraits") {
+        description = "Tests that implement the core's foreign traits, in a JVM of their own."
+        group = "verification"
+        testClassesDirs = unit.get().testClassesDirs
+        classpath = unit.get().classpath
+        filter.includeTestsMatching(foreign)
+    }
+    unit.configure {
+        filter.excludeTestsMatching(foreign)
+        finalizedBy(foreignTraits)
+    }
 }

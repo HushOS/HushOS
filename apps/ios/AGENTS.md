@@ -674,6 +674,22 @@ See `docs/identity-pq-design.md`.
 - A queue folder with no note and no transfer goes when its claimant is gone, or after a day (`sweepOrphans`, run by the app's queue).
 - Adopting a note writes the queue's records first, and only then removes the note and the part files it read (`ShareHandoff.adopt`).
 
+### File tools harness
+
+- `HushOSKit/ToolRuns.swift`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `ToolRuns.run` takes one run at a time (a second waits, told `waiting(behind:)`), runs the work on a `Thread` of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling task is cancelled.
+- A thread can't be killed: cancel and the watchdog end the run for the caller at once, a request in flight is cancelled (`StoreSource` waits in slices), and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
+- Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
+- When a run's thread returns, `ToolRuns` calls `control.finish()`: every `VersionReader` made under it drops its chunks and its key at once, whoever still holds it. A finished run is not `isCancelled()`: read the state before `finish()`.
+- `ToolReaders.reader` asks for the first address under `whileRunning(control, ...)`, so a run that ends while it waits stops waiting; renewals run inside a range's fetch, which the run's end, a drain's deadline and a sign-out cancel already.
+- `DriveAPI.range` streams through `RangeLoad`, which keeps an ending that came before `start()` waited (a caller already cancelled, a task that completed first) for `start()` to take: never drop one, or the caller waits forever.
+- `DriveAPI.range` streams the body (`RangeLoad`) and refuses a store that sends more than the range, by its length or as it arrives.
+- `ToolRuns.budget` is the process's one `ToolBudget`: tools produce into it with their run's control, which answers the budget's generation; whoever takes a result releases it with that generation when uploaded or dropped. A release from before a sign-out's `clear()` takes nothing from the next account.
+- `AccountStore.wipe` calls `ToolRuns.shared.cancelAll()` and `ToolRuns.budget.clear()`: nothing runs past a sign-out, and the budget starts empty. A run holds one cancellation from before it is announced until its thread ends, so a sign-out reaches it waiting, being let in or running.
+- The watchdog's clock is injectable (`clock:`); tests use one that moves a second per read.
+- `Vault.toolReader` (`ToolReaders.reader`) gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
+- Tests: `ToolRunsTests`.
+
 ## Files app (File Provider)
 
 - `FileProviderExtension` is replicated (`NSFileProviderReplicatedExtension`).
