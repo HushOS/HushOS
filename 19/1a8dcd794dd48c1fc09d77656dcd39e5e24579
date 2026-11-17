@@ -1,0 +1,64 @@
+apps/web/src/lib/archives/differential.ts
+  s_c60e24772e04af::t_1b7daff664500d 1-199
+  s_c60e24772e04af::t_fd0fced5d1e55d 200-228
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_1e188a84e00f8d 670
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_be14ef180a13e4 708-709
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_f5f92be8bfbd48 141-150
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_08e22d069b0714 43-72,90-95,331-332,385,400-401
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_c60e24772e04af::t_5c7275d2be620c 309,320-322
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_e3595f27dfdd57 234-260
+apps/web/src/components/drive/archive-view.tsx
+  s_c60e24772e04af::t_22e61f9366a881 566-570,573-589
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_c7b7e4fd93f28a 377,394-395,409,426,472
+apps/web/src/lib/archives/archive.tool-worker.ts
+  s_c60e24772e04af::t_3b1e7f66089f59 147-149,160-161,167-169
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_e1392fb50edb5b 2,126-169
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_28da2e4a450cd5 49-50,280-281,395-396,401,404,407-419
+apps/web/src/lib/archives/zip-archive.ts
+  s_c60e24772e04af::t_536758a3562618 448-450,460-462
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_bb72bb50cf05ff 27-32,791
+crates/hushos-core/AGENTS.md
+  s_c60e24772e04af::t_ce09c6aba76e26 1395
+crates/hushos-core/fuzz/Cargo.toml
+  s_c60e24772e04af::t_f2119d936064db 31-37
+crates/hushos-core/fuzz/fuzz_targets/archive.rs
+  s_c60e24772e04af::t_301998f7e5d6fe 1-3
+crates/hushos-core/fuzz/src/targets.rs
+  s_c60e24772e04af::t_7a5a4e5a226ca9 60-62,2178-2282,2287-2308
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_588b13c4b7a699 747-751,859,940-942,1023,1559,1803-1804,1816-1818
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_6f109c6a3608f3 257-270
+docs/file-tools-design.md
+  s_c60e24772e04af::t_6f18da842b6f87 198,376
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_81841e6aef75bd 893-896,1038-1065
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_7c0523b29bc4e3 1223-1239,1478-1488,1541,1544
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "191a8dcd794dd48c1fc09d77656dcd39e5e24579",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
