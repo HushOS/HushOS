@@ -12,9 +12,9 @@ import Testing
  * and the pixels show the mark upright, unmirrored and centred, with dots only where asked for.
  */
 struct BrandQRTests {
-    /* A share link as long as a real one, key in the fragment, and an approval code's payload. */
+    /* A share link as long as a real one, key in the fragment, and an approval code's payload at its real length (48 bytes). */
     static let link = "https://hushos.com/s/5f0c2a9e-4b7d-4c1e-9a3b-2d8e6f1a7c40#k=Qm9vbS1zaGFrYWxha2EtYm9vbS1zaGFrYWxha2EtYm9vbS1zaGFr"
-    static let approval = "hushos-approve:7Y2kQ9wPzR4tVb8nLs3aXe6cHd1fGj5mKo0pUq7rSt2uVw9xYz4AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab"
+    static let approval = "hushos-approve:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v"
 
     /* Core Image's own QR reader: Vision's needs a neural engine the simulator does not have. */
     static func read(_ image: CGImage) throws -> (text: String?, level: CIQRCodeDescriptor.ErrorCorrectionLevel?) {

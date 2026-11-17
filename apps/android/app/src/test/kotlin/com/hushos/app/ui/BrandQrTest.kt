@@ -33,9 +33,9 @@ import kotlin.math.abs
 @Config(sdk = [35])
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class BrandQrTest {
-    /* A share link as long as a real one, key in the fragment, and an approval code's payload. */
+    /* A share link as long as a real one, key in the fragment, and an approval code's payload at its real length (48 bytes). */
     private val link = "https://hushos.com/s/5f0c2a9e-4b7d-4c1e-9a3b-2d8e6f1a7c40#k=Qm9vbS1zaGFrYWxha2EtYm9vbS1zaGFrYWxha2EtYm9vbS1zaGFr"
-    private val approval = "hushos-approve:7Y2kQ9wPzR4tVb8nLs3aXe6cHd1fGj5mKo0pUq7rSt2uVw9xYz4AbCdEfGhIjKlMnOpQrStUvWxYz0123456789ab"
+    private val approval = "hushos-approve:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKissLS4v"
 
     private fun read(text: String, dots: Boolean): Pair<String, Any?> {
         val bitmap = BrandQr.bitmap(text, dots, side = 360)
