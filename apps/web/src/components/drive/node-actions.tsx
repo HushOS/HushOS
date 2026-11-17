@@ -37,6 +37,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { formatBytes, nodeSize } from '@/lib/drive';
+import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import { useState, useSyncExternalStore } from 'react';
 
 /*
@@ -208,15 +209,43 @@ export function nodeEntries(
     return groups.filter((group) => group.length > 0);
 }
 
+/* The entries as a right-click menu's items. */
+export function NodeContextMenuItems({ entries }: { entries: MenuEntry[][] }) {
+    return entries.map((group, index) => (
+        <ContextMenuGroup key={group[0]!.label}>
+            {index > 0 && <ContextMenuSeparator />}
+            {group.map((entry) => (
+                <ContextMenuItem
+                    key={entry.label}
+                    variant={entry.destructive ? 'destructive' : 'default'}
+                    onClick={entry.onSelect}
+                >
+                    <entry.icon aria-hidden="true" />
+                    {entry.label}
+                    {entry.shortcut && <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>}
+                </ContextMenuItem>
+            ))}
+        </ContextMenuGroup>
+    ));
+}
+
 /* The same entries as a right-click menu. */
 export function NodeContextMenu({ entries }: { entries: MenuEntry[][] }) {
     return (
         <ContextMenuContent className="w-60">
+            <NodeContextMenuItems entries={entries} />
+        </ContextMenuContent>
+    );
+}
+
+function NodeMoreContent({ entries }: { entries: MenuEntry[][] }) {
+    return (
+        <DropdownMenuContent align="end" sideOffset={4} className="w-60">
             {entries.map((group, index) => (
-                <ContextMenuGroup key={group[0]!.label}>
-                    {index > 0 && <ContextMenuSeparator />}
+                <DropdownMenuGroup key={group[0]!.label}>
+                    {index > 0 && <DropdownMenuSeparator />}
                     {group.map((entry) => (
-                        <ContextMenuItem
+                        <DropdownMenuItem
                             key={entry.label}
                             variant={entry.destructive ? 'destructive' : 'default'}
                             onClick={entry.onSelect}
@@ -224,13 +253,13 @@ export function NodeContextMenu({ entries }: { entries: MenuEntry[][] }) {
                             <entry.icon aria-hidden="true" />
                             {entry.label}
                             {entry.shortcut && (
-                                <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>
+                                <DropdownMenuShortcut>{entry.shortcut}</DropdownMenuShortcut>
                             )}
-                        </ContextMenuItem>
+                        </DropdownMenuItem>
                     ))}
-                </ContextMenuGroup>
+                </DropdownMenuGroup>
             ))}
-        </ContextMenuContent>
+        </DropdownMenuContent>
     );
 }
 
@@ -241,26 +270,57 @@ export function NodeMoreMenu({ name, entries }: { name: string; entries: MenuEnt
             <DropdownMenuTrigger render={<RowMenuButton aria-label={`More for ${name}`} />}>
                 <EllipsisIcon className="size-5" aria-hidden="true" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" sideOffset={4} className="w-60">
-                {entries.map((group, index) => (
-                    <DropdownMenuGroup key={group[0]!.label}>
-                        {index > 0 && <DropdownMenuSeparator />}
-                        {group.map((entry) => (
-                            <DropdownMenuItem
-                                key={entry.label}
-                                variant={entry.destructive ? 'destructive' : 'default'}
-                                onClick={entry.onSelect}
-                            >
-                                <entry.icon aria-hidden="true" />
-                                {entry.label}
-                                {entry.shortcut && (
-                                    <DropdownMenuShortcut>{entry.shortcut}</DropdownMenuShortcut>
-                                )}
-                            </DropdownMenuItem>
-                        ))}
-                    </DropdownMenuGroup>
-                ))}
-            </DropdownMenuContent>
+            <NodeMoreContent entries={entries} />
+        </DropdownMenu>
+    );
+}
+
+/*
+ * A long list's ⋯ menus: one menu for the whole list (`SharedNodeMenu`), and on each row
+ * only a button that opens it with that row's id (`NodeMoreButton`). A menu per row cost a
+ * menu's state and listeners on every row, drawn or not, before anyone opened one; the
+ * entries are worked out only for the row whose menu is open.
+ */
+export type NodeMenuHandle = MenuPrimitive.Handle<unknown>;
+
+export function useNodeMenuHandle(): NodeMenuHandle {
+    return useState(() => MenuPrimitive.createHandle<unknown>())[0];
+}
+
+export function NodeMoreButton({
+    handle,
+    id,
+    name,
+}: {
+    handle: NodeMenuHandle;
+    id: string;
+    name: string;
+}) {
+    return (
+        <DropdownMenuTrigger
+            handle={handle}
+            payload={id}
+            render={<RowMenuButton aria-label={`More for ${name}`} />}
+        >
+            <EllipsisIcon className="size-5" aria-hidden="true" />
+        </DropdownMenuTrigger>
+    );
+}
+
+export function SharedNodeMenu({
+    handle,
+    entriesFor,
+}: {
+    handle: NodeMenuHandle;
+    /* The entries for the row with this id, or null once it has left the list. */
+    entriesFor: (id: string) => MenuEntry[][] | null;
+}) {
+    return (
+        <DropdownMenu handle={handle}>
+            {({ payload }) => {
+                const entries = typeof payload === 'string' ? entriesFor(payload) : null;
+                return entries && <NodeMoreContent entries={entries} />;
+            }}
         </DropdownMenu>
     );
 }

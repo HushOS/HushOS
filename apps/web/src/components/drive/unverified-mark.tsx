@@ -189,6 +189,20 @@ export function UnverifiedMark({
     className?: string;
 }) {
     const issues = given ?? (node ? integrityIssues(node) : []);
+    // Nearly every row has nothing to say: it costs no queries or state until it does.
+    if (!issues.length) return null;
+    return <IssuesMark issues={issues} variant={variant} className={className} />;
+}
+
+function IssuesMark({
+    issues,
+    variant,
+    className,
+}: {
+    issues: IntegrityIssue[];
+    variant: 'badge' | 'icon';
+    className?: string;
+}) {
     const queryClient = useQueryClient();
     const userId = useAuthView((state) => state.unlockedUserId);
     const names = useSignerNames(userId, issues.length > 0);
@@ -200,7 +214,6 @@ export function UnverifiedMark({
     // Who wrote it, Check it's them, an account changed: one flow, where this mark sits.
     const openFlow = useContactFlow();
     const [busy, setBusy] = useState(false);
-    if (!issues.length) return null;
     const lines = issueLines(issues, names);
     const action = lines.find((entry) => entry.action)?.action ?? null;
     const worst = issues[0]!.integrity;

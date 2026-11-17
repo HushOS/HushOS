@@ -3,6 +3,7 @@ import { cn } from 'cn';
 import {
     useCallback,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
     useSyncExternalStore,
@@ -62,6 +63,8 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     /* Whether the arrows put the focus where it is, rather than a click. */
     const [keyed, setKeyed] = useState(false);
     const [marquee, setMarquee] = useState<Marquee | null>(null);
+    /* The row the arrows just moved to, to scroll to (and focus) once it is drawn. */
+    const reveal = useRef<{ id: string; takeKeys: boolean } | null>(null);
 
     function select(id: string, event?: Modifiers) {
         const toggle = coarse || Boolean(event?.metaKey || event?.ctrlKey);
@@ -111,16 +114,28 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         const next = ids[Math.min(ids.length - 1, Math.max(0, index + delta))]!;
         select(next, extend ? { shiftKey: true } : undefined);
         setKeyed(true);
-        const item = root.current?.querySelector<HTMLElement>(`[data-node-id="${next}"]`);
-        item?.scrollIntoView({ block: 'nearest' });
         // The keys are on a row's name (Tab) or its thumbnail (a click, in Chromium): they move
         // along with the arrows to the next row's name, so one row has focus and Enter acts there.
-        if (
+        const takeKeys = Boolean(
             document.activeElement?.closest('[data-row-name], [data-row-thumb]') &&
-            root.current?.contains(document.activeElement)
-        )
-            item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
+            root.current?.contains(document.activeElement),
+        );
+        // A long list draws only what is near the screen, so the next row may not be drawn
+        // yet: it is once the focus is on it (the list keeps the focused row), and is
+        // scrolled to after that render.
+        reveal.current = { id: next, takeKeys };
     }
+    useLayoutEffect(() => {
+        const pending = reveal.current;
+        if (!pending) return;
+        reveal.current = null;
+        const item = root.current?.querySelector<HTMLElement>(
+            `[data-node-id="${CSS.escape(pending.id)}"]`,
+        );
+        item?.scrollIntoView({ block: 'nearest' });
+        if (pending.takeKeys)
+            item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
+    });
     /*
      * Whether an item wears the focus outline: always once the arrows moved there, as the
      * tint alone says selected, not here; after a click only on an item the click left

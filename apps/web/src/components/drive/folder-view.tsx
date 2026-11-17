@@ -4,6 +4,7 @@ import {
     AccessMarker,
     accessSentence,
     useAccessIndex,
+    type Access,
 } from '@/components/drive/access';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
@@ -28,6 +29,7 @@ import {
     TILE_FOCUS_WITHIN,
     useHiddenColumn,
     useListSelection,
+    type Modifiers,
 } from '@/components/drive/file-list';
 import { folderTint } from '@/components/folder-mark';
 import { FileMark } from '@/components/drive/file-mark';
@@ -35,13 +37,16 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { InfoDialog } from '@/components/drive/info-dialog';
 import { MoveDialog } from '@/components/drive/move-dialog';
 import {
-    NodeContextMenu,
+    NodeContextMenuItems,
     nodeEntries,
-    NodeMoreMenu,
+    NodeMoreButton,
     NodeSelectionBar,
+    SharedNodeMenu,
     SizeText,
+    useNodeMenuHandle,
     useWideScreen,
     type NodeActions,
+    type NodeMenuHandle,
 } from '@/components/drive/node-actions';
 import { Preview } from '@/components/drive/preview';
 import { RenameDialog } from '@/components/drive/rename-dialog';
@@ -54,6 +59,7 @@ import { isTyping, keyLabel } from '@/components/drive/shortcuts';
 import { AddMenu } from '@/components/drive/add-menu';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
 import { VersionsDialog } from '@/components/drive/versions-dialog';
+import { VirtualGrid, VirtualTableBody } from '@/components/drive/virtual-list';
 import { Button } from '@/components/ui/button';
 import {
     ContextMenu,
@@ -95,7 +101,7 @@ import { previewKind } from '@/lib/previews';
 import { saveCopy } from '@/lib/save-copy';
 import { cue } from '@/lib/sounds';
 import { tagsQueryOptions } from '@/lib/tags';
-import { folderColour, tagsOf } from '@hushos/drive/client';
+import { folderColour, tagsOf, type TagRegistry } from '@hushos/drive/client';
 import { useThumbnail } from '@/lib/thumbnails';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import {
@@ -121,7 +127,16 @@ import {
     ListIcon,
     RotateCcwIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent } from 'react';
+import {
+    memo,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    useSyncExternalStore,
+    type MouseEvent,
+    type SyntheticEvent,
+} from 'react';
 
 /*
  * One folder at a time: its path as the page title, the rows, and the actions.
@@ -214,6 +229,257 @@ function NodeName({
     );
 }
 
+/* What a row or tile calls back with; one object for the list's life, so rows can be memoized. */
+type ItemCalls = {
+    select: (id: string, event?: Modifiers) => void;
+    toggle: (id: string) => void;
+    open: (node: DriveNode) => void;
+    /* The name link was followed (a file's viewer pushes a history entry). */
+    opened: (node: DriveNode) => void;
+    tag: (node: DriveNode) => void;
+    /* The row's element registers for dragging (and, for a folder, dropping) as it is drawn. */
+    dragRef: (node: DriveNode) => (element: HTMLElement | null) => (() => void) | void;
+};
+
+/*
+ * How a row or tile looks beyond its content: its place in the entrance (styles.css
+ * [data-reveal]), its folder's colour (for a drop on it), and whether it is being dragged
+ * or dropped on. `stagger` counts only while it enters, so a scroll leaves the rest as is.
+ */
+function itemLook(
+    node: DriveNode,
+    entering: boolean,
+    stagger: number,
+    dragging: boolean,
+    dropOver: boolean,
+) {
+    const step = reveal(stagger);
+    const tint = node.kind === 'folder' ? folderTint(folderColour(node)) : {};
+    return {
+        'data-reveal': entering ? step['data-reveal'] : undefined,
+        'data-folder-colour': tint['data-folder-colour'],
+        'data-dragging': dragging || undefined,
+        'data-drop-over': dropOver || undefined,
+        style: { ...(entering ? step.style : {}), ...tint.style },
+    };
+}
+
+type ItemProps = {
+    node: DriveNode;
+    index: number;
+    selected: boolean;
+    /* The focus outline the arrows put here (useListSelection's focusShown). */
+    focusShown: boolean;
+    /* The empty check shows without a hover: a touch screen with a selection under way. */
+    revealed: boolean;
+    entering: boolean;
+    stagger: number;
+    dragging: boolean;
+    dropOver: boolean;
+    rootId: string;
+    groupId: string | null;
+    folderId: string;
+    calls: ItemCalls;
+};
+
+/*
+ * One row of the list. Memoized: as the list scrolls, only the rows coming into view
+ * render, and a selection change renders only the rows it changes.
+ */
+const ListRow = memo(function ListRow({
+    node,
+    index,
+    selected,
+    focusShown,
+    revealed,
+    entering,
+    stagger,
+    dragging,
+    dropOver,
+    rootId,
+    groupId,
+    folderId,
+    calls,
+    mobile,
+    registry,
+    canTag,
+    access,
+    inherited,
+    accessColumn,
+    changedColumn,
+    sizeColumn,
+    menu,
+}: ItemProps & {
+    mobile: boolean;
+    registry: TagRegistry | null;
+    /* The item is this workspace's own, so its tags can be edited from here. */
+    canTag: boolean;
+    access: Access | undefined;
+    inherited: boolean;
+    /* Whether the list has a Who can open column (one's own folders). */
+    accessColumn: boolean;
+    changedColumn: string;
+    sizeColumn: string;
+    menu: NodeMenuHandle;
+}) {
+    const tagIds = registry ? tagsOf(registry, node.id) : [];
+    return (
+        <tr
+            ref={calls.dragRef(node)}
+            aria-selected={selected}
+            aria-rowindex={index + 2}
+            data-node-id={node.id}
+            {...itemLook(node, entering, stagger, dragging, dropOver)}
+            onDoubleClick={() => calls.open(node)}
+            className={cn(
+                'group/row h-14 cursor-default border-b border-rule select-none',
+                ROW_FOCUS_WITHIN,
+                dropOver
+                    ? 'bg-accent ring-2 ring-primary ring-inset'
+                    : selected
+                      ? 'bg-accent'
+                      : 'hover:bg-hover',
+                focusShown && ROW_FOCUS,
+            )}
+        >
+            <td className="min-w-0 p-0">
+                <RowName
+                    node={node}
+                    onSelect={(event) => calls.select(node.id, event)}
+                    thumbnail={
+                        <SelectableMark
+                            name={node.name}
+                            checked={selected}
+                            revealed={revealed}
+                            onToggle={() => calls.toggle(node.id)}
+                        >
+                            <FileMark node={node} size={mobile ? 'row' : 'list'} />
+                        </SelectableMark>
+                    }
+                    name={
+                        <NodeName
+                            node={node}
+                            here={{ rootId, groupId }}
+                            folderId={folderId}
+                            onOpen={() => calls.opened(node)}
+                        />
+                    }
+                    tags={
+                        tagIds.length > 0 && (
+                            <TagStamps
+                                tagIds={tagIds}
+                                registry={registry}
+                                itemName={node.name}
+                                onEdit={canTag ? () => calls.tag(node) : undefined}
+                                max={2}
+                            />
+                        )
+                    }
+                />
+            </td>
+            {accessColumn && (
+                <td className={cn(LIST_COLUMN.access, 'min-w-0 pr-4')}>
+                    <AccessCell access={access} inherited={inherited} />
+                </td>
+            )}
+            <td className={cn(changedColumn, 'text-[13px] text-muted-foreground tabular-nums')}>
+                {formatWhen(node.metadata?.modified ?? node.updatedAt)}
+            </td>
+            <td
+                className={cn(
+                    sizeColumn,
+                    'pr-2 text-right text-[13px] text-muted-foreground tabular-nums',
+                )}
+            >
+                <SizeText node={node} folderWord="–" />
+            </td>
+            <td className="pr-3 text-right sm:pr-5">
+                <NodeMoreButton handle={menu} id={node.id} name={node.name} />
+            </td>
+        </tr>
+    );
+});
+
+/* One tile of the grid, memoized as a row is. */
+const GridTile = memo(function GridTile({
+    node,
+    index,
+    count,
+    selected,
+    focusShown,
+    revealed,
+    entering,
+    stagger,
+    dragging,
+    dropOver,
+    rootId,
+    groupId,
+    folderId,
+    calls,
+}: ItemProps & { count: number }) {
+    return (
+        <li
+            ref={calls.dragRef(node)}
+            aria-posinset={index + 1}
+            aria-setsize={count}
+            data-node-id={node.id}
+            data-selected={selected || undefined}
+            {...itemLook(node, entering, stagger, dragging, dropOver)}
+            className={cn(
+                'group/row relative flex cursor-default flex-col gap-2 rounded-xl p-2 select-none',
+                TILE_FOCUS_WITHIN,
+                dropOver || selected
+                    ? 'bg-accent ring-2 ring-primary ring-inset'
+                    : 'hover:bg-hover',
+                focusShown && TILE_FOCUS,
+            )}
+        >
+            <button
+                type="button"
+                aria-label={node.name}
+                aria-pressed={selected}
+                data-row-name
+                className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-none"
+                onClick={(event) => calls.select(node.id, event)}
+                onDoubleClick={() => calls.open(node)}
+            >
+                <span
+                    data-tile-face
+                    className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted"
+                >
+                    <NodeFace node={node} />
+                </span>
+                <span className="flex min-w-0 flex-col gap-0.5 px-1 pb-0.5">
+                    <span className="truncate text-sm font-medium">
+                        <NodeName
+                            node={node}
+                            here={{ rootId, groupId }}
+                            folderId={folderId}
+                            onOpen={() => calls.opened(node)}
+                        />
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground tabular-nums">
+                        <SizeText node={node} folderWord="Folder" />
+                    </span>
+                </span>
+            </button>
+            <CornerCheck
+                name={node.name}
+                checked={selected}
+                revealed={revealed}
+                onToggle={() => calls.toggle(node.id)}
+                className="top-3.5 left-3.5 size-5 shadow-md"
+                iconClassName="size-3"
+            />
+            <UnverifiedMark
+                node={node}
+                variant="icon"
+                className="absolute top-3.5 right-3.5 bg-card shadow-md hover:bg-card"
+            />
+        </li>
+    );
+});
+
 export function FolderView({ folderId }: { folderId: string }) {
     const drive = useDrive();
     // A family folder's page (the family space), or this account's own Drive.
@@ -249,6 +515,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         coarse,
         selected,
         setSelected,
+        focused,
         marquee,
         select,
         toggle,
@@ -365,6 +632,10 @@ export function FolderView({ folderId }: { folderId: string }) {
     function open(node: DriveNode) {
         if (node.kind === 'folder') void navigate(folderLink(here, node.id));
         else showPreview(node);
+    }
+    /* A name link followed: a file's viewer pushed an entry, which closing it goes back from. */
+    function markOpened(node: DriveNode) {
+        if (node.kind === 'file') pushedPreview.current = true;
     }
     /* A re-encrypted copy of something shared with this person, into the top of their own files. */
     async function saveToMyDrive(nodes: DriveNode[]) {
@@ -765,11 +1036,99 @@ export function FolderView({ folderId }: { folderId: string }) {
     useEffect(() => {
         dragState.current = { selected, select, moveTo, moveCrumb, rows, crumbs };
     });
+    /* A drop target for a folder row or a crumb; `destination` reads the folder as it is now. */
+    const [dropTarget] = useState(
+        () => (element: HTMLElement, destination: () => DriveNode | undefined) =>
+            dropTargetForElements({
+                element,
+                canDrop: ({ source }) => {
+                    const folder = destination();
+                    if (!folder) return false;
+                    if (source.data.type === 'drive-crumb') {
+                        // Only upward, and past its own parent: anything else is where it already is, or inside itself.
+                        const path = dragState.current.crumbs;
+                        const from = path.findIndex((crumb) => crumb.id === source.data.id);
+                        const to = path.findIndex((crumb) => crumb.id === folder.id);
+                        return to >= 0 && from > 0 && to < from - 1;
+                    }
+                    return (
+                        source.data.type === 'drive-nodes' &&
+                        !(source.data.ids as string[]).includes(folder.id)
+                    );
+                },
+                onDragEnter: () => setDropOver(destination()?.id ?? null),
+                onDragLeave: () => setDropOver(null),
+                onDrop: ({ source, location }) => {
+                    setDropOver(null);
+                    const folder = destination();
+                    if (!folder) return;
+                    if (source.data.type === 'drive-crumb') {
+                        void dragState.current.moveCrumb(source.data.id as string, folder);
+                        return;
+                    }
+                    void dragState.current.moveTo(
+                        source.data.ids as string[],
+                        folder,
+                        location.current.input.altKey,
+                    );
+                },
+            }),
+    );
     /*
-     * Registered again whenever the rows or the path change, but not during a drag: a
-     * refetch mid-drag hands back new objects for the same items, and tearing the
-     * handlers down then cancels the drag, so the drop lands on nothing. The drop's
-     * check reads the latest path, and the handlers catch up once the drag ends.
+     * Each drawn row registers itself as it is drawn and lets go as it leaves, through a ref
+     * kept per item, so a long list registers only the rows on screen. The handlers read the
+     * latest rows and selection, so a refetch mid-drag (new objects for the same items)
+     * never tears a row's handlers down, which would cancel the drag.
+     */
+    const rowRefs = useRef(new Map<string, (element: HTMLElement | null) => (() => void) | void>());
+    const [dragRef] = useState(() => (node: DriveNode) => {
+        const key = `${node.kind}:${node.id}`;
+        let ref = rowRefs.current.get(key);
+        if (!ref) {
+            const id = node.id;
+            const folder = node.kind === 'folder';
+            ref = (element) => {
+                if (!element) return;
+                const dragged = () =>
+                    dragState.current.selected.has(id) ? [...dragState.current.selected] : [id];
+                return combine(
+                    draggable({
+                        element,
+                        getInitialData: () => ({ type: 'drive-nodes', ids: dragged() }),
+                        onGenerateDragPreview: ({ nativeSetDragImage }) =>
+                            disableNativeDragPreview({ nativeSetDragImage }),
+                        onDragStart: () => {
+                            if (!dragState.current.selected.has(id)) dragState.current.select(id);
+                        },
+                    }),
+                    folder
+                        ? dropTarget(element, () =>
+                              dragState.current.rows.find((row) => row.id === id),
+                          )
+                        : () => {},
+                );
+            };
+            rowRefs.current.set(key, ref);
+        }
+        return ref;
+    });
+    /* The rows' callbacks, read from the latest render when called. */
+    const latestCalls = useRef({ select, toggle, open, markOpened });
+    useEffect(() => {
+        latestCalls.current = { select, toggle, open, markOpened };
+    });
+    const [itemCalls] = useState<ItemCalls>(() => ({
+        select: (id, event) => latestCalls.current.select(id, event),
+        toggle: (id) => latestCalls.current.toggle(id),
+        open: (node) => latestCalls.current.open(node),
+        opened: (node) => latestCalls.current.markOpened(node),
+        tag: (node) => setTagging([node]),
+        dragRef,
+    }));
+    /*
+     * The crumbs register again whenever the path changes, but not during a drag: tearing
+     * the handlers down then cancels the drag, so the drop lands on nothing. The handlers
+     * catch up once the drag ends.
      */
     const [dragging, setDragging] = useState(false);
     const registered = useRef<(() => void) | null>(null);
@@ -781,59 +1140,14 @@ export function FolderView({ folderId }: { folderId: string }) {
         const root = dropRef.current;
         if (!root) return;
         const cleanups: (() => void)[] = [];
-        const dragged = (id: string) =>
-            dragState.current.selected.has(id) ? [...dragState.current.selected] : [id];
-        const target = (element: HTMLElement, destination: DriveNode) =>
-            dropTargetForElements({
-                element,
-                canDrop: ({ source }) => {
-                    if (source.data.type === 'drive-crumb') {
-                        // Only upward, and past its own parent: anything else is where it already is, or inside itself.
-                        const path = dragState.current.crumbs;
-                        const from = path.findIndex((crumb) => crumb.id === source.data.id);
-                        const to = path.findIndex((crumb) => crumb.id === destination.id);
-                        return to >= 0 && from > 0 && to < from - 1;
-                    }
-                    return (
-                        source.data.type === 'drive-nodes' &&
-                        !(source.data.ids as string[]).includes(destination.id)
-                    );
-                },
-                onDragEnter: () => setDropOver(destination.id),
-                onDragLeave: () => setDropOver(null),
-                onDrop: ({ source, location }) => {
-                    setDropOver(null);
-                    if (source.data.type === 'drive-crumb') {
-                        void dragState.current.moveCrumb(source.data.id as string, destination);
-                        return;
-                    }
-                    void dragState.current.moveTo(
-                        source.data.ids as string[],
-                        destination,
-                        location.current.input.altKey,
-                    );
-                },
-            });
-        for (const element of root.querySelectorAll<HTMLElement>('[data-node-id]')) {
-            const id = element.dataset.nodeId!;
-            const node = rows.find((row) => row.id === id);
-            if (!node) continue;
-            cleanups.push(
-                draggable({
-                    element,
-                    getInitialData: () => ({ type: 'drive-nodes', ids: dragged(id) }),
-                    onGenerateDragPreview: ({ nativeSetDragImage }) =>
-                        disableNativeDragPreview({ nativeSetDragImage }),
-                    onDragStart: () => {
-                        if (!dragState.current.selected.has(id)) dragState.current.select(id);
-                    },
-                }),
-            );
-            if (node.kind === 'folder') cleanups.push(target(element, node));
-        }
         for (const element of root.querySelectorAll<HTMLElement>('[data-crumb-id]')) {
-            const crumb = crumbs.find((entry) => entry.id === element.dataset.crumbId);
-            if (crumb) cleanups.push(target(element, crumb));
+            const id = element.dataset.crumbId;
+            if (crumbs.some((crumb) => crumb.id === id))
+                cleanups.push(
+                    dropTarget(element, () =>
+                        dragState.current.crumbs.find((crumb) => crumb.id === id),
+                    ),
+                );
         }
         // Every folder in the path but the top one can be picked up, the open folder included.
         for (const element of root.querySelectorAll<HTMLElement>('[data-crumb-drag]')) {
@@ -848,7 +1162,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             );
         }
         registered.current = combine(...cleanups);
-    }, [rows, crumbs, view, dragging]);
+    }, [crumbs, dragging, dropTarget]);
 
     /* The card that follows the pointer while rows or a crumb are dragged, in place of the browser's snapshot. */
     const [ghost, setGhost] = useState<{
@@ -860,6 +1174,8 @@ export function FolderView({ folderId }: { folderId: string }) {
         /* Where the card goes on a drop: the centre of the target folder's mark. */
         landing?: { x: number; y: number };
     } | null>(null);
+    /* The row a drag picked up: kept drawn while the list scrolls under the drag. */
+    const [dragFrom, setDragFrom] = useState<string | null>(null);
     // The rows and crumbs as last drawn, for the monitor, which is set up once.
     const shown = useRef<DriveNode[]>([]);
     useEffect(() => {
@@ -874,6 +1190,11 @@ export function FolderView({ folderId }: { folderId: string }) {
             onDragStart: ({ source, location }) => {
                 window.clearTimeout(landingTimer.current);
                 setDragging(true);
+                setDragFrom(
+                    source.data.type === 'drive-nodes'
+                        ? (source.element.dataset.nodeId ?? null)
+                        : null,
+                );
                 const ids =
                     source.data.type === 'drive-crumb'
                         ? [source.data.id as string]
@@ -904,6 +1225,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                 ),
             onDrop: ({ location }) => {
                 setDragging(false);
+                setDragFrom(null);
                 // Dropped on a folder, the card shrinks into its mark and goes; cancelled,
                 // or under reduced motion, it goes at once.
                 const target = location.current.dropTargets[0]?.element;
@@ -940,20 +1262,75 @@ export function FolderView({ folderId }: { folderId: string }) {
         ? [...rows, ...crumbs].find((node) => node.id === dropOver)
         : undefined;
     /*
-     * A row's or tile's place in the entrance, its folder's colour (for a drop on it), and
-     * whether it is being dragged or dropped on, which styles.css draws.
+     * Rows enter (styles.css [data-reveal]) as a folder shows, as the view changes, and as
+     * items arrive in it, but never as scrolling draws rows that were there all along: for a
+     * second after an opening, and for each arrival until a second passes without another.
      */
-    const rowLook = (node: DriveNode, index: number) => {
-        const entrance = reveal(index);
-        const tint = node.kind === 'folder' ? folderTint(folderColour(node)) : {};
-        return {
-            'data-reveal': entrance['data-reveal'],
-            'data-folder-colour': tint['data-folder-colour'],
-            'data-dragging': ghost?.nodes.some((held) => held.id === node.id) || undefined,
-            'data-drop-over': dropOver === node.id || undefined,
-            style: { ...entrance.style, ...tint.style },
-        };
+    const [entrance, setEntrance] = useState<{
+        ids: string[] | null;
+        view: 'list' | 'grid';
+        all: boolean;
+        arrived: ReadonlySet<string>;
+    }>({ ids: null, view, all: false, arrived: new Set() });
+    if (listing.data && (entrance.ids !== ids || entrance.view !== view)) {
+        const known = entrance.ids && new Set(entrance.ids);
+        const fresh = known ? ids.filter((id) => !known.has(id)) : [];
+        setEntrance({
+            ids,
+            view,
+            all: known === null || entrance.view !== view || entrance.all,
+            arrived: fresh.length ? new Set([...entrance.arrived, ...fresh]) : entrance.arrived,
+        });
+    }
+    useEffect(() => {
+        if (!entrance.all && entrance.arrived.size === 0) return;
+        const timer = window.setTimeout(
+            () => setEntrance((current) => ({ ...current, all: false, arrived: new Set() })),
+            1_000,
+        );
+        return () => window.clearTimeout(timer);
+    }, [entrance.all, entrance.arrived]);
+    const held = useMemo(() => new Set(ghost?.nodes.map((node) => node.id)), [ghost?.nodes]);
+    const isEntering = (id: string) => entrance.all || entrance.arrived.has(id);
+    /* What a row or tile shows of the list's state; plain values, so unchanged rows skip rendering. */
+    const itemState = (node: DriveNode, index: number, entering: boolean, stagger: number) => ({
+        node,
+        index,
+        selected: selected.has(node.id),
+        focusShown: focusShown(node.id),
+        revealed: coarse && selecting,
+        entering,
+        stagger: entering ? stagger : 0,
+        dragging: held.has(node.id),
+        dropOver: dropOver === node.id,
+        rootId,
+        groupId: area?.groupId ?? null,
+        folderId,
+        calls: itemCalls,
+    });
+    /* Rows drawn wherever the list is scrolled: the one with the keys, the one being dragged. */
+    const keep = [focused, dragFrom].flatMap((id) => {
+        const index = id ? ids.indexOf(id) : -1;
+        return index >= 0 ? [index] : [];
+    });
+    /*
+     * One right-click menu for the whole list: a row's when the click was on a row, the
+     * space's otherwise. It reads which from where the press began, before it opens.
+     */
+    const [menuFor, setMenuFor] = useState<string | null>(null);
+    const menuNode = menuFor ? (rows.find((row) => row.id === menuFor) ?? null) : null;
+    const aimMenu = (event: SyntheticEvent) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const id = target?.closest<HTMLElement>('[data-node-id]')?.dataset.nodeId ?? null;
+        setMenuFor(id);
+        return id;
     };
+    /* A right-click on a row outside the selection selects it, so the menu acts on that row. */
+    const aimRowMenu = (event: SyntheticEvent) => {
+        const id = aimMenu(event);
+        if (id && !selected.has(id)) select(id);
+    };
+    const moreMenu = useNodeMenuHandle();
 
     const actions: NodeActions = {
         onOpen: open,
@@ -990,10 +1367,6 @@ export function FolderView({ folderId }: { folderId: string }) {
             onColour: writable ? setColouring : null,
         });
     }
-    const markOpened = (node: DriveNode) => () => {
-        if (node.kind === 'file') pushedPreview.current = true;
-    };
-    const tagIds = (node: DriveNode) => (registry ? tagsOf(registry, node.id) : []);
 
     return (
         <div
@@ -1117,6 +1490,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                     <ContextMenuTrigger
                         render={<div />}
                         className="@container/list flex min-h-0 min-w-0 flex-1 flex-col"
+                        onContextMenuCapture={aimRowMenu}
+                        onTouchStartCapture={aimMenu}
                     >
                         {listing.isPending && <SkeletonRows />}
                         {listing.isError && (
@@ -1167,10 +1542,12 @@ export function FolderView({ folderId }: { folderId: string }) {
                                 ref={setTable}
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 aria-multiselectable="true"
+                                // Only the rows near the screen are drawn: the count says how many there are.
+                                aria-rowcount={rows.length + 1}
                                 className="w-full table-fixed border-collapse"
                             >
                                 <thead>
-                                    <tr className="h-10 border-b border-rule">
+                                    <tr aria-rowindex={1} className="h-10 border-b border-rule">
                                         <th
                                             scope="col"
                                             // While the sorted column is hidden, its order is said here.
@@ -1255,245 +1632,100 @@ export function FolderView({ folderId }: { folderId: string }) {
                                         </th>
                                     </tr>
                                 </thead>
-                                <tbody>
-                                    {rows.map((node, index) => {
-                                        const isSelected = selected.has(node.id);
-                                        const entries = entriesFor(node);
+                                <VirtualTableBody
+                                    count={rows.length}
+                                    estimate={57}
+                                    keep={keep}
+                                    row={(index, stagger) => {
+                                        const node = rows[index]!;
+                                        const entering = isEntering(node.id);
                                         return (
-                                            <ContextMenu key={node.id}>
-                                                <ContextMenuTrigger
-                                                    render={
-                                                        <tr
-                                                            aria-selected={isSelected}
-                                                            data-node-id={node.id}
-                                                            {...rowLook(node, index)}
-                                                            onDoubleClick={() => open(node)}
-                                                            onContextMenu={(event) => {
-                                                                event.stopPropagation();
-                                                                if (!isSelected) select(node.id);
-                                                            }}
-                                                        />
-                                                    }
-                                                    className={cn(
-                                                        'group/row h-14 cursor-default border-b border-rule select-none',
-                                                        ROW_FOCUS_WITHIN,
-                                                        dropOver === node.id
-                                                            ? 'bg-accent ring-2 ring-primary ring-inset'
-                                                            : isSelected
-                                                              ? 'bg-accent'
-                                                              : 'hover:bg-hover',
-                                                        focusShown(node.id) && ROW_FOCUS,
-                                                    )}
-                                                >
-                                                    <td className="min-w-0 p-0">
-                                                        <RowName
-                                                            node={node}
-                                                            onSelect={(event) =>
-                                                                select(node.id, event)
-                                                            }
-                                                            thumbnail={
-                                                                <SelectableMark
-                                                                    name={node.name}
-                                                                    checked={isSelected}
-                                                                    revealed={coarse && selecting}
-                                                                    onToggle={() => toggle(node.id)}
-                                                                >
-                                                                    <FileMark
-                                                                        node={node}
-                                                                        size={
-                                                                            mobile ? 'row' : 'list'
-                                                                        }
-                                                                    />
-                                                                </SelectableMark>
-                                                            }
-                                                            name={
-                                                                <NodeName
-                                                                    node={node}
-                                                                    here={here}
-                                                                    folderId={folderId}
-                                                                    onOpen={markOpened(node)}
-                                                                />
-                                                            }
-                                                            tags={
-                                                                tagIds(node).length > 0 && (
-                                                                    <TagStamps
-                                                                        tagIds={tagIds(node)}
-                                                                        registry={registry}
-                                                                        itemName={node.name}
-                                                                        onEdit={
-                                                                            node.workspaceId ===
-                                                                            workspaceId
-                                                                                ? () =>
-                                                                                      setTagging([
-                                                                                          node,
-                                                                                      ])
-                                                                                : undefined
-                                                                        }
-                                                                        max={2}
-                                                                    />
-                                                                )
-                                                            }
-                                                        />
-                                                    </td>
-                                                    {!shared && !area && (
-                                                        <td
-                                                            className={cn(
-                                                                LIST_COLUMN.access,
-                                                                'min-w-0 pr-4',
-                                                            )}
-                                                        >
-                                                            <AccessCell
-                                                                access={access.get(node.id)}
-                                                                inherited={inheritedFrom !== null}
-                                                            />
-                                                        </td>
-                                                    )}
-                                                    <td
-                                                        className={cn(
-                                                            changedColumn,
-                                                            'text-[13px] text-muted-foreground tabular-nums',
-                                                        )}
-                                                    >
-                                                        {formatWhen(
-                                                            node.metadata?.modified ??
-                                                                node.updatedAt,
-                                                        )}
-                                                    </td>
-                                                    <td
-                                                        className={cn(
-                                                            sizeColumn,
-                                                            'pr-2 text-right text-[13px] text-muted-foreground tabular-nums',
-                                                        )}
-                                                    >
-                                                        <SizeText node={node} folderWord="–" />
-                                                    </td>
-                                                    <td className="pr-3 text-right sm:pr-5">
-                                                        <NodeMoreMenu
-                                                            name={node.name}
-                                                            entries={entries}
-                                                        />
-                                                    </td>
-                                                </ContextMenuTrigger>
-                                                <NodeContextMenu entries={entries} />
-                                            </ContextMenu>
+                                            <ListRow
+                                                key={node.id}
+                                                {...itemState(node, index, entering, stagger)}
+                                                mobile={mobile}
+                                                registry={registry}
+                                                canTag={node.workspaceId === workspaceId}
+                                                access={access.get(node.id)}
+                                                inherited={inheritedFrom !== null}
+                                                accessColumn={!shared && !area}
+                                                changedColumn={changedColumn}
+                                                sizeColumn={sizeColumn}
+                                                menu={moreMenu}
+                                            />
                                         );
-                                    })}
-                                </tbody>
+                                    }}
+                                />
                             </table>
                         )}
                         {listing.data && rows.length > 0 && view === 'grid' && (
-                            <div
+                            <VirtualGrid
                                 aria-label={`Contents of ${title || 'folder'}`}
                                 className="grid grid-cols-2 content-start gap-2 px-3 pt-1 pb-6 sm:grid-cols-[repeat(auto-fill,minmax(10.5rem,1fr))] sm:gap-3 sm:px-6"
-                            >
-                                {rows.map((node, index) => {
-                                    const isSelected = selected.has(node.id);
-                                    const entries = entriesFor(node);
+                                count={rows.length}
+                                keep={keep}
+                                tile={(index, stagger) => {
+                                    const node = rows[index]!;
+                                    const entering = isEntering(node.id);
                                     return (
-                                        <ContextMenu key={node.id}>
-                                            <ContextMenuTrigger
-                                                render={
-                                                    <div
-                                                        data-node-id={node.id}
-                                                        data-selected={isSelected || undefined}
-                                                        {...rowLook(node, index)}
-                                                        onContextMenu={(event) => {
-                                                            event.stopPropagation();
-                                                            if (!isSelected) select(node.id);
-                                                        }}
-                                                    />
-                                                }
-                                                className={cn(
-                                                    'group/row relative flex cursor-default flex-col gap-2 rounded-xl p-2 select-none',
-                                                    TILE_FOCUS_WITHIN,
-                                                    dropOver === node.id || isSelected
-                                                        ? 'bg-accent ring-2 ring-primary ring-inset'
-                                                        : 'hover:bg-hover',
-                                                    focusShown(node.id) && TILE_FOCUS,
-                                                )}
-                                            >
-                                                <button
-                                                    type="button"
-                                                    aria-label={node.name}
-                                                    aria-pressed={isSelected}
-                                                    data-row-name
-                                                    className="flex w-full min-w-0 cursor-default flex-col gap-2 text-left outline-none"
-                                                    onClick={(event) => select(node.id, event)}
-                                                    onDoubleClick={() => open(node)}
-                                                >
-                                                    <span
-                                                        data-tile-face
-                                                        className="relative flex aspect-4/3 w-full items-center justify-center overflow-hidden rounded-md bg-muted"
-                                                    >
-                                                        <NodeFace node={node} />
-                                                    </span>
-                                                    <span className="flex min-w-0 flex-col gap-0.5 px-1 pb-0.5">
-                                                        <span className="truncate text-sm font-medium">
-                                                            <NodeName
-                                                                node={node}
-                                                                here={here}
-                                                                folderId={folderId}
-                                                                onOpen={markOpened(node)}
-                                                            />
-                                                        </span>
-                                                        <span className="truncate text-xs text-muted-foreground tabular-nums">
-                                                            <SizeText
-                                                                node={node}
-                                                                folderWord="Folder"
-                                                            />
-                                                        </span>
-                                                    </span>
-                                                </button>
-                                                <CornerCheck
-                                                    name={node.name}
-                                                    checked={isSelected}
-                                                    revealed={coarse && selecting}
-                                                    onToggle={() => toggle(node.id)}
-                                                    className="top-3.5 left-3.5 size-5 shadow-md"
-                                                    iconClassName="size-3"
-                                                />
-                                                <UnverifiedMark
-                                                    node={node}
-                                                    variant="icon"
-                                                    className="absolute top-3.5 right-3.5 bg-card shadow-md hover:bg-card"
-                                                />
-                                            </ContextMenuTrigger>
-                                            <NodeContextMenu entries={entries} />
-                                        </ContextMenu>
+                                        <GridTile
+                                            key={node.id}
+                                            {...itemState(node, index, entering, stagger)}
+                                            count={rows.length}
+                                        />
                                     );
-                                })}
-                            </div>
+                                }}
+                            />
                         )}
                     </ContextMenuTrigger>
-                    <ContextMenuContent>
-                        {canAdd && (
+                    <ContextMenuContent className={menuNode ? 'w-60' : undefined}>
+                        {menuNode ? (
+                            <NodeContextMenuItems entries={entriesFor(menuNode)} />
+                        ) : (
                             <>
-                                <ContextMenuItem
-                                    disabled={!canMakeFolder}
-                                    onClick={() => setCreating(true)}
-                                >
-                                    <FolderPlusIcon aria-hidden="true" />
-                                    New folder
-                                    <ContextMenuShortcut>{keyLabel('Shift')}N</ContextMenuShortcut>
+                                {canAdd && (
+                                    <>
+                                        <ContextMenuItem
+                                            disabled={!canMakeFolder}
+                                            onClick={() => setCreating(true)}
+                                        >
+                                            <FolderPlusIcon aria-hidden="true" />
+                                            New folder
+                                            <ContextMenuShortcut>
+                                                {keyLabel('Shift')}N
+                                            </ContextMenuShortcut>
+                                        </ContextMenuItem>
+                                        <ContextMenuItem
+                                            onClick={() => picker.current?.pickFiles()}
+                                        >
+                                            <FileUpIcon aria-hidden="true" />
+                                            Upload files
+                                        </ContextMenuItem>
+                                        <ContextMenuItem
+                                            onClick={() => picker.current?.pickFolder()}
+                                        >
+                                            <FolderUpIcon aria-hidden="true" />
+                                            Upload folder
+                                        </ContextMenuItem>
+                                        <ContextMenuSeparator />
+                                    </>
+                                )}
+                                <ContextMenuItem disabled={!rows.length} onClick={selectAll}>
+                                    <ListChecksIcon aria-hidden="true" />
+                                    Select all
+                                    <ContextMenuShortcut>{keyLabel('Mod')}A</ContextMenuShortcut>
                                 </ContextMenuItem>
-                                <ContextMenuItem onClick={() => picker.current?.pickFiles()}>
-                                    <FileUpIcon aria-hidden="true" />
-                                    Upload files
-                                </ContextMenuItem>
-                                <ContextMenuItem onClick={() => picker.current?.pickFolder()}>
-                                    <FolderUpIcon aria-hidden="true" />
-                                    Upload folder
-                                </ContextMenuItem>
-                                <ContextMenuSeparator />
                             </>
                         )}
-                        <ContextMenuItem disabled={!rows.length} onClick={selectAll}>
-                            <ListChecksIcon aria-hidden="true" />
-                            Select all
-                            <ContextMenuShortcut>{keyLabel('Mod')}A</ContextMenuShortcut>
-                        </ContextMenuItem>
                     </ContextMenuContent>
                 </ContextMenu>
+                <SharedNodeMenu
+                    handle={moreMenu}
+                    entriesFor={(id) => {
+                        const node = rows.find((row) => row.id === id);
+                        return node ? entriesFor(node) : null;
+                    }}
+                />
                 {wide && detailsOpen && (
                     <DetailsPanel
                         node={single}
