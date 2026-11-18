@@ -88,9 +88,13 @@ test('another tab’s Keep between this tab’s look and its write is never undo
     // Tab A's quiet look finds the folder (filled since) and would offer the row again; tab B's
     // Keep lands between A's look and its write.
     const { view, arm } = interleaved(tabA, async () => {
-        await keepInterrupted({ runs: tabB, abortUpload: async () => 'aborted' }, answered);
+        await keepInterrupted(
+            { current: () => true, runs: tabB, abortUpload: async () => 'aborted' },
+            answered,
+        );
     });
     await interruptedRuns({
+        current: () => true,
         runs: view,
         isLive: async () => false,
         lookFolder: async () => {
@@ -101,7 +105,9 @@ test('another tab’s Keep between this tab’s look and its write is never undo
     await quietlySettled();
     // Kept: only the done mark is left in both tabs' journal, never offered, dropped at the next open.
     expect(await tabA.list()).toEqual([{ ...answered, chosen: 'keep', done: true }]);
-    expect(await interruptedRuns({ runs: tabB, isLive: async () => false })).toEqual([]);
+    expect(
+        await interruptedRuns({ current: () => true, runs: tabB, isLive: async () => false }),
+    ).toEqual([]);
     expect(await tabA.list()).toEqual([]);
 });
 
@@ -113,6 +119,7 @@ test('a row changed by another tab is left as that tab wrote it', async () => {
     // Tab B's own look got there first and offered it again with what it holds.
     const { view, arm } = interleaved(tabA, () => tabB.put({ ...offered, holds: 5 }));
     await interruptedRuns({
+        current: () => true,
         runs: view,
         isLive: async () => false,
         lookFolder: async () => {
@@ -142,6 +149,7 @@ function recoveryTab(runs: RunJournal, exclusive: ReturnType<typeof sharedLocks>
     let gate: Promise<void> = Promise.resolve();
     const deps = {
         runs,
+        current: () => true,
         exclusive,
         trash: async (_ws: string, ids: string[]) => {
             sent.push(`trash ${ids.join(',')}`);
@@ -177,7 +185,11 @@ test('Delete from a snapshot read before another tab’s Keep sends nothing and 
     const tabB = recoveryTab(createIndexedDbRunJournal('runs-keep-then-delete'), locks, sent);
     await tabA.deps.runs.put(offered);
     // Both tabs offered the row; the person answered Keep in tab A first.
-    const [snapshotB] = await interruptedRuns({ runs: tabB.deps.runs, isLive: async () => false });
+    const [snapshotB] = await interruptedRuns({
+        current: () => true,
+        runs: tabB.deps.runs,
+        isLive: async () => false,
+    });
     expect(await keepInterrupted(tabA.deps, offered)).toBe('kept');
     expect(sent).toEqual(['abort up']);
     // Tab B's Delete, from its older snapshot: no trash, no purge.

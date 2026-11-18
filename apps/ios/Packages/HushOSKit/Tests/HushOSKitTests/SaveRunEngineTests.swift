@@ -191,9 +191,9 @@ extension OnFakeDrive {
                 return nil
             }
             let workspace = s.into.node.workspaceId
-            #expect(try await s.vault.trash(["node-x"], in: workspace) == ["node-x": .held])
-            #expect(try await s.vault.purge(["node-x"], in: workspace) == ["node-x": .held])
-            #expect(await s.vault.abortUpload("up-x", in: workspace, pause: .zero) == .held)
+            #expect(try await s.vault.trash(["node-x"], in: workspace, while: { true }) == ["node-x": .held])
+            #expect(try await s.vault.purge(["node-x"], in: workspace, while: { true }) == ["node-x": .held])
+            #expect(await s.vault.abortUpload("up-x", in: workspace, pause: .zero, while: { true }) == .held)
         }
 
         static func versionOf(_ run: SaveRun, _ s: Setup) async throws -> Made {

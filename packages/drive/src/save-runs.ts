@@ -285,18 +285,18 @@ export type ItemFate = 'done' | 'gone' | 'refused' | 'denied' | 'held';
 export async function askAbort(
     abort: () => Promise<unknown>,
     options: {
+        /* Asked before every try: after a sign-out nothing more is sent (no answer, as offline). */
+        stillOn: () => boolean;
         tries?: number;
         pauseMs?: number;
         pause?: (ms: number) => Promise<void>;
-        /* Asked before every try: after a sign-out nothing more is sent (no answer, as offline). */
-        stillOn?: () => boolean;
-    } = {},
+    },
 ): Promise<AbortFate> {
     const tries = options.tries ?? 5;
     const pause =
         options.pause ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     for (let asked = 1; ; asked++) {
-        if (!(options.stillOn?.() ?? true)) return 'unknown';
+        if (!options.stillOn()) return 'unknown';
         try {
             await abort();
             return 'aborted';
@@ -475,8 +475,11 @@ export type SaveRunDeps = {
     isLive?: (runId: string) => Promise<boolean>;
     /* The session generation the caller's work began in (the transfer manager's enqueue `from`). */
     from?: { generation: number };
-    /* Whether the run's session is still this browser's: after a sign-out nothing is written. */
-    current?: () => boolean;
+    /*
+     * Whether the run's session is still this browser's: after a sign-out nothing is sent or
+     * written for it. Required: every request and journal write of a run or a recovery asks it.
+     */
+    current: () => boolean;
     newId?: () => string;
     now?: () => number;
     /* How often a live run's row says it is alive (BEAT_MS). */
@@ -617,7 +620,7 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
     }
     // A sign-out while it starts (abandonRuns cannot reach a run not yet live): it never
     // starts, writes nothing into the journal the sign-out cleared, and lets its hold go.
-    const current = () => deps.current?.() ?? true;
+    const current = () => deps.current();
     const signedOut = () => new RunStopped('signed-out', stoppedWords('signed-out'), 'nothing');
     if (!current()) throw signedOut();
     const needed = runEstimate(plan.results);
@@ -731,7 +734,7 @@ function createRun(
     /* Set by the clean-up just before it removes the row: no write may land after that. */
     let sealed = false;
     /* Writes the journal only while this run's session is the browser's. */
-    const current = () => !abandoned && (deps.current?.() ?? true);
+    const current = () => !abandoned && deps.current();
     // Rows written one after another, each the run as it is then.
     let writing = Promise.resolve();
     /*
@@ -1131,7 +1134,7 @@ function createRun(
             if (abandoned) throw done;
             // Made while the run stopped: it goes the way the rest of the run went, and if it
             // cannot, a row names it for the next open (keepLate).
-            const fate = await discard(deps, row.workspaceId, [made.id]).catch(
+            const fate = await discard(deps, row.workspaceId, [made.id], current).catch(
                 (): Cleanup => 'left',
             );
             if (fate === 'left') await keepLate(made.id, done.cleanup === 'left');
@@ -1205,7 +1208,9 @@ function createRun(
                 await deps.runs.put(left).catch(() => {
                     throw new RecordNotUpdated();
                 });
-            } else if (current() && !(await retire(deps.runs, row))) throw new RecordNotUpdated();
+            } else if (current() && !(await retire(deps.runs, row, current)) && current())
+                // Refused while still signed in; after a sign-out the run ends, writing nothing.
+                throw new RecordNotUpdated();
             end();
         },
         async cancel() {
@@ -1278,19 +1283,19 @@ async function cleanUp(
         published?: Set<string>;
         /* Folders whose creation got no definite answer: one not found yet may still be made. */
         mayExist?: Set<string>;
-        current?: () => boolean;
-        /* Stop asking the server once signed out (an interrupted run's clean-up). */
-        quitOnSignOut?: boolean;
-    } = {},
+        /* The run's session: once it ends (a sign-out) nothing more is asked or written. */
+        current: () => boolean;
+    },
 ): Promise<{
     cleanup: Cleanup;
     keptVersions: number;
     uncertainVersions: number;
     /*
      * New files or folders that may still be there: `left` with the row kept, `no-access` without,
-     * `held` when a family manager's pause kept the clean-up from them (the row kept for later).
+     * `held` when a family manager's pause kept the clean-up from them (the row kept for later),
+     * `stays` when a sign-out stopped the clean-up (the journal went with the account).
      */
-    remains: 'left' | 'no-access' | 'held' | null;
+    remains: 'left' | 'no-access' | 'held' | 'stays' | null;
     /* Kept for a folder whose creation may still land (mayExist), not found yet. */
     waiting: boolean;
     /* Those folders, when they are all that kept the row: everything else was settled. */
@@ -1303,19 +1308,35 @@ async function cleanUp(
     let uncertainVersions = 0;
     let othersMayLand = false;
     let held = false;
-    // An interrupted run's clean-up asks the server nothing once signed out: checked before every
-    // request (a live run's stop goes on, and says what may remain).
-    const stillOn = () => !options.quitOnSignOut || (options.current?.() ?? true);
-    const signedOutNow = () => ({
-        cleanup: 'left' as const,
-        keptVersions,
-        uncertainVersions,
-        remains: null,
-        waiting: false,
-        onlyWaitingOn: null,
-    });
+    // Nothing asked of the server once signed out, a live run's stop as an interrupted run's
+    // clean-up: checked before every request.
+    const stillOn = options.current;
+    // Stopped by a sign-out: what wasn't settled may stay, and is said to (`stays`): an upload not
+    // asked about whose completion was sent (a version counted as maybe saved), and every node
+    // not yet removed that may have been published.
+    let asked = 0;
+    let removed = false;
+    const signedOutNow = () => {
+        let uncertain = uncertainVersions;
+        let others = othersMayLand;
+        for (const uploadId of row.uploadIds.slice(asked)) {
+            if (!(options.completing?.has(uploadId) ?? true)) continue;
+            if (options.versionUploads?.has(uploadId)) uncertain += 1;
+            else others = true;
+        }
+        const nodes = !removed && row.nodeIds.some((id) => options.published?.has(id) ?? true);
+        return {
+            cleanup: 'left' as const,
+            keptVersions,
+            uncertainVersions: uncertain,
+            remains: others || nodes ? ('stays' as const) : null,
+            waiting: false,
+            onlyWaitingOn: null,
+        };
+    };
     for (const uploadId of row.uploadIds) {
         if (!stillOn()) return signedOutNow();
+        asked += 1;
         const fate = await deps.abortUpload(row.workspaceId, uploadId);
         if (fate === 'unknown') {
             unsettled = true;
@@ -1351,9 +1372,10 @@ async function cleanUp(
     }
     if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
-    const discarded = await discard(deps, row.workspaceId, row.nodeIds, notFound, stillOn, () => {
+    const discarded = await discard(deps, row.workspaceId, row.nodeIds, stillOn, notFound, () => {
         held = true;
     }).catch((): Cleanup => 'left');
+    removed = discarded === 'deleted' || discarded === 'nothing';
     // A folder whose creation went unanswered, not found now: the server may still make it.
     if (!stillOn()) return signedOutNow();
     const waitingOn = [...(options.mayExist ?? [])].filter((id) => notFound.has(id));
@@ -1379,7 +1401,7 @@ async function cleanUp(
         options.seal?.();
         await options.written?.();
         // A row the journal won't retire stays as it was: the clean-up is left for the next open.
-        if ((options.current?.() ?? true) && !(await retire(deps.runs, row))) cleanup = 'left';
+        if (stillOn() && !(await retire(deps.runs, row, stillOn))) cleanup = 'left';
     }
     const remains =
         held && cleanup === 'left'
@@ -1398,7 +1420,7 @@ async function cleanUp(
  * the next open drops it). False when neither was written: the row stays as
  * it was, and the caller says so rather than call it retired.
  */
-async function retire(runs: RunJournal, row: RunRow, stillOn: () => boolean = () => true) {
+async function retire(runs: RunJournal, row: RunRow, stillOn: () => boolean) {
     for (let tries = 0; tries < 2; tries++)
         try {
             if (!stillOn()) return false;
@@ -1443,7 +1465,7 @@ async function changeRow(
  * itself. Not after a sign-out.
  */
 function swapRow(
-    deps: Pick<SaveRunDeps, 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current'>,
     expected: RunRow,
     next: RunRow | null,
 ) {
@@ -1457,10 +1479,10 @@ async function discard(
     deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge'>,
     workspaceId: string,
     nodeIds: string[],
+    /* Asked before every request: false (a sign-out) stops here, leaving the rest. */
+    stillOn: () => boolean,
     /* Filled with the ids the server did not find. */
     notFound?: Set<string>,
-    /* Asked before every request: false (a sign-out) stops here, leaving the rest. */
-    stillOn: () => boolean = () => true,
     /* Told when a family manager's pause refused it: the rest is left for after the hold. */
     onHeld: () => void = () => {},
 ): Promise<Cleanup> {
@@ -1497,7 +1519,7 @@ async function discard(
  * stopped). Ids only; the app names the folder from its own metadata.
  */
 export async function interruptedRuns(
-    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now' | 'current'> & Partial<SaveRunDeps>,
 ) {
     const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
@@ -1517,7 +1539,8 @@ export async function interruptedRuns(
         // Nothing made to ask about: one with no uploads either goes; one with reservations to let
         // go (a finished run's stale version, or a version run that ended mid-upload) and one
         // already answered "delete" that waits for a folder are settled quietly, never offered.
-        if (!row.nodeIds.length && !row.uploadIds.length) await retire(deps.runs, row);
+        if (!row.nodeIds.length && !row.uploadIds.length)
+            await retire(deps.runs, row, () => signedIn(deps));
         else if (!row.nodeIds.length || row.chosen === 'delete') quiet.push(row);
         else left.push(row);
     }
@@ -1534,7 +1557,7 @@ export function quietlySettled() {
 }
 
 async function settleQuietly(
-    deps: Pick<SaveRunDeps, 'runs'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current'> & Partial<SaveRunDeps>,
     rows: RunRow[],
     now: () => number,
 ) {
@@ -1546,7 +1569,10 @@ async function settleQuietly(
                 if (!(await stillSo(deps, row))) return;
                 if (row.chosen === 'delete') await lookAgain(deps, row, now());
                 else if (deps.abortUpload)
-                    await settleUploads(deps as Pick<SaveRunDeps, 'runs' | 'abortUpload'>, row);
+                    await settleUploads(
+                        deps as Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current'>,
+                        row,
+                    );
             });
         } catch {
             // No answer: asked again at the next open.
@@ -1561,7 +1587,7 @@ async function settleQuietly(
  * and the row goes.
  */
 async function lookAgain(
-    deps: Pick<SaveRunDeps, 'runs'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current'> & Partial<SaveRunDeps>,
     row: RunRow,
     now: number,
 ) {
@@ -1582,18 +1608,15 @@ async function lookAgain(
 }
 
 /* Still this session's (no sign-out since). */
-function signedIn(deps: Partial<Pick<SaveRunDeps, 'current'>>) {
-    return deps.current?.() ?? true;
+function signedIn(deps: Pick<SaveRunDeps, 'current'>) {
+    return deps.current();
 }
 
 /*
  * Before acting on a row read earlier, and again before writing it: still this session's, and the
  * row on disk still the one read (another open, or this one's clean-up, may have changed it).
  */
-async function stillSo(
-    deps: Pick<SaveRunDeps, 'runs'> & Partial<Pick<SaveRunDeps, 'current'>>,
-    row: RunRow,
-) {
+async function stillSo(deps: Pick<SaveRunDeps, 'runs' | 'current'>, row: RunRow) {
     if (!signedIn(deps)) return false;
     const held = (await deps.runs.list()).find((each) => each.id === row.id);
     return held !== undefined && signedIn(deps) && stable(held) === stable(row);
@@ -1642,7 +1665,7 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     // The session this clean-up began in: after a sign-out it asks nothing more and writes nothing.
     const current = () => signedIn(deps);
     if (!current()) return 'left';
-    const result = await cleanUp(deps, row, [], { mayExist, current, quitOnSignOut: true });
+    const result = await cleanUp(deps, row, [], { mayExist, current });
     // Kept only to wait for folders that may still land, all else done: the row names just those,
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
@@ -1661,7 +1684,7 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
 
 /* A nodeless row's uploads aborted; it goes once none is left without an answer. */
 async function settleUploads(
-    deps: Pick<SaveRunDeps, 'runs' | 'abortUpload'> & Partial<Pick<SaveRunDeps, 'current'>>,
+    deps: Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current'>,
     row: RunRow,
 ) {
     const left: string[] = [];
@@ -1681,8 +1704,8 @@ async function settleUploads(
  * is kept, as asked.
  */
 export async function keepInterrupted(
-    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs'> &
-        Partial<Pick<SaveRunDeps, 'current' | 'exclusive'>>,
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current'> &
+        Partial<Pick<SaveRunDeps, 'exclusive'>>,
     row: RunRow,
 ): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone'> {
     return recovering(deps, row.id, async () => {

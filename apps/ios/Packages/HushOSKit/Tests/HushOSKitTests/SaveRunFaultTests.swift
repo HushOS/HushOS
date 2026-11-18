@@ -235,7 +235,8 @@ struct FaultyDrive: SaveRunWriter {
             for _ in 1 ... 2 { try await call(.part, {}, refused: refuse) }
             try onCompleting(uploadId)
         } catch {
-            _ = await abortUpload(uploadId, in: "ws")
+            // The vault's own abort of an upload it began (not a clean-up request): no session of a run to ask.
+            _ = await abortUpload(uploadId, in: "ws", while: { true })
             throw error
         }
         let landed = try await call(.complete, { try world.complete(uploadId) }, refused: refuse)
@@ -246,14 +247,17 @@ struct FaultyDrive: SaveRunWriter {
     func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? { try await call(.listing, { world.holds(id) }, refused: refuse) }
     func refreshFolder(_ folder: Opened) async throws -> Opened { folder }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
-    func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
-        (try? await call(.abort, { world.abort(uploadId) }, refused: { .denied })) ?? .unknown
+    func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {
+        guard stillOn() else { return .unknown }
+        return (try? await call(.abort, { world.abort(uploadId) }, refused: { .denied })) ?? .unknown
     }
-    func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
-        try await call(.trash, { world.trash(ids) }, refused: { Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) })
+    func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        guard stillOn() else { return Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) }
+        return try await call(.trash, { world.trash(ids) }, refused: { Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) })
     }
-    func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
-        try await call(.purge, { world.purge(ids) }, refused: { Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) })
+    func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        guard stillOn() else { return Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) }
+        return try await call(.purge, { world.purge(ids) }, refused: { Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) })
     }
     func mayPurge(_ workspaceId: String) async -> Bool { true }
 }

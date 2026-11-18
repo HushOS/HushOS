@@ -82,8 +82,8 @@ const abort = (uploadId: string) => () =>
 describe('an abort’s answer, from the route', () => {
     test('an open upload is aborted; aborted again, it is gone (settled either way)', async () => {
         const uploadId = await begun();
-        expect(await askAbort(abort(uploadId))).toBe('aborted');
-        expect(await askAbort(abort(uploadId))).toBe('gone');
+        expect(await askAbort(abort(uploadId), { stillOn: () => true })).toBe('aborted');
+        expect(await askAbort(abort(uploadId), { stillOn: () => true })).toBe('gone');
     });
 
     test('one still finishing is asked again (data.upload completing), and settles once it finishes', async () => {
@@ -97,6 +97,7 @@ describe('an abort’s answer, from the route', () => {
         // It finishes between the first ask and the second: the second says finished, a result that landed.
         let asked = 0;
         const fate = await askAbort(abort(uploadId), {
+            stillOn: () => true,
             pause: async () => {
                 asked += 1;
                 await driveRepository.finishCompleting(owner.workspaceId, uploadId, MiB);
@@ -110,8 +111,8 @@ describe('an abort’s answer, from the route', () => {
         const uploadId = await begun();
         await driveRepository.startCompleting(owner.workspaceId, uploadId);
         await driveRepository.finishCompleting(owner.workspaceId, uploadId, MiB);
-        expect(await askAbort(abort(uploadId))).toBe('finished');
-        expect(await askAbort(abort(randomUUID()))).toBe('gone');
+        expect(await askAbort(abort(uploadId), { stillOn: () => true })).toBe('finished');
+        expect(await askAbort(abort(randomUUID()), { stillOn: () => true })).toBe('gone');
     });
 });
 

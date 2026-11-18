@@ -1290,6 +1290,38 @@ class SaveRunTest {
         pool.shutdown()
     }
 
+    /* A sign-out while a stop waits for a folder's creation: nothing more is asked of the server, and it says what may stay. */
+    @Test
+    fun aSignOutWhileAStopWaitsSendsNothingMoreAndSaysWhatMayStay() {
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter()
+        val session = SaveRunJournal.Epoch()
+        val rows = journal(session)
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val folder = pool.submit<Opened> { run.folder("Out", own) }
+            assertTrue(making.await(5, TimeUnit.SECONDS))
+            val cancel = pool.submit<SaveRunStopped> { run.cancel() }
+            Thread.sleep(50)
+            // Signed out while the stop waits for the creation to settle.
+            session.end()
+            go.countDown()
+            val stopped = cancel.get(5, TimeUnit.SECONDS)
+            runCatching { folder.get(5, TimeUnit.SECONDS) }
+            assertEquals(emptyList<String>(), writer.sent.filter { it == "trash" || it == "purge" })
+            assertTrue(writer.purged.isEmpty())
+            assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+            assertTrue(stopped.message, stopped.message.orEmpty().contains("may still be there"))
+        } finally {
+            go.countDown()
+            pool.shutdownNow()
+        }
+    }
+
     /* An offline clean-up of a file whose completion was never sent doesn't say it may still be there. */
     @Test
     fun anOfflineCleanUpOfAFileNeverCompletedSaysNothingRemains() {

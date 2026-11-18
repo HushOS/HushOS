@@ -675,7 +675,8 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
             return srv.driveNode(id);
         },
         // As the web does: a finishing upload asked about again, about ten seconds.
-        abortUpload: (_ws, id) => askAbort(() => api.abortUpload('ws', id)),
+        abortUpload: (_ws, id) =>
+            askAbort(() => api.abortUpload('ws', id), { stillOn: () => true }),
         trash: async (_ws, ids) => {
             try {
                 return await call(

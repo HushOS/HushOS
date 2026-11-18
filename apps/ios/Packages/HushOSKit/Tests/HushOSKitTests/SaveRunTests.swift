@@ -184,7 +184,9 @@ actor FakeWriter: SaveRunWriter {
         return live.contains(id) || trashed.contains(id) ? items[id] ?? 0 : nil
     }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
-    func abortUpload(_ uploadId: String, in workspaceId: String) async -> DriveAPI.AbortFate {
+    func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {
+        // Asked before it is sent, as the vault does before every try.
+        guard stillOn() else { return .unknown }
         if offline { return .unknown }
         if held { return .held }
         if denied { return .denied }
@@ -200,7 +202,8 @@ actor FakeWriter: SaveRunWriter {
     /* Awaited once a trash is sent, before it is answered (a request on its way). */
     var trashing: (@Sendable () async -> Void)?
     func set(trashing: @escaping @Sendable () async -> Void) { self.trashing = trashing }
-    func trash(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+    func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        guard stillOn() else { return Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) }
         sent.append("trash")
         await trashing?()
         if offline { throw DriveAPIError.transport("offline") }
@@ -214,7 +217,8 @@ actor FakeWriter: SaveRunWriter {
         afterTrash?()
         return fates
     }
-    func purge(_ ids: [String], in workspaceId: String) async throws -> [String: SaveItemFate] {
+    func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate] {
+        guard stillOn() else { return Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) }
         sent.append("purge")
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
@@ -784,6 +788,30 @@ let own = SaveSources.ownWriting
         _ = try? await folder.value
         #expect(await writer.purged == ["made-Out"])
         #expect(rows.list().isEmpty)
+    }
+
+    /* A sign-out while a stop waits for a folder's creation: nothing more is asked of the server, and it says what may stay. */
+    @Test func aSignOutWhileAStopWaitsSendsNothingMoreAndSaysWhatMayStay() async throws {
+        let writer = FakeWriter()
+        let session = SaveRunJournal.Epoch()
+        let rows = journal(session)
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own)
+        let gate = AsyncGate()
+        await writer.set(making: { await gate.wait() })
+        let folder = Task { try await run.folder("Out", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        let cancel = Task { await run.cancel() }
+        try await Task.sleep(for: .milliseconds(50))
+        // Signed out while the stop waits for the creation to settle.
+        session.end()
+        await gate.open()
+        let stopped = await cancel.value
+        _ = try? await folder.value
+        #expect(await writer.sent.filter { $0 == "trash" || $0 == "purge" }.isEmpty)
+        #expect(await writer.purged.isEmpty)
+        #expect(stopped.cleanup == .left)
+        #expect(stopped.message.contains("may still be there"))
     }
 
     /*
@@ -1679,18 +1707,18 @@ extension OnFakeDrive {
             let vault = try await vault(server)
             server.abortReplies = [(409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]]),
                                    (409, ["code": "conflict", "message": "finished", "data": ["upload": "completed"]])]
-            #expect(await vault.abortUpload("up", in: server.workspace) == .finished)
+            #expect(await vault.abortUpload("up", in: server.workspace, while: { true }) == .finished)
             server.abortReplies = [(409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]])]
-            #expect(await vault.abortUpload("up", in: server.workspace) == .gone)
+            #expect(await vault.abortUpload("up", in: server.workspace, while: { true }) == .gone)
             // Still finishing after every try: no answer, never finished (its node is published only once it completes).
             server.abortReplies = Array(repeating: (409, ["code": "conflict", "message": "finishing", "data": ["upload": "completing"]]), count: 5)
-            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .unknown)
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .unknown)
             // A self-hosted server from before `data.upload` says which in words.
             server.abortReplies = [(409, ["code": "conflict", "message": "This upload is finishing and cannot be cancelled."]),
                                    (409, ["code": "conflict", "message": "This upload already finished."])]
-            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .finished)
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .finished)
             server.abortReplies = [(409, ["code": "conflict", "message": "Something else."])]
-            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero) == .unknown)
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .unknown)
         }
 
         /* A new folder's id is heard before its creation is sent; a throw from the hearer sends nothing. */

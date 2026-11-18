@@ -617,12 +617,13 @@ describe('an abort’s answer', () => {
                 const next = answers.shift();
                 if (next) throw next;
             },
-            { pause: async (ms) => void pauses.push(ms) },
+            { stillOn: () => true, pause: async (ms) => void pauses.push(ms) },
         );
         expect(fate).toBe('aborted');
         expect(pauses).toEqual([2_000, 2_000]);
         expect(
             await askAbort(() => Promise.reject(refusal(409, { upload: 'completing' })), {
+                stillOn: () => true,
                 tries: 3,
                 pause: async () => {},
             }),
@@ -631,7 +632,7 @@ describe('an abort’s answer', () => {
 
     test('finished, gone, denied and no answer each say what they are; an unnamed 409 is no answer', async () => {
         const ask = (error: unknown) =>
-            askAbort(() => Promise.reject(error), { pause: async () => {} });
+            askAbort(() => Promise.reject(error), { stillOn: () => true, pause: async () => {} });
         expect(await ask(refusal(409, { upload: 'completed' }))).toBe('finished');
         expect(await ask(refusal(404))).toBe('gone');
         expect(await ask(refusal(403))).toBe('denied');
@@ -865,6 +866,7 @@ describe('a save run', () => {
         w.server.offline = false;
         abandonRuns();
         const offered = await interruptedRuns({
+            current: () => true,
             runs: w.runs,
             isLive: async () => false,
             abortUpload: w.deps.abortUpload,
@@ -933,7 +935,7 @@ describe('a save run', () => {
                             upload: 'completing',
                         });
                 },
-                { pause: async () => {} },
+                { stillOn: () => true, pause: async () => {} },
             );
         const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
         const run = await startRun(w.deps, { targets: [doc, folder('f')], results: [] });
@@ -965,7 +967,11 @@ describe('a save run', () => {
         w.server.finished.add('up-f');
         w.server.live.add('node-f');
         w.deps.abortUpload = async () => 'finished';
-        const [left] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        const [left] = await interruptedRuns({
+            current: () => true,
+            runs: w.runs,
+            isLive: async () => false,
+        });
         expect(await cleanUpInterrupted(w.deps, left!)).toBe('deleted');
         expect(w.server.purged.has('node-f')).toBe(true);
         expect(w.runs.rows.size).toBe(0);
@@ -1206,14 +1212,18 @@ describe('a save run', () => {
         expect(w.server.aborted).toEqual(['up-b']);
         // Kept as a done mark (another tab's Delete finds it kept), never offered: the next open drops it.
         expect(w.runs.rows.get('r')).toMatchObject({ chosen: 'keep', done: true });
-        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false }),
+        ).toEqual([]);
         expect(w.runs.rows.size).toBe(0);
         // With no answer to the abort (offline, an older server), the row goes all the same:
         // an open upload expires on the server, and Keep never leaves a row it can't clear.
         await w.runs.put({ ...left, id: 'r2' });
         w.server.offline = true;
         expect(await keepInterrupted(w.deps, { ...left, id: 'r2' })).toBe('kept');
-        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false }),
+        ).toEqual([]);
         expect(w.runs.rows.size).toBe(0);
     });
 
@@ -1348,7 +1358,9 @@ describe('a save run', () => {
         w.runs.remove = () => Promise.reject(new DOMException('closed', 'InvalidStateError'));
         await run.finish();
         expect(w.runs.rows.get(run.id)?.done).toBe(true);
-        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false }),
+        ).toEqual([]);
         // Keep is retired the same way.
         const left: RunRow = {
             id: 'r',
@@ -1360,10 +1372,12 @@ describe('a save run', () => {
         };
         await w.runs.put(left);
         await keepInterrupted(w.deps, left);
-        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false }),
+        ).toEqual([]);
         // Once the journal works again the next open drops them.
         w.runs.remove = remove;
-        await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false });
         expect(w.runs.rows.size).toBe(0);
         expect(w.server.live.has('node-a')).toBe(true);
     });
@@ -1438,7 +1452,11 @@ describe('a save run', () => {
         expect(stopped.cleanup).toBe('left');
         expect(stopped.message).not.toContain('Nothing was saved');
         expect(stopped.message).toContain('You’ll be asked about it next time.');
-        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        const [row] = await interruptedRuns({
+            current: () => true,
+            runs: w.runs,
+            isLive: async () => false,
+        });
         expect(row?.nodeIds).toEqual(['slow']);
         expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
         expect(w.server.purged.has('slow')).toBe(true);
@@ -1483,7 +1501,11 @@ describe('a save run', () => {
         await tick();
         expect(stopped.cleanup).toBe('left');
         expect(stopped.message).not.toContain('Nothing was saved');
-        const [row] = await interruptedRuns({ runs: w.runs, isLive: async () => false });
+        const [row] = await interruptedRuns({
+            current: () => true,
+            runs: w.runs,
+            isLive: async () => false,
+        });
         expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
         expect(w.server.purged.has('twice')).toBe(true);
     });
@@ -2031,6 +2053,85 @@ describe('a save run', () => {
         await expect(saved).rejects.toMatchObject({ reason: 'failed' });
     });
 
+    test('a sign-out while a live run stops sends nothing more, and says what may stay', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        void run.file({ name: 'b', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[1]!, 'up-b', 'node-b');
+        await tick();
+        // Signed out while the stop's first abort was on its way.
+        const abort = w.deps.abortUpload;
+        w.deps.abortUpload = async (workspaceId, uploadId) => {
+            const fate = await abort(workspaceId, uploadId);
+            w.signOut();
+            return fate;
+        };
+        const stopped = await run.cancel();
+        expect(w.server.trash.size).toBe(0);
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(stopped.message).toContain('may still be there');
+    });
+
+    test('a sign-out while a finish or a clean-up retires its row writes nothing back, done or not', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const writes: string[] = [];
+        const put = w.runs.put.bind(w.runs);
+        w.runs.put = async (row: RunRow) => {
+            writes.push(`put ${row.id}${row.done ? ' done' : ''}`);
+            return put(row);
+        };
+        // The removal refused, and the account signed out meanwhile: no retry, no `done` fallback.
+        let removals = 0;
+        w.runs.remove = async () => {
+            removals += 1;
+            w.signOut();
+            throw new DOMException('full', 'QuotaExceededError');
+        };
+        await run.finish();
+        expect(removals).toBe(1);
+        expect(writes).toEqual([]);
+        // An interrupted run's Delete: the same.
+        const v = world();
+        const left: RunRow = {
+            id: 'left',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-z'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        };
+        await v.runs.put(left);
+        v.server.live.add('node-z');
+        const vput = v.runs.put.bind(v.runs);
+        const vwrites: string[] = [];
+        v.runs.put = async (row: RunRow) => {
+            vwrites.push(`put ${row.id}${row.done ? ' done' : ''}`);
+            return vput(row);
+        };
+        let vremovals = 0;
+        v.runs.remove = async () => {
+            vremovals += 1;
+            v.signOut();
+            throw new DOMException('full', 'QuotaExceededError');
+        };
+        expect(await cleanUpInterrupted(v.deps, left)).toBe('left');
+        expect(vremovals).toBe(1);
+        expect(vwrites).toEqual([]);
+        expect(v.runs.rows.get('left')).toEqual(left);
+    });
+
     test('a finish whose record the journal won’t update says so, stays live, and can be asked again', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
@@ -2045,7 +2146,9 @@ describe('a save run', () => {
         w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
         await expect(run.finish()).rejects.toBeInstanceOf(RecordNotUpdated);
         // Still this page's: never taken for interrupted here, and nothing more taken in.
-        expect(await interruptedRuns({ runs: w.runs, isLive: async () => false })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: async () => false }),
+        ).toEqual([]);
         await expect(run.file({ name: 'b', bytes: bytes(), mime: null, ...own })).rejects.toThrow();
         w.runs.put = put;
         w.runs.remove = remove;
@@ -2296,6 +2399,7 @@ describe('a save run', () => {
         // Another tab's run, held there: not this tab's to clean up.
         await w.runs.put({ ...left, id: 'run-other-tab' });
         const found = await interruptedRuns({
+            current: () => true,
             runs: w.runs,
             isLive: async (id) => id === 'run-other-tab',
         });
@@ -2326,9 +2430,11 @@ describe('a save run', () => {
             at: 1,
             beat: at - 10 * 60_000,
         });
-        expect((await interruptedRuns({ runs, now: () => at })).map((row) => row.id)).toEqual([
-            'stale',
-        ]);
+        expect(
+            (await interruptedRuns({ current: () => true, runs, now: () => at })).map(
+                (row) => row.id,
+            ),
+        ).toEqual(['stale']);
     });
 
     test('its row is written only once its lock is held, and the lock is held for as long as the run runs', async () => {
@@ -2350,14 +2456,18 @@ describe('a save run', () => {
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
         expect(unheldWrites).toEqual([]);
         // Another tab's next open, at any point while it runs: never interrupted.
-        expect(await interruptedRuns({ runs: w.runs, isLive: w.deps.isLive })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: w.deps.isLive }),
+        ).toEqual([]);
         void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
         await tick();
         w.begin(w.ids()[0]!, 'up-a', 'node-a');
         w.land(w.ids()[0]!, 'node-a', 'up-a');
         await tick();
         expect(unheldWrites).toEqual([]);
-        expect(await interruptedRuns({ runs: w.runs, isLive: w.deps.isLive })).toEqual([]);
+        expect(
+            await interruptedRuns({ current: () => true, runs: w.runs, isLive: w.deps.isLive }),
+        ).toEqual([]);
         await run.finish();
         expect(held.size).toBe(0);
     });

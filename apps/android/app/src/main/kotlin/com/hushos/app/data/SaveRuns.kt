@@ -558,7 +558,7 @@ object SaveRuns {
      */
     internal fun clean(row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal, versions: Set<String>, completing: Set<String>?,
                        published: Set<String>?, asked: Map<String, SaveAbortFate> = emptyMap(), mayExist: Set<String> = emptySet(),
-                       stillOn: () -> Boolean = { true }): Cleaned {
+                       stillOn: () -> Boolean): Cleaned {
         var unsettled = false
         var denied = false
         var kept = 0
@@ -568,8 +568,28 @@ object SaveRuns {
         // An upload the stop already aborted with an answer isn't asked again; one that got none is.
         fun fateOf(uploadId: String) = asked[uploadId]?.takeIf { it != SaveAbortFate.UNKNOWN && it != SaveAbortFate.FINISHING }
             ?: abort(writer, uploadId, row.workspaceId)
-        // Signed out meanwhile (an interrupted run's clean-up): nothing more asked of the server, nothing written.
-        for (uploadId in row.uploadIds) when (if (stillOn()) fateOf(uploadId) else return Cleaned(SaveCleanup.LEFT, kept, uncertain)) {
+        // Stopped by a sign-out (a live run's stop as an interrupted run's clean-up): nothing more asked of the server,
+        // nothing written, and what wasn't settled is said to stay (remains NOTHING: the journal went with the account): an
+        // upload not settled whose completion was sent (a version counted as maybe saved), and every node not removed that
+        // may have been published.
+        var reached = 0
+        var removed = false
+        fun signedOutNow(): Cleaned {
+            var maybe = uncertain
+            var keptNow = kept
+            var others = othersMayLand
+            for (uploadId in row.uploadIds.drop(reached)) {
+                if (completing?.contains(uploadId) == false) continue
+                when (asked[uploadId]) {
+                    SaveAbortFate.ABORTED, SaveAbortFate.GONE -> {}
+                    SaveAbortFate.FINISHED -> if (uploadId in versions) keptNow++
+                    else -> if (uploadId in versions) maybe++ else others = true
+                }
+            }
+            val nodes = !removed && row.nodeIds.any { published?.contains(it) != false }
+            return Cleaned(SaveCleanup.LEFT, keptNow, maybe, if (others || nodes) SaveCleanup.NOTHING else null)
+        }
+        for (uploadId in row.uploadIds) when (if (stillOn()) fateOf(uploadId).also { reached++ } else return signedOutNow()) {
             SaveAbortFate.UNKNOWN, SaveAbortFate.FINISHING -> {
                 // No answer: once its completion was sent it may land yet, and a new version is never said not to have.
                 unsettled = true
@@ -593,9 +613,10 @@ object SaveRuns {
             else -> {}
         }
         val notFound = HashSet<String>()
-        if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
+        if (!stillOn()) return signedOutNow()
         val discarded = discard(row.nodeIds, row.workspaceId, writer, notFound, stillOn) { held = true }
-        if (!stillOn()) return Cleaned(SaveCleanup.LEFT, kept, uncertain)
+        removed = discarded == SaveCleanup.DELETED || discarded == SaveCleanup.NOTHING
+        if (!stillOn()) return signedOutNow()
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
         val waitingOn = mayExist.filter { it in notFound }
         val waiting = waitingOn.isNotEmpty()
@@ -616,7 +637,7 @@ object SaveRuns {
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null,
-                         stillOn: () -> Boolean = { true }, onHeld: () -> Unit = {}): SaveCleanup {
+                         stillOn: () -> Boolean, onHeld: () -> Unit = {}): SaveCleanup {
         if (ids.isEmpty()) return SaveCleanup.NOTHING
         return try {
             if (!stillOn()) return SaveCleanup.LEFT
@@ -933,7 +954,7 @@ class SaveRun private constructor(
             // Made while the run stopped: it goes the way the rest went, and if it cannot, a row names it (keepLate). After a
             // sign-out nothing is asked of the server or written for that account.
             val done = waiting.get()
-            if (!synchronized(lock) { abandoned } && SaveRuns.discard(listOf(made.id), row.workspaceId, writer) == SaveCleanup.LEFT)
+            if (!synchronized(lock) { abandoned } && SaveRuns.discard(listOf(made.id), row.workspaceId, writer, stillOn = { journal.live }) == SaveCleanup.LEFT)
                 keepLate(made.id, done.cleanup == SaveCleanup.LEFT)
             throw done
         }
@@ -1043,7 +1064,8 @@ class SaveRun private constructor(
                     // names it for the next open (keepLate). Never after a sign-out.
                     val done = waiting.get()
                     if (tracked && !synchronized(lock) { abandoned } &&
-                        SaveRuns.discard(listOf(landed.id), row.workspaceId, writer) == SaveCleanup.LEFT) keepLate(landed.id, done.cleanup == SaveCleanup.LEFT)
+                        SaveRuns.discard(listOf(landed.id), row.workspaceId, writer, stillOn = { journal.live }) == SaveCleanup.LEFT)
+                        keepLate(landed.id, done.cleanup == SaveCleanup.LEFT)
                     throw done
                 }
                 // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
@@ -1109,14 +1131,18 @@ class SaveRun private constructor(
         // The run's uploads are aborted first, so none keeps sending parts while the stop waits (a second abort in the
         // clean-up is harmless, and one answered here isn't asked again).
         val ws = synchronized(lock) { row.workspaceId }
-        val asked = synchronized(lock) { row.uploadIds.toList() }.associateWith { SaveRuns.abort(writer, it, ws) }
+        // The run's session: a sign-out while the stop waits (an abort, a folder creation settling) stops it there.
+        val stillOn = { journal.live }
+        val asked = synchronized(lock) { row.uploadIds.toList() }.associateWith {
+            if (stillOn()) SaveRuns.abort(writer, it, ws) else SaveAbortFate.UNKNOWN
+        }
         // Folder creations already sent settle next (a lost answer included): one the server creates after the clean-up
         // looked would otherwise be left with its row gone.
         while (creating.get() > 0) Thread.sleep(5)
         val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
         val (sent, out) = synchronized(lock) { completing.toSet() to published.toSet() }
         val maybe = synchronized(lock) { mayExist.toSet() }
-        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe)
+        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe, stillOn)
         val total = keptBefore + cleaned.kept
         val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held), cleaned.cleanup, total,
             cleaned.uncertain)
