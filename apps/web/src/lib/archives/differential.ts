@@ -188,11 +188,27 @@ if (!existsSync(binary))
         'Build the core verdicts first: cargo build --release --manifest-path crates/hushos-core/fuzz/Cargo.toml --example verdicts',
     );
 const core = spawn(binary, [], { stdio: ['pipe', 'pipe', 'inherit'] });
-const waiting: ((reply: unknown) => void)[] = [];
-createInterface({ input: core.stdout }).on('line', (line) => waiting.shift()?.(JSON.parse(line)));
+const waiting: { resolve: (reply: unknown) => void; reject: (error: Error) => void }[] = [];
+createInterface({ input: core.stdout }).on('line', (line) =>
+    waiting.shift()?.resolve(JSON.parse(line)),
+);
+/*
+ * The core gone mid-run (it exited, crashed past its panic guard, or a pipe broke): every input
+ * waiting on it fails, so compare saves the one that did it, and the run ends non-zero.
+ */
+let coreGone: Error | null = null;
+function lose(error: Error) {
+    coreGone ??= error;
+    for (const waiter of waiting.splice(0)) waiter.reject(coreGone);
+}
+core.on('exit', (code, signal) => lose(new Error(`the core exited (${signal ?? code}) mid-run`)));
+core.on('error', lose);
+core.stdin.on('error', lose);
+core.stdout.on('error', lose);
 const rust = (data: Uint8Array) =>
-    new Promise<unknown>((resolve) => {
-        waiting.push(resolve);
+    new Promise<unknown>((resolve, reject) => {
+        if (coreGone) return reject(coreGone);
+        waiting.push({ resolve, reject });
         core.stdin.write(
             `${JSON.stringify({ target: 'archive', data: Buffer.from(data).toString('base64url') })}\n`,
         );
@@ -265,7 +281,20 @@ const judged = (verdict: unknown) =>
 let compared = 0;
 let found = 0;
 async function compare(bytes: Uint8Array) {
-    const [ours, theirs] = await Promise.all([web(bytes), rust(bytes)]);
+    let ours: unknown;
+    let theirs: unknown;
+    try {
+        [ours, theirs] = await Promise.all([web(bytes), rust(bytes)]);
+    } catch (error) {
+        // The core went while this input was with it: the input is kept, and the run fails now.
+        mkdirSync(artifacts, { recursive: true });
+        const name = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
+        writeFileSync(join(artifacts, `${name}.zip`), bytes);
+        console.log(
+            `core lost on ${name}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        process.exit(1);
+    }
     compared++;
     const theirsPanicked = typeof theirs === 'object' && theirs !== null && 'panic' in theirs;
     const oursFailed = JSON.stringify(ours).includes('"failed: ');

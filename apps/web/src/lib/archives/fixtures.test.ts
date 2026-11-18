@@ -78,8 +78,11 @@ function python(name: string, read = true, password = PASSWORD) {
     return JSON.parse(output) as { error?: string; entries: PyEntry[] };
 }
 
-function bsdtar(name: string, args: string[]) {
-    const result = spawnSync('bsdtar', [...args, '-f', pathOf(name)], { encoding: 'utf8' });
+/* Options first, then the archive, then any members: a member before `-f` is read as one more name to find. */
+function bsdtar(name: string, options: string[], members: string[] = []) {
+    const result = spawnSync('bsdtar', [...options, '-f', pathOf(name), ...members], {
+        encoding: 'utf8',
+    });
     return { status: result.status, out: result.stdout, err: result.stderr };
 }
 
@@ -235,9 +238,11 @@ print(json.dumps(out))`,
         expect(right.out).toContain('AES-256, AE-2.');
         expect(right.out).toContain('AES-256, AE-1.');
         expect(right.out).toContain(CANARY);
-        expect(bsdtar('aes.zip', ['-xO', '--passphrase', 'not it', 'secret.txt']).status).not.toBe(
-            0,
-        );
+        // The wrong password is refused for itself, not for a name it couldn't find.
+        const wrong = bsdtar('aes.zip', ['-xO', '--passphrase', 'not it'], ['secret.txt']);
+        expect(wrong.status).not.toBe(0);
+        expect(wrong.err).toMatch(/Incorrect passphrase/i);
+        expect(wrong.err).not.toMatch(/Not found in archive/i);
         const flipped = bsdtar('aes-flipped.zip', ['-xO', '--passphrase', PASSWORD]);
         expect(flipped.status).not.toBe(0);
         expect(flipped.err).toMatch(/Authentication code/i);

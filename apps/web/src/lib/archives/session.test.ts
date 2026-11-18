@@ -229,6 +229,54 @@ describe('a stopped preview', () => {
     });
 });
 
+describe('a worker re-reading what a cache already holds', () => {
+    it('is held to the bytes it may be served, fetched or not: cached reads are never free', async () => {
+        const { openArchive } = await import('./session');
+        const { main, fetched, CHUNK } = engine();
+        const worker = driven();
+        const session = openArchive(main, () => worker.fake as unknown as Worker);
+        session.listing.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const read = reading(worker.main());
+        // The first chunk, over and over: fetched once, then from the cache each time.
+        for (let n = 0; n < 40 && !worker.terminated(); n++) await read(0, CHUNK);
+        expect(worker.terminated()).toBe(true);
+        expect(fetched.main).toBe(1);
+    });
+});
+
+describe('a download’s last word', () => {
+    it('commits the file only on its end: any other reply aborts it, an empty entry included', async () => {
+        const { openArchive } = await import('./session');
+        const { memoryReader } = await import('@/lib/tools/ranges');
+        const worker = driven();
+        const session = openArchive(
+            memoryReader(new Uint8Array(100)),
+            () => worker.fake as unknown as Worker,
+        );
+        const empty = big(0, 0);
+        worker.send({ type: 'listing', ...message([empty]) });
+        await session.listing;
+        let closed = false;
+        let aborted = false;
+        const download = session.download(empty as ArchiveEntry, {
+            write: async () => {},
+            close: async () => void (closed = true),
+            abort: async () => void (aborted = true),
+        });
+        download.done.catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const asked = worker.asked.find((message) => message.type === 'download')!;
+        // A preview's reply for the download's id: every byte (none) is written, but it isn't the end.
+        worker.send({ type: 'bytes', id: asked.id, bytes: new ArrayBuffer(0) });
+        await expect(download.done).rejects.toThrow();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(closed).toBe(false);
+        expect(aborted).toBe(true);
+        expect(worker.terminated()).toBe(true);
+    });
+});
+
 describe('a download paused on its sink beside a stuck preview', () => {
     it('stops the clock only while every operation waits on the page: the stuck preview is still ended', async () => {
         vi.useFakeTimers();

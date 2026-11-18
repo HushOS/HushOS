@@ -213,6 +213,27 @@ function readable(source: Source): Source {
     };
 }
 
+/*
+ * `source` for one call: each read rejects once `signal` is aborted, its wait included, the shared
+ * source itself untouched. The listener goes with the read, so a long call adds none per read.
+ */
+function stoppable(source: Source, signal?: AbortSignal): Source {
+    if (!signal) return source;
+    return {
+        size: source.size,
+        read: (offset, length) =>
+            new Promise<Uint8Array>((resolve, reject) => {
+                if (signal.aborted) return reject(new Error('Stopped.'));
+                const stop = () => reject(new Error('Stopped.'));
+                signal.addEventListener('abort', stop, { once: true });
+                source
+                    .read(offset, length)
+                    .then(resolve, reject)
+                    .finally(() => signal.removeEventListener('abort', stop));
+            }),
+    };
+}
+
 /* zip.js's errors, by message, as refusal codes; anything else is damage. */
 function refusalOf(error: unknown): ZipError {
     if (error instanceof ZipError) return error;
@@ -352,7 +373,12 @@ export class ZipArchive {
             source?: Source;
         },
     ) {
-        const source = options.source ? readable(options.source) : this.#source;
+        // Every read of this call stops with its signal, the local header's included: leaving an entry
+        // while its header is fetched lets go of the call (and what it holds) without closing the archive.
+        const source = stoppable(
+            options.source ? readable(options.source) : this.#source,
+            options.signal,
+        );
         if (source.size !== this.#source.size) throw new ZipError('damaged');
         const start = await this.dataStart(entry, source);
         if (entry.lock !== 'none' && options.password === null) throw new ZipError('password');

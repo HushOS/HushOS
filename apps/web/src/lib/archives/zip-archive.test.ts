@@ -443,6 +443,29 @@ describe('reading', () => {
         expect(await archive.unlock(table.password)).toBe(true);
     });
 
+    it('lets go of a preview left while its local header is fetched, the archive still open', async () => {
+        const bytes = bytesOf('basic.zip');
+        let hang = false;
+        const archive = await ZipArchive.open({
+            size: bytes.length,
+            read: (offset, length) =>
+                hang
+                    ? new Promise<Uint8Array>(() => {})
+                    : Promise.resolve(bytes.slice(offset, offset + length)),
+        });
+        const entry = archive.listed.find((item) => !item.directory && item.size > 0)!;
+        // The connection stalls on the entry's local header; the viewer leaves the entry.
+        hang = true;
+        const leaving = new AbortController();
+        const previewing = archive.preview(entry.index, 1 << 20, leaving.signal);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        leaving.abort();
+        await expect(previewing).rejects.toThrow();
+        // The archive itself goes on: the next preview reads as before.
+        hang = false;
+        expect((await archive.preview(entry.index, 1 << 20)).length).toBe(entry.size);
+    });
+
     it('keeps a password only once it opens something, and drops it on close', async () => {
         const archive = await open('aes.zip');
         expect(await outcome(() => archive.preview(0, 1024))).toBe('password');

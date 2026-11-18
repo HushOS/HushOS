@@ -229,8 +229,16 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     let allowed = 0;
     const metered = typeof reader.meter === 'function';
     const slack = metered ? 3 * CHUNK_SIZE : MiB;
-    const grant = (bytes: number) =>
-        (allowed += Math.min(4 * bytes + slack, 4 * reader.size + slack));
+    /*
+     * And what it may be served in all, in bytes asked for, whether fetched or found in a cache:
+     * metered, a worker re-reading cached chunks costs no fetch, so without this it could be
+     * served without end (each read counted as progress). The same four times and a MiB.
+     */
+    let servable = 0;
+    const grant = (bytes: number) => {
+        allowed += Math.min(4 * bytes + slack, 4 * reader.size + slack);
+        servable += Math.min(4 * bytes + MiB, 4 * reader.size + MiB);
+    };
     reader.meter?.((bytes) => {
         if (bytes > allowed) {
             broken();
@@ -310,18 +318,18 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         size: reader.size,
         fresh: reader.fresh,
         read(offset, length) {
-            if (!metered) {
-                if (length > allowed) {
-                    broken();
-                    return Promise.reject(new Error('The worker read more than it was allowed.'));
-                }
-                allowed -= length;
+            if (length > servable || (!metered && length > allowed)) {
+                broken();
+                return Promise.reject(new Error('The worker read more than it was allowed.'));
             }
+            servable -= length;
+            if (!metered) allowed -= length;
             return reader.read(offset, length);
         },
     };
+    // Each range the worker waits on is one operation's wait on the page (pause), never the session's whole clock.
     const stopServing = serveRanges(channel.port1, counted, {
-        hold: () => watchdog?.hold() ?? (() => {}),
+        hold: pause,
         allowance: readAllowance(),
         onAbuse: broken,
     });
@@ -470,9 +478,24 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             }
             own -= bytes;
         });
+        // And the bytes it is served in all, cached or not, held to the same: re-reading cached chunks is never free.
+        let ownServable = 4 * (entry.packed + 65_536 + 512) + MiB;
+        const served: RangeReader = {
+            size: forked.size,
+            fresh: forked.fresh,
+            read(offset, length) {
+                if (length > ownServable) {
+                    broken();
+                    return Promise.reject(new Error('The worker read more than it was allowed.'));
+                }
+                ownServable -= length;
+                return forked.read(offset, length);
+            },
+        };
         const channel = new MessageChannel();
-        const stopServing = serveRanges(channel.port1, forked, {
-            hold: () => watchdog?.hold() ?? (() => {}),
+        // A wait on the page for this download alone (pause): never the session's whole clock.
+        const stopServing = serveRanges(channel.port1, served, {
+            hold: pause,
             allowance: readAllowance(),
             onAbuse: broken,
         });
@@ -638,9 +661,16 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                     () => busy,
                 );
                 id = asked.id;
-                await asked.answer;
+                const reply = await asked.answer;
                 await writing;
                 if (failure) throw failure;
+                // Only the download's own end commits the file: any other last word (bytes, a span,
+                // an unlock's answer) is a worker off its script, even with every byte written (at
+                // once, for an empty entry). The session ends and the sink is aborted.
+                if (reply.type !== 'end') {
+                    broken();
+                    throw new Error(TOOL_FAILED);
+                }
                 if (written !== entry.size) throw new ArchiveRefusal('size');
                 await sink.close();
             })();
