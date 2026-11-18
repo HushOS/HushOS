@@ -89,17 +89,38 @@ test.each(['light', 'dark', 'lightHigh', 'darkHigh'] as const)(
         const of = (role: ColorRole) => color[role][scheme];
         const rule = css.slice(css.indexOf(themes[0]!.from));
         const block = rule.slice(0, rule.indexOf('\n}'));
-        // The bar is the accent whole.
-        expect(block).toContain('--cue: var(--primary);');
         const dark = scheme.startsWith('dark');
-        const highlight = strength('highlight', themes[dark ? 1 : 0]!.from);
-        for (const ground of grounds) {
-            const filled = over(of(highlight.of), highlight.alpha, of(ground));
-            // Against the item's own fill and against the menu around it: 3:1 (WCAG 1.4.11).
-            expect(contrast(of('primary'), filled), `bar on ${ground}`).toBeGreaterThanOrEqual(3);
-            expect(contrast(of('primary'), of(ground)), `bar by ${ground}`).toBeGreaterThanOrEqual(
-                3,
-            );
+        const high = scheme.endsWith('High');
+        // The ring the menus draw round the keyboard's highlight is the controls' ring.
+        expect(css).toMatch(/@utility focus-ring \{\n\s+outline: 2px solid var\(--ring\);/);
+        const ring = high ? 1 : strength('ring', themes[0]!.from).alpha;
+        // High contrast, from the toggle or from the computer, sets its own highlight.
+        const highlights = high
+            ? [':root.hc,', '@media (prefers-contrast: more) {\n    :root:root,'].map((from) =>
+                  strength('highlight', from),
+              )
+            : [strength('highlight', themes[dark ? 1 : 0]!.from)];
+        // What the ring is drawn on: the highlight, a checked or selected item's tint, and a
+        // focused destructive item's soft danger.
+        const fills = grounds.flatMap((ground) => [
+            ...highlights.map((highlight) => ({
+                ground,
+                name: `highlight ${highlight.alpha}`,
+                fill: over(of(highlight.of), highlight.alpha, of(ground)),
+            })),
+            { ground, name: 'tint', fill: of('tint') },
+            { ground, name: 'dangerSoft', fill: of('dangerSoft') },
+        ]);
+        // Against the item's own fill and against the menu around it: 3:1 (WCAG 1.4.11), and
+        // 4.5:1 in high contrast, where focus meets AAA (DESIGN.md, Colour).
+        const least = high ? 4.5 : 3;
+        for (const { ground, name, fill } of fills) {
+            const drawn = over(of('primary'), ring, fill);
+            expect(contrast(drawn, fill), `ring on ${name}`).toBeGreaterThanOrEqual(least);
+            expect(
+                contrast(drawn, of(ground)),
+                `ring on ${name} by ${ground}`,
+            ).toBeGreaterThanOrEqual(least);
         }
         // The opaque hover: ink mixed into the panel (the surface, or the ground in the dark).
         const solid =
@@ -115,7 +136,9 @@ test.each(['light', 'dark', 'lightHigh', 'darkHigh'] as const)(
     },
 );
 
-test('high contrast draws the ring whole', () => {
-    const rule = css.slice(css.indexOf(':root.hc,'));
-    expect(rule.slice(0, rule.indexOf('\n}'))).toContain('--ring: var(--primary);');
+test('high contrast draws the ring whole, asked for here or by the computer', () => {
+    for (const from of [':root.hc,', '@media (prefers-contrast: more) {\n    :root:root,']) {
+        const rule = css.slice(css.indexOf(from));
+        expect(rule.slice(0, rule.indexOf('\n}')), from).toContain('--ring: var(--primary);');
+    }
 });

@@ -228,12 +228,6 @@
      * step, mixed into the panel and opaque.
      */
     --hover-solid: color-mix(in oklab, var(--ink) 8%, var(--panel));
-    /*
-     * The mark the keyboard's highlight carries besides its fill: a 2px bar on the item's leading
-     * edge, in the accent whole. The fill alone is about 1.3:1; a state found only by keyboard
-     * needs 3:1 (WCAG 1.4.11), and the bar has it against the fill and the surface.
-     */
-    --cue: var(--primary);
 
     --sidebar: var(--ground);
     --sidebar-foreground: var(--ink);
@@ -500,10 +494,6 @@
     summary {
         @apply focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-ring;
     }
-    /* A menu's item is marked by its fill as the highlight moves; the ring joins it in high contrast. */
-    [role='menuitem'] {
-        @apply hc:focus-visible:outline-2 hc:focus-visible:outline-solid hc:focus-visible:-outline-offset-2 hc:focus-visible:outline-ring;
-    }
     strong {
         @apply font-bold text-foreground;
     }
@@ -559,6 +549,18 @@
 /* The surface that holds a page's content, raised from the ground. */
 @utility sheet {
     @apply rounded-xs bg-card shadow-sheet;
+}
+
+/*
+ * The keyboard's highlight in a menu, a select or the command palette: the ring every control
+ * draws, inset round the item's fill. The fill alone is about 1.3:1, and a state found only by
+ * keyboard needs 3:1 (WCAG 1.4.11); the ring has it against the fill and the menu around it
+ * (lib/states.test.ts). Drawn while the keyboard was used last (lib/moved.ts); the pointer has
+ * the fill to follow. In high contrast, on the highlighted item whatever moved it.
+ */
+@utility focus-ring {
+    outline: 2px solid var(--ring);
+    outline-offset: -2px;
 }
 
 @utility text-link {

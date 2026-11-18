@@ -38,6 +38,7 @@ import { ThemeProvider, useTheme } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { trackMoved } from '@/lib/moved';
 import { billingHint, freeQuotaHint } from '@/lib/billing';
 import { sessionHint } from '@/lib/session';
 import { appStoreHint, operatorHint, playStoreHint } from '@/lib/social';
@@ -205,6 +206,7 @@ function Document({ children, release }: { children: ReactNode; release: string 
         setServedRelease(release);
         startReleaseChecks();
         initSounds();
+        trackMoved();
         installAnalyticsFilter();
         // A link's key, saved for a sign-in that never came, is not kept past its hour.
         forgetReturn(Date.now());
