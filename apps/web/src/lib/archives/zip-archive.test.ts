@@ -331,7 +331,8 @@ describe('every fixture, as expected.json says', () => {
                     }
                 }
             },
-            120_000,
+            // zip64-5g.zip inflates and hashes 5 GiB of zeros: about a minute here, over two on a CI runner.
+            600_000,
         );
 });
 
