@@ -1,0 +1,33 @@
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_a993a7988ee3d9 232-276
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_f64c1ae1acb860 266-294,298,304,306,616-618
+apps/web/src/lib/archives/zip-archive.ts
+  s_c60e24772e04af::t_8c964669bae187 362-369
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_7f1f01f37d9cff 785-794
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_3aea12fd00735a 982-992
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_364ff5892edbc4 1277-1302,1305,1323-1328
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_a9820f18511900 1450-1451,1616-1632,1812
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_bb9c8b2a1202c1 626-633,698-711,742-743
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "07261ad7de3c9133cc162835c0ca5737146e31c8",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
