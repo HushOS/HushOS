@@ -88,8 +88,14 @@ test('another tab’s Keep between this tab’s look and its write is never undo
     // Tab A's quiet look finds the folder (filled since) and would offer the row again; tab B's
     // Keep lands between A's look and its write.
     const { view, arm } = interleaved(tabA, async () => {
+        // Tab B: its own turn (the lock a browser shares between tabs is what keeps them apart).
         await keepInterrupted(
-            { current: () => true, runs: tabB, abortUpload: async () => 'aborted' },
+            {
+                current: () => true,
+                runs: tabB,
+                abortUpload: async () => 'aborted',
+                exclusive: (_id, work) => work(),
+            },
             answered,
         );
     });

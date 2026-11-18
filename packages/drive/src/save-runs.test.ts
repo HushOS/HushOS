@@ -2053,6 +2053,79 @@ describe('a save run', () => {
         await expect(saved).rejects.toMatchObject({ reason: 'failed' });
     });
 
+    test('without Web Locks, a Delete paused while another tab keeps the row removes nothing', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        w.server.open.add('up-a');
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: ['up-a'],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        let release!: () => void;
+        const paused = new Promise<void>((resolve) => (release = resolve));
+        let reached!: () => void;
+        const atAbort = new Promise<void>((resolve) => (reached = resolve));
+        const abort = w.deps.abortUpload;
+        const deleting = cleanUpInterrupted(
+            {
+                ...w.deps,
+                abortUpload: async (workspaceId, uploadId) => {
+                    reached();
+                    await paused;
+                    return abort(workspaceId, uploadId);
+                },
+            },
+            left,
+        );
+        await atAbort;
+        // Another tab with no lock to share: its own turn, so its Keep lands while this Delete waits.
+        expect(await keepInterrupted({ ...w.deps, exclusive: (_id, work) => work() }, left)).toBe(
+            'kept',
+        );
+        release();
+        expect(await deleting).toBe('changed');
+        expect(w.server.trash.size).toBe(0);
+        expect(w.server.purged.size).toBe(0);
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('without Web Locks, Keep in the same tab waits for its Delete, and never says kept of what went', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: ['up-a'],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        let release!: () => void;
+        const paused = new Promise<void>((resolve) => (release = resolve));
+        let reached!: () => void;
+        const atAbort = new Promise<void>((resolve) => (reached = resolve));
+        const abort = w.deps.abortUpload;
+        w.deps.abortUpload = async (workspaceId, uploadId) => {
+            reached();
+            await paused;
+            return abort(workspaceId, uploadId);
+        };
+        const deleting = cleanUpInterrupted(w.deps, left);
+        await atAbort;
+        const keeping = keepInterrupted(w.deps, left);
+        await tick();
+        release();
+        expect(await deleting).toBe('deleted');
+        expect(await keeping).toBe('gone');
+        expect(w.server.purged.has('node-a')).toBe(true);
+    });
+
     test('a sign-out while a live run stops sends nothing more, and says what may stay', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });

@@ -1290,6 +1290,51 @@ class SaveRunTest {
         pool.shutdown()
     }
 
+    /* A stop interrupted while it waits for a folder's creation: its outcome is settled, the interrupt kept, the row left for later. */
+    @Test
+    fun aStopInterruptedWhileItWaitsSettlesItsOutcomeAndLaterCallsReturn() {
+        val making = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        run.file(byteArrayOf(1), "a", null, own)
+        writer.making = { making.countDown(); go.await(5, TimeUnit.SECONDS) }
+        val pool = Executors.newFixedThreadPool(3)
+        try {
+            val folder = pool.submit<Opened> { run.folder("Out", own) }
+            assertTrue(making.await(5, TimeUnit.SECONDS))
+            var stopped: SaveRunStopped? = null
+            var stillInterrupted = false
+            val stopper = Thread {
+                stopped = run.cancel()
+                stillInterrupted = Thread.currentThread().isInterrupted
+            }
+            stopper.start()
+            Thread.sleep(100)
+            stopper.interrupt()
+            stopper.join(5_000)
+            assertFalse(stopper.isAlive)
+            assertTrue(stillInterrupted)
+            assertEquals(SaveCleanup.LEFT, stopped?.cleanup)
+            assertTrue(stopped?.message.orEmpty(), stopped?.message.orEmpty().contains("asked about it next time"))
+            // Later calls return the settled outcome instead of waiting on it.
+            val later = pool.submit<SaveRunStopped> { run.cancel() }
+            assertEquals(stopped, later.get(5, TimeUnit.SECONDS))
+            val finishing = pool.submit<Unit> { run.finish() }
+            val thrown = runCatching { finishing.get(5, TimeUnit.SECONDS) }.exceptionOrNull()
+            assertTrue(thrown.toString(), thrown?.cause is SaveRunStopped)
+            // Nothing was removed: the row still names what was made, for the next launch.
+            assertTrue(writer.purged.isEmpty())
+            assertEquals(listOf("node-1"), rows.list().single().nodeIds.take(1))
+            go.countDown()
+            runCatching { folder.get(5, TimeUnit.SECONDS) }
+        } finally {
+            go.countDown()
+            pool.shutdownNow()
+        }
+    }
+
     /* A sign-out while a stop waits for a folder's creation: nothing more is asked of the server, and it says what may stay. */
     @Test
     fun aSignOutWhileAStopWaitsSendsNothingMoreAndSaysWhatMayStay() {

@@ -1128,26 +1128,44 @@ class SaveRun private constructor(
             made to true
         }
         if (!owner) return future.get()
-        // The run's uploads are aborted first, so none keeps sending parts while the stop waits (a second abort in the
-        // clean-up is harmless, and one answered here isn't asked again).
-        val ws = synchronized(lock) { row.workspaceId }
-        // The run's session: a sign-out while the stop waits (an abort, a folder creation settling) stops it there.
-        val stillOn = { journal.live }
-        val asked = synchronized(lock) { row.uploadIds.toList() }.associateWith {
-            if (stillOn()) SaveRuns.abort(writer, it, ws) else SaveAbortFate.UNKNOWN
+        // The outcome is always settled, whatever cuts the stop short, so a later cancel or finish never waits forever.
+        var done: SaveRunStopped? = null
+        try {
+            // The run's uploads are aborted first, so none keeps sending parts while the stop waits (a second abort in the
+            // clean-up is harmless, and one answered here isn't asked again).
+            val ws = synchronized(lock) { row.workspaceId }
+            // The run's session: a sign-out while the stop waits (an abort, a folder creation settling) stops it there.
+            val stillOn = { journal.live }
+            val asked = synchronized(lock) { row.uploadIds.toList() }.associateWith {
+                if (stillOn()) SaveRuns.abort(writer, it, ws) else SaveAbortFate.UNKNOWN
+            }
+            // Folder creations already sent settle next (a lost answer included): one the server creates after the clean-up
+            // looked would otherwise be left with its row gone.
+            while (creating.get() > 0) Thread.sleep(5)
+            val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
+            val (sent, out) = synchronized(lock) { completing.toSet() to published.toSet() }
+            val maybe = synchronized(lock) { mayExist.toSet() }
+            val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe, stillOn)
+            val total = keptBefore + cleaned.kept
+            done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held),
+                cleaned.cleanup, total, cleaned.uncertain)
+            return done
+        } catch (interrupted: InterruptedException) {
+            // Interrupted while it waited (apps/android/AGENTS.md, threads): the interrupt is kept for the caller, and the
+            // clean-up is left for later (below).
+            Thread.currentThread().interrupt()
+            return leftForLater(reason, failure).also { done = it }
+        } finally {
+            // Cut short (an interrupt, any other throw): what is known is said, the row stays sealed as it is, and the next
+            // launch offers what was made.
+            future.complete(done ?: leftForLater(reason, failure))
         }
-        // Folder creations already sent settle next (a lost answer included): one the server creates after the clean-up
-        // looked would otherwise be left with its row gone.
-        while (creating.get() > 0) Thread.sleep(5)
-        val (held, versions, keptBefore) = synchronized(lock) { Triple(row, versionUploads.toSet(), keptVersions) }
-        val (sent, out) = synchronized(lock) { completing.toSet() to published.toSet() }
-        val maybe = synchronized(lock) { mayExist.toSet() }
-        val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe, stillOn)
-        val total = keptBefore + cleaned.kept
-        val done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held), cleaned.cleanup, total,
-            cleaned.uncertain)
-        future.complete(done)
-        return done
+    }
+
+    /* A stop that couldn't finish its clean-up: the row is kept for the next launch, and what may remain is said so. */
+    private fun leftForLater(reason: SaveRunStopped.Reason, failure: String?): SaveRunStopped {
+        val kept = synchronized(lock) { keptVersions }
+        return SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, kept, 0, SaveCleanup.LEFT), SaveCleanup.LEFT, kept)
     }
 
     /* Every result is in: the row goes. Refused while one is still on its way, or once stopped. */

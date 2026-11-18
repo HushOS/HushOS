@@ -1285,6 +1285,11 @@ async function cleanUp(
         mayExist?: Set<string>;
         /* The run's session: once it ends (a sign-out) nothing more is asked or written. */
         current: () => boolean;
+        /*
+         * Asked just before anything is trashed (an interrupted run's Delete without a lock shared
+         * by tabs): false (the row kept, changed or gone in another tab) removes nothing.
+         */
+        stillTheRow?: () => Promise<boolean>;
     },
 ): Promise<{
     cleanup: Cleanup;
@@ -1300,6 +1305,8 @@ async function cleanUp(
     waiting: boolean;
     /* Those folders, when they are all that kept the row: everything else was settled. */
     onlyWaitingOn: string[] | null;
+    /* Stopped before removing anything: the row was no longer the one read (stillTheRow). */
+    changed?: boolean;
 }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
@@ -1370,6 +1377,17 @@ async function cleanUp(
             else othersMayLand = true;
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
+    if (!stillOn()) return signedOutNow();
+    if (options.stillTheRow && !(await options.stillTheRow()))
+        return {
+            cleanup: 'left',
+            keptVersions,
+            uncertainVersions,
+            remains: null,
+            waiting: false,
+            onlyWaitingOn: null,
+            changed: true,
+        };
     if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
     const discarded = await discard(deps, row.workspaceId, row.nodeIds, stillOn, notFound, () => {
@@ -1665,7 +1683,16 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     // The session this clean-up began in: after a sign-out it asks nothing more and writes nothing.
     const current = () => signedIn(deps);
     if (!current()) return 'left';
-    const result = await cleanUp(deps, row, [], { mayExist, current });
+    // Without a lock shared by tabs, another tab's Keep may land while this one aborts: the row is
+    // read again just before anything is trashed, and a row kept, changed or gone removes nothing.
+    const stillTheRow = deps.exclusive
+        ? undefined
+        : async () => {
+              const held = await readRow(deps.runs, row.id);
+              return held !== undefined && held.chosen !== 'keep' && stable(held) === stable(row);
+          };
+    const result = await cleanUp(deps, row, [], { mayExist, current, stillTheRow });
+    if (result.changed) return 'changed';
     // Kept only to wait for folders that may still land, all else done: the row names just those,
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
@@ -1742,11 +1769,29 @@ async function readRow(runs: RunJournal, id: string) {
     return (await runs.list()).find((row) => row.id === id);
 }
 
-/* A recovery row's work under its lock (exclusive), or in turn here without one. */
+/*
+ * A recovery row's work under its lock shared by every tab (exclusive), or, without one, in turn
+ * with this page's other work on the run (a chain per run id): one tab never runs two at once.
+ */
 function recovering<T>(
     deps: Partial<Pick<SaveRunDeps, 'exclusive'>>,
     runId: string,
     work: () => Promise<T>,
 ) {
-    return deps.exclusive ? deps.exclusive(runId, work) : work();
+    return deps.exclusive ? deps.exclusive(runId, work) : inTurn(runId, work);
+}
+
+/* Each run's recovery work in this page, one after another: the tail of each run's chain. */
+const turns = new Map<string, Promise<void>>();
+function inTurn<T>(runId: string, work: () => Promise<T>) {
+    const turn = (turns.get(runId) ?? Promise.resolve()).then(work);
+    const tail = turn.then(
+        () => {},
+        () => {},
+    );
+    turns.set(runId, tail);
+    void tail.then(() => {
+        if (turns.get(runId) === tail) turns.delete(runId);
+    });
+    return turn;
 }
