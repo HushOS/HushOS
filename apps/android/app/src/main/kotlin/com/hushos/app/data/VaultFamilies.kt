@@ -123,7 +123,7 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     val gone = HashSet<String>()
     val proven = HashSet<String>()
     val purged = HashSet<String>()
-    synchronized(familyCopiesLock) {
+    val closing = synchronized(familyCopiesLock) {
         for (id in ids.map { it.lowercase() }) {
             if (id == own) continue
             // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never
@@ -137,9 +137,11 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
                 proven.add(id)
             }
         }
+        // A zip open from it by a share holds that share's content key: revoked in the same step as the proof (no
+        // piece is written after), and closed below, outside the lock, its downloads with it.
+        ArchiveSessions.shared.revoke(familyState, proven, nodes = purged)
     }
-    // A zip open from it by a share holds that share's content key: closed now, its downloads with it.
-    ArchiveSessions.shared.closeWorkspaces(familyState, proven, nodes = purged)
+    ArchiveSessions.shared.finish(closing)
     forgetParents(gone)
 }
 
@@ -407,19 +409,23 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
     // Rows and keys dropped under it too, so an open that asked the ledger before this either lands first and is dropped
     // here, or finds the count moved and keeps nothing. Never this account's own drive, whatever a member list names.
     val gone = HashSet<String>()
-    synchronized(familyCopiesLock) {
+    // Never this account's own drive: its count never moves for a family's forget (an archive of it is held to that count).
+    val theirs = ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) }
+    val closing = synchronized(familyCopiesLock) {
         // An ended session's cleanup touches nothing: the copies there now may be the next session's.
         if (closed) return gone
-        for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
-        FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
-        for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) {
+        for (id in theirs) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
+        FamilyCopies.delete(context.cacheDir, context.filesDir, theirs)
+        for (id in theirs) {
             // The sealed thumbnails kept of what this session opened there go with the rows that named them.
             runCatching { mirror.dropThumbnails(nodes.rowsIn(id).mapNotNull { it.node.currentVersion?.id }) }
             gone.addAll(nodes.forgetWorkspace(id))
         }
+        // Its zips, idle ones included, revoked in the same step as the count (by node too: a kept zip known only by
+        // its node), and closed below, outside the lock: their keys don't wait for a next call to find the count moved.
+        ArchiveSessions.shared.revoke(familyState, theirs, nodes = gone)
     }
-    // Its zips close now, idle ones included: their keys don't wait for a next call to find the count moved.
-    ArchiveSessions.shared.closeWorkspaces(familyState, ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) })
+    ArchiveSessions.shared.finish(closing, words)
     forgetParents(gone)
     return gone
 }

@@ -2521,7 +2521,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun showKeptArchive(entry: Offline.Entry): Boolean {
         if (!com.hushos.app.data.ArchiveTree.isZip(entry.name, entry.mime)) return false
         val file = Offline.file(context, entry)
-        return showArchive(ArchiveSubject(entry.id, entry.name, kept = file)) {
+        return showArchive(ArchiveSubject(entry.id, entry.name, kept = file, workspace = entry.workspaceId)) {
             // Its workspace and node from its record: a proof that the workspace is a family's (which purges the copy)
             // closes it, and the screen drops what it showed.
             // Scoped to this session, as a drive row's zip is: a forget or a proof the registry sees closes it, however late.
@@ -2548,9 +2548,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      */
     override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
         val subject = state.value.archive ?: return
-        val workspace = subject.item?.node?.workspaceId
-        val inFamily = workspace != null && workspaces.any { it.equals(workspace, ignoreCase = true) }
-        if (inFamily || nodes.any { it.equals(subject.id, ignoreCase = true) }) closeArchive()
+        // By its workspace when it has one; by its node only when it has none (a kept copy whose record predates its
+        // workspace's): another workspace's node that shares its id never closes it.
+        val workspace = subject.workspace
+        val reached = if (workspace != null) workspaces.any { it.equals(workspace, ignoreCase = true) }
+            else nodes.any { it.equals(subject.id, ignoreCase = true) }
+        if (reached) closeArchive()
     }
 
     /* Every path that ends a session ends the archive open in it: its sessions closed, its downloads stopped, nothing kept. */

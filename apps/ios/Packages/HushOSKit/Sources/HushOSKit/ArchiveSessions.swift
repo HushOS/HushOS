@@ -117,15 +117,20 @@ public enum ArchiveSessions {
     static func refusal(_ scope: Scope) -> ArchiveFailure? { lock.withLock { refusalLocked(scope) } }
 
     /*
-     * `body` (a downloaded piece written out) only while the archive stands, checked and run under the
-     * lock: a forget, a proof or a sign-out lands before the check, and nothing is written, or after the
-     * write, and closes the archive before the next. `registered`: an archive a sign-out reaches, which
-     * must still be in the registry (closed by none of those).
+     * `body` (a downloaded piece written out) while the archive stands: checked under the registry's
+     * lock, written under the archive's own (`writing`), never the registry's, so a write to a slow
+     * provider holds up no forget, sign-out or screen. A forget, a proof or a sign-out takes the archive
+     * out of the registry under the registry's lock first: a piece not yet checked is refused; one
+     * already being written finishes, and the download's failure removes its file, that piece with it
+     * (`OpenArchive.settled` waits it out first, off the main thread). `registered`: an archive a
+     * sign-out reaches, which must still be in the registry.
      */
-    static func whileStanding<T>(archive id: UUID, registered: Bool, _ scope: Scope, _ body: () throws -> T) throws -> T {
-        try lock.withLock {
-            if let refused = refusalLocked(scope) { throw refused }
-            if registered, live.archives[id] == nil { throw ArchiveFailure.closed }
+    static func whileStanding<T>(archive id: UUID, registered: Bool, _ scope: Scope, writing: NSLock, _ body: () throws -> T) throws -> T {
+        try writing.withLock {
+            try lock.withLock {
+                if let refused = refusalLocked(scope) { throw refused }
+                if registered, live.archives[id] == nil { throw ArchiveFailure.closed }
+            }
             return try body()
         }
     }
@@ -265,7 +270,11 @@ public enum ArchiveSessions {
     /* The watchdogs' own queue, as ToolRuns' are: never the cooperative pool. */
     static let watchdogQueue = DispatchQueue(label: "com.hushos.archive-watchdog")
     /* Where archives are closed: never the main thread. */
-    static let closeQueue = DispatchQueue(label: "com.hushos.archive-close", qos: .userInitiated)
+    /*
+     * Concurrent: a core close may wait for a call still in it (a sibling's piece being written to a slow
+     * provider), and must hold up no other archive's close. A flush (tests) is a barrier.
+     */
+    static let closeQueue = DispatchQueue(label: "com.hushos.archive-close", qos: .userInitiated, attributes: .concurrent)
 }
 
 /* Turns, first come first served; a task cancelled while it waits leaves its place. */
@@ -495,6 +504,8 @@ public final class OpenArchive: @unchecked Sendable {
     private let calls = ArchiveCalls()
     private let siblings = ArchiveSiblings()
     private let id = UUID()
+    /* Held while a downloaded piece is written out: the archive's own lock, never the registry's (`ArchiveSessions.whileStanding`). */
+    private let writing = NSLock()
     /* Who this archive is, in `ArchiveSessions.familyClosed`. */
     public var identity: UUID { id }
     private let watchdog: Duration
@@ -532,7 +543,7 @@ public final class OpenArchive: @unchecked Sendable {
     /* The list's folders, handed over once: the core keeps none after (ArchiveTree holds them). */
     public func takeFolders() -> ArchiveFolders { session.takeFolders() }
 
-    /* The core's close, never on the main thread: it doesn't wait on a read, but it is still the core's work. */
+    /* The core's close, never on the main thread: it may wait for a call still in it (a piece being written). */
     static func closeOffMain(_ session: ZipArchiveSession) {
         ArchiveSessions.closeQueue.async { session.closeArchive() }
     }
@@ -547,7 +558,7 @@ public final class OpenArchive: @unchecked Sendable {
         let family = await vault.isFamilyWorkspace(item.node.workspaceId)
         let gate = vault.copyGate(familyWorkspace: family ? item.node.workspaceId : nil)
         if let url = Offline.localCopy(of: item), let copy = try? KeptCopy(url: url) {
-            let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
+            let archive = try await open(local: copy, born: born, watchdog: watchdog, poll: poll)
             archive.gate = gate
             try archive.mark(item.node.workspaceId, node: item.id, family: family)
             try archive.stands()
@@ -590,9 +601,12 @@ public final class OpenArchive: @unchecked Sendable {
      * it, its copy's handle with it.
      */
     public static func openKept(_ url: URL, workspace: String? = nil, node: String? = nil, watchdog: Duration = .milliseconds(Int(toolWatchdogMillis())), poll: Duration = .seconds(1)) async throws -> OpenArchive {
+        // The sign-out generation first, before the copy's file is opened: a sign-out from here on is seen as the
+        // archive registers, never the old account's file registered under the next one's generation.
+        let born = ArchiveSessions.generation
         let copy: KeptCopy
         do { copy = try KeptCopy(url: url) } catch { throw ArchiveFailure(code: nil, message: ErrorWords.generic) }
-        let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
+        let archive = try await open(local: copy, born: born, watchdog: watchdog, poll: poll)
         try archive.mark(workspace, node: node, family: false)
         try archive.stands()
         return archive
@@ -608,8 +622,9 @@ public final class OpenArchive: @unchecked Sendable {
     }
 
     /* An archive over a copy kept on the phone (or a test's bytes). */
-    static func open(local: LocalSource, watchdog: Duration, poll: Duration = .seconds(1), registered: Bool = true) async throws -> OpenArchive {
-        let born = ArchiveSessions.generation
+    /* `born`: the generation the caller took before it opened anything of the copy (its file); taken here otherwise. */
+    static func open(local: LocalSource, born: UInt64? = nil, watchdog: Duration, poll: Duration = .seconds(1), registered: Bool = true) async throws -> OpenArchive {
+        let born = born ?? ArchiveSessions.generation
         let session = try await call(watchdog: watchdog, poll: poll, registered: registered) { control in
             try ZipArchiveSession.openLocal(source: local, control: control)
         }
@@ -679,8 +694,8 @@ public final class OpenArchive: @unchecked Sendable {
         defer { if let done = siblings.remove(key) { OpenArchive.closeOffMain(done) } }
         // Asked of every piece too: a family let go of mid-download writes nothing more.
         // Checked and written in one step under the registry's lock: no forget, proof or sign-out lands between.
-        let held: EntrySink = ArchiveSink { [id, registered, scope] chunk in
-            try ArchiveSessions.whileStanding(archive: id, registered: registered, scope) { try sink.write(chunk: chunk) }
+        let held: EntrySink = ArchiveSink { [id, registered, scope, writing] chunk in
+            try ArchiveSessions.whileStanding(archive: id, registered: registered, scope, writing: writing) { try sink.write(chunk: chunk) }
         }
         do {
             try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
@@ -697,6 +712,22 @@ public final class OpenArchive: @unchecked Sendable {
      * Closes the archive: every call in flight on it is cancelled first, then the core wipes the
      * password and the key off the main thread. Any later call fails.
      */
+    /*
+     * Returns once no piece is being written out (a call's thread may still be in one after a cancel):
+     * waited for off the main thread, so a download's cleanup removes its file after its last piece, never
+     * before it. Nothing waits on a write from the main thread.
+     */
+    public func settled() async {
+        let writing = self.writing
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            ArchiveSessions.closeQueue.async {
+                writing.lock()
+                writing.unlock()
+                done.resume()
+            }
+        }
+    }
+
     public func close() {
         calls.cancelAll()
         for sibling in siblings.takeAll() { OpenArchive.closeOffMain(sibling) }

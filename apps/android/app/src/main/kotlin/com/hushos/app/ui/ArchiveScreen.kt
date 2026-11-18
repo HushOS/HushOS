@@ -131,13 +131,13 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         val entry = browse.waitingFor
         browse.waitingFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        val destination = DocumentDestination(context.contentResolver, uri, browse.pickedAt)
-        if (entry == null) { browse.discardIfMade(destination); return@rememberLauncherForActivityResult }
+        val destination = DocumentDestination(context.contentResolver, uri)
+        // No download waits for it (the process went meanwhile): the document is left as the dialog gave it.
+        if (entry == null) return@rememberLauncherForActivityResult
         browse.startDownload(entry, destination) { model.notify(ArchiveWords.DOWNLOADED) }
     }
     fun pick(entry: ArchiveEntry) {
         browse.waitingFor = entry
-        browse.pickedAt = System.currentTimeMillis()
         // Under the name made safe by the core: no bidi override can make "…exe" read as "…txt".
         picker.launch(entry.saveName)
     }
@@ -293,7 +293,11 @@ private fun EntryList(
 ) {
     val alpine = Alpine.colors
     if (rows.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(ArchiveWords.EMPTY, color = alpine.inkMuted, textAlign = TextAlign.Center) }
+        // Empty, and what was left out said too (an archive of Mac resource files only), as the web and iOS say both.
+        Column(Modifier.fillMaxSize().padding(AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2, Alignment.CenterVertically), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(ArchiveWords.EMPTY, color = alpine.inkMuted, textAlign = TextAlign.Center)
+            if (hidden > 0) Text(ArchiveWords.hidden(hidden), style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
+        }
         return
     }
     LazyColumn(Modifier.fillMaxSize()) {

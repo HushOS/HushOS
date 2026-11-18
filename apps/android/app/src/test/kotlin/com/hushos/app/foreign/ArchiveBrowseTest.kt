@@ -110,12 +110,10 @@ class ArchiveBrowseTest {
     }
 
     /* The Save dialog's document as a file: made empty, or one already there that the person chose to replace. */
-    private class FileDestination(val file: File, private val known: Boolean = true, private val pickedAt: Long = System.currentTimeMillis() - 1_000) : com.hushos.app.ui.SaveDestination {
+    private class FileDestination(val file: File) : com.hushos.app.ui.SaveDestination {
         @Volatile var deleted = false
         val hold = java.util.concurrent.CountDownLatch(1)
         val writing = java.util.concurrent.CountDownLatch(1)
-        // As DocumentDestination judges it: empty, and changed since the dialog was asked for.
-        override fun made(): Boolean = known && file.exists() && file.length() == 0L && file.lastModified() >= pickedAt - 2_000
         override fun open(): java.io.OutputStream = object : java.io.FileOutputStream(file, false) {
             // Both: FileOutputStream's write(ByteArray) doesn't go through write(ByteArray, Int, Int).
             override fun write(b: ByteArray) = write(b, 0, b.size)
@@ -168,7 +166,7 @@ class ArchiveBrowseTest {
         scope.cancel()
     }
 
-    @Test fun aReplacedFileStaysWhenNothingWasWrittenAndGoesWhenAPartWas() = runBlocking {
+    @Test fun aDocumentStaysWhenNothingWasWrittenAndGoesWhenAPartWas() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })
         withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
@@ -179,18 +177,13 @@ class ArchiveBrowseTest {
         withTimeout(10_000) { while (browse.downloads.isNotEmpty()) kotlinx.coroutines.delay(20) }
         assertFalse(theirs.deleted)
         assertEquals("their own", theirs.file.readText())
-        // A provider that doesn't say a size: unknown is never taken as made, so nothing is deleted.
-        val unknown = FileDestination(File.createTempFile("save", ".txt").apply { writeText("unknown") }, known = false).apply { hold.countDown() }
-        browse.discardIfMade(unknown)
-        assertFalse(unknown.deleted)
-        // An empty file of the person's, chosen to overwrite (last changed before the dialog): kept. One the dialog made: gone.
-        val emptyTheirs = FileDestination(File.createTempFile("save", ".txt").apply { setLastModified(System.currentTimeMillis() - 3_600_000) }).apply { hold.countDown() }
-        browse.discardIfMade(emptyTheirs)
-        assertFalse(emptyTheirs.deleted)
-        assertTrue(emptyTheirs.file.exists())
-        val dialogs = FileDestination(File.createTempFile("save", ".txt")).apply { hold.countDown() }
-        browse.discardIfMade(dialogs)
-        assertTrue(dialogs.deleted)
+        // An empty document (one the dialog may have made, or one of the person's) and a download refused before any
+        // piece: left alone. Whether the dialog made it can't be known, and a stray empty file is the lesser harm.
+        val empty = FileDestination(File.createTempFile("save", ".txt")).apply { hold.countDown() }
+        browse.startDownload(locked, empty) {}
+        withTimeout(10_000) { while (browse.downloads.isNotEmpty()) kotlinx.coroutines.delay(20) }
+        assertFalse(empty.deleted)
+        assertTrue(empty.file.exists())
         browse.close()
         // A replaced file that a part was written to, then the download stopped: gone, never a part under its name.
         val bigBrowse = ArchiveBrowse(ArchiveSubject("b", "big.zip"), scope, open = { ArchiveSessions().openLocal(big()) })

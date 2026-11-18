@@ -31,20 +31,23 @@ import kotlin.coroutines.cancellation.CancellationException
 class ArchiveSessions {
     /*
      * The registry's one lock: FamilyCopies.LOCK, which a forget moves its folders' counts under, a proof
-     * names a folder a family's under, and a session ends under. Every registry operation takes it, so
-     * each one checks an archive's scope (ArchiveScope: its session, workspace, node and count) and acts
-     * in one step: an archive is admitted (`admit`), a piece written (`whileStanding`) or a forget
-     * acted on (`closeWorkspaces`) either wholly before an invalidation or wholly after it.
+     * names a folder a family's under, and a session ends under. Each registry operation checks an
+     * archive's scope (ArchiveScope: its session, workspace, node and count) under it and acts in the
+     * same step: an archive is admitted (`admit`), a piece checked (`whileStanding`), a forget or a proof
+     * recorded and its archives marked revoked (`revoke`), either wholly before an invalidation or wholly
+     * after it. Never held across anything slow: no provider write, no core close, no stream opened (HushOS's
+     * own documents provider takes its vault lock and then this one, so this one is never held into it).
      */
     private val lock: Any get() = FamilyCopies.LOCK
-    private val open = HashSet<OpenArchive>()
+    /* Added under the lock (`admit`: the check and the add are one step); read and removed without it. */
+    private val open = ConcurrentHashMap.newKeySet<OpenArchive>()
 
     /* Archives open now: none after a sign-out. */
-    val count: Int get() = synchronized(lock) { open.size }
+    val count: Int get() = open.size
 
-    /* Sign-out and account removal: every archive's password goes and every call ends. */
+    /* Sign-out and account removal: every archive's password goes and every call ends, without waiting on any of them. */
     fun closeAll() {
-        for (archive in synchronized(lock) { ArrayList(open) }) archive.close()
+        for (archive in ArrayList(open)) archive.close()
     }
 
     /*
@@ -55,44 +58,58 @@ class ArchiveSessions {
         archive.scopeRefusal()?.let { words -> throw FamilyFailure(words) }
         open.add(archive)
     }
-    internal fun remove(archive: OpenArchive) = synchronized(lock) { open.remove(archive) }
+    internal fun remove(archive: OpenArchive) = open.remove(archive)
 
-    /* `body` (a piece written out) only while the archive stands, under the lock: no invalidation lands between the check and the write. */
-    internal fun <T> whileStanding(archive: OpenArchive, body: () -> T): T = synchronized(lock) {
-        archive.scopeRefusal()?.let { words -> throw FetchException.Failed(words) }
-        if (archive.closed) throw FetchException.Failed(FamilyWords.OPEN_AGAIN)
+    /*
+     * `body` (a piece written out) while the archive stands: checked under the registry's lock, written
+     * under the archive's own (`OpenArchive.writing`), never the registry's, so a provider's write takes as
+     * long as it takes without holding up a forget, a sign-out or the screen. An invalidation marks the
+     * archive revoked under the registry's lock first: a piece not yet checked is refused, one already being
+     * written finishes, and the download's failure deletes its file, that piece with it.
+     */
+    internal fun <T> whileStanding(archive: OpenArchive, body: () -> T): T = synchronized(archive.writing) {
+        synchronized(lock) {
+            archive.scopeRefusal()?.let { words -> throw FetchException.Failed(words) }
+            if (archive.closed || archive.revoked) throw FetchException.Failed(FamilyWords.OPEN_AGAIN)
+        }
         body()
     }
 
     /*
-     * The workspaces `ids` became family folders (route 25's proof), or a family let go of them:
-     * every archive of `session` open from them closes now, idle or not, its siblings with it, so no
-     * key a share (or the family) gave it outlives the proof. Its next call says the family's words.
-     * Bound to the session that forgot: an ended session's late forget closes nothing, and never an
-     * archive of the session after it. `session` null (tests) reaches every archive.
+     * The workspaces `ids` became family folders (route 25's proof), or a family let go of them: recorded,
+     * and every archive of `session` open from them marked revoked, in one step under the lock (reentrant:
+     * a proof or a forget calls this inside its own, with what it recorded). The caller closes them after,
+     * outside it (`finish`). Bound to the session that forgot: an ended session's late forget reaches
+     * nothing, never an archive of the session after it. `session` null (tests) reaches every archive. By
+     * workspace; by node only an archive with no workspace (a kept copy whose record predates its
+     * workspace's): another workspace's id that collides with it is never reached by it.
      */
+    internal fun revoke(session: FamilySessionState?, ids: Collection<String>, nodes: Collection<String> = emptyList()): List<OpenArchive> {
+        val gone = ids.map { it.lowercase() }.toSet()
+        val purged = nodes.map { it.lowercase() }.toSet()
+        return synchronized(lock) {
+            if (session?.closed == true) return emptyList()
+            // A kept zip known only by its node, however late it registers, never serves after this.
+            session?.archivePurged?.addAll(purged)
+            open.filter { archive ->
+                (session == null || archive.scope?.session === session) &&
+                    (archive.workspace in gone || (archive.workspace == null && archive.node in purged))
+            }.onEach { it.revoked = true }
+        }
+    }
+
+    /* Closes what `revoke` reached, outside the lock, its screens told; nothing here waits on a write. */
+    internal fun finish(closing: List<OpenArchive>, words: String = FamilyWords.OPEN_AGAIN) {
+        for (archive in closing) archive.closeFor(words)
+    }
+
+    /* `revoke`, then `finish`: their archives close now, idle or not, siblings with them. Its next call says the family's words. */
     fun closeWorkspaces(
         session: FamilySessionState?,
         ids: Collection<String>,
         nodes: Collection<String> = emptyList(),
         words: String = FamilyWords.OPEN_AGAIN,
-    ) {
-        val gone = ids.map { it.lowercase() }.toSet()
-        val purged = nodes.map { it.lowercase() }.toSet()
-        val closing = synchronized(lock) {
-            if (session?.closed == true) return
-            // A kept zip known only by its node, however late it registers, never serves after this.
-            session?.archivePurged?.addAll(purged)
-            // By workspace; by node only for a kept copy whose record predates its workspace's (a node of a known
-            // workspace is that workspace's, and another workspace's id that collides with it is never closed by it).
-            open.filter { archive ->
-                (session == null || archive.scope?.session === session) &&
-                    (archive.workspace in gone || (archive.workspace == null && archive.node in purged))
-            }
-        }
-        // Closed outside the lock: a close waits for the call's thread, which may be writing under it.
-        for (archive in closing) archive.closeFor(words)
-    }
+    ) = finish(revoke(session, ids, nodes), words)
 
     /* Tests only: heard on the call's thread once a session is made and handed to its archive, before the caller hears. */
     @Volatile internal var made: ((ZipArchiveSession) -> Unit)? = null
@@ -165,6 +182,15 @@ class ArchiveSessions {
 
     companion object {
         val shared = ArchiveSessions()
+
+        /*
+         * Where the core's close runs: it waits for a call still in it (a piece being written to a slow
+         * provider), so never on the thread that closes, which may be the main one. Daemon threads, as
+         * many as are waiting, so one stuck write never holds up another archive's key going.
+         */
+        internal val closer: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newCachedThreadPool { work ->
+            Thread(work, "archive-close").apply { isDaemon = true }
+        }
     }
 }
 
@@ -222,6 +248,10 @@ class OpenArchive internal constructor(
         private set
     @Volatile var closed = false
         private set
+    /* Reached by a forget or a proof (`ArchiveSessions.revoke`), under the registry's lock: no piece is written after. */
+    @Volatile internal var revoked = false
+    /* Held while a piece is written out (`ArchiveSessions.whileStanding`): the archive's own, never the registry's. */
+    internal val writing = Any()
     /* The session and `closed` change together: a session handed over after the close is closed at once. */
     private val life = Any()
 
@@ -286,7 +316,8 @@ class OpenArchive internal constructor(
     /* The list's folders, handed over once: the core keeps none after (ArchiveTree holds them). */
     fun takeFolders() = opened().takeFolders()
     val hidden get() = opened().hidden().toInt()
-    val unlocked get() = session?.unlocked() == true
+    /* False from the close on, whether or not the core has wiped the password yet (it does so in the background). */
+    val unlocked get() = !closed && session?.unlocked() == true
 
     /* Whether `password` opens the archive; tried on entry `index` first (an item whose own password was asked for). */
     suspend fun unlock(password: String, index: UInt? = null): Boolean = call { opened().unlock(password, index, it) }
@@ -350,8 +381,10 @@ class OpenArchive internal constructor(
         parent?.children?.remove(this)
         // Copied by iterating, never by size then elements: a call's thread may remove itself meanwhile.
         for (end in ArrayList(calls)) end()
-        held?.closeArchive()
         owner.remove(this)
+        // The core's close waits for a call still in it (a piece being written): in the background, never here.
+        // The calls are cancelled already, so it returns as soon as that piece does, and the key goes then.
+        if (held != null) ArchiveSessions.closer.execute { held.closeArchive() }
     }
 
     /*
@@ -542,10 +575,13 @@ class ArchiveScope internal constructor(
     internal val node: String?,
     private val epoch: Long,
     private val family: Boolean,
+    /* This account's own drive: never a family folder, and no family's forget reaches it. */
+    private val own: Boolean = false,
 ) {
     /* Under FamilyCopies.LOCK: null while it stands; the words its screen says once it doesn't. */
     internal fun refusal(): String? {
         if (session.closed) return FamilyWords.OPEN_AGAIN
+        if (own) return null
         val ws = workspace ?: return if (node != null && node in session.archivePurged) FamilyWords.OPEN_AGAIN else null
         val now = session.epochs[ws]
         if ((now?.first ?: 0L) != epoch) return now?.second ?: FamilyWords.OPEN_AGAIN
@@ -558,5 +594,6 @@ class ArchiveScope internal constructor(
 /* The scope an archive of `workspace`'s `node` opens under in this vault's session (ArchiveScope). */
 fun Vault.archiveScope(workspace: String?, node: String?): ArchiveScope = synchronized(familyCopiesLock) {
     val ws = workspace?.lowercase()
-    ArchiveScope(familyState, ws, node?.lowercase(), ws?.let { familyEpoch(it) } ?: 0L, ws != null && isFamilyWorkspace(ws))
+    val own = ws != null && ws == ownWorkspaceId?.lowercase()
+    ArchiveScope(familyState, ws, node?.lowercase(), ws?.let { familyEpoch(it) } ?: 0L, ws != null && isFamilyWorkspace(ws), own)
 }

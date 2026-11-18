@@ -73,6 +73,18 @@ struct FileViewer: View {
                 }
                 .padding(.horizontal, Alpine.Space.s2)
             }
+            // A zip's list runs to the edges, so the side strips are off over it: the previous and next file are here
+            // instead, or paging onto a zip would leave no way on but Done.
+            if isArchive, items.count > 1 {
+                ToolbarItem(placement: .bottomBar) {
+                    Button { step(-1) } label: { HeaderIcon(symbol: "chevron.left") }
+                        .accessibilityLabel("Previous file")
+                }
+                ToolbarItem(placement: .bottomBar) {
+                    Button { step(1) } label: { HeaderIcon(symbol: "chevron.right") }
+                        .accessibilityLabel("Next file")
+                }
+            }
             ToolbarItem(placement: .bottomBar) {
                 Button { action = .sendCopy(current) } label: { HeaderIcon(symbol: "square.and.arrow.up") }
                     .accessibilityLabel("Send a copy")

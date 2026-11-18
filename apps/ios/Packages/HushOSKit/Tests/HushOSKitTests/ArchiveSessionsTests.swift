@@ -65,7 +65,7 @@ import Testing
         let text = String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self)
         #expect(text.contains("AES-256, AE-2."))
         archive.close()
-        ArchiveSessions.closeQueue.sync {}
+        ArchiveSessions.closeQueue.sync(flags: .barrier) {}
         #expect(!archive.unlocked)
         // Closed, nothing reads: not the entry the password opened, not the one that needed none.
         await #expect(throws: ArchiveFailure(code: nil, message: "The archive was closed.")) { try await archive.preview(secret, limit: 1024) }
@@ -200,7 +200,7 @@ import Testing
         kept.gate.signal()
         try await downloading.value
         #expect(String(decoding: collected.data, as: UTF8.self).contains("AES-256, AE-2."))
-        ArchiveSessions.closeQueue.sync {}
+        ArchiveSessions.closeQueue.sync(flags: .barrier) {}
         #expect(archive.downloading == 0)
     }
 
@@ -236,7 +236,7 @@ import Testing
         #expect(kept.reads == before)
         #expect(collected.bytes == 0)
         ArchiveSessions.closeQueue.resume()
-        ArchiveSessions.closeQueue.sync {}
+        ArchiveSessions.closeQueue.sync(flags: .barrier) {}
     }
 
     @Test func aZipKeptOnThePhoneOpensFromItsCopyAlone() async throws {
@@ -303,7 +303,7 @@ import Testing
         #expect(pieces.value == atForget.value)
         #expect(pieces.value >= 1)
         // The archive closed with it: its password gone, and every later call refused before it reads.
-        ArchiveSessions.closeQueue.sync {}
+        ArchiveSessions.closeQueue.sync(flags: .barrier) {}
         #expect(!archive.unlocked)
         await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) { try await archive.preview(zeros, limit: 1024) }
     }
@@ -390,7 +390,7 @@ import Testing
             defer { NotificationCenter.default.removeObserver(listening) }
             // Route 25 proves it a family folder: the share's archive closes at once, idle, its key and password gone.
             ArchiveSessions.proveFamilies([workspace])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.unlocked)
             #expect(!archive.serves)
             await #expect(throws: ArchiveFailure.self) { try await archive.preview(secret, limit: 1024) }
@@ -417,7 +417,7 @@ import Testing
             try mine.mark(UUID().uuidString, node: "node-collides", family: false)
             ArchiveSessions.closeFamily([UUID().uuidString], nodes: ["node-collides"])
             ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-collides"])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(mine.serves)
             // And one opened after that purge, of a known workspace, is admitted.
             let later = try await Self.open("aes.zip", registered: true)
@@ -441,14 +441,14 @@ import Testing
             // The ended session's late let-go and proof: this session's zip stays, and a zip of it opened later is admitted.
             ArchiveSessions.closeFamily([workspace], session: ended)
             ArchiveSessions.proveFamilies([workspace], session: ended)
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(archive.serves)
             let later = try await Self.open("aes.zip", registered: true)
             try later.mark(workspace, family: false)
             #expect(later.serves)
             // The session's own let-go closes both.
             ArchiveSessions.closeFamily([workspace], session: TemporaryCopies.session(account))
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.serves)
             #expect(!later.serves)
         }
@@ -464,7 +464,7 @@ import Testing
             #expect(try await shared.unlock("correct horse battery"))
             // The sync lets the family go (a refusal, a fork, not a member): its folder's keys and copies go, and so does this.
             TemporaryCopies.forgetFamily([workspace])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!shared.unlocked)
             #expect(!shared.serves)
             // One marked after the let-go is refused at its mark.
@@ -478,7 +478,7 @@ import Testing
             try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: copy)
             let kept = try await OpenArchive.openKept(copy, workspace: nil, node: "node-family-kept")
             ArchiveSessions.closeFamily([UUID().uuidString], nodes: ["node-family-kept"])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!kept.serves)
             await #expect(throws: ArchiveFailure.self) { _ = try await OpenArchive.openKept(copy, workspace: nil, node: "node-family-kept") }
         }
@@ -497,14 +497,14 @@ import Testing
             let kept = try await OpenArchive.openKept(copy, workspace: workspace, node: "node-kept")
             #expect(try await kept.unlock("correct horse battery"))
             ArchiveSessions.proveFamilies([workspace])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!kept.unlocked)
             #expect(!kept.serves)
             // A record kept before its workspace was recorded: found by the node the proof purged.
             let older = try await OpenArchive.openKept(copy, workspace: nil, node: "node-older")
             #expect(older.serves)
             ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-older"])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!older.serves)
             // A purge that comes while such a copy is still being read (before its mark): the mark sees it and refuses.
             ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-late"])
@@ -560,7 +560,7 @@ import Testing
             #expect(archive.serves)
             // The family is let go of while the tree builds: by then the archive is closed, and the screen shows nothing of it.
             TemporaryCopies.forgetFamily([workspace])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.serves)
         }
     }
@@ -580,7 +580,7 @@ import Testing
             }
             defer { NotificationCenter.default.removeObserver(listening) }
             TemporaryCopies.forgetFamily([workspace])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.unlocked)
             for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
             #expect(heard.value == 1)
@@ -589,7 +589,7 @@ import Testing
             try other.mark(UUID().uuidString, family: true)
             #expect(try await other.unlock("correct horse battery"))
             TemporaryCopies.forgetFamily([UUID().uuidString])
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(other.unlocked)
             other.close()
         }
@@ -606,11 +606,11 @@ import Testing
             let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: temporary) }
             #expect(TemporaryCopies.sweepFamily(keeping: [], in: temporary))
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(archive.unlocked)
             // Its revocation is what closes it.
             TemporaryCopies.forgetFamily([family], in: temporary)
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.unlocked)
         }
     }
@@ -635,7 +635,7 @@ import Testing
             let archive = try await Self.open("aes.zip", registered: true)
             #expect(try await archive.unlock("correct horse battery"))
             ArchiveSessions.closeAll()
-            ArchiveSessions.closeQueue.sync {}
+            ArchiveSessions.closeQueue.sync(flags: .barrier) {}
             #expect(!archive.unlocked)
             let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
             #expect(await code { try await archive.preview(secret, limit: 1024) } == nil)

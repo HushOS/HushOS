@@ -321,12 +321,20 @@ class FamilySyncTest {
         val root = phone.vault.mountShares().single().root!!
         val ws = root.node.workspaceId
         val sessions = ArchiveSessions.shared
+        // Open before the forget: one by its workspace, one known only by its node (a kept record from before its
+        // workspace was kept). And a scope taken before the forget, whose archive registers after it.
+        val first = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))
+        val nodeOnly = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(null, root.id))
         val late = phone.vault.archiveScope(ws, root.id)
         phone.vault.forgetWorkspaces(listOf(ws))
         assertFalse(phone.vault.isFamilyWorkspace(ws))
+        assertTrue("a forget left its folder's zip open", first.closed)
+        assertTrue("a node-only kept zip outlived its folder's forget (the forgotten node ids)", nodeOnly.closed)
         val before = sessions.count
         val refused = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = late) }.exceptionOrNull()
         assertTrue("registered across a forget: $refused", refused is FamilyFailure)
+        val again = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(null, root.id)) }.exceptionOrNull()
+        assertTrue("a node-only kept zip opened after the forget: $again", again is FamilyFailure)
         assertEquals(before, sessions.count)
 
         val archive = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))

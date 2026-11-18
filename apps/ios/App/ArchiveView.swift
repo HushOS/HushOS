@@ -332,6 +332,9 @@ struct ArchiveScreen: View {
                 try handle.close()
                 await MainActor.run { downloads.removeAll { $0 === progress } }
             } catch {
+                // A cancel answers before the call's thread is out of its piece: that piece is waited out (off the
+                // main thread), so the file is removed after its last write, never before it.
+                await archive.settled()
                 try? unclosed?.close()
                 if let target { try? FileManager.default.removeItem(at: target) }
                 await MainActor.run {
