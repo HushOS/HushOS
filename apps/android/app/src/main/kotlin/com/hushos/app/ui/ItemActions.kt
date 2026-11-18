@@ -60,6 +60,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DownloadForOffline
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Info
@@ -127,6 +128,9 @@ import java.time.temporal.ChronoUnit
 
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
 enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
+
+/* A file the text editor opens: text by its name and type, no larger than the editor takes (TextEditing). */
+fun editsAsText(item: Opened) = com.hushos.app.data.TextEditing.opens(item) && (item.size ?: 0L) <= com.hushos.app.data.TextEditing.LIMIT
 
 /* Whose folder an item sits in: this account's, or someone else's that it can edit or only view. */
 enum class Owner { ME, EDIT, VIEW }
@@ -230,6 +234,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
                 SheetDivider()
             }
             if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
+            // A family folder's text file, while this phone may write there.
+            if (canEdit && editsAsText(item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             if (canEdit) {
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
@@ -290,6 +296,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             }
             if (!mine) SheetRow("Save a copy to my files", Icons.Outlined.LibraryAdd) { model.saveCopy(listOf(item)); dismiss() }
             SheetDivider()
+            // Text and code, for whoever may change the file (an owner, an editor of the share).
+            if (canEdit && editsAsText(item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }

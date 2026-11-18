@@ -1018,6 +1018,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * How a moved record is signed, as a copy is: out of a family folder as its member list judges it (a former member's file
      * is re-sealed as the mover's), out of one's own files by the trust set. Without either, nothing moves.
      */
+    /* How a copy of `source` is signed (the text editor's Save as a copy): as a move or a copy takes its records. */
+    fun copyPrior(source: Opened): Prior = movePrior(source)
+
     private fun movePrior(source: Opened): Prior {
         val ws = source.node.workspaceId
         if (!isFamilyWorkspace(ws)) return Prior.of(source.node, trustForWrite())

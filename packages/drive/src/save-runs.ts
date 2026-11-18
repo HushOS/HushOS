@@ -15,6 +15,7 @@ import {
     type TransferManagerOptions,
     type UploadItem,
 } from './transfers';
+import { abandonRuns, liveRuns, lockGeneration, lockRuns, resultsWaiting } from './save-runs-live';
 import { sourcesSignatureForms, type ResultSource } from './trust';
 
 /*
@@ -596,36 +597,8 @@ export type SaveRun = {
 
 type LiveRun = SaveRun & { abandon(): void; lock(): Promise<RunStopped> };
 
-/* Runs live in this page: a result still waiting to upload asks before the page unloads. */
-const liveRuns = new Set<LiveRun>();
-export function resultsWaiting() {
-    for (const run of liveRuns) if (run.waiting() > 0) return true;
-    return false;
-}
-
-/*
- * A sign-out (here or in another tab): every run in this page stops at once.
- * Its pending results are rejected and their bytes let go; nothing is written
- * to the journal (the sign-out deletes it) and nothing is asked of the server
- * (the uploads were already dropped and released by the queue).
- */
-export function abandonRuns() {
-    // A Set may lose the entry being visited: each run removes itself as it ends.
-    for (const run of liveRuns) run.abandon();
-}
-
-/*
- * The device locked (the app's explicit lock, not only an upload's worker
- * finding out): every run in this page stops and cleans up, a result paused or
- * completing included, rather than hold its plaintext until someone unlocks or
- * report a save afterwards.
- */
-export function lockRuns() {
-    lockGeneration += 1;
-    return Promise.all([...liveRuns].map((run) => run.lock()));
-}
-/* Moved on by every lock: a run still starting (not yet live, so lockRuns can't reach it) checks it. */
-let lockGeneration = 0;
+/* The live runs' registry is its own module, so the app shell reaches it without the engine. */
+export { abandonRuns, lockRuns, resultsWaiting };
 
 /*
  * Buffers already handed to a run: a result's bytes move to the crypto worker
@@ -674,9 +647,9 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
     const account = deps.account;
     if (!account) throw signedOut();
     // A lock while it starts (lockRuns cannot reach a run not yet live): it never starts either.
-    const unlockedSince = lockGeneration;
+    const unlockedSince = lockGeneration();
     const lockedNow = () =>
-        lockGeneration !== unlockedSince
+        lockGeneration() !== unlockedSince
             ? new RunStopped('locked', stoppedWords('locked'), 'nothing')
             : null;
     const needed = runEstimate(plan.results);

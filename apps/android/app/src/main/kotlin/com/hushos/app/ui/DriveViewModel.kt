@@ -146,6 +146,8 @@ data class DriveState(
     val reading: Reading? = null,
     /* A zip open as its list (ArchiveScreen), over every screen: never decrypted to a file, nor handed to another app. */
     val archive: ArchiveSubject? = null,
+    /* The text editor open over every screen (TextEditorScreen), by the id of the file it opened on. */
+    val editing: String? = null,
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
@@ -637,6 +639,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         notices.clear()
         link = null
         endArchive()
+        endTextEdit()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
     }
 
@@ -971,6 +974,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         endArchive()
+        endTextEdit()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -1003,6 +1007,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         notices.clear()
         link = null
         endArchive()
+        endTextEdit()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
         // Ended because this phone was removed from the account: everything of the account goes too,
         // unless someone has signed in since (the generation moved), and a sign-in started after the
@@ -2267,6 +2272,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         notices.clear()
         filesAppChanged()
         endArchive()
+        endTextEdit()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
     }
 
@@ -2550,6 +2556,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      * of `nodes` (a kept copy has only its id), closes with the family's other plaintext.
      */
     override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
+        // A family file open in the editor goes with the family's other plaintext.
+        textEdit?.let { open -> if (workspaces.any { it.equals(open.target.node.workspaceId, ignoreCase = true) }) closeEditor() }
         val subject = state.value.archive ?: return
         // By its workspace when it has one; by its node only when it has none (a kept copy whose record predates its
         // workspace's): another workspace's node that shares its id never closes it.
@@ -2557,6 +2565,28 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         val reached = if (workspace != null) workspaces.any { it.equals(workspace, ignoreCase = true) }
             else nodes.any { it.equals(subject.id, ignoreCase = true) }
         if (reached) closeArchive()
+    }
+
+    /* The text editor's session (TextEdit): held here, so a rotation keeps the text; nothing of it outlives the session. */
+    var textEdit: TextEdit? = null
+        private set
+
+    /* Edit: a text file this person may change opens in the editor, read afresh from the server. */
+    fun edit(item: Opened) {
+        textEdit?.end()
+        textEdit = TextEdit(item, context, viewModelScope, vault = { vault }, saved = { parent -> parent?.let { refresh(it) } }).also { it.load() }
+        _state.update { it.copy(editing = item.id) }
+    }
+
+    fun closeEditor() {
+        endTextEdit()
+        _state.update { it.copy(editing = null) }
+    }
+
+    /* Every path that ends a session ends the editor open in it: its text emptied, no save landing on screen. */
+    private fun endTextEdit() {
+        textEdit?.end()
+        textEdit = null
     }
 
     /* Every path that ends a session ends the archive open in it: its sessions closed, its downloads stopped, nothing kept. */

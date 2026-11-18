@@ -288,7 +288,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Drive',
                 title: 'Editing in the browser',
-                body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
+                body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version. Text and code files can now be edited on the web, iPhone and Android.',
                 links: [{ kind: 'docs', path: 'docs/editing-design.md', label: 'Read the design' }],
             },
             {

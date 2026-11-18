@@ -1863,6 +1863,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                 onChange={(node) => showPreview(node, node !== null)}
                 onDownload={(node) => download([node])}
                 onShare={!area && folder?.workspaceId === workspaceId ? setSharing : undefined}
+                // An owner, an editor of the share, or a family folder this device may write.
+                editable={() => writable && (!shared || sharedBy?.role === 'editor')}
                 access={
                     shared || area
                         ? undefined

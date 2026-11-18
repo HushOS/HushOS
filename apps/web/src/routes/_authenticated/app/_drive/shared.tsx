@@ -508,6 +508,7 @@ type Stop =
 
 function ByMe() {
     const queryClient = useQueryClient();
+    const { workspaceId } = useDrive();
     // Fetched again each time the page opens: an item trashed a moment ago leaves the list,
     // without waiting for the feed's next poll.
     const mine = useQuery({ ...mySharingQueryOptions, refetchOnMount: 'always' });
@@ -685,6 +686,8 @@ function ByMe() {
                 current={previewing}
                 onChange={setPreviewing}
                 onDownload={(node) => downloadNodes([node])}
+                // What this person shared is theirs to change.
+                editable={(node) => node.workspaceId === workspaceId}
             />
             <ShareDialog
                 node={sharing}

@@ -23,6 +23,8 @@ struct FileViewer: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var action: NodeAction?
+    /* The text editor over the file on screen (TextEditorScreen). */
+    @State private var editing: Opened?
     /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
     @State private var seenListed: String?
 
@@ -57,6 +59,12 @@ struct FileViewer: View {
         ToolbarItem(placement: .principal) { title }
         if version == nil {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                // Text and code, for whoever may change the file: an owner, an editor of the share, a
+                // family folder this phone may write. Never an earlier version.
+                if editable {
+                    Button { editing = current } label: { HeaderIcon(symbol: "pencil") }
+                        .accessibilityLabel(EditorWords.edit)
+                }
                 if store.role(of: current) == .owner {
                     Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
                         .accessibilityLabel("Share")
@@ -133,6 +141,9 @@ struct FileViewer: View {
         // the space it leaves showed the cover's own white until the page grew back (the band under the password card).
         .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
+        .fullScreenCover(item: $editing) { file in
+            TextEditorScreen(item: file).environment(store)
+        }
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
@@ -156,6 +167,11 @@ struct FileViewer: View {
         .onChange(of: removed) { _, gone in
             if gone { dismiss() }
         }
+    }
+
+    /* Whether the file on screen offers Edit: text by its name and type, small enough, and this person may change it. */
+    private var editable: Bool {
+        version == nil && TextEditing.opens(current) && (current.size ?? 0) <= TextEditing.limit && store.role(of: current) != .viewer
     }
 
     /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */

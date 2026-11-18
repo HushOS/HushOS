@@ -78,6 +78,10 @@
         "vitest": "^5.1.0",
         "xlsx": "file:vendor/xlsx-0.20.3.tgz"
     },
+    "overrides": {
+        "@codemirror/lint": "6.9.7",
+        "style-mod": "4.1.4"
+    },
     "engines": {
         "bun": ">=1.4.4"
     },

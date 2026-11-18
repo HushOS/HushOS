@@ -8,6 +8,7 @@ import {
     ChevronRightIcon,
     DownloadIcon,
     FileQuestionIcon,
+    PencilIcon,
     RotateCcwIcon,
     UserPlusIcon,
     XIcon,
@@ -35,6 +36,16 @@ import {
     viewerWords,
 } from '@/components/drive/viewer-parts';
 import { Spinner } from '@/components/motion';
+import type { EditGuard } from '@/components/drive/text-editor';
+import {
+    AlertDialog,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { formatBytes, formatWhen, nodeSize } from '@/lib/drive';
@@ -58,6 +69,7 @@ import {
     TEXT_CEILING,
 } from '@/lib/previews';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
+import { editableFile, TEXT_EDIT_LIMIT } from '@/lib/text-edit';
 
 /*
  * The viewer: one file at a time over the folder, with the neighbours a key
@@ -85,6 +97,13 @@ const JsonView = lazy(() =>
 const ArchiveView = lazy(() =>
     import('@/components/drive/archive-view').then((m) => ({ default: m.ArchiveView })),
 );
+// The text editor and CodeMirror come in with the first Edit, never with the drive.
+const loadEditor = () => import('@/components/drive/text-editor');
+const TextEditor = lazy(() => loadEditor().then((m) => ({ default: m.TextEditor })));
+
+/* An editing session: the file Edit was pressed on, and the one being written now. */
+type Editing = { session: number; start: DriveNode; target: DriveNode };
+let sessions = 0;
 
 /*
  * A control inside the viewer that uses the arrow keys itself keeps them: the JSON tree, and a
@@ -132,6 +151,7 @@ export function Preview({
     onShare,
     access,
     version,
+    editable,
 }: {
     files: DriveNode[];
     current: DriveNode | null;
@@ -143,13 +163,79 @@ export function Preview({
     access?: (node: DriveNode) => ReactNode;
     /* An earlier version instead of the file: no neighbours, no Share, a banner with Restore. */
     version?: ViewerVersion;
+    /*
+     * Whether the person may change this file here (an owner, an editor of the share, a family
+     * folder this device may write): its text files then offer Edit. Absent: nothing is edited.
+     */
+    editable?: (node: DriveNode) => boolean;
 }) {
+    /*
+     * The text editor, over the file it opened on. It stays while it has changes even if the
+     * listing lets go of the file (moved or deleted elsewhere): the save then says so.
+     */
+    const [editing, setEditing] = useState<Editing | null>(null);
+    const [dirty, setDirty] = useState(false);
+    const [asking, setAsking] = useState<((discard: boolean) => void) | null>(null);
+    const [actions, setActions] = useState<HTMLElement | null>(null);
+    /* The session's way out: set once the person chose to discard, so nothing asks again. */
+    const guard = useRef<EditGuard>({ discarded: false });
+    // The file being edited as listed now (its new size and time after a save), while it is listed.
+    const shown = editing
+        ? current?.id === editing.target.id
+            ? current
+            : editing.target
+        : current;
     const index = current ? files.findIndex((file) => file.id === current.id) : -1;
-    const previous = !version && index > 0 ? files[index - 1] : undefined;
-    const next = !version && index >= 0 && index < files.length - 1 ? files[index + 1] : undefined;
-    const open = current !== null;
+    const previous = !version && !editing && index > 0 ? files[index - 1] : undefined;
+    const next =
+        !version && !editing && index >= 0 && index < files.length - 1
+            ? files[index + 1]
+            : undefined;
+    const open = shown !== null;
     useStepKey('ArrowLeft', previous, open, onChange);
     useStepKey('ArrowRight', next, open, onChange);
+    /* "Discard your changes?", answered true to discard. Only while there are changes to lose. */
+    const askDiscard = useCallback(
+        () =>
+            new Promise<boolean>((resolve) => {
+                setAsking(() => (discard: boolean) => {
+                    setAsking(null);
+                    resolve(discard);
+                });
+            }).then((discard) => {
+                if (discard) {
+                    guard.current.discarded = true;
+                    setEditing(null);
+                    setDirty(false);
+                }
+                return discard;
+            }),
+        [],
+    );
+    /* Closing the viewer: with unsaved changes, only once the person chose to discard them. */
+    const close = async () => {
+        if (editing && dirty && !guard.current.discarded && !(await askDiscard())) return;
+        guard.current.discarded = true;
+        setEditing(null);
+        setDirty(false);
+        onChange(null);
+    };
+    const canEdit =
+        !version &&
+        !editing &&
+        current !== null &&
+        editableFile(current) &&
+        !((nodeSize(current) ?? 0) > TEXT_EDIT_LIMIT) &&
+        (editable?.(current) ?? false);
+    const startEditing = (node: DriveNode) => {
+        setDirty(false);
+        guard.current = { discarded: false };
+        setEditing({ session: ++sessions, start: node, target: node });
+    };
+    const onTarget = useCallback(
+        (target: DriveNode) => setEditing((now) => (now ? { ...now, target } : now)),
+        [],
+    );
     // Formatted | Source, offered by the renderer and kept per file.
     const [offered, setOffered] = useState(false);
     const [sourceFor, setSourceFor] = useState<string | null>(null);
@@ -157,7 +243,25 @@ export function Preview({
     const offer = useCallback((available: boolean) => setOffered(available), []);
     const switchValue = useMemo(() => ({ source, offer }), [source, offer]);
     return (
-        <Dialog open={open} onOpenChange={(value) => !value && onChange(null)}>
+        <Dialog
+            open={open}
+            onOpenChange={(value, details) => {
+                if (value) return;
+                if (!editing) return onChange(null);
+                // Escape inside the editor is the editor's (its search panel closes on it).
+                const target = details.event?.target;
+                if (
+                    details.reason === 'escape-key' &&
+                    target instanceof Element &&
+                    target.closest('[data-text-editor]')
+                ) {
+                    details.cancel();
+                    return;
+                }
+                details.cancel();
+                void close();
+            }}
+        >
             <DialogContent
                 showCloseButton={false}
                 // No enter or exit transition: Base UI waits for the popup's transition to end
@@ -166,6 +270,7 @@ export function Preview({
                 className="inset-0 top-0 left-0 flex h-dvh max-h-none w-dvw max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 bg-background p-0 text-base shadow-none transition-none *:min-w-0 sm:max-w-none sm:p-0"
                 onKeyDown={(event) => {
                     // The dialog holds focus, so the arrows are handled here as well.
+                    if (editing) return;
                     if (
                         (event.target as HTMLElement).tagName === 'INPUT' ||
                         ownsArrows(event.target)
@@ -177,7 +282,7 @@ export function Preview({
                     event.preventDefault();
                 }}
             >
-                {current && (
+                {shown && (
                     <>
                         <header className="flex min-h-16 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3 border-b border-rule bg-card py-2 pr-2 pl-5 sm:flex-nowrap sm:pr-3">
                             {/* On a phone the name takes a full line; wider, it shortens in the middle so its type stays. */}
@@ -185,22 +290,22 @@ export function Preview({
                                 <div className="flex min-w-0 items-center gap-2">
                                     <DialogTitle
                                         className="flex min-w-0 text-[15px] font-bold"
-                                        title={current.name}
+                                        title={shown.name}
                                     >
-                                        <MiddleName name={current.name} />
+                                        <MiddleName name={shown.name} />
                                     </DialogTitle>
                                     {/* An earlier version is marked in the versions list, not here. */}
-                                    {!version && <UnverifiedMark node={current} />}
+                                    {!version && <UnverifiedMark node={shown} />}
                                 </div>
                                 <DialogDescription className="truncate text-[13px] text-muted-foreground tabular-nums">
                                     {version
                                         ? version.meta
                                         : [
-                                              formatBytes(nodeSize(current)),
+                                              formatBytes(nodeSize(shown)),
                                               formatWhen(
-                                                  current.metadata?.modified ?? current.updatedAt,
+                                                  shown.metadata?.modified ?? shown.updatedAt,
                                               ),
-                                              files.length > 1
+                                              files.length > 1 && !editing
                                                   ? `${index + 1} of ${files.length}`
                                                   : null,
                                           ]
@@ -208,15 +313,15 @@ export function Preview({
                                               .join(' · ')}
                                 </DialogDescription>
                                 {!version && (
-                                    <SavedFromLinkLine node={current} className="leading-snug" />
+                                    <SavedFromLinkLine node={shown} className="leading-snug" />
                                 )}
                             </div>
                             {access && !version && (
                                 <span className="hidden h-8 max-w-56 shrink-0 items-center rounded-full bg-muted px-3 lg:flex">
-                                    {access(current)}
+                                    {access(shown)}
                                 </span>
                             )}
-                            {offered && (
+                            {offered && !editing && (
                                 <fieldset
                                     className={cn(
                                         'm-0 inline-flex min-w-0 shrink-0 rounded-md border-0 p-0.5',
@@ -233,7 +338,7 @@ export function Preview({
                                                 aria-pressed={on}
                                                 onClick={() =>
                                                     setSourceFor(
-                                                        label === 'Source' ? current.id : null,
+                                                        label === 'Source' ? shown.id : null,
                                                     )
                                                 }
                                                 className={cn(
@@ -250,7 +355,26 @@ export function Preview({
                                 </fieldset>
                             )}
                             <div className="ml-auto flex shrink-0 items-center sm:gap-1">
-                                {!version && files.length > 1 && (
+                                {/* The editor's Save and what it says: in the header, beside Close. */}
+                                {editing && (
+                                    <div
+                                        ref={setActions}
+                                        className="mr-1 flex min-w-0 items-center"
+                                    />
+                                )}
+                                {canEdit && (
+                                    <Button
+                                        variant="outline"
+                                        aria-label="Edit"
+                                        className="max-sm:size-9 max-sm:px-0 max-sm:pointer-coarse:size-11"
+                                        onPointerEnter={() => void loadEditor()}
+                                        onClick={() => startEditing(current)}
+                                    >
+                                        <PencilIcon />
+                                        <span className="max-sm:hidden">Edit</span>
+                                    </Button>
+                                )}
+                                {!version && !editing && files.length > 1 && (
                                     <>
                                         <Button
                                             variant="ghost"
@@ -274,7 +398,7 @@ export function Preview({
                                         </Button>
                                     </>
                                 )}
-                                {!version && onShare && (
+                                {!version && !editing && onShare && current && (
                                     <>
                                         <span
                                             className="mx-1 h-6 w-px bg-rule max-sm:hidden"
@@ -291,21 +415,23 @@ export function Preview({
                                         </Button>
                                     </>
                                 )}
-                                <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    aria-label="Download"
-                                    title="Download"
-                                    onClick={() => onDownload(current)}
-                                >
-                                    <DownloadIcon />
-                                </Button>
+                                {!editing && current && (
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        aria-label="Download"
+                                        title="Download"
+                                        onClick={() => onDownload(current)}
+                                    >
+                                        <DownloadIcon />
+                                    </Button>
+                                )}
                                 <Button
                                     variant="ghost"
                                     size="icon"
                                     aria-label="Close preview"
                                     title="Close (Esc)"
-                                    onClick={() => onChange(null)}
+                                    onClick={() => void close()}
                                 >
                                     <XIcon />
                                 </Button>
@@ -328,16 +454,48 @@ export function Preview({
                                 )}
                             </div>
                         )}
-                        <SourceSwitch.Provider value={switchValue}>
-                            <PreviewBody
-                                key={current.currentVersion?.id ?? current.id}
-                                node={current}
-                                onDownload={onDownload}
-                            />
-                        </SourceSwitch.Provider>
+                        {editing ? (
+                            <Suspense fallback={<Opening />}>
+                                <TextEditor
+                                    key={editing.session}
+                                    node={editing.start}
+                                    actions={actions}
+                                    guard={guard}
+                                    askDiscard={askDiscard}
+                                    onTarget={onTarget}
+                                    onDirty={setDirty}
+                                />
+                            </Suspense>
+                        ) : (
+                            current && (
+                                <SourceSwitch.Provider value={switchValue}>
+                                    <PreviewBody
+                                        key={current.currentVersion?.id ?? current.id}
+                                        node={current}
+                                        onDownload={onDownload}
+                                    />
+                                </SourceSwitch.Provider>
+                            )
+                        )}
                     </>
                 )}
             </DialogContent>
+            <AlertDialog open={asking !== null} onOpenChange={(value) => !value && asking?.(false)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Discard your changes?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            Your changes to “{shown?.name}” aren’t saved.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep editing</AlertDialogCancel>
+                        <Button variant="destructive" onClick={() => asking?.(true)}>
+                            Discard changes
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </Dialog>
     );
 }

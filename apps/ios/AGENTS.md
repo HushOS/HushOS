@@ -239,6 +239,16 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - Code with a line past 1,000 characters wraps.
 - Tests: `MarkdownDocumentTests`.
 
+### Text editor
+
+Editing 1a (docs/editing-design.md, the web's `components/drive/text-editor.tsx`): Edit (the pencil) in the viewer's bar, for a text file (`TextEditing.opens`, the core's `text_editable_kind`) of at most 8 MiB that this person may change (`role(of:)` not viewer: an owner, an editor of the share, a family folder this phone may write). Never on an earlier version.
+
+- `TextEditorScreen` (App/TextEditorView.swift) reads the file's current version afresh (`Vault.editTarget`, in the file's own workspace) and decides with the core's `text_read_only`: UTF-8 without a byte order mark, LF only, not binary. Anything else opens read-only with the web's sentence (`TextEditing.words`).
+- The system's `UITextView`, monospaced at the reader's size, no autocorrection, capitals, smart punctuation, predictions or Writing Tools; a CR typed or pasted goes in as LF (`TextEditing.lineFeeds`). No colouring on the phone. The text is read from the view only at Save (`TextBox`), never mirrored into SwiftUI state.
+- Save goes through the save path (`TextSave` over `SaveRun`): a new version from the version it opened, signed as the person's own writing. A stale save offers Save on top (the version current now), Save as a copy (next free name, signed as the source is: `Vault.copySources`) and Open theirs after a confirmation.
+- Close with changes asks first; the cover can't be swiped away with changes. Leaving, a sign-out or another session (`store.vault` changing) empties the view (`TextBox.drop`). Nothing is kept on the phone.
+- Tests: `TextEditingTests` (the shared fixture, byte-for-byte through `NSTextStorage`), `TextSaveTests` (a stand-in server keeping versions).
+
 ### Keep downloaded
 
 - Keep downloaded is the app's own feature (`Offline.swift`, app group container, one folder per version, the Offline section on Home).

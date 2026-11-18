@@ -1,0 +1,348 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expect, test, type Page } from '@playwright/test';
+import {
+    addContact,
+    grip,
+    newContext,
+    newFolder,
+    openFolder,
+    PASSWORD,
+    registerAccount,
+    shareWith,
+} from './helpers';
+
+/*
+ * Editing 1a on the web: a text file opens in the editor, a save is a new version holding
+ * exactly the edit, a file the editor can't keep byte for byte opens read-only, a save after
+ * someone else's offers Save on top, Save as a copy and Open theirs and each does what it
+ * says, leaving with changes asks first, a lock drops the editor's text, and only those who
+ * may change a file are offered Edit.
+ */
+
+test.describe.configure({ mode: 'serial' });
+
+let page: Page;
+let other: Page;
+let ownerEmail: string;
+const dialog = (p: Page) => p.locator('[data-slot=dialog-content]').first();
+const row = (p: Page, name: string) =>
+    p.locator('[data-node-id]').filter({ has: p.getByText(name, { exact: true }) });
+const editor = (p: Page) => p.getByRole('textbox', { name: /^Contents of / });
+
+const files = mkdtempSync(join(tmpdir(), 'hushos-editing-'));
+const write = (name: string, bytes: string | Uint8Array) => {
+    const path = join(files, name);
+    writeFileSync(path, bytes);
+    return path;
+};
+
+async function openEditor(p: Page, name: string) {
+    await row(p, name).getByRole('link', { name, exact: true }).click();
+    await dialog(p).getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(editor(p)).toBeVisible({ timeout: 60_000 });
+}
+
+/* Replaces the whole text, as a person selecting everything and typing would. */
+async function retype(p: Page, text: string) {
+    await editor(p).click();
+    await p.keyboard.press('ControlOrMeta+a');
+    await p.keyboard.insertText(text);
+}
+
+async function close(p: Page) {
+    await dialog(p).getByRole('button', { name: 'Close preview' }).click();
+    await expect(p.locator('[data-slot=dialog-content]')).toHaveCount(0);
+}
+
+/* The file's current bytes, as Download gives them. */
+async function downloaded(p: Page, name: string) {
+    await row(p, name).locator('button').first().click(grip);
+    const [download] = await Promise.all([
+        p.waitForEvent('download'),
+        p.getByRole('button', { name: 'Download', exact: true }).first().click(),
+    ]);
+    return readFileSync((await download.path())!);
+}
+
+test.beforeAll(async ({ browser }) => {
+    test.setTimeout(300_000);
+    page = await (await newContext(browser)).newPage();
+    ownerEmail = (await registerAccount(page, 'Maya Lindqvist')).email;
+    await page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles([
+            write('notes.txt', 'Grüße\nline two\nno final newline'),
+            write('windows.txt', 'first\r\nsecond\r\n'),
+            write('marked.md', Uint8Array.from([0xef, 0xbb, 0xbf, ...Buffer.from('# Title\n')])),
+            write('latin.txt', Uint8Array.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
+            write('config.json', '{\n  "a": 1\n}\n'),
+        ]);
+    await expect(page.locator('[data-node-id]')).toHaveCount(5, { timeout: 90_000 });
+});
+test.afterAll(async () => {
+    await page.context().close();
+});
+
+test('a save is a new version that changes only the edited bytes', async () => {
+    await openEditor(page, 'notes.txt');
+    await expect(editor(page)).toContainText('Grüße');
+    const save = dialog(page).getByRole('button', { name: 'Save', exact: true });
+    // Nothing to save until something changed.
+    await expect(save).toBeDisabled();
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+Home');
+    await page.keyboard.press('End');
+    await page.keyboard.insertText(' ✓');
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await expect(save).toBeDisabled();
+    await close(page);
+    // Byte for byte: the edit, and no final newline added where there was none.
+    expect([...(await downloaded(page, 'notes.txt'))]).toEqual([
+        ...Buffer.from('Grüße ✓\nline two\nno final newline'),
+    ]);
+});
+
+test('files the editor can’t keep exactly open read-only with a note', async () => {
+    for (const [name, note] of [
+        ['windows.txt', 'This file uses Windows line endings, which HushOS can’t edit yet.'],
+        ['marked.md', 'HushOS can’t edit this file’s encoding yet.'],
+        ['latin.txt', 'This file uses an encoding HushOS can’t edit without changing it.'],
+    ] as const) {
+        await openEditor(page, name);
+        await expect(dialog(page).getByText(note)).toBeVisible();
+        await expect(dialog(page).getByRole('button', { name: 'Save', exact: true })).toHaveCount(
+            0,
+        );
+        await expect(editor(page)).toHaveAttribute('contenteditable', 'false');
+        await close(page);
+    }
+});
+
+test('broken JSON gets a warning beside Save, and still saves', async () => {
+    await openEditor(page, 'config.json');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('}');
+    await expect(
+        dialog(page).getByRole('status').filter({ hasText: 'This JSON doesn’t parse at line 4.' }),
+    ).toBeVisible();
+    await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await close(page);
+    expect((await downloaded(page, 'config.json')).toString()).toBe('{\n  "a": 1\n}\n}');
+});
+
+test('leaving with changes asks first', async () => {
+    await openEditor(page, 'notes.txt');
+    await retype(page, 'not kept');
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    const ask = page.getByRole('alertdialog');
+    await expect(ask).toContainText('Discard your changes?');
+    await ask.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(editor(page)).toContainText('not kept');
+    // The browser's Back is asked about too.
+    await page.goBack();
+    await expect(ask).toContainText('Discard your changes?');
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    expect((await downloaded(page, 'notes.txt')).toString()).toBe(
+        'Grüße ✓\nline two\nno final newline',
+    );
+});
+
+test.describe('when someone else saved first', () => {
+    test.beforeAll(async () => {
+        // A second tab of the same person: "someone else" is any other save of the file.
+        other = await page.context().newPage();
+        await other.goto('/app/drive');
+        await expect(row(other, 'notes.txt')).toBeVisible({ timeout: 60_000 });
+    });
+
+    /* Mine open with an edit, theirs saved meanwhile from the other tab; then mine saves. */
+    async function race(mine: string, theirs: string) {
+        await openEditor(page, 'notes.txt');
+        await retype(page, mine);
+        await openEditor(other, 'notes.txt');
+        await retype(other, theirs);
+        await other.keyboard.press('ControlOrMeta+s');
+        await expect(dialog(other).getByText('Saved', { exact: true })).toBeVisible({
+            timeout: 60_000,
+        });
+        await close(other);
+        await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+        const choices = page.getByRole('alertdialog');
+        await expect(choices).toContainText('This file changed', { timeout: 60_000 });
+        for (const choice of ['Save on top', 'Save as a copy', 'Open theirs'])
+            await expect(choices.getByRole('button', { name: choice })).toBeVisible();
+        return choices;
+    }
+
+    test('Save on top makes a new version after theirs, and both stay in history', async () => {
+        const choices = await race('mine on top', 'theirs first');
+        await choices.getByRole('button', { name: 'Save on top' }).click();
+        await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({
+            timeout: 60_000,
+        });
+        await close(page);
+        expect((await downloaded(page, 'notes.txt')).toString()).toBe('mine on top');
+        await row(page, 'notes.txt')
+            .locator('button')
+            .first()
+            .click({ ...grip, button: 'right' });
+        await page.getByRole('menuitem', { name: 'Versions' }).click();
+        const [earlier] = await Promise.all([
+            page.waitForEvent('download'),
+            dialog(page).getByRole('button', { name: 'Download earlier version' }).first().click(),
+        ]);
+        expect(readFileSync((await earlier.path())!, 'utf8')).toBe('theirs first');
+        await page.keyboard.press('Escape');
+    });
+
+    test('Save as a copy makes a file beside it under the next free name', async () => {
+        const choices = await race('mine as a copy', 'theirs again');
+        await choices.getByRole('button', { name: 'Save as a copy' }).click();
+        await expect(dialog(page).getByText('Saved as “notes (2).txt”')).toBeVisible({
+            timeout: 60_000,
+        });
+        await close(page);
+        expect((await downloaded(page, 'notes (2).txt')).toString()).toBe('mine as a copy');
+        expect((await downloaded(page, 'notes.txt')).toString()).toBe('theirs again');
+    });
+
+    test('Open theirs discards mine only after a confirmation', async () => {
+        const choices = await race('mine, discarded', 'theirs to open');
+        await choices.getByRole('button', { name: 'Open theirs' }).click();
+        const confirm = page.getByRole('alertdialog');
+        await expect(confirm).toContainText('Discard your changes?');
+        await confirm.getByRole('button', { name: 'Cancel' }).click();
+        // Cancelled: back to the three choices, nothing discarded.
+        await expect(choices.getByRole('button', { name: 'Save on top' })).toBeVisible();
+        await choices.getByRole('button', { name: 'Open theirs' }).click();
+        await confirm.getByRole('button', { name: 'Discard changes' }).click();
+        await expect(editor(page)).toContainText('theirs to open', { timeout: 60_000 });
+        await expect(editor(page)).not.toContainText('mine, discarded');
+        await close(page);
+        expect((await downloaded(page, 'notes.txt')).toString()).toBe('theirs to open');
+        await other.close();
+    });
+});
+
+test('locking drops the editor’s text', async () => {
+    await openEditor(page, 'notes.txt');
+    await retype(page, 'typed before the lock');
+    // Locked from another tab while this one holds unsaved changes.
+    const locker = await page.context().newPage();
+    await locker.goto('/app/drive');
+    await expect(row(locker, 'notes.txt')).toBeVisible({ timeout: 60_000 });
+    await locker.getByRole('button', { name: 'Account menu' }).click();
+    await locker.getByRole('menuitem', { name: 'Lock on this browser' }).click();
+    await locker
+        .getByRole('alertdialog')
+        .getByRole('button', { name: 'Lock', exact: true })
+        .click();
+    await expect(
+        locker.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+    ).toBeVisible();
+    await locker.close();
+    await page.bringToFront();
+    await expect(
+        page.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
+    ).toBeVisible({
+        timeout: 90_000,
+    });
+    // The lock isn't held up by the unsaved changes, and nothing of them is left on the page.
+    await expect(page.getByText('typed before the lock')).toHaveCount(0);
+    await expect(page.locator('.cm-editor')).toHaveCount(0);
+    await page.locator('input[autocomplete=current-password]').fill(PASSWORD);
+    await page.locator('input[autocomplete=current-password]').press('Enter');
+    // The viewer comes back over the folder (the address still names the file), not the editor.
+    await expect(dialog(page).getByRole('heading', { name: 'notes.txt' })).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(page.locator('.cm-editor')).toHaveCount(0);
+    await dialog(page).getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(editor(page)).toContainText('theirs to open', { timeout: 60_000 });
+    await expect(editor(page)).not.toContainText('typed before the lock');
+    await close(page);
+});
+
+test('a viewer gets no Edit; an editor of the share edits', async ({ browser }) => {
+    test.setTimeout(300_000);
+    const guest = await (await newContext(browser)).newPage();
+    const guestEmail = (await registerAccount(guest, 'Ines Okafor')).email;
+    await page.goto('/app/contacts');
+    await addContact(page, guestEmail);
+    await page.goto('/app/drive');
+    for (const [folder, role] of [
+        ['Viewing', undefined],
+        ['Editing', 'Can edit'],
+    ] as const) {
+        await newFolder(page);
+        await page.getByPlaceholder('Reports/2026').fill(folder);
+        await page.keyboard.press('Enter');
+        await openFolder(page, folder);
+        await page
+            .locator('input[type=file]')
+            .first()
+            .setInputFiles([write(`${folder}.txt`, `${folder} text`)]);
+        await expect(row(page, `${folder}.txt`)).toBeVisible({ timeout: 60_000 });
+        await page.locator('[data-crumb-id]').first().click();
+        await row(page, folder).locator('button').first().click(grip);
+        await page.getByRole('button', { name: 'Share', exact: true }).click();
+        await shareWith(page, /Ines Okafor/, role);
+        await expect(page.getByText(/shared with Ines Okafor/)).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    }
+    expect(ownerEmail).toBeTruthy();
+
+    await guest.goto('/app/shared');
+    await guest.locator('[data-shared="Viewing"]').getByRole('link', { name: 'Viewing' }).click();
+    await row(guest, 'Viewing.txt').getByRole('link', { name: 'Viewing.txt', exact: true }).click();
+    await expect(dialog(guest).locator('.rt-code')).toContainText('Viewing text', {
+        timeout: 60_000,
+    });
+    await expect(dialog(guest).getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+    await close(guest);
+
+    await guest.goto('/app/shared');
+    await guest.locator('[data-shared="Editing"]').getByRole('link', { name: 'Editing' }).click();
+    await openEditor(guest, 'Editing.txt');
+    await retype(guest, 'edited by the editor');
+    await guest.keyboard.press('ControlOrMeta+s');
+    await expect(dialog(guest).getByText('Saved', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    });
+    await close(guest);
+    await guest.context().close();
+
+    await openFolder(page, 'Editing');
+    expect((await downloaded(page, 'Editing.txt')).toString()).toBe('edited by the editor');
+});
+
+test('signing out drops the editor’s text, and the changes don’t hold it up', async () => {
+    test.setTimeout(240_000);
+    await page.goto('/app/drive');
+    await openEditor(page, 'notes.txt');
+    await retype(page, 'typed before signing out');
+    // Signed out from another tab while this one holds unsaved changes.
+    const leaver = await page.context().newPage();
+    await leaver.goto('/app/drive');
+    await expect(row(leaver, 'notes.txt')).toBeVisible({ timeout: 60_000 });
+    await leaver.getByRole('button', { name: 'Account menu' }).click();
+    await leaver.getByRole('menuitem', { name: 'Sign out' }).click();
+    await leaver.getByRole('alertdialog').getByRole('button', { name: 'Sign out' }).click();
+    await expect(leaver).toHaveURL(/\/login/, { timeout: 60_000 });
+    await leaver.close();
+    // Back on this tab: it looks at the session again as it comes into view.
+    await page.bringToFront();
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await expect(page).toHaveURL(/\/login/, { timeout: 90_000 });
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    await expect(page.locator('.cm-editor')).toHaveCount(0);
+    await expect(page.getByText('typed before signing out')).toHaveCount(0);
+});

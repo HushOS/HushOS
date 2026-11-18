@@ -363,6 +363,16 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - A table is one measured grid with columns up to 320dp.
 - Code with a line past 1,000 characters wraps: Compose can't represent a 300 KB line's width.
 
+### Text editor
+
+Editing 1a (docs/editing-design.md, the web's `components/drive/text-editor.tsx`, iOS's `TextEditorScreen`): Edit in the item sheet for a text file (`TextEditing.opens`, the core's `text_editable_kind`) of at most 8 MiB that this person may change (`ownerOf` not VIEW; a family folder only while this phone may write it).
+
+- `TextEdit` (ui/TextEditor.kt), held by the view model so a rotation keeps it: reads the current version afresh (`VaultSaveWriter.editTarget`, in the file's own workspace) through a decrypted copy deleted as soon as it is read, and decides with the core's `text_read_only`. Anything else opens read-only with the web's sentence.
+- The system's `EditText` edits the session's `SpannableStringBuilder` in place (an `Editable.Factory` that hands it back), never copied per keystroke and never saved into the instance state (`isSaveEnabled = false`). No suggestions, no keyboard learning (`IME_FLAG_NO_PERSONALIZED_LEARNING`); a CR typed or pasted goes in as LF. No colouring.
+- Save goes through the save path (`TextSave` over `SaveRun`). A stale save offers a sheet: Save on top, Save as a copy (signed as the source: `Vault.copyPrior`), Open theirs after a confirmation.
+- Back and Close with changes ask first. Every session end (sign-out, session lost, account deleted, another sign-in) ends the editor with the archive (`endTextEdit`), and a family's clear-out closes a family file's editor.
+- Tests: `TextEditingTest` (the shared fixture, a stand-in server keeping versions).
+
 ### Sign-up in the app
 
 - "Create an account" on the sign-in screen runs the web's /register in the app (`ui/SignupScreen.kt`, `DriveViewModel.SignupFlow`):

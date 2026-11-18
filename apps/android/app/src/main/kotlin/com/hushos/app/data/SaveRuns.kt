@@ -1513,6 +1513,31 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         return null
     }
 
+    /*
+     * The text editor's target (TextEditing.kt): the file's folder and the file as the server lists them now, in the file's
+     * own workspace (never the own drive's row of the same id); the file null when it is no longer in its folder.
+     */
+    fun editTarget(file: Opened): Pair<Opened, Opened?> {
+        val parent = file.node.parentId ?: throw NotFound("This file isn’t in a folder.")
+        var after: String? = null
+        var folder: Opened? = null
+        var found: Opened? = null
+        do {
+            val page = vault.api.children(parent, file.node.workspaceId, after)
+            if (folder == null) {
+                // The chain above first, so the folder opens under its parent's key as served now.
+                for (above in page.ancestors) runCatching { openServed(above) }
+                folder = openServed(page.folder)
+            }
+            page.children.firstOrNull { it.id == file.id }?.let { found = openServed(it) }
+            after = if (found == null) page.nextCursor else null
+        } while (after != null)
+        return folder!! to found
+    }
+
+    /* What a copy of `file` is signed with: its records' verdicts as a copy takes them, so an Unverified file's copy stays so. */
+    fun copySources(file: Opened): SaveSources = SaveSources.From(listOf(SaveSource.of(vault.copyPrior(file))))
+
     override fun refreshFolder(folder: Opened): Opened {
         resync(folder.node.workspaceId)
         val listing = vault.api.children(folder.id, folder.node.workspaceId, null)

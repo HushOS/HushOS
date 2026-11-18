@@ -1,0 +1,694 @@
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+import {
+    bracketMatching,
+    HighlightStyle,
+    indentOnInput,
+    syntaxHighlighting,
+} from '@codemirror/language';
+import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
+import { Compartment, EditorState, type Extension, type Text } from '@codemirror/state';
+import {
+    crosshairCursor,
+    drawSelection,
+    dropCursor,
+    EditorView,
+    highlightActiveLine,
+    highlightActiveLineGutter,
+    highlightSpecialChars,
+    keymap,
+    lineNumbers,
+    rectangularSelection,
+} from '@codemirror/view';
+import type { DriveNode } from '@hushos/drive/client';
+import type { FileReader } from '@hushos/drive/downloads';
+import { tags } from '@lezer/highlight';
+import { useFormatForDisplay, useHotkey } from '@tanstack/react-hotkeys';
+import { useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useBlocker } from '@tanstack/react-router';
+import { SaveIcon, TriangleAlertIcon } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Notice, Opening } from '@/components/drive/viewer-parts';
+import { openStorageFull } from '@/components/drive/storage-full-dialog';
+import { Spinner } from '@/components/motion';
+import {
+    AlertDialog,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
+import { unlockedNow } from '@/lib/auth-view';
+import { driveError, folderQueryOptions, invalidateFolders, nodeSize } from '@/lib/drive';
+import { editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
+import { holdPageWhile } from '@/lib/leave-guard';
+import { openReader, readAll, type ReadProgress } from '@/lib/previews';
+import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
+import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
+import { parseFailure, parseWarning, structuredKind } from '@/lib/text-parse';
+import { saveCopy, saveVersion, type StartRun } from '@/lib/text-save';
+
+/*
+ * The text editor (docs/editing-design.md section 1; Editing 1a): CodeMirror over the
+ * file's current version, read again from the server, never the viewer's copy. Saving is
+ * explicit (Save, Ctrl or Cmd+S), a new version through the save path, with the stale
+ * choices when someone else saved first. A file it can't save byte for byte opens read-only
+ * with a note. Its text lives in this component only: a lock or a sign-out unmounts the drive
+ * and the text goes with it, and nothing is kept on this device (drafts are Editing 1c).
+ *
+ * Loaded on first use, never with the drive (the preload is Editing 1b).
+ */
+
+export type EditGuard = { discarded: boolean };
+type GuardRef = { readonly current: EditGuard };
+
+type Phase =
+    | { kind: 'loading'; progress: ReadProgress | null }
+    | { kind: 'failed'; message: string }
+    | { kind: 'read-only'; reason: ReadOnlyReason; text: string | null }
+    | { kind: 'editing'; text: string };
+
+/* The file being written, and the version this editor's text started from. */
+type Target = { file: DriveNode; startedFrom: string | null };
+
+export const editorWords = {
+    save: 'Save',
+    saving: 'Saving',
+    saved: 'Saved',
+    savedCopy: (name: string) => `Saved as “${name}”`,
+    savedCopyUnnamed: 'Saved as a copy',
+    failed: 'This file couldn’t be opened for editing.',
+    tryAgain: 'Try again',
+    staleTitle: 'This file changed',
+    staleText:
+        'Someone saved a newer version while you were editing. Your changes aren’t saved yet.',
+    goneTitle: 'This file was moved or deleted',
+    goneText: 'Your changes aren’t saved yet. Save them as a new file to keep them.',
+    onTop: 'Save on top',
+    copy: 'Save as a copy',
+    theirs: 'Open theirs',
+    cancel: 'Cancel',
+    theirsTitle: 'Discard your changes?',
+    theirsText: 'The newer version opens instead, and your changes are lost.',
+    discard: 'Discard changes',
+    theirsGone: 'This file is no longer there.',
+};
+
+const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
+
+/* The viewer's colours (Shiki's GitHub themes), so code looks the same open and in the editor. */
+const highlight = HighlightStyle.define([
+    {
+        tag: [tags.keyword, tags.modifier, tags.operatorKeyword],
+        color: lightDark('#cf222e', '#ff7b72'),
+    },
+    {
+        tag: [tags.string, tags.special(tags.string), tags.regexp],
+        color: lightDark('#0a3069', '#a5d6ff'),
+    },
+    { tag: [tags.comment, tags.meta], color: lightDark('#6e7781', '#8b949e'), fontStyle: 'italic' },
+    {
+        tag: [tags.number, tags.bool, tags.null, tags.atom, tags.constant(tags.name)],
+        color: lightDark('#0550ae', '#79c0ff'),
+    },
+    {
+        tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.macroName],
+        color: lightDark('#8250df', '#d2a8ff'),
+    },
+    {
+        tag: [tags.typeName, tags.className, tags.namespace],
+        color: lightDark('#953800', '#ffa657'),
+    },
+    { tag: [tags.tagName], color: lightDark('#116329', '#7ee787') },
+    { tag: [tags.attributeName, tags.propertyName], color: lightDark('#0550ae', '#79c0ff') },
+    { tag: tags.heading, fontWeight: 'bold', color: lightDark('#0550ae', '#79c0ff') },
+    { tag: tags.emphasis, fontStyle: 'italic' },
+    { tag: tags.strong, fontWeight: 'bold' },
+    { tag: [tags.link, tags.url], textDecoration: 'underline' },
+    { tag: tags.invalid, color: lightDark('#82071e', '#ffa198') },
+    { tag: [tags.inserted], color: lightDark('#116329', '#7ee787') },
+    { tag: [tags.deleted], color: lightDark('#82071e', '#ffa198') },
+]);
+
+/* The app's tokens, so the editor follows light, dark and high contrast as the page does. */
+const theme = EditorView.theme({
+    '&': {
+        height: '100%',
+        backgroundColor: 'var(--background)',
+        color: 'var(--foreground)',
+        fontSize: '13px',
+    },
+    '&.cm-focused': { outline: 'none' },
+    '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6' },
+    '.cm-content': { caretColor: 'var(--foreground)', paddingBlock: '12px' },
+    '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--foreground)' },
+    '.cm-gutters': {
+        backgroundColor: 'var(--background)',
+        color: 'var(--muted-foreground)',
+        border: 'none',
+    },
+    '.cm-lineNumbers .cm-gutterElement': { paddingInline: '16px 12px' },
+    '.cm-activeLine': { backgroundColor: 'var(--hover)' },
+    '.cm-activeLineGutter': { backgroundColor: 'var(--hover)', color: 'var(--foreground)' },
+    '.cm-selectionBackground, &.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground':
+        { backgroundColor: 'color-mix(in oklch, var(--primary), transparent 72%)' },
+    '.cm-selectionMatch': { backgroundColor: 'var(--highlight)' },
+    '.cm-searchMatch': {
+        backgroundColor: 'color-mix(in oklch, var(--warning), transparent 65%)',
+        outline: '1px solid color-mix(in oklch, var(--warning), transparent 30%)',
+    },
+    '.cm-searchMatch.cm-searchMatch-selected': {
+        backgroundColor: 'color-mix(in oklch, var(--primary), transparent 60%)',
+    },
+    '&.cm-focused .cm-matchingBracket': { backgroundColor: 'var(--highlight)' },
+    '.cm-panels': {
+        backgroundColor: 'var(--card)',
+        color: 'var(--foreground)',
+        fontFamily: 'var(--font-sans)',
+    },
+    '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--rule)' },
+    '.cm-panel.cm-search': { padding: '8px 12px', fontSize: '13px' },
+    '.cm-panel.cm-search input, .cm-panel.cm-search button': { fontSize: '13px' },
+    '.cm-textfield': {
+        backgroundColor: 'var(--background)',
+        color: 'var(--foreground)',
+        border: '1px solid var(--input)',
+        borderRadius: '6px',
+        padding: '4px 8px',
+    },
+    '.cm-button': {
+        backgroundImage: 'none',
+        backgroundColor: 'var(--card)',
+        color: 'var(--foreground)',
+        border: '1px solid var(--input)',
+        borderRadius: '6px',
+        padding: '4px 10px',
+    },
+    '.cm-specialChar': { color: 'var(--destructive)' },
+});
+
+/* Everything but the language, wrapping and whether it may be changed. */
+function baseExtensions(): Extension[] {
+    return [
+        lineNumbers(),
+        highlightActiveLineGutter(),
+        highlightSpecialChars(),
+        history(),
+        drawSelection(),
+        dropCursor(),
+        EditorState.allowMultipleSelections.of(true),
+        indentOnInput(),
+        syntaxHighlighting(highlight),
+        bracketMatching(),
+        rectangularSelection(),
+        crosshairCursor(),
+        highlightActiveLine(),
+        highlightSelectionMatches(),
+        search({ top: true }),
+        // Tab stays the page's (focus moves on), so the keyboard never gets stuck in the editor.
+        keymap.of([...defaultKeymap, ...searchKeymap, ...historyKeymap]),
+        theme,
+    ];
+}
+
+/* The file's folder as listed now: the save path looks the file up there again before sealing. */
+function folderOf(queryClient: QueryClient, file: DriveNode) {
+    return queryClient.fetchQuery({
+        ...folderQueryOptions(file.parentId!, file.workspaceId),
+        staleTime: 0,
+    });
+}
+
+/* What went wrong with a save, in the save path's own words where it has them. */
+function saveFailure(error: unknown) {
+    if (error instanceof RunStopped || error instanceof SaveRefused) return error.message;
+    return driveError(error);
+}
+
+/* Large text isn't checked as it changes: parsing megabytes of YAML on every pause would stall typing. */
+const CHECK_LIMIT = 2 * 1024 * 1024;
+
+export function TextEditor({
+    node,
+    actions,
+    guard,
+    askDiscard,
+    onTarget,
+    onDirty,
+}: {
+    /* The file as the viewer listed it when Edit was pressed. */
+    node: DriveNode;
+    /* Where Save and its status go: the viewer's header. */
+    actions: HTMLElement | null;
+    /* Set by the viewer once the person chose to discard: nothing asks again on the way out. */
+    guard: GuardRef;
+    /* The viewer's "Discard your changes?": true to discard. */
+    askDiscard: () => Promise<boolean>;
+    /* The file being written changed (Save as a copy, Open theirs): the header names it. */
+    onTarget: (file: DriveNode) => void;
+    onDirty: (dirty: boolean) => void;
+}) {
+    const queryClient = useQueryClient();
+    const [phase, setPhase] = useState<Phase>({ kind: 'loading', progress: null });
+    const [loadFrom, setLoadFrom] = useState(node);
+    const [attempt, setAttempt] = useState(0);
+    const target = useRef<Target>({ file: node, startedFrom: node.currentVersion?.id ?? null });
+    const host = useRef<HTMLDivElement>(null);
+    const view = useRef<EditorView | null>(null);
+    const saved = useRef<Text | null>(null);
+    const [dirty, setDirty] = useState(false);
+    const dirtyNow = useRef(false);
+    const [saving, setSaving] = useState(false);
+    const [status, setStatus] = useState<string | null>(null);
+    const [failure, setFailure] = useState<string | null>(null);
+    const [warning, setWarning] = useState<string | null>(null);
+    const [edits, setEdits] = useState(0);
+    const [stale, setStale] = useState<{ currentVersionId: string | null } | null>(null);
+    const [confirmTheirs, setConfirmTheirs] = useState(false);
+    const language = editorLanguage(loadFrom.name);
+    const checks = structuredKind(language);
+
+    const markDirty = useCallback(
+        (value: boolean) => {
+            if (dirtyNow.current === value) return;
+            dirtyNow.current = value;
+            setDirty(value);
+            onDirty(value);
+        },
+        [onDirty],
+    );
+
+    // Read the version afresh: the bytes saved later are these, edited. Whoever asks for a
+    // read (Try again, Open theirs) shows the opening ring first; this only publishes.
+    useEffect(() => {
+        let active = true;
+        let reader: FileReader | null = null;
+        void (async () => {
+            // The file as the server lists it now: a listing on screen can be a version behind
+            // (another device's save the feed hasn't brought yet), and editing that one would end
+            // in the stale choices at once.
+            const listing = await folderOf(queryClient, loadFrom).catch(() => null);
+            if (!active) return;
+            const file = listing?.children.find((child) => child.id === loadFrom.id) ?? loadFrom;
+            if (file !== loadFrom) onTarget(file);
+            const size = nodeSize(file);
+            if (size !== null && size > TEXT_EDIT_LIMIT) {
+                setPhase({ kind: 'read-only', reason: 'too-large', text: null });
+                return;
+            }
+            try {
+                reader = openReader(file, true);
+                // One byte past the limit is enough to know it's too large.
+                const { bytes } = await readAll(
+                    reader,
+                    TEXT_EDIT_LIMIT + 1,
+                    (progress) => active && setPhase({ kind: 'loading', progress }),
+                );
+                if (!active) return;
+                const text = openText(bytes);
+                target.current = { file, startedFrom: file.currentVersion?.id ?? null };
+                setPhase(
+                    text.editable
+                        ? { kind: 'editing', text: text.text }
+                        : { kind: 'read-only', reason: text.reason, text: text.text },
+                );
+            } catch {
+                if (active) setPhase({ kind: 'failed', message: editorWords.failed });
+            }
+        })();
+        return () => {
+            active = false;
+            void reader?.close();
+        };
+    }, [loadFrom, attempt, queryClient, onTarget]);
+
+    // The editor itself, once there is text to show.
+    const shown = phase.kind === 'editing' || phase.kind === 'read-only' ? phase : null;
+    const shownText = shown?.text ?? null;
+    const editable = shown?.kind === 'editing';
+    useEffect(() => {
+        const parent = host.current;
+        if (!parent || shownText === null) return;
+        let active = true;
+        const languageSlot = new Compartment();
+        const made = new EditorView({
+            parent,
+            state: EditorState.create({
+                doc: shownText,
+                extensions: [
+                    baseExtensions(),
+                    languageSlot.of([]),
+                    EditorState.readOnly.of(!editable),
+                    EditorView.editable.of(editable),
+                    wrapsLines(language) ? EditorView.lineWrapping : [],
+                    EditorView.contentAttributes.of({
+                        'aria-label': `Contents of ${loadFrom.name}`,
+                        spellcheck: 'false',
+                        autocorrect: 'off',
+                        autocapitalize: 'off',
+                    }),
+                    EditorView.updateListener.of((update) => {
+                        if (!update.docChanged || !saved.current) return;
+                        markDirty(!update.state.doc.eq(saved.current));
+                        setEdits((count) => count + 1);
+                    }),
+                ],
+            }),
+        });
+        view.current = made;
+        saved.current = made.state.doc;
+        markDirty(false);
+        setEdits((count) => count + 1);
+        // The language comes in after the text shows, then colours it.
+        void loadLanguage(language).then((extension) => {
+            if (active) made.dispatch({ effects: languageSlot.reconfigure(extension) });
+        });
+        if (editable) made.focus();
+        return () => {
+            active = false;
+            made.destroy();
+            if (view.current === made) view.current = null;
+            saved.current = null;
+        };
+    }, [shownText, editable, language, loadFrom.name, markDirty]);
+
+    // The structured-text check, a moment after typing stops. It never stops a save.
+    useEffect(() => {
+        const current = view.current;
+        if (!checks || !current || !editable) return;
+        const timer = window.setTimeout(() => {
+            const doc = current.state.doc;
+            if (doc.length > CHECK_LIMIT) {
+                setWarning(null);
+                return;
+            }
+            void parseFailure(checks, doc.toString()).then((failed) => {
+                if (view.current !== current) return;
+                setWarning(failed ? parseWarning(checks, failed.line) : null);
+            });
+        }, 500);
+        return () => window.clearTimeout(timer);
+    }, [edits, checks, editable]);
+
+    // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
+    useEffect(
+        () =>
+            holdPageWhile(
+                () => dirtyNow.current && !guard.current.discarded && unlockedNow() !== null,
+            ),
+        [guard],
+    );
+    // So does a move within the app (Back, a link); signing out goes to the sign-in page and is never held.
+    useBlocker({
+        shouldBlockFn: async ({ next }) => {
+            if (!dirtyNow.current || guard.current.discarded) return false;
+            if (!next.pathname.startsWith('/app')) return false;
+            if (unlockedNow() === null) return false;
+            return !(await askDiscard());
+        },
+        enableBeforeUnload: false,
+    });
+
+    const start: StartRun = useCallback((plan) => startSaveRun(queryClient, plan), [queryClient]);
+
+    /* After a save landed: the editor's text is the file's now, from that version on. */
+    const settled = useCallback(
+        async (doc: Text, file: DriveNode, versionId: string | null) => {
+            let startedFrom = versionId;
+            // The reply named no version: the file as listed now says which is current.
+            if (!startedFrom) {
+                const listing = await folderOf(queryClient, file).catch(() => null);
+                startedFrom =
+                    listing?.children.find((child) => child.id === file.id)?.currentVersion?.id ??
+                    null;
+            }
+            target.current = { file, startedFrom };
+            saved.current = doc;
+            markDirty(!(view.current?.state.doc.eq(doc) ?? true));
+            void invalidateFolders(queryClient, file.parentId);
+        },
+        [queryClient, markDirty],
+    );
+
+    const save = useCallback(
+        async (onTopOf?: string) => {
+            const current = view.current;
+            if (!current || saving || !editable) return;
+            const doc = current.state.doc;
+            const { file, startedFrom } = target.current;
+            setSaving(true);
+            setStatus(null);
+            setFailure(null);
+            try {
+                const listing = await folderOf(queryClient, file);
+                // The file as listed now (its current version, its key): the save path holds the
+                // version it replaces to the one this text started from, or Save on top's.
+                const listed = listing.children.find((child) => child.id === file.id);
+                if (!listed) {
+                    setStale({ currentVersionId: null });
+                    return;
+                }
+                const result = await saveVersion(start, {
+                    file: listed,
+                    folder: listing.folder,
+                    startedFrom: onTopOf ?? startedFrom,
+                    text: doc.toString(),
+                });
+                if (result.status === 'stale') {
+                    setStale({ currentVersionId: result.currentVersionId });
+                    return;
+                }
+                await settled(doc, listed, result.versionId);
+                setStatus(editorWords.saved);
+            } catch (error) {
+                if (error instanceof SaveRefused && error.reason === 'no-room' && error.room)
+                    openStorageFull();
+                setFailure(saveFailure(error));
+            } finally {
+                setSaving(false);
+            }
+        },
+        [saving, editable, queryClient, start, settled],
+    );
+
+    const copy = useCallback(async () => {
+        const current = view.current;
+        if (!current) return;
+        const doc = current.state.doc;
+        const { file } = target.current;
+        setSaving(true);
+        setStatus(null);
+        setFailure(null);
+        try {
+            const listing = await folderOf(queryClient, file);
+            const made = await saveCopy(start, {
+                file,
+                folder: listing.folder,
+                text: doc.toString(),
+            });
+            // From here on the editor writes the copy: the file someone else saved is left as theirs.
+            const fresh = made ? await folderOf(queryClient, file).catch(() => null) : null;
+            const listed = fresh?.children.find((child) => child.id === made?.id);
+            if (listed) {
+                await settled(doc, listed, listed.currentVersion?.id ?? null);
+                onTarget(listed);
+                setStatus(editorWords.savedCopy(listed.name));
+            } else {
+                setStatus(editorWords.savedCopyUnnamed);
+                saved.current = doc;
+                markDirty(!current.state.doc.eq(doc));
+            }
+        } catch (error) {
+            if (error instanceof SaveRefused && error.reason === 'no-room' && error.room)
+                openStorageFull();
+            setFailure(saveFailure(error));
+        } finally {
+            setSaving(false);
+        }
+    }, [queryClient, start, settled, onTarget, markDirty]);
+
+    /* Their version, as listed now, opened in place of this text. */
+    const openTheirs = useCallback(async () => {
+        const { file } = target.current;
+        setStatus(null);
+        setFailure(null);
+        const listing = await folderOf(queryClient, file).catch(() => null);
+        const listed = listing?.children.find((child) => child.id === file.id);
+        if (!listed) {
+            setFailure(editorWords.theirsGone);
+            return;
+        }
+        markDirty(false);
+        onTarget(listed);
+        setPhase({ kind: 'loading', progress: null });
+        setLoadFrom(listed);
+    }, [queryClient, onTarget, markDirty]);
+
+    useHotkey('Mod+S', () => void save(), {
+        enabled: editable && !saving && stale === null,
+        preventDefault: 'always',
+    });
+
+    const format = useFormatForDisplay();
+    const savable = editable && dirty && !saving;
+    const header = actions
+        ? createPortal(
+              <div className="flex min-w-0 items-center gap-3">
+                  {warning && (
+                      <output className="flex min-w-0 items-center gap-1.5 text-[13px] text-warning max-sm:hidden">
+                          <TriangleAlertIcon className="size-3.5 shrink-0" />
+                          <span className="truncate">{warning}</span>
+                      </output>
+                  )}
+                  {failure ? (
+                      <span
+                          role="alert"
+                          className="min-w-0 truncate text-[13px] text-destructive"
+                          title={failure}
+                      >
+                          {failure}
+                      </span>
+                  ) : (
+                      status &&
+                      !dirty && (
+                          <output className="truncate text-[13px] text-muted-foreground">
+                              {status}
+                          </output>
+                      )
+                  )}
+                  {editable && (
+                      <Button
+                          disabled={!savable}
+                          onClick={() => void save()}
+                          title={`${editorWords.save} (${format('Mod+S')})`}
+                      >
+                          {saving ? <Spinner /> : <SaveIcon />}
+                          {saving ? editorWords.saving : editorWords.save}
+                      </Button>
+                  )}
+              </div>,
+              actions,
+          )
+        : null;
+
+    let body;
+    if (phase.kind === 'loading') body = <Opening name={loadFrom.name} progress={phase.progress} />;
+    else if (phase.kind === 'failed')
+        body = (
+            <Notice title={phase.message}>
+                <Button
+                    variant="outline"
+                    onClick={() => {
+                        setPhase({ kind: 'loading', progress: null });
+                        setAttempt((count) => count + 1);
+                    }}
+                >
+                    {editorWords.tryAgain}
+                </Button>
+            </Notice>
+        );
+    else if (phase.kind === 'read-only' && phase.text === null)
+        body = <Notice title={READ_ONLY_WORDS[phase.reason]} />;
+    else
+        body = (
+            <div className="flex min-h-0 flex-1 flex-col">
+                {phase.kind === 'read-only' && (
+                    <p className="shrink-0 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground">
+                        {READ_ONLY_WORDS[phase.reason]}
+                    </p>
+                )}
+                {warning && (
+                    <p
+                        aria-hidden="true"
+                        className="flex shrink-0 items-center gap-1.5 border-b border-rule px-5 py-2 text-[13px] text-warning sm:hidden"
+                    >
+                        <TriangleAlertIcon className="size-3.5 shrink-0" />
+                        {warning}
+                    </p>
+                )}
+                <div ref={host} data-text-editor className="min-h-0 flex-1 overflow-hidden" />
+            </div>
+        );
+
+    const gone = stale !== null && stale.currentVersionId === null;
+    return (
+        <>
+            {header}
+            {body}
+            <AlertDialog
+                open={stale !== null && !confirmTheirs}
+                onOpenChange={(open) => !open && setStale(null)}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            {gone ? editorWords.goneTitle : editorWords.staleTitle}
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {gone ? editorWords.goneText : editorWords.staleText}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter className="sm:flex-wrap">
+                        <AlertDialogCancel>{editorWords.cancel}</AlertDialogCancel>
+                        {!gone && (
+                            <Button variant="outline" onClick={() => setConfirmTheirs(true)}>
+                                {editorWords.theirs}
+                            </Button>
+                        )}
+                        <Button
+                            variant={gone ? 'default' : 'outline'}
+                            onClick={() => {
+                                setStale(null);
+                                void copy();
+                            }}
+                        >
+                            {editorWords.copy}
+                        </Button>
+                        {!gone && (
+                            <Button
+                                onClick={() => {
+                                    const onTop = stale?.currentVersionId ?? undefined;
+                                    setStale(null);
+                                    void save(onTop);
+                                }}
+                            >
+                                {editorWords.onTop}
+                            </Button>
+                        )}
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog
+                open={confirmTheirs}
+                onOpenChange={(open) => {
+                    if (open) return;
+                    // Back to the three choices: nothing was discarded.
+                    setConfirmTheirs(false);
+                }}
+            >
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{editorWords.theirsTitle}</AlertDialogTitle>
+                        <AlertDialogDescription>{editorWords.theirsText}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>{editorWords.cancel}</AlertDialogCancel>
+                        <Button
+                            variant="destructive"
+                            onClick={() => {
+                                setConfirmTheirs(false);
+                                setStale(null);
+                                void openTheirs();
+                            }}
+                        >
+                            {editorWords.discard}
+                        </Button>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
+    );
+}
