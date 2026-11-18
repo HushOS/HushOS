@@ -1,0 +1,19 @@
+apps/web/src/components/drive/virtual-list.tsx
+  s_c60e24772e04af::t_33aec8aed1b6e8 8,31-34,86,88,90,93,95-96,99,103,105,108,176-182,188,193,218,232-236,240-243,245-258,260-285,287-328,330-331,333-334,336-369,461,484,529,560
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a926dff70833c873d41c5664e3ff2b4c5628b50",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
