@@ -264,6 +264,11 @@ test('two-step sign-in: the settings, the step, and a sign-in approved on anothe
     });
     if (await idle.isVisible().catch(() => false)) await idle.click();
     await expect(visitor.locator('[data-device-ask=waiting]')).toBeVisible({ timeout: 30_000 });
+    // Picture 3: waiting for another device, with the QR code a phone can scan.
+    await expect(
+        visitor.locator('[data-device-ask=waiting] svg, [data-device-ask=waiting] img').first(),
+    ).toBeVisible();
+    await shoot(browser, visitor, card, 'two-step-ask', 32);
     // From Trash, where the line above the app offers Answer, in a window tall enough that the
     // dialog, which sits in its middle, is clear of the page's own words: the picture is the
     // dialog and nothing beside it.
@@ -277,10 +282,10 @@ test('two-step sign-in: the settings, the step, and a sign-in approved on anothe
     await expect(shown).toHaveText(/^\d{2} [a-z]+$/, { timeout: 30_000 });
     const code = await shown.innerText();
 
-    // Picture 3: the new browser shows its code.
+    // Picture 4: once a device opened the request, the new browser shows its code.
     await shoot(browser, visitor, card, 'two-step-code', 32);
 
-    // Picture 4: the laptop's prompt, with the code typed.
+    // Picture 5: the laptop's prompt, with the code typed.
     const field = answer(laptop).getByLabel('Code on the other device');
     await field.fill(code);
     await field.blur();
