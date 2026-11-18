@@ -1,0 +1,57 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_b853ff6315b604 686-690
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveTree.kt
+  s_c60e24772e04af::t_5177e6158b780f 13-15,43,49-50,57,60-62
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_81b191b3a547ce 1566-1569
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_9ab10d88e362b4 19,176-180,182-183,187-192,196,209,214-227,229-239,266-268,305-357
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveScreen.kt
+  s_c60e24772e04af::t_a7df72b0a85c65 57,134-136,194-207,663-664
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_ff859b627a7631 292,301-304
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveBrowseTest.kt
+  s_3846ed32b420f5::t_ea450290a2a25b 112-199
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_2332c672ea85bb 731
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_85b1b338bb3e0e 36-37,100-101,103,118-127,138,181,317,323,330-332,335,724-735
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_1b0c2ad1511ad1 125,127,132-134,137,817-819,869,877-879,883-889,1010,1013
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_a3ae5ec6c1f020::t_3e12aa56f261ed 290-293
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_35263c7a9db963 408-418,628-632
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d80b06719ae02da9a4e3a2a77687c71e40b6b2c1",
+  "prompts": {},
+  "sessions": {
+    "s_3846ed32b420f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21531b93-1373-4b29-8d81-4c6c9c2d6f91",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_a3ae5ec6c1f020": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ec63-6409-7313-bd79-ec86fd6a7daa",
+        "model": "gpt-6.2-astra"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
