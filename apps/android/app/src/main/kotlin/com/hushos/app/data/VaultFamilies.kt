@@ -459,6 +459,21 @@ internal fun Vault.sweepFamilyCopies(keep: Set<String>) = synchronized(familyCop
     }
 }
 
+/*
+ * Whether a zip kept on this phone by its offline record (`workspace`, or only its `node`) may still be handed on (Send a
+ * copy), as iOS's ArchiveSessions.keptMayLeave: not while this session ended, nor once its folder was proven a family's
+ * or let go of (a forget moved its count), nor, known only by its node, once a proof or a forget purged that node.
+ * Under the lock those take, so it is never half-way through one. This account's own drive always may.
+ */
+fun Vault.keptMayLeave(workspace: String?, node: String?): Boolean = synchronized(familyCopiesLock) {
+    if (closed) return false
+    val id = node?.lowercase()
+    if (id != null && (id in familyState.archivePurged || familyPurged.any { it.equals(id, ignoreCase = true) })) return false
+    val ws = workspace?.lowercase() ?: return true
+    if (ws == ownWorkspaceId?.lowercase()) return true
+    !isFamilyWorkspace(ws) && !familyEpochs.containsKey(ws)
+}
+
 /* A family folder's invalidation count (0 until a forget): a download or a listing captures it before it begins. */
 internal fun Vault.familyEpoch(workspaceId: String): Long = familyEpochs[workspaceId.lowercase()]?.first ?: 0L
 

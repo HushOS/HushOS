@@ -15,6 +15,7 @@ import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.familyEpoch
 import com.hushos.app.data.archiveScope
+import com.hushos.app.data.keptMayLeave
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyOf
 import com.hushos.app.data.isFamilyWorkspace
@@ -2562,8 +2563,17 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         archiveBrowse = null
     }
 
-    /* The kept copy of an archive, to another app: what Send a copy does for a drive row. */
-    fun sendKept(name: String, file: java.io.File) {
+    /*
+     * The kept copy of an archive, to another app: what Send a copy does for a drive row. Only while it may still leave
+     * (Vault.keptMayLeave: its folder not proven a family's, let go of or purged since) and the copy is still there;
+     * refused in the family's words otherwise, nothing handed on.
+     */
+    fun sendKept(name: String, file: java.io.File, workspace: String?, node: String?) {
+        val vault = vault
+        if (vault == null || !vault.keptMayLeave(workspace, node) || !file.exists()) {
+            notify(com.hushos.app.data.FamilyWords.OPEN_AGAIN)
+            return
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.shared", file)
         val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("application/zip").putExtra(android.content.Intent.EXTRA_STREAM, uri)
             .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)

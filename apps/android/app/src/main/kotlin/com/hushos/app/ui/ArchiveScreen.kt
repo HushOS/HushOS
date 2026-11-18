@@ -228,7 +228,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
             val kept = item.kept
             when {
                 row != null -> SendCopy(model, state, listOf(row)) { sending = false }
-                kept != null -> LaunchedEffect(kept) { model.sendKept(item.name, kept); sending = false }
+                kept != null -> LaunchedEffect(kept) { model.sendKept(item.name, kept, item.workspace, item.id); sending = false }
                 else -> LaunchedEffect(Unit) { sending = false }
             }
         }

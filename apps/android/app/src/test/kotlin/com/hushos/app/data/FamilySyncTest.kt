@@ -321,6 +321,9 @@ class FamilySyncTest {
         val root = phone.vault.mountShares().single().root!!
         val ws = root.node.workspaceId
         val sessions = ArchiveSessions.shared
+        // A copy kept by its record, of this share's folder or known only by its node: it may leave until the forget.
+        assertTrue(phone.vault.keptMayLeave(ws, root.id))
+        assertTrue(phone.vault.keptMayLeave(null, root.id))
         // Open before the forget: one by its workspace, one known only by its node (a kept record from before its
         // workspace was kept). And a scope taken before the forget, whose archive registers after it.
         val first = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))
@@ -330,6 +333,10 @@ class FamilySyncTest {
         assertFalse(phone.vault.isFamilyWorkspace(ws))
         assertTrue("a forget left its folder's zip open", first.closed)
         assertTrue("a node-only kept zip outlived its folder's forget (the forgotten node ids)", nodeOnly.closed)
+        // And its kept copy is handed on no more (Send a copy), by its folder or, known only by its node, by that.
+        assertFalse("a kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(ws, root.id))
+        assertFalse("a node-only kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(null, root.id))
+        assertTrue("another workspace’s kept zip was held back", phone.vault.keptMayLeave(java.util.UUID.randomUUID().toString(), "other-node"))
         val before = sessions.count
         val refused = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = late) }.exceptionOrNull()
         assertTrue("registered across a forget: $refused", refused is FamilyFailure)
