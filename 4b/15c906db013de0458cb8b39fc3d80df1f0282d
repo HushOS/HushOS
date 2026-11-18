@@ -1,0 +1,56 @@
+apps/web/src/lib/api/two-step-device.db.test.ts
+  s_566b8e0c4467a4::t_d0b1044e104379 874-880
+  s_566b8e0c4467a4::t_294ee4ee7d4589 881-882
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_566b8e0c4467a4::t_accfb524aee2de 5,20,345-346,399-405,517-519
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_566b8e0c4467a4::t_54ea0b3ba7a228 12,84,581,748,959-960,962-967
+apps/android/app/src/test/kotlin/com/hushos/app/data/DeviceApprovalTest.kt
+  s_566b8e0c4467a4::t_dd0e903c57bb2c 955,965-966,968-969,971-972,974-976,978,980-982
+apps/ios/App/DeviceApproval.swift
+  s_566b8e0c4467a4::t_cc764dcb1412eb 421,423-424,426-438
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DeviceApproval.swift
+  s_566b8e0c4467a4::t_0314135c648b5d 362-363,458-465,552-553,594,818
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DeviceApprovalTests.swift
+  s_566b8e0c4467a4::t_108de220d80b43 22,1210,1215-1216,1218-1220,1226,1229,1231-1234
+apps/web/src/lib/approvals.test.ts
+  s_566b8e0c4467a4::t_b71a19dbe14abc 106,108-109,112-115,126-127,129-130,132-133,135-137,139-140
+apps/web/src/lib/approvals.ts
+  s_566b8e0c4467a4::t_e0e81a41397b99 107-108
+crates/hushos-core/src/device_approval.rs
+  s_566b8e0c4467a4::t_09644ef1078d5b 49-56,507-510,513,518,520-521,526-530,533,553,656,670
+crates/hushos-core/src/two_step.rs
+  s_566b8e0c4467a4::t_0b57641d1a4d7f 1641-1643,1651,1657-1756
+docs/self-hosting.md
+  s_566b8e0c4467a4::t_7f0c6ea1ef8bec 886
+docs/two-step-design.md
+  s_566b8e0c4467a4::t_68435056c5b312 876,964
+packages/crypto/src/approval-prompts.ts
+  s_566b8e0c4467a4::t_256bfcd5d31ca6 7-12,14-15,36-37
+packages/crypto/src/device-approval.test.ts
+  s_566b8e0c4467a4::t_91278bae532132 275,287,310-316
+packages/db/src/two-step.ts
+  s_566b8e0c4467a4::t_ad87341bdf2922 126-127
+docs/devices-design.md
+  s_566b8e0c4467a4::t_b46c1fc4f2b7c2 110,328
+packages/db/src/two-step.approvals.test.ts
+  s_566b8e0c4467a4::t_1242bf8f3555f9 1156,1160,1182,1184
+packages/db/src/two-step.approvals.ts
+  s_566b8e0c4467a4::t_b1418babedf86f 62-63,70-77,503-504
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4b15c906db013de0458cb8b39fc3d80df1f0282d",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
