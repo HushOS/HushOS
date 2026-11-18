@@ -344,6 +344,33 @@ describe('transfer manager', () => {
         expect(h.journal.entries.size).toBe(0);
     });
 
+    test('a cancel whose worker steps outlast a sign-out sends no abort for that session', async () => {
+        let open = true;
+        let generation = 1;
+        let release: () => void = () => {};
+        const h = harness({
+            session: { open: () => open, generation: () => generation },
+            cancelHold: () => new Promise<void>((resolve) => (release = resolve)),
+        });
+        const [id] = h.manager.enqueue(
+            [{ file: fakeFile(4 * CHUNK), parent: node('root', null) }],
+            {
+                generation: 1,
+            },
+        );
+        await settle(120);
+        const cancelling = h.manager.cancel(id!);
+        await settle(10);
+        // Signed out while the worker's cancel was on its way.
+        open = false;
+        generation = 2;
+        release();
+        await cancelling;
+        await settle(500);
+        expect(h.item(id!).status).toBe('cancelled');
+        expect(h.server.aborted).toEqual([]);
+    });
+
     test('a batch takes its key epochs in one range, one round trip for the lot', async () => {
         const h = harness();
         const ids = h.manager.enqueue([
@@ -2088,6 +2115,30 @@ describe('produced results', () => {
                     'held',
                     403,
                 );
+            },
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v-theirs', released: false });
+    });
+
+    test('a stale version whose abort met an expired session (401) is not released', async () => {
+        let current = 'v1';
+        const h = harness({
+            serverVersion: () => current,
+            ...listedAt(() => current),
+            encryptHold: () => void (current = 'v-theirs'),
+        });
+        Object.assign(h.api, {
+            abortUpload: async () => {
+                throw new DriveApiError('Sign in again.', 'forbidden', 401);
             },
         });
         const [id] = h.manager.enqueue([

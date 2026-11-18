@@ -46,6 +46,10 @@ extension Vault {
                     "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
                 ]])
                 guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
+                // The reply must name the folder minted here (Android's checkWritten): another is never adopted under its key.
+                guard node.id.lowercased() == id.lowercased(), node.workspaceId.lowercased() == workspace.workspaceId.lowercased() else {
+                    throw DriveAPIError.server(502, "HushOS answered with a different item than the one written. Nothing was kept.")
+                }
                 return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
             } catch {
                 // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).

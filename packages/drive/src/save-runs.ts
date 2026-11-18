@@ -8,7 +8,13 @@ import type { SignatureForm } from '@hushos/crypto/signatures';
 import { DriveApiError, type NodeView, type TrashBatchItem } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
-import type { MemoryFile, TransferManager, TransferManagerOptions, UploadItem } from './transfers';
+import {
+    DESTINATION_CHANGED,
+    type MemoryFile,
+    type TransferManager,
+    type TransferManagerOptions,
+    type UploadItem,
+} from './transfers';
 import { sourcesSignatureForms, type ResultSource } from './trust';
 
 /*
@@ -82,6 +88,10 @@ export function resultSignatures(sources: ResultSources): UploadSignatures {
 }
 
 /* Why a run did not start: nothing was made. */
+/* A reply naming another item than the one written: no answer to file (Android's checkWritten). */
+export const OTHER_ITEM =
+    'HushOS answered with a different item than the one written. Nothing was kept.';
+
 /* A result asked into a folder of another workspace than the run's: refused, nothing made. */
 export const OUTSIDE_RUN = 'This is saved in another Drive than the rest. Save it on its own.';
 
@@ -324,7 +334,9 @@ export function abortFateOf(error: unknown): AbortFate | 'finishing' {
     if (!(error instanceof DriveApiError)) return 'unknown';
     if (error.status === 404) return 'gone';
     if (heldNow(error)) return 'held';
-    if (error.status === 401 || error.status === 403) return 'denied';
+    // A session the server no longer knows (401) says nothing of the upload: no answer, asked again.
+    if (error.status === 401) return 'unknown';
+    if (error.status === 403) return 'denied';
     if (error.status === 409) {
         const upload = (error.data as { upload?: string } | undefined)?.upload;
         if (upload === 'completing') return 'finishing';
@@ -468,21 +480,24 @@ export type SaveRunDeps = {
     /*
      * Whether the person may delete forever in a workspace: the server lets
      * only a member (their own, their family's folders), never an editor
-     * through a share, whose results go to the owner's Trash instead.
+     * through a share, whose results go to the owner's Trash instead. Null when that isn't known
+     * yet (a family's folders not registered at open): the row is kept, asked again later.
      */
-    mayPurge: (workspaceId: string) => Promise<boolean>;
+    mayPurge: (workspaceId: string) => Promise<boolean | null>;
     /*
-     * Marks a run live for as long as it runs (Web Locks on the web), so no tab
-     * takes it for interrupted; taken before its row is written. Without it,
-     * the row's heartbeat says whether it runs.
+     * Holds the run's lock (a Web Lock named for the run, shared by every tab) for as long as it
+     * runs, taken before its row is written: no tab takes a run that holds it for interrupted, and
+     * none recovers from under it. A browser without Web Locks saves nothing (the web's NO_RECORD).
      */
-    hold?: (runId: string) => Promise<() => void> | (() => void);
+    hold: (runId: string) => Promise<() => void> | (() => void);
     /*
-     * Runs `work` holding a lock of this run's recovery shared by every tab (a Web Lock), so two
-     * tabs' Keep, Delete and quiet settling of one row never interleave. Without it, in turn here.
+     * Runs `work` holding that same lock if it is free, or answers null at once: a run still live
+     * (a tab frozen with it held included), or another tab's Keep, Delete or quiet settling of it
+     * under way. The only serialization of a run's recovery.
      */
-    exclusive?: <T>(runId: string, work: () => Promise<T>) => Promise<T>;
-    isLive?: (runId: string) => Promise<boolean>;
+    exclusive: <T>(runId: string, work: () => Promise<T>) => Promise<T | null>;
+    /* Whether a run's lock is held now (by any tab): such a run is never offered or recovered. */
+    isLive: (runId: string) => Promise<boolean>;
     /* The session generation the caller's work began in (the transfer manager's enqueue `from`). */
     from?: { generation: number };
     /*
@@ -492,13 +507,14 @@ export type SaveRunDeps = {
     current: () => boolean;
     newId?: () => string;
     now?: () => number;
-    /* How often a live run's row says it is alive (BEAT_MS). */
-    beatMs?: number;
+    /* How a run waits between tries (a folder creation refused for a key change); tests don't. */
+    pause?: (ms: number) => Promise<void>;
 };
 
-/* A live run's heartbeat, and how old one may be before another tab takes the run for interrupted. */
-export const BEAT_MS = 30_000;
-export const STALE_BEAT_MS = 4 * BEAT_MS;
+/* A folder creation refused 409 rotating is asked again after a pause, for at most ten minutes. */
+const FOLDER_ROTATION_PAUSE_MS = 5_000;
+const FOLDER_ROTATION_GIVE_UP_MS = 10 * 60_000;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 /*
  * How long a folder creation that got no answer may still be made: an hour. Its request is given up
  * on long before (the client's timeout), and the network's retransmissions of it end well within the
@@ -587,8 +603,11 @@ export function abandonRuns() {
  * report a save afterwards.
  */
 export function lockRuns() {
+    lockGeneration += 1;
     return Promise.all([...liveRuns].map((run) => run.lock()));
 }
+/* Moved on by every lock: a run still starting (not yet live, so lockRuns can't reach it) checks it. */
+let lockGeneration = 0;
 
 /*
  * Buffers already handed to a run: a result's bytes move to the crypto worker
@@ -597,10 +616,11 @@ export function lockRuns() {
  * results cut from one buffer would otherwise leave the second with nothing.
  */
 const handedBuffers = new WeakSet<ArrayBufferLike>();
-function ownedParts(bytes: Uint8Array | Uint8Array[]) {
+function ownedParts(bytes: Uint8Array | Uint8Array[], keepCallers = false) {
     const parts = Array.isArray(bytes) ? bytes : [bytes];
     return parts.map((part) => {
         const whole =
+            !keepCallers &&
             part.buffer instanceof ArrayBuffer &&
             part.byteOffset === 0 &&
             part.byteLength === part.buffer.byteLength &&
@@ -633,27 +653,44 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
     const current = () => deps.current();
     const signedOut = () => new RunStopped('signed-out', stoppedWords('signed-out'), 'nothing');
     if (!current()) throw signedOut();
+    // A lock while it starts (lockRuns cannot reach a run not yet live): it never starts either.
+    const unlockedSince = lockGeneration;
+    const lockedNow = () =>
+        lockGeneration !== unlockedSince
+            ? new RunStopped('locked', stoppedWords('locked'), 'nothing')
+            : null;
     const needed = runEstimate(plan.results);
     const room = await deps.room(workspaceId);
     if (!current()) throw signedOut();
+    const lockedWhileRoom = lockedNow();
+    if (lockedWhileRoom) throw lockedWhileRoom;
     if (room.kind !== 'shared' && room.free !== null && needed > room.free)
         throw new SaveRefused('no-room', NO_ROOM, { needed, free: Math.max(0, room.free) });
     const now = deps.now ?? (() => Date.now());
     const id = deps.newId?.() ?? crypto.randomUUID();
     // Held before the row exists: no other tab ever finds the row without its hold.
-    const release = await deps.hold?.(id);
+    const release = await deps.hold(id);
     try {
         if (!current()) throw signedOut();
-        const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now(), beat: now() };
+        const lockedWhileHeld = lockedNow();
+        if (lockedWhileHeld) throw lockedWhileHeld;
+        const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now() };
         await deps.runs.put(row);
         // Signed out while the row was written: it goes too (only this row, wherever it landed).
         if (!current()) {
             await deps.runs.remove(row.id).catch(() => {});
             throw signedOut();
         }
+        // Locked while it was written: the row goes, nothing was made, and the run never starts.
+        const lockedWhileWritten = lockedNow();
+        if (lockedWhileWritten) {
+            await deps.runs.remove(row.id).catch(() => {});
+            throw lockedWhileWritten;
+        }
+        // Registered (createRun) with nothing awaited since the last check: a lock from here on reaches it.
         return createRun(deps, row, plan, room.kind === 'shared', release);
     } catch (error) {
-        release?.();
+        release();
         throw error;
     }
 }
@@ -678,7 +715,7 @@ function createRun(
     row: RunRow,
     plan: RunPlan,
     shared: boolean,
-    release: (() => void) | undefined,
+    release: () => void,
 ): LiveRun {
     const now = deps.now ?? (() => Date.now());
     const pending = new Map<string, Pending>();
@@ -762,7 +799,6 @@ function createRun(
         nodeIds: [...row.nodeIds],
         uploadIds: [...row.uploadIds],
         ...(row.uncertain ? { uncertain: [...row.uncertain] } : {}),
-        beat: now(),
     });
     const writable = () => current() && !sealed;
     const persist = () => {
@@ -790,7 +826,6 @@ function createRun(
         await writing;
         if (unrecorded) throw unrecorded;
     };
-    const beat = setInterval(() => void persist(), deps.beatMs ?? BEAT_MS);
     const unsubscribe = deps.events(onEvent);
 
     /*
@@ -924,8 +959,14 @@ function createRun(
                     signAs: resultSignatures(sources),
                     produced: {
                         ...(extra.replaces ? { startedFrom: extra.startedFrom ?? null } : {}),
-                        onBegun: ({ uploadId, nodeId }) => {
+                        onBegun: ({ uploadId, nodeId, workspaceId }) => {
                             if (stopped || !current()) return;
+                            // Begun in another workspace than the run's (a re-look that moved it):
+                            // never recorded or sent; the run stops.
+                            if (workspaceId !== row.workspaceId) {
+                                void stop('failed', undefined, DESTINATION_CHANGED);
+                                throw new Error(DESTINATION_CHANGED);
+                            }
                             // A restart begins again with fresh ids: the last begin is the one held.
                             if (output.uploadId)
                                 row.uploadIds = row.uploadIds.filter(
@@ -941,10 +982,14 @@ function createRun(
                             if (output.tracked) row.nodeIds.push(nodeId);
                             void persist();
                         },
-                        onAttach: async ({ nodeId }) => {
+                        onAttach: async ({ nodeId, workspaceId }) => {
                             // Stopping: the attach is not sent, so no node lands after the clean-up.
                             if (stopping || !current())
                                 throw new Error('This save run is stopping.');
+                            if (workspaceId !== row.workspaceId) {
+                                void stop('failed', undefined, DESTINATION_CHANGED);
+                                throw new Error(DESTINATION_CHANGED);
+                            }
                             // The attach's node is minted here too: the only id its reply may name.
                             output.nodeId = nodeId;
                             if (!output.tracked) return;
@@ -987,8 +1032,13 @@ function createRun(
         mime: string | null | undefined,
         thumbnail: Uint8Array | null,
         modified: number | undefined,
+        /*
+         * A new version may lose the race to someone else's (stale): its caller then still holds its
+         * bytes for Save on top or Save as a copy, so they are copied, never handed to the worker.
+         */
+        keepCallers = false,
     ): MemoryFile {
-        const parts = ownedParts(bytes);
+        const parts = ownedParts(bytes, keepCallers);
         return {
             kind: 'memory',
             name,
@@ -1071,16 +1121,15 @@ function createRun(
             ? { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds] }
             : { ...row, nodeIds: [], uploadIds: [] };
         if (!late.nodeIds.includes(nodeId)) late.nodeIds.push(nodeId);
-        const snapshot = { ...late, nodeIds: [...late.nodeIds], beat: now() };
+        const snapshot = { ...late, nodeIds: [...late.nodeIds] };
         lateWriting = lateWriting
             .then(() => (current() ? deps.runs.put(snapshot) : undefined))
             .catch(() => {});
         return lateWriting;
     }
     function end() {
-        clearInterval(beat);
         unsubscribe();
-        release?.();
+        release();
         liveRuns.delete(run);
     }
 
@@ -1106,54 +1155,95 @@ function createRun(
         try {
             const given = claim(await namesTaken(into), name);
             await open();
-            // Waited for by a stop only once its creation is sent: a folder still waiting out a
-            // key change (untilWritable) never holds a cancel up.
-            let sent: Promise<unknown> | null = null;
             // Uncertain in the row (a folder the row names) only when recorded; kept either way
             // to tell its own 409 from another refusal.
             let sentId: string | null = null;
             let mintedId: string | null = null;
-            const making = deps.makeFolder(into, given, signAs, async (id) => {
-                // Its id on disk before its creation is sent, or the creation is not sent.
-                if (stopping || !current()) throw new Error('This save run is stopping.');
-                if (recordIt) {
-                    row.nodeIds.push(id);
-                    // Uncertain until answered: a restart before the answer finds it so.
-                    row.uncertain = [...(row.uncertain ?? []), { id, at: now() }];
-                    void persist();
-                    await recorded();
+            const began = now();
+            for (let rotations = 1; ; rotations++) {
+                // Waited for by a stop only once its creation is sent: a folder still waiting out a
+                // key change (untilWritable) never holds a cancel up.
+                let sent: Promise<unknown> | null = null;
+                sentId = null;
+                mintedId = null;
+                const making = deps.makeFolder(into, given, signAs, async (id) => {
+                    // Its id on disk before its creation is sent, or the creation is not sent.
+                    if (stopping || !current()) throw new Error('This save run is stopping.');
+                    if (recordIt) {
+                        row.nodeIds.push(id);
+                        // Uncertain until answered: a restart before the answer finds it so.
+                        row.uncertain = [...(row.uncertain ?? []), { id, at: now() }];
+                        void persist();
+                        await recorded();
+                    }
+                    await Promise.resolve();
+                    if (stopping) throw new Error('This save run is stopping.');
+                    mayBePublished.add(id);
+                    mintedId = id;
+                    if (recordIt) sentId = id;
+                    if (sent) creating.add(sent);
+                });
+                // Settled before the stop it causes cleans up: an unanswered creation may exist.
+                // An answer settles it in the row too (written with the row's next write).
+                sent = making.then(
+                    () => answered(sentId),
+                    (error: unknown) => {
+                        if (sentId && !refusedOutright(error)) mayExist.add(sentId);
+                        else answered(sentId);
+                    },
+                );
+                try {
+                    made = await making;
+                    break;
+                } catch (error) {
+                    // Answered 409 for its own id: an earlier send of the same request made it
+                    // (the browser sent it again by itself). There, it is the folder asked for.
+                    const found =
+                        mintedId && ownIdTaken(error)
+                            ? await deps.findChild?.(into, mintedId).catch(() => null)
+                            : null;
+                    if (found) {
+                        mayExist.delete(found.id);
+                        answered(found.id);
+                        made = found;
+                        break;
+                    }
+                    // Refused outright for a key change (409 rotating: an answer, so nothing was
+                    // made): its id leaves the row, and it is asked again, under the folder's keys
+                    // as they are by then, until FOLDER_ROTATION_GIVE_UP_MS. A creation whose
+                    // outcome is not known is never sent again.
+                    if (
+                        error instanceof DriveApiError &&
+                        error.code === 'rotating' &&
+                        refusedOutright(error) &&
+                        now() - began < FOLDER_ROTATION_GIVE_UP_MS &&
+                        !stopping &&
+                        current()
+                    ) {
+                        const refused = sentId ?? mintedId;
+                        if (refused) {
+                            row.nodeIds = row.nodeIds.filter((id) => id !== refused);
+                            answered(refused);
+                            mayBePublished.delete(refused);
+                            void persist();
+                        }
+                        await (deps.pause ?? sleep)(
+                            FOLDER_ROTATION_PAUSE_MS * Math.min(rotations, 12),
+                        );
+                        await open();
+                        continue;
+                    }
+                    throw error;
+                } finally {
+                    creating.delete(sent);
                 }
-                await Promise.resolve();
-                if (stopping) throw new Error('This save run is stopping.');
-                mayBePublished.add(id);
-                mintedId = id;
-                if (recordIt) sentId = id;
-                if (sent) creating.add(sent);
-            });
-            // Settled before the stop it causes cleans up: an unanswered creation may exist.
-            // An answer settles it in the row too (written with the row's next write).
-            sent = making.then(
-                () => answered(sentId),
-                (error: unknown) => {
-                    if (sentId && !refusedOutright(error)) mayExist.add(sentId);
-                    else answered(sentId);
-                },
-            );
-            try {
-                made = await making;
-            } catch (error) {
-                // Answered 409 for its own id: an earlier send of the same request made it
-                // (the browser sent it again by itself). There, it is the folder asked for.
-                const found =
-                    mintedId && ownIdTaken(error)
-                        ? await deps.findChild?.(into, mintedId).catch(() => null)
-                        : null;
-                if (!found) throw error;
-                mayExist.delete(found.id);
-                answered(found.id);
-                made = found;
-            } finally {
-                creating.delete(sent);
+            }
+            // The reply must name the folder minted here, in the run's workspace: one naming anything
+            // else is no answer. Its own id may still have been made, so the clean-up looks for it
+            // from the row (mayExist), and the reply's id is never removed or written into.
+            if (made.id !== mintedId || made.workspaceId !== row.workspaceId) {
+                if (sentId) mayExist.add(sentId);
+                throw new Error(OTHER_ITEM);
             }
         } catch (error) {
             return failed(error);
@@ -1213,6 +1303,7 @@ function createRun(
                     result.mime ?? result.file.metadata?.mime,
                     thumbnail,
                     result.modified,
+                    true,
                 );
                 return (await enqueue('version', file, result.folder, result.sources, {
                     replaces: result.file,
@@ -1237,7 +1328,7 @@ function createRun(
             // Not retired: the run stays live (its row is never taken for interrupted here) and
             // finish may be asked again; nothing more is taken in (`finished`).
             if (current() && loose.length) {
-                const left = { ...row, nodeIds: [], uploadIds: loose, uncertain: [], beat: now() };
+                const left = { ...row, nodeIds: [], uploadIds: loose, uncertain: [] };
                 await deps.runs.put(left).catch(() => {
                     throw new RecordNotUpdated();
                 });
@@ -1318,12 +1409,6 @@ async function cleanUp(
         mayExist?: Set<string>;
         /* The run's session: once it ends (a sign-out) nothing more is asked or written. */
         current: () => boolean;
-        /*
-         * Claims the row for this clean-up just before anything is trashed (an interrupted run's
-         * Delete without a lock shared by tabs), in one journal transaction: false (the row kept,
-         * changed or gone in another tab) removes nothing.
-         */
-        claim?: () => Promise<boolean>;
     },
 ): Promise<{
     cleanup: Cleanup;
@@ -1339,8 +1424,6 @@ async function cleanUp(
     waiting: boolean;
     /* Those folders, when they are all that kept the row: everything else was settled. */
     onlyWaitingOn: string[] | null;
-    /* Stopped before removing anything: the row was no longer the one read (claim). */
-    changed?: boolean;
 }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
     let unsettled = false;
@@ -1412,17 +1495,6 @@ async function cleanUp(
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
     if (!stillOn()) return signedOutNow();
-    if (options.claim && !(await options.claim()))
-        return {
-            cleanup: 'left',
-            keptVersions,
-            uncertainVersions,
-            remains: null,
-            waiting: false,
-            onlyWaitingOn: null,
-            changed: true,
-        };
-    if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
     const discarded = await discard(deps, row.workspaceId, row.nodeIds, stillOn, notFound, () => {
         held = true;
@@ -1455,14 +1527,15 @@ async function cleanUp(
         // A row the journal won't retire stays as it was: the clean-up is left for the next open.
         if (stillOn() && !(await retire(deps.runs, row, stillOn))) cleanup = 'left';
     }
-    const remains =
-        held && cleanup === 'left'
-            ? 'held'
-            : !someRemain
-              ? null
-              : cleanup === 'left'
-                ? 'left'
-                : 'no-access';
+    // Said by whether anything may remain: a pause that kept only a reservation (a version never
+    // published, an upload's room) keeps the row for later but says nothing remains.
+    const remains = !someRemain
+        ? null
+        : held && cleanup === 'left'
+          ? ('held' as const)
+          : cleanup === 'left'
+            ? ('left' as const)
+            : ('no-access' as const);
     return { cleanup, keptVersions, uncertainVersions, remains, waiting, onlyWaitingOn };
 }
 
@@ -1552,7 +1625,10 @@ async function discard(
     const inTrash = nodeIds.filter((id) => trashed.get(id) === 'done');
     if (!inTrash.length) return 'nothing';
     if (!stillOn()) return 'left';
-    if (!(await deps.mayPurge(workspaceId))) return 'trashed';
+    // Not known yet whether it may be deleted forever: in the Trash for now, and the row kept.
+    const mayPurge = await deps.mayPurge(workspaceId);
+    if (mayPurge === null) return 'left';
+    if (!mayPurge) return 'trashed';
     if (!stillOn()) return 'left';
     const purged = await deps.purge(workspaceId, inTrash);
     if (inTrash.some((id) => purged.get(id) === 'held')) {
@@ -1567,11 +1643,11 @@ async function discard(
 /*
  * Runs a closed tab (or a crash) left behind, for the next open to offer
  * "… was interrupted. Delete what was made?": rows of runs not running in
- * this page or held by another tab (or, without Web Locks, whose heartbeat
- * stopped). Ids only; the app names the folder from its own metadata.
+ * this page and whose lock no tab holds. Ids only; the app names the folder from its own
+ * metadata.
  */
 export async function interruptedRuns(
-    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'now' | 'current'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'current' | 'exclusive'> & Partial<SaveRunDeps>,
 ) {
     const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
@@ -1584,10 +1660,8 @@ export async function interruptedRuns(
             await deps.runs.remove(row.id).catch(() => {});
             continue;
         }
-        if (live.has(row.id)) continue;
-        if (deps.isLive) {
-            if (await deps.isLive(row.id)) continue;
-        } else if (now() - (row.beat ?? row.at) < STALE_BEAT_MS) continue;
+        // Live here, or its lock held by another tab (a frozen one included): never taken for interrupted.
+        if (live.has(row.id) || (await deps.isLive(row.id))) continue;
         // Nothing made to ask about: one with no uploads either goes; one with reservations to let
         // go (a finished run's stale version, or a version run that ended mid-upload) and one
         // already answered "delete" that waits for a folder are settled quietly, never offered.
@@ -1609,15 +1683,15 @@ export function quietlySettled() {
 }
 
 async function settleQuietly(
-    deps: Pick<SaveRunDeps, 'runs' | 'current'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current' | 'exclusive'> & Partial<SaveRunDeps>,
     rows: RunRow[],
     now: () => number,
 ) {
     for (const row of rows) {
         try {
-            // Under the run's recovery lock, as Keep and Delete are: never between another tab's
-            // read and its write.
-            await recovering(deps, row.id, async () => {
+            // Under the run's lock, as Keep and Delete are, or not at all now (held: a tab's Keep or
+            // Delete of it under way, or the run live after all): asked again at the next open.
+            await deps.exclusive(row.id, async () => {
                 if (!(await stillSo(deps, row))) return;
                 if (row.chosen === 'delete') await lookAgain(deps, row, now());
                 else if (deps.abortUpload)
@@ -1695,16 +1769,19 @@ function stable(value: unknown): string {
 export async function cleanUpInterrupted(
     deps: SaveRunDeps,
     row: RunRow,
-): Promise<Cleanup | 'kept' | 'gone' | 'changed'> {
-    return recovering(deps, row.id, async () => {
-        // Under the run's recovery lock, from the row as the journal holds it now: kept in another
-        // tab, or already gone, or changed since this snapshot was read (the person decides again).
+): Promise<Cleanup | 'kept' | 'gone' | 'changed' | 'busy'> {
+    // Under the run's own lock for the whole clean-up, or nothing (`busy`): the run is live (a tab
+    // frozen with it held included), or another tab's Keep or Delete of it is under way.
+    const done = await deps.exclusive(row.id, async () => {
+        // From the row as the journal holds it now: kept in another tab, or already gone, or
+        // changed since this snapshot was read (the person decides again).
         const held = await readRow(deps.runs, row.id);
-        if (!held) return 'gone';
-        if (held.chosen === 'keep') return 'kept';
-        if (stable(held) !== stable(row)) return 'changed';
+        if (!held) return 'gone' as const;
+        if (held.chosen === 'keep') return 'kept' as const;
+        if (stable(held) !== stable(row)) return 'changed' as const;
         return cleanUpNow(deps, row);
     });
+    return done ?? 'busy';
 }
 
 async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
@@ -1717,30 +1794,13 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     // The session this clean-up began in: after a sign-out it asks nothing more and writes nothing.
     const current = () => signedIn(deps);
     if (!current()) return 'left';
-    // Without a lock shared by tabs, another tab's Keep may land while this one runs: just before
-    // anything is trashed the row is claimed for this Delete, compared and written in one journal
-    // transaction. A row kept, changed or gone meanwhile removes nothing; a Keep after the claim
-    // sees the Delete under way and never says kept (keepInterrupted).
-    let held = row;
-    const claim = deps.exclusive
-        ? undefined
-        : async () => {
-              const claimed: RunRow = { ...row, deleting: deps.now?.() ?? Date.now() };
-              if (!(await swapRow(deps, row, claimed).catch(() => false))) return false;
-              held = claimed;
-              return true;
-          };
-    const result = await cleanUp(deps, row, [], { mayExist, current, claim });
-    if (result.changed) return 'changed';
+    const result = await cleanUp(deps, row, [], { mayExist, current });
     // Kept only to wait for folders that may still land, all else done: the row names just those,
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
-    if (result.cleanup === 'left' && !waitingOn && held !== row && current())
-        // Left (no answer, an item refused): the claim goes, and the row is offered again as it was.
-        await swapRow(deps, held, row).catch(() => {});
     if (result.cleanup === 'left' && waitingOn && current()) {
         const { holds: _seen, ...rest } = row;
-        await swapRow(deps, held, {
+        await swapRow(deps, row, {
             ...rest,
             nodeIds: waitingOn,
             uploadIds: [],
@@ -1773,85 +1833,41 @@ async function settleUploads(
  * is kept, as asked.
  */
 export async function keepInterrupted(
-    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current'> &
-        Partial<Pick<SaveRunDeps, 'exclusive' | 'now'>>,
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current' | 'exclusive'>,
     row: RunRow,
-): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone' | 'deleting'> {
-    return recovering(deps, row.id, async () => {
+): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone' | 'busy'> {
+    // Under the run's own lock, or nothing (`busy`): the run is live, or another tab's Keep or
+    // Delete of it is under way.
+    const done = await deps.exclusive(row.id, async () => {
         // Signed out meanwhile: nothing more asked of the server or changed in that account's journal.
         const stillOn = () => signedIn(deps);
-        if (!stillOn()) return 'signed-out';
-        // As the journal holds it now, under the run's recovery lock: a Delete another tab finished
-        // (gone), or a Keep already made.
+        if (!stillOn()) return 'signed-out' as const;
+        // As the journal holds it now: a Delete another tab finished (gone), or a Keep already made.
         const held = await readRow(deps.runs, row.id);
-        const now = deps.now?.() ?? Date.now();
-        const answer = (found: RunRow | undefined) =>
-            !found
-                ? ('gone' as const)
-                : found.chosen === 'keep'
-                  ? ('kept' as const)
-                  : found.deleting !== undefined && now - found.deleting < DELETE_CLAIM_MS
-                    ? ('deleting' as const)
-                    : null;
-        // Gone, kept already, or claimed by a Delete under way in another tab (never said kept:
-        // that Delete is trashing what was made).
-        const settledAs = answer(held);
-        if (settledAs || !held) return settledAs ?? 'gone';
+        if (!held) return 'gone' as const;
+        if (held.chosen === 'keep') return 'kept' as const;
         for (const uploadId of held.uploadIds) {
-            if (!stillOn()) return 'signed-out';
+            if (!stillOn()) return 'signed-out' as const;
             await deps.abortUpload(held.workspaceId, uploadId);
         }
         // A mark, not a removal: a Delete chosen from an older snapshot finds it kept (the next
         // open drops it, as any `done` row). The journal refusing it twice: still offered.
         const kept: RunRow = { ...held, chosen: 'keep', done: true };
         for (let tries = 0; tries < 2; tries++) {
-            if (!stillOn()) return 'signed-out';
+            if (!stillOn()) return 'signed-out' as const;
             try {
-                if (await swapRow(deps, held, kept)) return 'kept';
-                // Changed meanwhile (compared and written in one transaction): as it is now.
-                return answer(await readRow(deps.runs, row.id)) ?? 'not-recorded';
+                if (await swapRow(deps, held, kept)) return 'kept' as const;
+                break;
             } catch {
                 // Asked again.
             }
         }
-        return stillOn() ? 'not-recorded' : 'signed-out';
+        return stillOn() ? ('not-recorded' as const) : ('signed-out' as const);
     });
+    return done ?? 'busy';
 }
-
-/*
- * How long a Delete's claim on a row holds off a Keep: a tab that died mid-Delete leaves its claim,
- * and past this the row may be kept again.
- */
-export const DELETE_CLAIM_MS = 10 * 60 * 1000;
 
 /* The row as the journal holds it now. */
 async function readRow(runs: RunJournal, id: string) {
     return (await runs.list()).find((row) => row.id === id);
-}
-
-/*
- * A recovery row's work under its lock shared by every tab (exclusive), or, without one, in turn
- * with this page's other work on the run (a chain per run id): one tab never runs two at once.
- */
-function recovering<T>(
-    deps: Partial<Pick<SaveRunDeps, 'exclusive'>>,
-    runId: string,
-    work: () => Promise<T>,
-) {
-    return deps.exclusive ? deps.exclusive(runId, work) : inTurn(runId, work);
-}
-
-/* Each run's recovery work in this page, one after another: the tail of each run's chain. */
-const turns = new Map<string, Promise<void>>();
-function inTurn<T>(runId: string, work: () => Promise<T>) {
-    const turn = (turns.get(runId) ?? Promise.resolve()).then(work);
-    const tail = turn.then(
-        () => {},
-        () => {},
-    );
-    turns.set(runId, tail);
-    void tail.then(() => {
-        if (turns.get(runId) === tail) turns.delete(runId);
-    });
-    return turn;
 }

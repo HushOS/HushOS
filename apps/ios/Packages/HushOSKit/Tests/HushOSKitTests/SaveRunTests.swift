@@ -162,9 +162,13 @@ actor FakeWriter: SaveRunWriter {
         if replacing == nil { live.insert(nodeId) }
         return opened(landedAs ?? nodeId, parent: folder.id)
     }
+    /* A re-listing that names another folder (a server answering a key change's look with some other one). */
+    var refreshedAs: Opened?
+    func set(refreshedAs: Opened?) { self.refreshedAs = refreshedAs }
     func refreshFolder(_ folder: Opened) async throws -> Opened {
         refreshes += 1
         if !refreshAnswers.isEmpty { try refreshAnswers.removeFirst()() }
+        if let refreshedAs { return refreshedAs }
         return opened(folder.id, parent: folder.node.parentId, keyEpoch: folder.node.keyEpoch + 1)
     }
     func folderAnswer(_ next: @escaping @Sendable () throws -> Void) { folderAnswers.append(next) }
@@ -382,6 +386,11 @@ let own = SaveSources.ownWriting
         #expect(!rows.swap(other, nil))
         rows.dropDone()
         #expect(rows.list().isEmpty)
+        // A Delete or a Keep never takes an unreadable row for gone: left, or not recorded (asked again).
+        let writer = FakeWriter()
+        #expect(await SaveRuns.cleanUp(other, writer: writer, journal: rows) == .left)
+        await #expect(throws: SaveRecordNotUpdated.self) { try await SaveRuns.keep(other, writer: writer, journal: rows) }
+        #expect(await writer.sent.isEmpty)
         #expect(try Data(contentsOf: url) == torn)
         // A run refuses to start rather than publish what no row names.
         await #expect(throws: SaveRunStopped.self) { _ = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: rows) }
@@ -410,6 +419,50 @@ let own = SaveSources.ownWriting
         #expect(rows.list().isEmpty)
         #expect(DriveAPI.AbortFate.held.unsettled)
         #expect(!DriveAPI.AbortFate.denied.unsettled)
+    }
+
+    /* A pause that kept only a version's reservation keeps the row but never says what was made is still there. */
+    @Test func aPauseThatKeptOnlyAVersionsReservationSaysNothingRemains() async throws {
+        let writer = FakeWriter()
+        let gate = AsyncGate()
+        await writer.set(uploading: { await gate.wait() })
+        let rows = journal()
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [], journal: rows)
+        let saving = Task { try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) }
+        try await Task.sleep(for: .milliseconds(50))
+        await writer.set(held: true)
+        let stopped = await run.cancel()
+        #expect(stopped.cleanup == .left)
+        #expect(!stopped.message.contains("still there"))
+        #expect(rows.list().first?.uploadIds.isEmpty == false)
+        await gate.open()
+        _ = try? await saving.value
+    }
+
+    /* An upload begun in another workspace than the run's is never recorded, and the run stops. */
+    @Test func anUploadBegunInAnotherWorkspaceIsNeverRecorded() async throws {
+        let rows = journal()
+        let run = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: rows)
+        let state = run.state
+        #expect(throws: SaveRunRefusal(message: SaveRuns.destinationChanged)) {
+            try state.begun(Vault.BegunIds(workspaceId: "ws-elsewhere", uploadId: "up-x", nodeId: "node-x"), tracked: true, version: false)
+        }
+        #expect(rows.list().first?.nodeIds == [])
+        #expect(rows.list().first?.uploadIds == [])
+        _ = await run.cancel()
+    }
+
+    /* A key change's re-listing that names another folder than the run's never becomes where results are saved. */
+    @Test func aReListingNamingAnotherFolderNeverBecomesTheDestination() async throws {
+        let writer = FakeWriter()
+        await writer.folderAnswer { throw DriveAPIError.rotating("Finishing a key change…") }
+        await writer.set(refreshedAs: opened("elsewhere"))
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows, pause: { _ in })
+        let stopped = await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+        #expect(stopped?.message.contains(SaveRuns.destinationChanged) == true)
+        #expect(await !writer.live.contains("made-Out"))
     }
 
     /* A result asked into another Drive than the run's is refused before anything is listed, minted or sent. */
@@ -1777,6 +1830,64 @@ extension OnFakeDrive {
             #expect(try await vault.resolve(server.g).name == "renamed.txt")
         }
 
+        /* On a server without the batch route, a clean-up's trash goes one request an item, the session asked before each. */
+        @Test func aCleanUpOnAServerWithoutTheBatchRouteTrashesOneItemAtATime() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let batches = Locked(0)
+            let trashed = Locked<[String]>([])
+            let rows = try server.nodes.mapValues { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+            server.intercept = { method, parts, _ in
+                guard method == "POST" else { return nil }
+                if parts.last == "trash-batch" {
+                    batches.value += 1
+                    return (501, ["code": "unsupported", "message": "This server does not offer that yet."])
+                }
+                guard parts.last == "trash", parts.count >= 2 else { return nil }
+                let id = parts[parts.count - 2]
+                guard let row = rows[id] else { return (404, ["code": "not-found", "message": "This item no longer exists."]) }
+                trashed.value.append(id)
+                return (200, ["node": row])
+            }
+            let fates = try await vault.trash([server.a, "never-there"], in: server.workspace, while: { true })
+            #expect(fates[server.a] == .done)
+            #expect(fates["never-there"] == .gone)
+            #expect(batches.value == 1)
+            #expect(trashed.value == [server.a])
+            // Signed out after the first item went: the rest unsent (asked for the batch, then before each item).
+            let asked = Locked(0)
+            let rest = try await vault.trash([server.b, server.f], in: server.workspace, while: {
+                asked.value += 1
+                return asked.value <= 2
+            })
+            #expect(rest[server.b] == .done)
+            #expect(rest[server.f] == .refused)
+            #expect(trashed.value == [server.a, server.b])
+            server.intercept = nil
+        }
+
+        /* A folder creation answered with another node is never adopted, and a run that made it never removes that node. */
+        @Test func aFolderCreationAnsweredWithAnotherNodeIsNeverAdoptedOrRemoved() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let root = try await vault.resolve(server.root)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let victim = try JSONSerialization.jsonObject(with: JSONEncoder().encode(server.nodes[server.b]!))
+            server.intercept = { method, parts, _ in
+                guard method == "POST", parts.last == "folders" else { return nil }
+                return (200, ["nodes": [victim]])
+            }
+            let rows = journal()
+            let run = try await SaveRun.start(writer: vault, targets: [root], results: [], journal: rows)
+            let stopped = await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+            #expect(stopped?.reason == .failed)
+            server.intercept = nil
+            // Never adopted under the new folder's key and name, and never trashed or deleted.
+            #expect(try await vault.resolve(server.b).name == b.name)
+            #expect(server.nodes[server.b]?.trashedAt == nil)
+        }
+
         /*
          * A destination the vault holds under another workspace than the one asked (the own Drive's folder of the same id, say)
          * is refused before anything is minted or sent: a save never lands in another Drive than its run's.
@@ -1864,6 +1975,9 @@ extension OnFakeDrive {
                                    (409, ["code": "conflict", "message": "This upload already finished."])]
             #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .finished)
             server.abortReplies = [(409, ["code": "conflict", "message": "Something else."])]
+            #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .unknown)
+            // An expired session (401) says nothing of the upload: no answer, its id kept.
+            server.abortReplies = [(401, ["message": "Sign in to HushOS to see your files."])]
             #expect(await vault.abortUpload("up", in: server.workspace, pause: .zero, while: { true }) == .unknown)
         }
 

@@ -20,6 +20,7 @@ import {
     type SaveRunDeps,
     type VersionSaved,
 } from './save-runs';
+import { freeLock } from './save-runs.locks.harness';
 import type { TransferManagerOptions } from './transfers';
 import { harness, node } from './transfers.harness';
 
@@ -740,8 +741,10 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
             await call('hold', () => undefined, forbidden);
             return () => {};
         },
+        // One process at a time here: a recovery's lock is free, and no run of a dead one is live.
+        exclusive: freeLock,
+        isLive: async () => false,
         current: () => !state.dead && !state.signedOut,
-        beatMs: 1e9,
     };
     return {
         deps,

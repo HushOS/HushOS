@@ -146,11 +146,6 @@ export type RunRow = {
     uploadIds: string[];
     at: number;
     /*
-     * When the run last said it is alive (every half minute while it runs): without Web Locks,
-     * how another tab tells a live run from an interrupted one.
-     */
-    beat: number;
-    /*
      * The run finished (or its results were kept, or cleaned up) but its row could not be
      * removed: never offered as interrupted, dropped by the next open.
      */
@@ -173,11 +168,6 @@ export type RunRow = {
      */
     chosen?: 'delete' | 'keep';
     holds?: number;
-    /*
-     * When a Delete claimed the row, in one journal transaction, just before it trashed anything
-     * (a tab without Web Locks): a Keep meanwhile says the Delete is under way, never "kept".
-     */
-    deleting?: number;
 };
 
 export interface RunJournal {
@@ -228,40 +218,40 @@ function connection(name: string) {
 /* Save runs' rows, beside the upload journal: cleared with it at sign-out, deleted with its database. */
 export function createIndexedDbRunJournal(name = 'hushos-drive'): RunJournal {
     const open = connection(name);
+    // Any request refused lets its connection go (WebKit closes connections on its own): the next
+    // one, a run's write asked again included, opens a fresh one.
+    async function using<T>(work: (db: Awaited<ReturnType<typeof open>>) => Promise<T>) {
+        const opening = open();
+        try {
+            return await work(await opening);
+        } catch (error) {
+            open.forget(opening);
+            throw error;
+        }
+    }
     return {
-        async list() {
-            const db = await open();
-            return db.getAll('runs');
-        },
-        // A refused write lets its connection go: the run writes once more, on a fresh one.
-        async put(row) {
-            const opening = open();
-            try {
-                const tx = (await opening).transaction('runs', 'readwrite', {
-                    durability: 'strict',
-                });
+        list: () => using((db) => db.getAll('runs')),
+        put: (row) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
                 await tx.store.put(row);
                 await tx.done;
-            } catch (error) {
-                open.forget(opening);
-                throw error;
-            }
-        },
-        async remove(id) {
-            const db = await open();
-            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
-            await tx.store.delete(id);
-            await tx.done;
-        },
-        async update(id, change) {
-            const db = await open();
-            const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
-            const next = change(await tx.store.get(id));
-            if (next === null) await tx.store.delete(id);
-            else if (next !== undefined) await tx.store.put(next);
-            await tx.done;
-            return next !== undefined;
-        },
+            }),
+        remove: (id) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+                await tx.store.delete(id);
+                await tx.done;
+            }),
+        update: (id, change) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+                const next = change(await tx.store.get(id));
+                if (next === null) await tx.store.delete(id);
+                else if (next !== undefined) await tx.store.put(next);
+                await tx.done;
+                return next !== undefined;
+            }),
     };
 }
 

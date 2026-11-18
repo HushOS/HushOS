@@ -222,6 +222,16 @@ public final class SaveRunJournal: @unchecked Sendable {
         return rows
     }
 
+    /*
+     * One row as the journal holds it now, for a recovery's decision: nil only when it is not there; a file that can't be
+     * read throws (SaveJournalUnreadable), so a Delete or a Keep never takes an unreadable row for gone.
+     */
+    func row(_ id: String) throws -> SaveRunRow? {
+        let rows = try lock.withLock { try read() }
+        between?()
+        return rows.first { $0.id == id }
+    }
+
     /* Tests only: runs (outside the lock) after each list's read, and before each swap takes the lock. */
     var between: (@Sendable () -> Void)?
 
@@ -510,6 +520,8 @@ public enum SaveRuns {
     public static let cancelled = "Cancelled. Nothing was saved."
     public static let failed = "This couldn’t be saved, so nothing was kept."
     public static let unrecorded = "This device couldn’t keep a record of this save."
+    /* A re-look (after a key change) or a begin that named another folder or workspace than the run's (the web's DESTINATION_CHANGED). */
+    public static let destinationChanged = "HushOS answered with a different folder than the one this was going to. Nothing was uploaded there."
     /*
      * A failure's reason as the person reads it (ErrorWords): the app's own words, never a raw description that may carry a
      * path or a framework's wording; nil (the run's own words) for anything else.
@@ -723,7 +735,10 @@ public enum SaveRuns {
             // Under the run's lock, from the row as the journal holds it now: kept from another screen (kept), deleted
             // already (nothing), or changed since this read (left: offered again as it is now).
             guard journal.stillOn else { return .left }
-            guard let held = journal.list().first(where: { $0.id == row.id }) else { return .nothing }
+            // Unreadable: left (asked again), never taken for gone.
+            let found: SaveRunRow?
+            do { found = try journal.row(row.id) } catch { return .left }
+            guard let held = found else { return .nothing }
             if held.chosen == "keep" { return .kept }
             guard held == row else { return .left }
             return await cleanUpNow(row, writer: writer, journal: journal, now: now)
@@ -761,7 +776,10 @@ public enum SaveRuns {
     public static func keep(_ row: SaveRunRow, writer: SaveRunWriter, journal: SaveRunJournal = SaveRunJournal()) async throws -> SaveKeep {
         try await recovering(journal, row.id) { () async -> Result<SaveKeep, SaveRecordNotUpdated> in
             guard journal.stillOn else { return .success(.signedOut) }
-            guard let held = journal.list().first(where: { $0.id == row.id }) else { return .success(.gone) }
+            // Unreadable: not recorded (Keep may be asked again), never taken for gone.
+            let found: SaveRunRow?
+            do { found = try journal.row(row.id) } catch { return .failure(SaveRecordNotUpdated()) }
+            guard let held = found else { return .success(.gone) }
             if held.chosen == "keep" { return .success(.kept) }
             for uploadId in held.uploadIds {
                 guard journal.stillOn else { return .success(.signedOut) }
@@ -893,7 +911,9 @@ public enum SaveRuns {
         let someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if cleanup != .left, !journal.retire(row) { cleanup = .left }
-        let pausedHere = held.isHeld && cleanup == .left
+        // Said by whether anything may remain: a pause that kept only a reservation (a version never published) keeps
+        // the row for later but says nothing remains.
+        let pausedHere = held.isHeld && cleanup == .left && someRemain
         return (cleanup, kept, uncertain, pausedHere ? .left : someRemain ? (cleanup == .left ? .left : .noAccess) : nil, waiting, onlyWaitingOn, pausedHere)
     }
 
@@ -990,6 +1010,8 @@ final class RunState: @unchecked Sendable {
             guard !settledUploads.contains(ids.uploadId) else { return }
             // Begun after the run stopped (or its account signed out): nothing is sent, the vault aborts it.
             guard !sealed else { throw CancellationError() }
+            // Begun in another workspace than the run's: never recorded or sent (the vault aborts it), and the run stops.
+            guard ids.workspaceId.lowercased() == row.workspaceId.lowercased() else { throw SaveRunRefusal(message: SaveRuns.destinationChanged) }
             nodeOfUpload[ids.uploadId] = ids.nodeId
             if version { versionUploads.insert(ids.uploadId) }
             if !row.uploadIds.contains(ids.uploadId) { row.uploadIds.append(ids.uploadId) }
@@ -1374,8 +1396,12 @@ public actor SaveRun {
         while true {
             do {
                 let folderNow = try await writer.refreshFolder(folder)
+                // Only this folder (and file), in the run's workspace: a re-listing naming another is no answer, and nothing
+                // is sealed for its members.
+                guard folderNow.ref == folder.ref else { throw await stop(.failed, SaveRuns.destinationChanged) }
                 guard let file = replacing else { return (folderNow, nil) }
                 guard let fresh = try await writer.fresh(file, in: folderNow) else { throw SaveStale(currentVersionId: nil) }
+                guard fresh.ref == file.ref else { throw await stop(.failed, SaveRuns.destinationChanged) }
                 return (folderNow, fresh)
             } catch let stale as SaveStale {
                 throw stale
@@ -1450,7 +1476,8 @@ public actor SaveRun {
                                                            onCompleting: { try state.completing($0) })
                 // The reply must name what was written, in the run's workspace: anything else is no answer to file, and
                 // never a deletion target. The run stops; its row still names the id minted here.
-                if let ids = begun.ids, landed.id != ids.nodeId || landed.node.workspaceId != ids.workspaceId {
+                if let ids = begun.ids,
+                   landed.id != ids.nodeId || landed.node.workspaceId.lowercased() != state.snapshot.workspaceId.lowercased() {
                     throw await stop(.failed, nil)
                 }
                 if version { keptVersions += 1 }
@@ -1765,6 +1792,32 @@ extension Vault: SaveRunWriter {
             let answers: [TrashBatch.Answer]
             do {
                 answers = try await api.trashBatch(workspaceId: workspaceId, ids: batch)
+            } catch is TrashBatch.Unsupported {
+                // A server without the batch route: one request an item, the session asked before each (as the Trash
+                // screen falls back), still inside this write's family gate.
+                for id in batch {
+                    guard stillOn() else {
+                        fates[id] = .refused
+                        continue
+                    }
+                    do {
+                        _ = try await api.trash(nodeId: id, workspaceId: workspaceId)
+                        fates[id] = .done
+                    } catch DriveAPIError.notFound {
+                        fates[id] = .gone
+                    } catch DriveAPIError.trashed {
+                        fates[id] = .done
+                    } catch DriveAPIError.held {
+                        fates[id] = .held
+                    } catch DriveAPIError.forbidden {
+                        fates[id] = .denied
+                    } catch DriveAPIError.transport(let why) {
+                        throw DriveAPIError.transport(why)
+                    } catch {
+                        fates[id] = .refused
+                    }
+                }
+                continue
             } catch DriveAPIError.held {
                 // A family manager's pause is not lost access: kept for after the hold.
                 for id in batch { fates[id] = .held }

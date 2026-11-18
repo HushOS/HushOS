@@ -631,7 +631,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
             error.status == 409 && error.data?.has("upload") != true && error.message == STILL_FINISHING -> SaveAbortFate.FINISHING
             // A family manager paused changes: nothing ended, the abort is asked again after the hold.
             error.status == 403 && error.code == "held" -> SaveAbortFate.HELD
-            error.status == 401 || error.status == 403 -> SaveAbortFate.DENIED
+            // A 401 (thrown as NotAuthenticated, UNKNOWN below) says nothing of the upload: asked again.
+            error.status == 403 -> SaveAbortFate.DENIED
             error.status == 404 -> SaveAbortFate.GONE
             else -> SaveAbortFate.UNKNOWN
         }

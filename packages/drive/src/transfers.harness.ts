@@ -139,6 +139,8 @@ export function harness(
         cancelHold?: () => Promise<void>;
         /* A completion held until it resolves: the server finishing it while the device does something else. */
         completeHold?: () => Promise<void>;
+        /* The account's session (a sign-out closes it). */
+        session?: TransferManagerOptions['session'];
     } = {},
 ) {
     const journal = options.journal ?? createMemoryJournal();
@@ -457,6 +459,7 @@ export function harness(
         keyChangePause: options.keyChangePause,
         keyChangeGiveUpMs: options.keyChangeGiveUpMs,
         onEvent: options.onEvent,
+        session: options.session,
         onPublished: (n) => published.push(n.id),
         // Ids as the server derives them, minted without Web Crypto's real-time digest,
         // which fake timers would never let resolve.

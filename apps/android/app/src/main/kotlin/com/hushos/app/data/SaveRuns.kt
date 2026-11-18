@@ -369,6 +369,9 @@ object SaveRuns {
         else -> null
     }
 
+    /* A re-look (after a key change) or a begin that named another folder or workspace than the run's (the web's DESTINATION_CHANGED). */
+    const val DESTINATION_CHANGED = "HushOS answered with a different folder than the one this was going to. Nothing was uploaded there."
+
     /* A result asked into a folder of another workspace than the run's: refused, nothing made (the web's OUTSIDE_RUN). */
     const val OUTSIDE_RUN = "This is saved in another Drive than the rest. Save it on its own."
 
@@ -692,9 +695,12 @@ object SaveRuns {
         val someRemain = othersMayLand || unremoved
         // A row the disk won't retire stays as it was: the clean-up is left for the next open.
         if (cleanup != SaveCleanup.LEFT && !journal.retire(row)) cleanup = SaveCleanup.LEFT
-        val remains = if (held && cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT
+        // Said by whether anything may remain: a pause that kept only a reservation (a version never published) keeps the
+        // row for later but says nothing remains.
+        val pausedHere = held && cleanup == SaveCleanup.LEFT && someRemain
+        val remains = if (pausedHere) SaveCleanup.LEFT
         else if (!someRemain) null else if (cleanup == SaveCleanup.LEFT) SaveCleanup.LEFT else SaveCleanup.NO_ACCESS
-        return Cleaned(cleanup, kept, uncertain, remains, waiting, onlyWaitingOn, held && cleanup == SaveCleanup.LEFT)
+        return Cleaned(cleanup, kept, uncertain, remains, waiting, onlyWaitingOn, pausedHere)
     }
 
     internal fun discard(ids: List<String>, workspaceId: String, writer: SaveRunWriter, notFound: MutableSet<String>? = null,
@@ -857,6 +863,8 @@ class SaveRun private constructor(
         if (ids.uploadId in settledUploads) return@synchronized
         // Begun after the run stopped (or its account signed out): nothing is sent, the vault aborts it.
         if (sealed) throw IllegalStateException("This save run is stopping.")
+        // Begun in another workspace than the run's: never recorded or sent (the vault aborts it), and the run stops.
+        if (!ids.workspaceId.equals(row.workspaceId, ignoreCase = true)) throw SaveRunRefusal(SaveRuns.DESTINATION_CHANGED)
         nodeOfUpload[ids.uploadId] = ids.nodeId
         if (version) versionUploads += ids.uploadId
         row = row.copy(uploadIds = if (ids.uploadId in row.uploadIds) row.uploadIds else row.uploadIds + ids.uploadId,
@@ -1073,10 +1081,17 @@ class SaveRun private constructor(
         while (true) {
             try {
                 val folderNow = writer.refreshFolder(folder)
+                // Only this folder (and file), in the run's workspace: a re-listing naming another is no answer, and nothing
+                // is sealed for its members.
+                if (!sameNode(folderNow, folder)) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.DESTINATION_CHANGED)
                 val file = replacing ?: return folderNow to null
-                return folderNow to (writer.fresh(file, folderNow) ?: throw SaveStale(null))
+                val fresh = writer.fresh(file, folderNow) ?: throw SaveStale(null)
+                if (!sameNode(fresh, file)) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.DESTINATION_CHANGED)
+                return folderNow to fresh
             } catch (stale: SaveStale) {
                 throw stale
+            } catch (done: SaveRunStopped) {
+                throw done
             } catch (error: Exception) {
                 if (error is InterruptedException) throw failed(error)
                 synchronized(lock) { stopping }?.let { throw it.get() }
@@ -1242,6 +1257,9 @@ class SaveRun private constructor(
         }
     }
 
+    private fun sameNode(a: Opened, b: Opened) =
+        a.id.equals(b.id, ignoreCase = true) && a.node.workspaceId.equals(b.node.workspaceId, ignoreCase = true)
+
     /* An interrupt caught as a failure is kept on the thread once the stop it led to is done. */
     private fun keepInterrupt(error: Exception) {
         if (error is InterruptedException) Thread.currentThread().interrupt()
@@ -1328,7 +1346,8 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         val own = workspaceId.equals(vault.workspaceId, ignoreCase = true)
         val family = vault.familyOf(workspaceId)
         if (!own && family == null) return SaveRoom.Shared
-        val figures = runCatching(storage).getOrNull() ?: return if (own) SaveRoom.Own(null) else SaveRoom.Family(null)
+        // No answer is "space unknown"; an interrupt is thrown on (SaveRuns.orUnknown).
+        val figures = SaveRuns.orUnknown(storage) ?: return if (own) SaveRoom.Own(null) else SaveRoom.Family(null)
         if (own) {
             val free = figures.ownFreeBytes
             if (figures.pool == null || free == null) return SaveRoom.Own(figures.free)
@@ -1461,6 +1480,11 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
             if (!stillOn()) { batch.forEach { fates[it] = SaveItemFate.REFUSED }; continue }
             val answers = try {
                 vault.api.trashBatch(workspaceId, batch, sessionCheck)
+            } catch (unsupported: BatchUnsupported) {
+                // A server without the batch route: one request an item, the session asked before each (as the Trash
+                // screen falls back), still inside this write's family gate.
+                for (id in batch) fates[id] = trashOne(id, workspaceId)
+                continue
             } catch (error: Exception) {
                 // A family manager's pause is not lost access: kept for after the hold.
                 if (error is ApiError && error.status == 403 && error.code == "held") { batch.forEach { fates[it] = SaveItemFate.HELD }; continue }
@@ -1478,6 +1502,26 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
             }
         }
         return fates
+    }
+
+    /* One item to the Trash on a server without the batch route; no answer throws, as a batch's does. */
+    private fun trashOne(id: String, workspaceId: String): SaveItemFate {
+        if (!stillOn()) return SaveItemFate.REFUSED
+        return try {
+            sessionCheck()
+            vault.api.trash(id, workspaceId)
+            SaveItemFate.DONE
+        } catch (gone: NotFound) {
+            SaveItemFate.GONE
+        } catch (error: ApiError) {
+            when {
+                error.status == 409 && error.code == "trashed" -> SaveItemFate.DONE
+                error.status == 403 && error.code == "held" -> SaveItemFate.HELD
+                error.status == 403 -> SaveItemFate.DENIED
+                error.status == 0 || error.status >= 500 -> throw error
+                else -> SaveItemFate.REFUSED
+            }
+        }
     }
 
     /* As trash: a write in its own scope, through the family's gate. */

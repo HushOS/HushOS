@@ -16,6 +16,7 @@ import {
     type SaveRun,
     type SaveRunDeps,
 } from './save-runs';
+import { freeLock } from './save-runs.locks.harness';
 import type { EnqueueInput, TransferManagerOptions, UploadItem } from './transfers';
 
 /*
@@ -424,8 +425,11 @@ function processOf(
                 () => new Map(ids.map((id) => [id, 'refused' as const])),
             ),
         mayPurge: async () => true,
+        // One process at a time here: a recovery's lock is free, and no run of a dead one is live.
+        hold: () => () => {},
+        exclusive: freeLock,
+        isLive: async () => false,
         current: () => !state.dead && !state.signedOut,
-        beatMs: 1e9,
     };
     return {
         deps,

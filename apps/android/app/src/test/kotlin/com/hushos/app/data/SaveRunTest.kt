@@ -136,7 +136,7 @@ class SaveRunTest {
             open += "up-$n"
             beginning?.invoke()
             try {
-                onBegun(Vault.BegunIds("ws", "up-$n", nodeId))
+                onBegun(Vault.BegunIds(beginWorkspace, "up-$n", nodeId))
             } catch (error: Exception) {
                 // As the vault does: nothing is sent, the reservation goes.
                 open -= "up-$n"
@@ -175,9 +175,13 @@ class SaveRunTest {
             val look = fresh ?: return file
             return look(file)
         }
+        /* The workspace a begin is answered in; a re-listing that names another folder. */
+        var beginWorkspace = "ws"
+        var refreshedAs: Opened? = null
         override fun refreshFolder(folder: Opened): Opened {
             refreshes++
             refreshAnswers.removeFirstOrNull()?.invoke()
+            refreshedAs?.let { return it }
             return Opened(folder.node.copy(keyEpoch = folder.node.keyEpoch + 1uL), folder.metadata)
         }
         /* Runs as each abort is asked (the vault's pause while an upload is still finishing). */
@@ -1434,6 +1438,55 @@ class SaveRunTest {
         assertEquals(null, SaveRuns.reason(java.io.IOException("/data/x: ENOSPC")))
     }
 
+    /* An upload begun in another workspace than the run's is never recorded, and the run stops. */
+    @Test
+    fun anUploadBegunInAnotherWorkspaceIsNeverRecorded() {
+        val writer = FakeWriter().apply { beginWorkspace = "ws-elsewhere" }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a", null, own) }
+        assertEquals(SaveRunStopped.Reason.FAILED, stopped.reason)
+        assertTrue(rows.list().none { "node-1" in it.nodeIds })
+        assertTrue(writer.purged.isEmpty())
+    }
+
+    /* A key change's re-listing that names another folder than the run's never becomes where results are saved. */
+    @Test
+    fun aReListingNamingAnotherFolderNeverBecomesTheDestination() {
+        val writer = FakeWriter().apply { refreshedAs = opened("elsewhere") }
+        writer.answers.addLast { throw ApiError(409, "Finishing a key change…", "rotating") }
+        val run = SaveRun.start(writer, listOf(opened("fam")), emptyList(), journal(), pause = {})
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.file(byteArrayOf(1), "a", null, own) }
+        assertTrue(stopped.message.orEmpty(), stopped.message.orEmpty().contains(SaveRuns.DESTINATION_CHANGED))
+        assertEquals(1, writer.uploads.size)
+    }
+
+    /* A pause that kept only a version's reservation keeps the row but never says what was made is still there. */
+    @Test
+    fun aPauseThatKeptOnlyAVersionsReservationSaysNothingRemains() {
+        val uploading = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.uploading = { uploading.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val doc = opened("doc", "f", version = "v1")
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), rows)
+        val pool = Executors.newSingleThreadExecutor()
+        try {
+            val saving = pool.submit<VersionSaved> { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+            assertTrue(uploading.await(5, TimeUnit.SECONDS))
+            writer.held = true
+            val stopped = run.cancel()
+            assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+            assertFalse(stopped.message.orEmpty(), stopped.message.orEmpty().contains("still there"))
+            assertTrue(rows.list().single().uploadIds.isNotEmpty())
+            go.countDown()
+            runCatching { saving.get(5, TimeUnit.SECONDS) }
+        } finally {
+            go.countDown()
+            pool.shutdownNow()
+        }
+    }
+
     /* A result asked into another Drive than the run's is refused before anything is listed, minted or sent. */
     @Test
     fun aResultIntoAnotherDriveThanTheRunsIsRefusedBeforeAnythingIsSent() {
@@ -1630,6 +1683,39 @@ class SaveResultTest {
         assertEquals(1, row.nodeIds.size)
         assertEquals(row.nodeIds.toSet(), row.uncertain.keys)
         server.dropReply = null
+        server.extraRoutes = null
+    }
+
+    /* On a server without the batch route, a clean-up's trash goes one request an item, the session asked before each. */
+    @Test
+    fun aCleanUpOnAServerWithoutTheBatchRouteTrashesOneItemAtATime() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val other = server.file(server.root, "other.txt", "second".toByteArray())
+        vault.listChildren(server.root)
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "trash-batch") 501 to JSONObject().put("code", "unsupported").put("message", "Not here.")
+            else null
+        }
+        val epoch = SaveRunJournal.Epoch()
+        val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
+        val fates = writer.trash(listOf(id), vault.workspaceId)
+        assertEquals(SaveItemFate.DONE, fates[id])
+        assertEquals(1, server.requests.count { it.endsWith("/trash-batch") })
+        assertEquals(1, server.requests.count { it.endsWith("/nodes/$id/trash") })
+        // Signed out: nothing more is sent, one item or another.
+        epoch.end()
+        assertEquals(SaveItemFate.REFUSED, writer.trash(listOf(other), vault.workspaceId)[other])
+        assertTrue(server.requests.none { it.endsWith("/nodes/$other/trash") })
+        server.extraRoutes = null
+    }
+
+    /* An abort answered 401 (an expired session) says nothing of the upload: no answer, its id kept. */
+    @Test
+    fun anAbortAnswered401IsNoAnswer() {
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "POST" && segments.lastOrNull() == "abort") 401 to JSONObject().put("message", "Sign in.") else null
+        }
+        assertEquals(SaveAbortFate.UNKNOWN, vault.api.abortUploadFate("up-x", vault.workspaceId))
         server.extraRoutes = null
     }
 

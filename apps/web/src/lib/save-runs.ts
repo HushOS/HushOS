@@ -46,12 +46,14 @@ export {
 } from '@hushos/drive/save-runs';
 
 /*
- * A browser that can't keep the run's record (no IndexedDB) saves nothing: what a run made must be
- * named on disk before it is sent, so a closed tab's next open can offer to remove it. A memory
- * journal would forget it with the tab (it stays for tests only, in packages/drive).
+ * A browser that can't keep the run's record (no IndexedDB) or hold its lock (no Web Locks) saves
+ * nothing: what a run made must be named on disk before it is sent, and its lock is what keeps
+ * every other tab from taking it for interrupted, or recovering it, while it runs. A memory journal
+ * would forget it with the tab (it stays for tests only, in packages/drive). Every browser HushOS
+ * supports has both.
  */
 export const NO_RECORD = 'This browser can’t keep a record of this save, so it wasn’t started.';
-const persistent = () => typeof indexedDB !== 'undefined';
+const persistent = () => typeof indexedDB !== 'undefined' && locks() !== undefined;
 
 let runJournal: RunJournal | undefined;
 function runs() {
@@ -60,11 +62,12 @@ function runs() {
     return runJournal;
 }
 
-// A Web Lock's name, not storage: nothing is kept under it.
+// A Web Lock's name, not storage: nothing is kept under it. The run holds it for its whole life;
+// another tab's Keep, Delete or quiet settling takes it only if it is free (exclusive).
 const LOCK_PREFIX = 'drive-save-run:';
-// The lock every tab takes for one interrupted run's Keep, Delete and quiet settling.
-const RECOVERY_PREFIX = 'drive-save-recovery:';
-const locks = () => (typeof navigator === 'undefined' ? undefined : navigator.locks);
+function locks() {
+    return typeof navigator === 'undefined' ? undefined : navigator.locks;
+}
 
 /*
  * Holds a Web Lock named for the run while it runs, so another tab's next open never takes it
@@ -99,11 +102,9 @@ function deps(queryClient: QueryClient): SaveRunDeps {
     const from = { generation: deviceSession.generation() };
     // The session these deps were made in: nothing is sent or written for it once it ends.
     const stillOn = () => deviceSession.open() && deviceSession.generation() === from.generation;
-    const ownWorkspace = async () =>
-        (
-            queryClient.getQueryData(storageQueryOptions.queryKey) ??
-            (await storageNow(queryClient).catch(() => null))
-        )?.workspaceId ?? null;
+    const storage = async () =>
+        queryClient.getQueryData(storageQueryOptions.queryKey) ??
+        (await storageNow(queryClient).catch(() => null));
     return {
         transfers,
         events: onTransferEvent,
@@ -161,16 +162,25 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             driveApi.abortUpload(workspaceId, uploadId),
         ),
         // The server deletes forever only for a member: the person's own Drive, a family's folder.
-        mayPurge: async (workspaceId) =>
-            groupOfSpace(workspaceId) !== null || workspaceId === (await ownWorkspace()),
-        hold: locks() ? hold : undefined,
-        isLive: locks() ? isLive : undefined,
+        // A family member's workspace not registered yet (its family's pages not loaded, at open)
+        // may be a family folder: not known, so the row stays (asked again later), never retired
+        // after only a trash.
+        mayPurge: async (workspaceId) => {
+            if (groupOfSpace(workspaceId) !== null) return true;
+            const figures = await storage();
+            if (!figures) return null;
+            if (workspaceId === figures.workspaceId) return true;
+            return figures.pool ? null : false;
+        },
+        hold,
+        isLive,
         from,
         current: stillOn,
-        exclusive: locks()
-            ? <T>(runId: string, work: () => Promise<T>) =>
-                  locks()!.request(`${RECOVERY_PREFIX}${runId}`, work) as Promise<T>
-            : undefined,
+        // The run's own lock, if no tab holds it: never waits on a live run (a frozen tab's included).
+        exclusive: <T>(runId: string, work: () => Promise<T>) =>
+            locks()!.request(`${LOCK_PREFIX}${runId}`, { ifAvailable: true }, (lock) =>
+                lock ? work() : null,
+            ) as Promise<T | null>,
     };
 }
 
@@ -192,11 +202,7 @@ export async function startSaveRun(queryClient: QueryClient, plan: RunPlan) {
 export function interruptedSaveRuns(queryClient: QueryClient) {
     // Nothing kept here, so nothing was left behind.
     if (!persistent()) return Promise.resolve([]);
-    return interruptedRuns({
-        ...deps(queryClient),
-        runs: runs(),
-        isLive: locks() ? isLive : undefined,
-    });
+    return interruptedRuns(deps(queryClient));
 }
 
 /* Deletes what an interrupted run made (to the Trash where the person may not delete forever). */

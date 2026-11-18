@@ -387,7 +387,8 @@ public final class DriveAPI: Sendable {
         switch status {
         case 200 ..< 300: return .aborted
         case 404: return .gone
-        case 401: return .denied
+        // A session the server no longer knows says nothing of the upload: no answer, asked again.
+        case 401: return .unknown
         case 403:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             return body?["code"] as? String == "held" ? .held : .denied

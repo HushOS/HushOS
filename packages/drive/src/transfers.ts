@@ -363,6 +363,8 @@ type Internal = {
     fetchingUrls: Promise<void> | null;
     backoff: Set<ReturnType<typeof setTimeout>>;
     generation: number;
+    /* The session it was queued in (options.session's generation): nothing is sent for it once that ends. */
+    session?: number;
     /*
      * Look the folder (and the file replaced) up again before sealing: the
      * snapshot held may be under keys a key change has replaced since (after
@@ -470,7 +472,8 @@ function abortSettled(failure: unknown) {
     if (!(failure instanceof DriveApiError)) return false;
     // A family manager's pause refused it: nothing ended, and the reservation stays.
     if (failure.status === 403 && failure.code === 'held') return false;
-    if ([401, 403, 404].includes(failure.status)) return true;
+    // A session the server no longer knows (401) says nothing of the upload: not settled.
+    if ([403, 404].includes(failure.status)) return true;
     return (
         failure.status === 409 &&
         (failure.data as { upload?: string } | undefined)?.upload === 'completed'
@@ -1926,6 +1929,7 @@ export function createTransferManager(options: TransferManagerOptions) {
                 input.parent,
             );
             u.replaces = input.replaces;
+            u.session = from?.generation ?? session?.generation();
             u.handle = input.handle ?? null;
             u.stash = input.stash ?? null;
             u.signAs = signaturesOf(u.item.origin, input.signAs);
@@ -2317,10 +2321,18 @@ export function createTransferManager(options: TransferManagerOptions) {
         options.onEvent?.({ type: 'cancelled', item: u.item });
         await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
         await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
-        if (u.uploadId) await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
+        // Asked after the worker's cancel: a sign-out meanwhile sends nothing for that session.
+        if (u.uploadId && sessionStill(u))
+            await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
         await journalForget(u);
         u.inFlight.clear();
         void schedule();
+    }
+    /* The upload's session is still the browser's (no sign-out since it was queued). */
+    function sessionStill(u: Internal) {
+        const session = options.session;
+        if (!session) return true;
+        return session.open() && (u.session === undefined || u.session === session.generation());
     }
     function remove(id: string) {
         const u = uploads.get(id);
