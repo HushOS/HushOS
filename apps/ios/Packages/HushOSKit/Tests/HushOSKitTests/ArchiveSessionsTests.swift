@@ -512,6 +512,26 @@ import Testing
         }
     }
 
+    @Test func aFailedDownloadRemovesOnlyTheFileItMadeEvenIfAnotherNowHasItsName() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Its own file, removed when the download fails.
+        let made = try await ArchiveSaveTarget.reserve(in: dir, name: "report.pdf")
+        try made.write(Data("part".utf8))
+        await made.discard()
+        #expect(!FileManager.default.fileExists(atPath: made.url.path))
+        // Moved away meanwhile (Files, a provider), and another document put under its name: neither is touched.
+        let moved = try await ArchiveSaveTarget.reserve(in: dir, name: "notes.txt")
+        try moved.write(Data("part".utf8))
+        let away = dir.appendingPathComponent("elsewhere.txt")
+        try FileManager.default.moveItem(at: moved.url, to: away)
+        try Data("someone else's".utf8).write(to: moved.url)
+        await moved.discard()
+        #expect(String(decoding: try Data(contentsOf: moved.url), as: UTF8.self) == "someone else's")
+        #expect(FileManager.default.fileExists(atPath: away.path))
+    }
+
     @Test func aDownloadReservesAFileOfItsOwnAndNeverTouchesOneAlreadyThere() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

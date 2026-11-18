@@ -313,30 +313,27 @@ struct ArchiveScreen: View {
         progress.task = Task {
             let scoped = folder.startAccessingSecurityScopedResource()
             defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-            var target: URL?
-            var unclosed: FileHandle?
+            var target: ArchiveSaveTarget?
             do {
                 // The name the core made safe: no bidi override, no NUL, no separator, at most 255 bytes. Created
-                // exclusively, so only a file this download made is ever written, or deleted when it fails.
-                let (file, handle) = try ArchiveSaveName.reserve(in: folder, name: entry.saveName)
-                target = file
-                unclosed = handle
+                // exclusively, off the main actor, so only a file this download made is ever written, or removed.
+                let made = try await ArchiveSaveTarget.reserve(in: folder, name: entry.saveName)
+                target = made
                 try await archive.download(entry, into: ArchiveSink { chunk in
-                    try handle.write(contentsOf: chunk)
+                    try made.write(chunk)
                     // Its size only: the progress waiting on the main actor never keeps the plaintext alive.
                     let count = UInt64(chunk.count)
                     Task { @MainActor in progress.written += count }
                 })
-                // Closed as part of the save: a file that fails as it is written out failed the download.
-                unclosed = nil
-                try handle.close()
+                // Closed as part of the save, off the main actor: a file that fails as it is written out failed the download.
+                try await made.finish()
                 await MainActor.run { downloads.removeAll { $0 === progress } }
             } catch {
                 // A cancel answers before the call's thread is out of its piece: that piece is waited out (off the
                 // main thread), so the file is removed after its last write, never before it.
                 await archive.settled()
-                try? unclosed?.close()
-                if let target { try? FileManager.default.removeItem(at: target) }
+                // Only while the path is still this download's file (Files may have moved it), off the main actor.
+                await target?.discard()
                 await MainActor.run {
                     if Task.isCancelled { downloads.removeAll { $0 === progress } } else if (error as? ArchiveFailure)?.code == "wrong-password" {
                         // The entry has a password of its own: asked for in its pane, tried on it first, then it downloads.

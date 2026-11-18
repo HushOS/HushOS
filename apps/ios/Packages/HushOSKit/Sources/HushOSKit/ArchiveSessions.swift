@@ -1066,6 +1066,73 @@ public enum ArchiveSaveName {
     }
 }
 
+/*
+ * A download's own file in the folder the person picked (`ArchiveSaveName.reserve`), its whole life
+ * off the main actor: made (up to 10,000 exclusive opens in a provider's folder), written on the
+ * call's thread, closed, and on failure removed. Removed only while the path still names the file
+ * this download made: Files or a provider may have moved it and put another document there, so the
+ * path is checked against the identity of the file it opened (device and inode, the descriptor kept
+ * open until then), under a file coordinator's delete, as the provider expects.
+ */
+public final class ArchiveSaveTarget: @unchecked Sendable {
+    public let url: URL
+    private let handle: FileHandle
+    private let device: dev_t
+    private let inode: ino_t
+    private static let queue = DispatchQueue(label: "com.hushos.archive-save", qos: .userInitiated, attributes: .concurrent)
+
+    private init(url: URL, handle: FileHandle) throws {
+        var own = stat()
+        guard fstat(handle.fileDescriptor, &own) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        self.url = url
+        self.handle = handle
+        device = own.st_dev
+        inode = own.st_ino
+    }
+
+    /* A file of its own in `folder` (see `ArchiveSaveName.reserve`), made off the main actor. */
+    public static func reserve(in folder: URL, name: String) async throws -> ArchiveSaveTarget {
+        try await run {
+            let (url, handle) = try ArchiveSaveName.reserve(in: folder, name: name)
+            do { return try ArchiveSaveTarget(url: url, handle: handle) } catch {
+                try? handle.close()
+                throw error
+            }
+        }
+    }
+
+    /* One piece, on the call's thread. */
+    public func write(_ chunk: Data) throws { try handle.write(contentsOf: chunk) }
+
+    /* Closed as part of the save: a file that fails as it is written out failed the download. */
+    public func finish() async throws { try await Self.run { try self.handle.close() } }
+
+    /* The download failed: its file goes, if the path is still that file, and its descriptor closes after. */
+    public func discard() async { _ = try? await Self.run { self.discardNow() } }
+
+    func discardNow() {
+        var failure: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: .forDeleting, error: &failure) { at in
+            guard self.isStill(at) else { return }
+            try? FileManager.default.removeItem(at: at)
+        }
+        try? handle.close()
+    }
+
+    /* Whether `path` names the file this download made: its device and inode, not a name that came back. */
+    func isStill(_ path: URL) -> Bool {
+        var there = stat()
+        let found = path.withUnsafeFileSystemRepresentation { name in name.map { lstat($0, &there) } ?? -1 }
+        return found == 0 && there.st_dev == device && there.st_ino == inode
+    }
+
+    private static func run<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<T, Error>) in
+            queue.async { done.resume(with: Result { try work() }) }
+        }
+    }
+}
+
 public enum ArchiveText {
     public static let lines = 200
     public static let bytes = 16 * 1024

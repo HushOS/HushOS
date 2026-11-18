@@ -98,6 +98,9 @@ struct FileViewer: View {
                 if isArchive {
                     // A zip opens as the list of what is inside it, read by range; it is never fetched whole to a file.
                     ArchiveScreen(item: current, adopted: { current = $0 })
+                        // A view of its own per file: paging from one zip to another never carries its failure,
+                        // listing or download rows over (a newer row of the same file keeps its id, and its view).
+                        .id(current.id)
                 } else if let url {
                     // Markdown as a document (MarkdownView); QuickLook shows it as raw text. Past the limit, QuickLook.
                     // The limit is the opened file's own size: an earlier version's isn't the current one's.
