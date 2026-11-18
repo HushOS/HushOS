@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_3846ed32b420f5::t_a18f3da65abc64 1664
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_67d53b8be64b2c 447-459,555-569,683-684,903-905,907,1012-1013,1034,1113,1170,1196-1200,1359
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_25e212be0efb80 182-183,185,1341-1397
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "dd5458405dcb6f5811fdf907168a1270586c5930",
+  "prompts": {},
+  "sessions": {
+    "s_3846ed32b420f5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21531b93-1373-4b29-8d81-4c6c9c2d6f91",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
