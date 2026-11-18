@@ -1594,6 +1594,56 @@ describe('a save run', () => {
         expect(w.locks.held.size).toBe(0);
     });
 
+    test('a stop lets the run’s lock go only after its queued row writes landed, and none lands after', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        // The journal turns slow: a row write waits.
+        const waiting: (() => void)[] = [];
+        const land = () => waiting.splice(0).forEach((resolve) => resolve());
+        const put = w.runs.put.bind(w.runs);
+        const writes: string[] = [];
+        w.runs.put = async (row) => {
+            await new Promise<void>((resolve) => waiting.push(resolve));
+            await put(row);
+            writes.push(w.locks.held.has(run.id) ? 'held' : 'released');
+        };
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        // The clean-up is left (the file refused): the row must stay as it was written.
+        w.server.refuse.add('node-a');
+        w.server.live.add('node-a');
+        const stopping = run.cancel();
+        await tick();
+        expect(w.locks.held.has(run.id)).toBe(true);
+        land();
+        const stopped = await stopping;
+        await saved;
+        expect(stopped.cleanup).toBe('left');
+        expect(w.locks.held.has(run.id)).toBe(false);
+        expect(writes.length).toBeGreaterThan(0);
+        expect(writes.every((at) => at === 'held')).toBe(true);
+        expect(w.runs.rows.get(run.id)?.nodeIds).toEqual(['node-a']);
+    });
+
+    test('results on their way are counted once each', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const first = run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        const second = run.file({ name: 'b', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        expect(w.queued.size).toBe(2);
+        expect(run.waiting()).toBe(2);
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await first;
+        expect(run.waiting()).toBe(1);
+        await run.cancel();
+        await second;
+        expect(run.waiting()).toBe(0);
+    });
+
     test('a stop whose clean-up throws still lets the run’s lock go, and leaves the row for later', async () => {
         const w = world();
         const run = await startRun(w.deps, { targets: [folder('f')], results: [] });

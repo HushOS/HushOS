@@ -851,7 +851,10 @@ public enum SaveRuns {
             var others = othersMayLand
             for uploadId in row.uploadIds.dropFirst(reached) where completing?.contains(uploadId) ?? true {
                 switch asked[uploadId] {
-                case .aborted?, .gone?: continue
+                case .aborted?: continue
+                // A version whose completion was sent, its upload not found: it may have landed (the share's end
+                // answers 404 too), as the clean-up's own loop counts it.
+                case .gone?: if versions.contains(uploadId), completing != nil { maybe += 1 }
                 case .finished?: if versions.contains(uploadId) { kept += 1 }
                 default: if versions.contains(uploadId) { maybe += 1 } else { others = true }
                 }
@@ -1697,7 +1700,8 @@ extension Vault: SaveRunWriter {
 
     public func makeFolder(in folder: Opened, name: String, signing: Signing, minted: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
         try heldExactly(folder)
-        return try await createFolder(in: folder.id, name: name, signing: signing, onMinted: minted)
+        // The row checked, passed through to the key wrap and the creation: never resolved again by its id.
+        return try await createFolder(under: folder, name: name, signing: signing, onMinted: minted)
     }
 
     public func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
@@ -1824,20 +1828,10 @@ extension Vault: SaveRunWriter {
                         fates[id] = .refused
                     }
                 }
-                // Every item not found (404s, one by one) may be a folder whose creation got no answer and isn't made yet,
-                // or the space out of reach. Only one read of the space itself tells: refused, it is lost access (as the
-                // batch's 404 says); answered, each stays `gone` for the clean-up to weigh (it waits for one that may land).
-                if batch.allSatisfy({ fates[$0] == .gone }), stillOn() {
-                    do {
-                        _ = try await api.trashListing(workspaceId: workspaceId, after: nil)
-                    } catch DriveAPIError.notFound, DriveAPIError.forbidden {
-                        for id in batch { fates[id] = .denied }
-                    } catch DriveAPIError.transport(let why) {
-                        throw DriveAPIError.transport(why)
-                    } catch {
-                        for id in batch { fates[id] = .refused }
-                    }
-                }
+                // Every item not found (404s, one by one): a folder whose creation got no answer and isn't made yet, or the
+                // space out of reach, and nothing here tells which. Neither lost access nor gone: refused, so the row and every
+                // id in it stay for another try (a stale row offered again is better than losing the only record).
+                if batch.allSatisfy({ fates[$0] == .gone }) { for id in batch { fates[id] = .refused } }
                 continue
             } catch DriveAPIError.held {
                 // A family manager's pause is not lost access: kept for after the hold.

@@ -1383,11 +1383,47 @@ class SaveRunTest {
             assertFalse(stopper.isAlive)
             assertTrue(stillInterrupted)
             assertEquals(SaveCleanup.LEFT, stopped?.cleanup)
-            assertTrue(stopped?.message.orEmpty(), stopped?.message.orEmpty().contains("asked about it next time"))
+            // Its new file's completion never went out: nothing may be there to promise a prompt for.
+            assertEquals(SaveRuns.words(SaveRunStopped.Reason.CANCELLED, false, null, 0, 0, null), stopped?.message)
             writer.abortPause = null
             assertEquals(stopped, pool.submit<SaveRunStopped> { run.cancel() }.get(5, TimeUnit.SECONDS))
             assertTrue(writer.sent.none { it == "trash" || it == "purge" })
             assertEquals(listOf("up-1"), rows.list().single().uploadIds)
+            go.countDown()
+            runCatching { saving.get(5, TimeUnit.SECONDS) }
+        } finally {
+            go.countDown()
+            pool.shutdownNow()
+        }
+    }
+
+    /*
+     * A stop cut short while a version's completion had gone out says that version may have been saved, and promises no
+     * prompt next time: a row with only uploads is settled quietly, never offered.
+     */
+    @Test
+    fun aStopCutShortAfterAVersionsCompletionSaysItMayHaveLandedAndPromisesNoPrompt() {
+        val landing = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val pausing = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.landing = { landing.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val doc = opened("doc", "f", version = "v1")
+        val run = SaveRun.start(writer, listOf(doc), emptyList(), journal())
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val saving = pool.submit<VersionSaved> { run.version(byteArrayOf(1), doc, opened("f"), "v1", own) }
+            assertTrue(landing.await(5, TimeUnit.SECONDS))
+            writer.abortPause = { pausing.countDown(); Thread.sleep(10_000) }
+            var stopped: SaveRunStopped? = null
+            val stopper = Thread { stopped = run.cancel() }
+            stopper.start()
+            assertTrue(pausing.await(5, TimeUnit.SECONDS))
+            stopper.interrupt()
+            stopper.join(5_000)
+            assertEquals(1, stopped?.uncertainVersions)
+            assertFalse(stopped?.message.orEmpty(), stopped?.message.orEmpty().contains("next time"))
+            assertTrue(stopped?.message.orEmpty(), stopped?.message.orEmpty().contains("may have been saved"))
+            writer.abortPause = null
             go.countDown()
             runCatching { saving.get(5, TimeUnit.SECONDS) }
         } finally {
@@ -1411,6 +1447,22 @@ class SaveRunTest {
         assertThrows(InterruptedException::class.java) {
             SaveRuns.clean(SaveRunRow("r", "ws", emptyList(), listOf("up-x"), 1L, "l"), writer, journal(), emptySet(), null, null, stillOn = { true })
         }
+    }
+
+    /*
+     * Signed out before the clean-up asks anything: a version whose completion was sent and whose abort answered "not found"
+     * may have landed (a share that ended answers 404 too), so it is said to maybe be saved; one the abort released is not.
+     */
+    @Test
+    fun aSignOutCountsAVersionWhoseSentCompletionAbortedAsNotFoundAsMaybeSaved() {
+        val writer = FakeWriter()
+        val row = SaveRunRow("r", "ws", emptyList(), listOf("up-gone", "up-aborted"), 1L, "l")
+        val both = setOf("up-gone", "up-aborted")
+        val asked = mapOf("up-gone" to SaveAbortFate.GONE, "up-aborted" to SaveAbortFate.ABORTED)
+        val cleaned = SaveRuns.clean(row, writer, journal(), both, both, emptySet(), asked, stillOn = { false })
+        assertEquals(SaveCleanup.LEFT, cleaned.cleanup)
+        assertEquals(1, cleaned.uncertain)
+        assertTrue(writer.sent.isEmpty())
     }
 
     /* A journal file it can't read is never written over: the other runs' rows in it stay, and every write is refused. */
@@ -1747,10 +1799,8 @@ class SaveResultTest {
         val id = server.file(server.root, "doc.txt", "first".toByteArray())
         val other = server.file(server.root, "other.txt", "second".toByteArray())
         vault.listChildren(server.root)
-        var outOfReach = false
         server.extraRoutes = { method, segments, _, _ ->
             when {
-                method == "GET" && segments.lastOrNull() == "trash" && outOfReach -> 403 to JSONObject().put("code", "forbidden").put("message", "No.")
                 method == "POST" && segments.lastOrNull() == "trash-batch" -> 501 to JSONObject().put("code", "unsupported").put("message", "Not here.")
                 method == "POST" && segments.lastOrNull() == "trash" && segments.getOrNull(2)?.startsWith("nope") == true ->
                     404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
@@ -1759,17 +1809,13 @@ class SaveResultTest {
         }
         val epoch = SaveRunJournal.Epoch()
         val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
-        // Every item not found, one by one, in a space this device still reaches: not made (yet), each left for the clean-up
-        // to weigh (a folder whose creation got no answer may still land), never lost access.
-        assertEquals(setOf(SaveItemFate.GONE), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
-        // The space itself refused too: out of reach, as the batch's 404 says.
-        outOfReach = true
-        assertEquals(setOf(SaveItemFate.DENIED), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
-        outOfReach = false
+        // Every item not found, one by one: not made yet or out of reach, and nothing tells which. Uncertain (refused, the row
+        // kept), never lost access and never gone.
+        assertEquals(setOf(SaveItemFate.REFUSED), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
         val fates = writer.trash(listOf(id), vault.workspaceId)
         assertEquals(SaveItemFate.DONE, fates[id])
         val batches = server.requests.count { it.endsWith("/trash-batch") }
-        assertEquals(3, batches)
+        assertEquals(2, batches)
         assertEquals(1, server.requests.count { it.endsWith("/nodes/$id/trash") })
         // Signed out: nothing more is sent, one item or another.
         epoch.end()
@@ -1841,6 +1887,26 @@ class SaveResultTest {
             writer.uploadResult(byteArrayOf(1), "a", null, shared, null, null, null, null, onBegun = {}, onCompleting = {})
         }
         assertEquals(sent, server.requests.size)
+    }
+
+    /*
+     * A run's folder is made under the very row its destination was checked as, never one its id looks up again: the own
+     * Drive's folder of the same id is not that row, so nothing is minted, wrapped or sent.
+     */
+    @Test
+    fun aFolderIsMadeUnderTheRowCheckedNeverOneItsIdLooksUpAgain() {
+        vault.listChildren(server.root)
+        val sent = server.requests.size
+        val real = vault.resolve(server.root)
+        val shared = Opened(real.node.copy(workspaceId = "0b6c0f4e-0000-4000-8000-00000000beef"), real.metadata)
+        var minted = 0
+        assertThrows(FamilyFailure::class.java) { vault.createFolder(shared, "Out", null) { minted++ } }
+        assertEquals(sent, server.requests.size)
+        assertEquals(0, minted)
+        // The row held as it was checked is the one written under.
+        val made = vault.createFolder(real, "In", null) { minted++ }
+        assertEquals(server.root, made.node.parentId)
+        assertEquals(1, minted)
     }
 
     /* A family manager's pause answers 403 `held`: the save path reads it as held, never as lost access (DENIED). */

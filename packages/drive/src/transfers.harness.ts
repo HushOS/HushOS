@@ -139,6 +139,8 @@ export function harness(
         cancelHold?: () => Promise<void>;
         /* A completion held until it resolves: the server finishing it while the device does something else. */
         completeHold?: () => Promise<void>;
+        /* A rewrap held until it resolves (a cancel or a lock while it is on its way). */
+        rewrapHold?: () => Promise<void>;
         /* The account's session (a sign-out closes it). */
         session?: TransferManagerOptions['session'];
     } = {},
@@ -299,6 +301,7 @@ export function harness(
             case 'driveUploadRewrap': {
                 const { nodeId, signAs } = input as CryptoRequests['driveUploadRewrap'];
                 signed.push({ operation, signAs });
+                await options.rewrapHold?.();
                 return { contentKeyEnvelope: `rewrapped-under-${nodeId}` } as CryptoResults[K];
             }
             default:

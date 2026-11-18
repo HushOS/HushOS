@@ -365,6 +365,8 @@ type Internal = {
     generation: number;
     /* The session it was queued in (options.session's generation): nothing is sent for it once that ends. */
     session?: number;
+    /* Its reservation's abort was sent (a cancel's, or a sign-out's release). */
+    released?: boolean;
     /*
      * Look the folder (and the file replaced) up again before sealing: the
      * snapshot held may be under keys a key change has replaced since (after
@@ -729,6 +731,9 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     function fail(u: Internal, message: string, code: UploadItem['errorCode'] = null) {
         clearBackoff(u);
+        // A produced result is never sent again from here (its run decides): its thumbnail's
+        // plaintext goes now, not when the row is removed.
+        if (u.produced) u.thumbnail = null;
         set(u, {
             status: 'failed',
             error: message,
@@ -913,6 +918,8 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     /* The upload is settled: every row goes, and the stash with it. */
     async function journalForget(u: Internal) {
+        // The thumbnail prepared for it (plaintext, a produced result's included) goes with the rest.
+        u.thumbnail = null;
         await releaseSource(u);
         await journalRemove(u);
         if (u.queued) {
@@ -1697,6 +1704,11 @@ export function createTransferManager(options: TransferManagerOptions) {
                 versionId: u.versionId,
                 signAs: u.signAs.version,
             });
+            // As the sibling attach: a cancel or a lock while it was rewrapped sends nothing, and a
+            // produced upload's run is asked first (a stopping run refuses it).
+            if (u.generation !== generation) throw new Error('Cancelled.');
+            await u.produced?.onAttach?.({ workspaceId, nodeId: replaces.id });
+            if (u.generation !== generation) throw new Error('Cancelled.');
             try {
                 return await api.attachUpload(workspaceId, u.uploadId, {
                     mode: 'same-node',
@@ -2330,11 +2342,16 @@ export function createTransferManager(options: TransferManagerOptions) {
         await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
         await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
         // Asked after the worker's cancel: a sign-out meanwhile sends nothing for that session.
-        if (u.uploadId && (releasing || sessionStill(u)))
-            await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
+        if (u.uploadId && (releasing || sessionStill(u))) await release(u);
         await journalForget(u);
         u.inFlight.clear();
         void schedule();
+    }
+    /* Its reservation let go once (a cancel's abort, or this tab's sign-out releasing it). */
+    async function release(u: Internal) {
+        if (!u.uploadId || u.released) return;
+        u.released = true;
+        await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
     }
     /* The upload's session is still the browser's (no sign-out since it was queued). */
     function sessionStill(u: Internal) {
@@ -2536,8 +2553,16 @@ export function createTransferManager(options: TransferManagerOptions) {
         stopping = true;
         try {
             // Every upload at once, and not forever: an offline sign-out must still finish.
+            // A cancel already under way (shown cancelled, its worker step awaited) is released here
+            // too: it would send no abort once the session ends.
+            const cancelling = [...uploads.values()].filter(
+                (u) => u.item.status === 'cancelled' && u.uploadId && !u.released,
+            );
             await Promise.race([
-                Promise.allSettled(order.slice().map((id) => cancelOne(id, true))),
+                Promise.allSettled([
+                    ...order.slice().map((id) => cancelOne(id, true)),
+                    ...cancelling.map((u) => release(u)),
+                ]),
                 new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
             ]);
             for (const u of uploads.values()) u.generation++;

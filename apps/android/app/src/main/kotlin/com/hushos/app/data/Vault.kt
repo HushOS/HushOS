@@ -1708,9 +1708,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
     /* `result`: a folder a tool makes for its results (SaveRuns.kt), signed by their sources, into a family folder too. */
     /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
     fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false,
-                     result: Boolean = false, onMinted: (String) -> Unit = {}): Opened = writing {
+                     result: Boolean = false, onMinted: (String) -> Unit = {}): Opened =
+        createFolder(name, copy, attributes, moving, result, onMinted) { resolve(parentId) }
+
+    /*
+     * Into the very row `held` names, workspace and all, as this process holds it now (a save run's destination, checked by
+     * its workspace): never looked up again by id, which answers with the own Drive's row first and so could name another
+     * workspace's folder. One no longer held is refused before anything is minted or sent.
+     */
+    fun createFolder(held: Opened, name: String, copy: Prior?, onMinted: (String) -> Unit): Opened =
+        createFolder(name, copy, emptyMap(), moving = false, result = true, onMinted = onMinted) {
+            nodes.row(held.node.workspaceId, held.id) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        }
+
+    private fun createFolder(name: String, copy: Prior?, attributes: Map<String, String>, moving: Boolean, result: Boolean, onMinted: (String) -> Unit,
+                             findParent: () -> Opened): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
-        val parent = resolve(parentId)
+        val parent = findParent()
         val ws = parent.node.workspaceId
         // A family folder takes a new folder through its ledger, and a moved folder's copy (moveAcross); a plain copy into one
         // isn't offered.

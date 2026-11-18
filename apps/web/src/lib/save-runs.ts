@@ -8,6 +8,7 @@ import {
     interruptedRuns,
     keepInterrupted,
     roomOf,
+    SignedOutError,
     startRun,
     type RunPlan,
     type SaveRunDeps,
@@ -154,6 +155,8 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             let after: string | undefined;
             try {
                 do {
+                    // Each page only while this session lasts: a sign-out stops the look, unsettled.
+                    if (!stillOn()) throw new SignedOutError();
                     const page = await driveApi.children(workspaceId, id, after);
                     items += page.children.length;
                     after = page.nextCursor ?? undefined;

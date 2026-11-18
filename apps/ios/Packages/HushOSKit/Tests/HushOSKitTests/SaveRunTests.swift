@@ -439,6 +439,21 @@ let own = SaveSources.ownWriting
         #expect(!DriveAPI.AbortFate.denied.unsettled)
     }
 
+    /*
+     * Signed out before the clean-up asks anything: a version whose completion was sent and whose abort answered "not found"
+     * may have landed (a share that ended answers 404 too), so it is said to maybe be saved; one the abort released is not.
+     */
+    @Test func aSignOutCountsAVersionWhoseSentCompletionAbortedAsNotFoundAsMaybeSaved() async throws {
+        let writer = FakeWriter()
+        let row = SaveRunRow(id: "r", workspaceId: "ws", nodeIds: [], uploadIds: ["up-gone", "up-aborted"], at: Date(), launch: "l")
+        let both: Set<String> = ["up-gone", "up-aborted"]
+        let cleaned = await SaveRuns.clean(row, writer: writer, journal: journal(), versions: both, completing: both, published: [],
+                                           asked: ["up-gone": .gone, "up-aborted": .aborted], stillOn: { false })
+        #expect(cleaned.cleanup == .left)
+        #expect(cleaned.uncertain == 1)
+        #expect(await writer.sent.isEmpty)
+    }
+
     /* A pause that kept only a version's reservation keeps the row but never says what was made is still there. */
     @Test func aPauseThatKeptOnlyAVersionsReservationSaysNothingRemains() async throws {
         let writer = FakeWriter()
@@ -1896,12 +1911,8 @@ extension OnFakeDrive {
             _ = try await vault.children(of: server.root)
             let batches = Locked(0)
             let trashed = Locked<[String]>([])
-            let outOfReach = Locked(false)
             let rows = try server.nodes.mapValues { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
             server.intercept = { method, parts, _ in
-                if method == "GET", parts.last == "trash" {
-                    return outOfReach.value ? (403, ["code": "forbidden", "message": "No."]) : (200, ["items": [Any](), "nextCursor": NSNull()])
-                }
                 guard method == "POST" else { return nil }
                 if parts.last == "trash-batch" {
                     batches.value += 1
@@ -1918,15 +1929,10 @@ extension OnFakeDrive {
             #expect(fates["never-there"] == .gone)
             #expect(batches.value == 1)
             #expect(trashed.value == [server.a])
-            // Every item not found, one by one, in a space this device still reaches: not made (yet), each left for the
-            // clean-up to weigh (a folder whose creation got no answer may still land), never lost access.
+            // Every item not found, one by one: not made yet or out of reach, and nothing tells which. Uncertain (refused, the
+            // row kept), never lost access and never gone.
             let missing = try await vault.trash(["never-1", "never-2"], in: server.workspace, while: { true })
-            #expect(Set(missing.values) == [.gone])
-            // The space itself refused too: out of reach, as the batch's 404 says.
-            outOfReach.value = true
-            let unreachable = try await vault.trash(["never-1", "never-2"], in: server.workspace, while: { true })
-            #expect(Set(unreachable.values) == [.denied])
-            outOfReach.value = false
+            #expect(Set(missing.values) == [.refused])
             // Signed out after the first item went: the rest unsent (asked for the batch, then before each item).
             let asked = Locked(0)
             let rest = try await vault.trash([server.b, server.f], in: server.workspace, while: {
@@ -2022,6 +2028,35 @@ extension OnFakeDrive {
                                                  signing: (.own, .own), onBegun: { _ in }, onCompleting: { _ in })
             }
             #expect(writes.value == 0)
+            server.intercept = nil
+        }
+
+        /*
+         * A run's folder is made under the very row its destination was checked as, never one its id looks up again: the own
+         * Drive's folder of the same id is not that row, so nothing is minted, wrapped or sent, and the own folder gains nothing.
+         */
+        @Test func aFolderIsMadeUnderTheRowCheckedNeverOneItsIdLooksUpAgain() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let writes = Locked(0)
+            let minted = Locked(0)
+            server.intercept = { method, _, _ in
+                if method != "GET" { writes.value += 1 }
+                return nil
+            }
+            let shared = opened(server.b, workspace: "0b6c0f4e-0000-4000-8000-00000000beef")
+            await #expect(throws: IdCollision.self) {
+                _ = try await vault.createFolder(under: shared, name: "Out", signing: .own, onMinted: { _ in minted.value += 1 })
+            }
+            #expect(writes.value == 0)
+            #expect(minted.value == 0)
+            #expect(try await vault.children(of: server.b).allSatisfy { $0.name != "Out" })
+            // The row held as it is checked is the one written under.
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let made = try await vault.createFolder(under: b, name: "In", signing: .own, onMinted: { _ in minted.value += 1 })
+            #expect(made.node.parentId == server.b)
+            #expect(minted.value == 1)
             server.intercept = nil
         }
 

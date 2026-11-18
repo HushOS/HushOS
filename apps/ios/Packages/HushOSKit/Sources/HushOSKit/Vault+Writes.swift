@@ -24,9 +24,26 @@ extension Vault {
     /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
     public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:],
                              onMinted: @Sendable (String) throws -> Void = { _ in }) async throws -> Opened {
+        try await createFolder(name: name, signing: signing, attributes: attributes, onMinted: onMinted) { try await self.resolve(parentId) }
+    }
+
+    /*
+     * Into the very row `held` names, workspace and all, as this process holds it now (a save run's destination, checked
+     * by its ref): never looked up again by id, which answers with the own Drive's row first and so could name another
+     * workspace's folder. One no longer held is refused before anything is minted or sent.
+     */
+    func createFolder(under held: Opened, name: String, signing: Signing, onMinted: @Sendable (String) throws -> Void) async throws -> Opened {
+        try await createFolder(name: name, signing: signing, attributes: [:], onMinted: onMinted) {
+            guard let row = self.opened[held.ref] else { throw IdCollision() }
+            return row
+        }
+    }
+
+    private func createFolder(name: String, signing: Signing, attributes: [String: String], onMinted: @Sendable (String) throws -> Void,
+                              parent find: () async throws -> Opened) async throws -> Opened {
         return try await writing {
             _ = try await loadWorkspace()
-            let parent = try await resolve(parentId)
+            let parent = try await find()
             let family = try familyTarget(parent.node.workspaceId)
             // Shared folders belong to the granter's workspace; an editor writes there.
             let workspace = Target(workspaceId: parent.node.workspaceId)

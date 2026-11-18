@@ -826,6 +826,16 @@ function createRun(
             });
         return writing;
     };
+    /*
+     * The run's end: every row write queued before its lock goes (a slow IndexedDB's) lands first,
+     * then no more are taken, so none of this run's writes can land after another tab takes its lock.
+     */
+    const letGo = async () => {
+        await writing;
+        sealed = true;
+        await writing;
+        end();
+    };
     /* Every row written so far is on disk; throws when one was refused. */
     const recorded = async () => {
         await writing;
@@ -1118,7 +1128,16 @@ function createRun(
             for (const output of pending.values()) output.reject(done);
             pending.clear();
             return done;
-        })().finally(end);
+        })().then(
+            async (done) => {
+                await letGo();
+                return done;
+            },
+            async (error: unknown) => {
+                await letGo();
+                throw error;
+            },
+        );
         return stopping;
     }
     /*
@@ -1354,7 +1373,9 @@ function createRun(
             return stop('cancelled');
         },
         waiting() {
-            return pending.size + calls;
+            // Results on their way: each is one of the run's calls from its first line until it
+            // settles (its upload, pending, included), counted once.
+            return calls;
         },
         lock() {
             return stop('locked');

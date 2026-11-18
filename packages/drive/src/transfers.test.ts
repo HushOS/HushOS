@@ -2332,6 +2332,69 @@ describe('produced results', () => {
         expect((h.server.attached[0]!.input as { mode: string }).mode).toBe('same-node');
     });
 
+    test('a same-file attach cancelled while its key is rewrapped is never sent', async () => {
+        let rewrapped: () => void = () => {};
+        let reached = false;
+        const h = harness({
+            conflict: true,
+            ...listedAt(() => 'v-winner'),
+            rewrapHold: () =>
+                new Promise((resolve) => {
+                    reached = true;
+                    rewrapped = resolve;
+                }),
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v-winner'),
+                produced: { startedFrom: 'v-winner' },
+            },
+        ]);
+        const attachesSent: unknown[] = [];
+        const api = h.api as unknown as DriveApi;
+        const attach = api.attachUpload.bind(api);
+        api.attachUpload = (async (...args: Parameters<typeof attach>) => {
+            attachesSent.push(args[2]);
+            return attach(...args);
+        }) as typeof attach;
+        await vi.waitFor(() => expect(reached).toBe(true), { timeout: 5_000 });
+        await h.manager.cancel(id!);
+        rewrapped();
+        await settle(1_000);
+        expect(attachesSent).toEqual([]);
+        expect(h.item(id!).status).toBe('cancelled');
+    });
+
+    test('a cancel under way when this tab signs out is still released, once', async () => {
+        let open = true;
+        let generation = 1;
+        let workerDone: () => void = () => {};
+        const h = harness({
+            session: { open: () => open, generation: () => generation },
+            cancelHold: () => new Promise<void>((resolve) => (workerDone = resolve)),
+        });
+        const [id] = h.manager.enqueue(
+            [{ file: fakeFile(4 * CHUNK), parent: node('root', null) }],
+            {
+                generation: 1,
+            },
+        );
+        await settle(120);
+        const cancelling = h.manager.cancel(id!);
+        await settle(10);
+        // The sign-out comes while that cancel waits on the worker.
+        open = false;
+        generation = 2;
+        const forgetting = h.manager.forgetAll();
+        await settle(50);
+        workerDone();
+        await Promise.all([cancelling, forgetting]);
+        await settle(200);
+        expect(h.server.aborted).toEqual(['up-1']);
+    });
+
     test('a produced new file a key change moved under keeps its own name when attached', async () => {
         const h = harness({ conflict: true });
         const [id] = h.manager.enqueue([

@@ -646,7 +646,10 @@ object SaveRuns {
             for (uploadId in row.uploadIds.drop(reached)) {
                 if (completing?.contains(uploadId) == false) continue
                 when (asked[uploadId]) {
-                    SaveAbortFate.ABORTED, SaveAbortFate.GONE -> {}
+                    SaveAbortFate.ABORTED -> {}
+                    // A version whose completion was sent, its upload not found: it may have landed (the share's end answers
+                    // 404 too), as the clean-up's own loop counts it.
+                    SaveAbortFate.GONE -> if (uploadId in versions && completing != null) maybe++
                     SaveAbortFate.FINISHED -> if (uploadId in versions) keptNow++
                     else -> if (uploadId in versions) maybe++ else others = true
                 }
@@ -1271,9 +1274,14 @@ class SaveRun private constructor(
     }
 
     /* A stop that couldn't finish its clean-up: the row is kept for the next launch, and what may remain is said so. */
-    private fun leftForLater(reason: SaveRunStopped.Reason, failure: String?): SaveRunStopped {
-        val kept = synchronized(lock) { keptVersions }
-        return SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, kept, 0, SaveCleanup.LEFT), SaveCleanup.LEFT, kept)
+    /*
+     * Said from what the run sent: versions whose completion went out may have been saved; "asked about it next time" only
+     * when a node the next launch offers may be there (an upload-only row is settled quietly, never offered).
+     */
+    private fun leftForLater(reason: SaveRunStopped.Reason, failure: String?): SaveRunStopped = synchronized(lock) {
+        val uncertain = row.uploadIds.count { it in completing && it in versionUploads }
+        val remains = if (row.nodeIds.any { it in published || it in mayExist }) SaveCleanup.LEFT else null
+        SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, keptVersions, uncertain, remains), SaveCleanup.LEFT, keptVersions, uncertain)
     }
 
     /* Every result is in: the row goes. Refused while one is still on its way, or once stopped. */
@@ -1386,7 +1394,8 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
 
     override fun makeFolder(folder: Opened, name: String, copy: Prior?, minted: (String) -> Unit): Opened {
         heldExactly(folder)
-        return vault.createFolder(folder.id, name, copy, result = true, onMinted = minted)
+        // The row checked, passed through to the key wrap and the creation: never resolved again by its id.
+        return vault.createFolder(folder, name, copy, minted)
     }
 
     override fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
@@ -1489,25 +1498,10 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
                 // A server without the batch route: one request an item, the session asked before each (as the Trash
                 // screen falls back), still inside this write's family gate.
                 for (id in batch) fates[id] = trashOne(id, workspaceId)
-                // Every item not found (404s, one by one) may be a folder whose creation got no answer and isn't made yet,
-                // or the space out of reach. Only one read of the space itself tells: refused, it is lost access (as the
-                // batch's 404 says); answered, each stays GONE for the clean-up to weigh (it waits for one that may land).
-                if (batch.all { fates[it] == SaveItemFate.GONE } && stillOn()) {
-                    val reach = try {
-                        sessionCheck()
-                        vault.api.trashListing(workspaceId, null)
-                        null
-                    } catch (gone: NotFound) {
-                        SaveItemFate.DENIED
-                    } catch (error: ApiError) {
-                        when {
-                            error.status == 403 -> SaveItemFate.DENIED
-                            error.status == 0 || error.status >= 500 -> throw error
-                            else -> SaveItemFate.REFUSED
-                        }
-                    }
-                    reach?.let { fate -> batch.forEach { fates[it] = fate } }
-                }
+                // Every item not found (404s, one by one): a folder whose creation got no answer and isn't made yet, or the
+                // space out of reach, and nothing here tells which. Neither lost access nor gone: refused, so the row and every
+                // id in it stay for another try (a stale row offered again is better than losing the only record).
+                if (batch.all { fates[it] == SaveItemFate.GONE }) batch.forEach { fates[it] = SaveItemFate.REFUSED }
                 continue
             } catch (error: Exception) {
                 // A family manager's pause is not lost access: kept for after the hold.
