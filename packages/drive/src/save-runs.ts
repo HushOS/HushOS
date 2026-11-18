@@ -1776,6 +1776,9 @@ export async function interruptedRuns(
             })
             .catch(() => {});
     }
+    // Signed out while the rows were read: none of them is offered, or settled, for whoever is
+    // signed in now (they were the session's that began this).
+    if (!signedIn(deps)) return [];
     // In the background: the rows to offer come back now, never after the network.
     // Each start chained after the last, so two opens' rows are never settled at once.
     if (quiet.length) quietWork = quietWork.then(() => settleQuietly(deps, quiet, now));

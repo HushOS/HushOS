@@ -81,6 +81,33 @@ extension OnFakeDrive {
         }
 
         /*
+         * The family folder stops being writable here after a save run made something in it (its guard owed, as after a sync
+         * that couldn't store it): the run's cancel removes nothing, sends no trash or delete forever, and keeps its row for
+         * when it may. Fails if a clean-up's trash or purge goes out past the family's write gate.
+         */
+        @Test func aCleanUpInAFamilyFolderThatMayNoLongerBeWrittenRemovesNothingAndKeepsItsRow() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            let listing = try await vault.listChildren(of: family.rootId, in: family.workspaceId)
+            let top = try await vault.open(listing.folder, replacing: true)
+            let rows = SaveRunJournal(url: FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json"),
+                                      epoch: SaveRunJournal.Epoch())
+            let run = try await SaveRun.start(writer: vault, targets: [top], results: [], journal: rows, pause: { _ in })
+            let out = try await run.folder("Out", in: top, sources: .ownWriting)
+            _ = await vault.oweFamilyGuard(family.groupId)
+            server.clearRequests()
+            let stopped = await run.cancel()
+            #expect(stopped.cleanup == .left)
+            #expect(server.node(out.id)?.trashedAt == nil)
+            #expect(server.writes.isEmpty, "a clean-up went past the family's gate: \(server.writes)")
+            #expect(rows.list().first?.nodeIds == [out.id])
+        }
+
+        /*
          * The first acceptance on this phone hands back a guard that can't be stored, so the family is
          * refused before any of its folders was opened. Its folders are still held for the barrier: a
          * write into one waits for the guard with the storage words, never sent as a personal folder's.

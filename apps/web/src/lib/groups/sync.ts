@@ -84,13 +84,24 @@ export function writeRefusal(
     state: Pick<AreaState, 'write' | 'view'> | undefined,
     folder: KeyedNode,
 ) {
+    const refused = changeRefusal(state);
+    if (refused) return refused;
+    if (waitsForKeyChange(state, folder))
+        return 'Finishing a key change. Uploads to this folder wait for it; anything else can be added once it’s done.';
+    return null;
+}
+/*
+ * Why nothing in a family folder may be changed now (its family not open here, its keys not
+ * checked, or changed since), or null while it is writable: a save run's clean-up asks it before
+ * every trash and delete forever, as the folder's own pages offer them only while it is writable.
+ */
+export function changeRefusal(state: Pick<AreaState, 'write'> | undefined) {
     if (!state) return 'Open the family again, then try again.';
     if (state.write === 'read-only')
         return 'HushOS couldn’t check this folder’s keys on this device, so nothing can be added to it.';
     if (state.write === 'keys-changed')
         return 'This folder’s keys changed. Use Check again on the folder, then try again.';
-    if (waitsForKeyChange(state, folder))
-        return 'Finishing a key change. Uploads to this folder wait for it; anything else can be added once it’s done.';
+    if (state.write !== 'writable') return 'Open the family again, then try again.';
     return null;
 }
 /* A node as the walk's rule reads it: its key epoch and the parent epoch its envelope is under. */

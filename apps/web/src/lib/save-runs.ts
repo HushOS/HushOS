@@ -23,6 +23,7 @@ import {
     sharedQueryOptions,
     groupOfSpace,
     nextName,
+    refuseChange,
     refuseWrite,
     waitsForKeyChange,
 } from '@/lib/drive';
@@ -106,6 +107,22 @@ function deps(queryClient: QueryClient): SaveRunDeps {
     const from = { generation: deviceSession.generation() };
     // The session these deps were made in: nothing is sent or written for it once it ends.
     const stillOn = () => deviceSession.open() && deviceSession.generation() === from.generation;
+    /*
+     * Why a clean-up may not change anything in `workspaceId` now: a family folder registered here
+     * says so itself (read-only, its keys changed, forgotten); this account's own Drive and a share
+     * it edits may be; any other is a family folder not open in this tab yet, which isn't known.
+     */
+    const refuseChangeNow = async (workspaceId: string): Promise<string | null> => {
+        const registered = refuseChange(workspaceId);
+        if (registered !== undefined) return registered;
+        const notKnown = 'Open the family again, then try again.';
+        const figures = await storage();
+        if (!figures) return notKnown;
+        if (workspaceId === figures.workspaceId) return null;
+        const shares = await queryClient.fetchQuery(sharedQueryOptions).catch(() => null);
+        if (shares?.some((mount) => mount.workspaceId === workspaceId)) return null;
+        return notKnown;
+    };
     // The account unlocked as these deps were made: written into every row, and only its rows recovered.
     const account = authClient.store.getState().unlockedUserId;
     const storage = async () =>
@@ -175,9 +192,13 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             }
             return items;
         },
-        // Every clean-up request, and each retry, only while this session lasts (lib/save-run-sends.ts).
-        ...cleanUpSends(stillOn, clientFor, (workspaceId, uploadId) =>
-            driveApi.abortUpload(workspaceId, uploadId),
+        // Every clean-up request, and each retry, only while this session lasts, and a trash or a
+        // delete forever only while a family folder may be changed (lib/save-run-sends.ts).
+        ...cleanUpSends(
+            stillOn,
+            clientFor,
+            (workspaceId, uploadId) => driveApi.abortUpload(workspaceId, uploadId),
+            refuseChangeNow,
         ),
         // The server deletes forever only for a member: the person's own Drive, a family's folder.
         // A family member's workspace not registered yet (its family's pages not loaded, at open)

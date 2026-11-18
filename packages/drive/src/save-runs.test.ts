@@ -2475,6 +2475,34 @@ describe('a save run', () => {
         expect(w.runs.rows.get('answered')?.uncounted).toBeUndefined();
     });
 
+    test('a sign-out while the interrupted rows are read offers none of them, and settles none', async () => {
+        const w = world();
+        const made: RunRow = {
+            id: 'made',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+        };
+        const nodeless: RunRow = { ...made, id: 'nodeless', nodeIds: [], uploadIds: ['up-a'] };
+        await w.runs.put(made);
+        await w.runs.put(nodeless);
+        w.server.open.add('up-a');
+        // Signed out right as the last row is read again under its lock.
+        const list = w.runs.list.bind(w.runs);
+        let reads = 0;
+        w.runs.list = async () => {
+            const rows = await list();
+            if (++reads === 3) w.signOut();
+            return rows;
+        };
+        expect(await interruptedRuns(w.deps)).toEqual([]);
+        await quietlySettled();
+        expect(w.server.aborted).toEqual([]);
+        expect(w.runs.rows.get('nodeless')).toEqual(nodeless);
+    });
+
     test('another account’s row, or one naming none, is never offered, settled, kept, deleted or removed', async () => {
         const w = world();
         // A run's row names the account that made it.

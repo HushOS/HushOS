@@ -75,6 +75,8 @@ export const clientOfNode = spaces.clientOfNode;
 export const groupOfSpace = spaces.groupOf;
 /* Why nothing may be added to `folder` now, or null: checked before any upload, folder or move into it. */
 export const refuseWrite = spaces.refuseWrite;
+/* Why nothing in a family folder may be changed now; undefined for a workspace never registered here. */
+export const refuseChange = spaces.refuseChange;
 /* Whether that refusal is only a family folder's key change still on its way to `folder`: adds wait. */
 export const waitsForKeyChange = spaces.waitsForKeyChange;
 /* A family folder's family synced again while an upload waits out its key change. */

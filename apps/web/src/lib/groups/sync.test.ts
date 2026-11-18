@@ -2,7 +2,7 @@ import type { CryptoResults } from '@hushos/crypto';
 import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
 import { GUARD_UNREADABLE, GUARD_UNSAVED } from '@/lib/contact-guard';
-import { areaWrite, syncGroup, wipeGroup, writeRefusal } from './sync';
+import { areaWrite, changeRefusal, syncGroup, wipeGroup, writeRefusal } from './sync';
 import { AREA, GROUP, USER, harness, pinAt, refusal } from './test-harness';
 
 /*
@@ -465,5 +465,15 @@ describe('writeRefusal', () => {
         expect(writeRefusal(undefined, { keyEpoch: 99 })).toMatch(/Open the family again/);
         expect(writeRefusal(state('read-only', null), { keyEpoch: 99 })).toMatch(/couldn’t check/);
         expect(writeRefusal(state('keys-changed', null), { keyEpoch: 99 })).toMatch(/keys changed/);
+    });
+});
+
+/* What a save run's clean-up may remove from a family folder: nothing unless it is writable here. */
+describe('changeRefusal', () => {
+    test('read-only, re-keyed or not open here refuses; writable, a walk under way included, does not', () => {
+        expect(changeRefusal(undefined)).toMatch(/Open the family again/);
+        expect(changeRefusal({ write: 'read-only' })).toMatch(/couldn’t check/);
+        expect(changeRefusal({ write: 'keys-changed' })).toMatch(/keys changed/);
+        expect(changeRefusal({ write: 'writable' })).toBeNull();
     });
 });

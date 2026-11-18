@@ -23,12 +23,15 @@ export type CleanUpClient = {
  * A save run's clean-up requests (SaveRunDeps abortUpload, trash, purge), each sent only while
  * `stillOn` (the session the run's deps were made in): checked before every batch, every delete
  * forever, every try of an abort and every resend of a busy delete, so a sign-out between two
- * sends nothing more, under no other account.
+ * sends nothing more, under no other account. `refuseChange` is asked at the same points before
+ * a trash or a delete forever: a family folder that may not be changed now (read-only here, its
+ * keys changed, not known) has nothing removed, and the items stay `refused` (the row kept).
  */
 export function cleanUpSends(
     stillOn: () => boolean,
     clientFor: (workspaceId: string) => CleanUpClient,
     abort: (workspaceId: string, uploadId: string) => Promise<unknown>,
+    refuseChange: (workspaceId: string) => Promise<string | null>,
     options: { pause?: (ms: number) => Promise<void> } = {},
 ): Pick<SaveRunDeps, 'abortUpload' | 'trash' | 'purge'> {
     return {
@@ -38,6 +41,10 @@ export function cleanUpSends(
         trash: (workspaceId, ids) =>
             trashInBatches(ids, MAX_TRASH_BATCH, stillOn, async (batch) => {
                 const fates = new Map<string, ItemFate>();
+                if (await refuseChange(workspaceId)) {
+                    for (const id of batch) fates.set(id, 'refused');
+                    return fates;
+                }
                 try {
                     const answer = await clientFor(workspaceId).trashMany(workspaceId, batch);
                     for (const [id, fate] of trashFatesOf(answer.results)) fates.set(id, fate);
@@ -61,6 +68,9 @@ export function cleanUpSends(
                 trash: () => Promise.reject(new Error('not used')),
                 restore: () => Promise.reject(new Error('not used')),
                 purge: async (ws, nodeIds) => {
+                    // Before every send, its resends too: refused, nothing goes (the items stay refused).
+                    const refused = await refuseChange(ws);
+                    if (refused) throw new Error(refused);
                     try {
                         return await send(ws, nodeIds);
                     } catch (error) {

@@ -553,6 +553,24 @@ class SaveRunTest {
         assertFalse(rows.list().single().uncounted)
     }
 
+    /* A sign-out while the interrupted rows are read offers none of them, and looks for none. */
+    @Test
+    fun aSignOutWhileTheRowsAreReadOffersNone() {
+        val epoch = SaveRunJournal.Epoch()
+        val rows = journal(epoch)
+        val writer = FakeWriter()
+        rows.put(SaveRunRow("made", "ws", listOf("node-a"), emptyList(), 1L, "an-earlier-launch", account = "me"))
+        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L),
+            chosenDelete = true, account = "me"))
+        var looks = 0
+        writer.looking = { looks++ }
+        // Signed out right as the rows were read.
+        rows.between = { epoch.end() }
+        assertTrue(SaveRuns.interrupted(rows, writer).isEmpty())
+        SaveRuns.quietlySettled()
+        assertEquals(0, looks)
+    }
+
     /* Another account's row, or one naming none, is never offered, settled, kept, deleted or removed; nothing is sent for it. */
     @Test
     fun anotherAccountsRowIsNeverOfferedSettledKeptOrDeleted() {

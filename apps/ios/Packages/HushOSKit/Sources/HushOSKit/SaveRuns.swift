@@ -661,6 +661,8 @@ public enum SaveRuns {
                 offered.append(row)
             }
         }
+        // Signed out (or another account in) while the rows were read: none is offered, or looked for, for whoever is now.
+        guard journal.stillOn else { return [] }
         // In the background: the rows to offer come back now, never after the network.
         if !quiet.isEmpty {
             // Each start chained after the last, swapped in under one lock: two opens never settle at once.

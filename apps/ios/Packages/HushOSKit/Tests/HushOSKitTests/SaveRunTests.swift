@@ -468,6 +468,23 @@ let own = SaveSources.ownWriting
         #expect(await writer.sent.isEmpty)
     }
 
+    /* A sign-out while the interrupted rows are read offers none of them, and looks for none. */
+    @Test func aSignOutWhileTheRowsAreReadOffersNone() async throws {
+        let epoch = SaveRunJournal.Epoch()
+        let rows = journal(epoch)
+        let writer = FakeWriter()
+        try rows.put(SaveRunRow(id: "made", workspaceId: "ws", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch"))
+        try rows.put(SaveRunRow(id: "answered", workspaceId: "ws", nodeIds: ["slow"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                                uncertain: ["slow": Date(timeIntervalSince1970: 1)], chosen: "delete"))
+        let looks = Locked(0)
+        await writer.set(looking: { looks.value += 1 })
+        // Signed out right as the rows were read.
+        rows.between = { epoch.end() }
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).isEmpty)
+        await SaveRuns.quietlySettled()
+        #expect(looks.value == 0)
+    }
+
     /* Not found, to someone who isn't a member, is gone only while every folder the run saved into is still found. */
     @Test func notFoundToSomeoneNotAMemberIsGoneOnlyWhileEveryDestinationIsFound() async throws {
         // An editor of two of one owner's folders who lost only the result's: its file still there.

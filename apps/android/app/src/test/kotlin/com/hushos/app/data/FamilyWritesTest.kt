@@ -116,6 +116,29 @@ class FamilyWritesTest {
     }
 
     /*
+     * The family folder stops being writable here after a save run made something in it (its member list no longer
+     * committed, as after a refusal): the run's cancel removes nothing, sends no trash or delete forever, and keeps its
+     * row for when it may. Fails if a clean-up's trash or purge goes out past the family's write gate.
+     */
+    @Test
+    fun aCleanUpInAFamilyFolderThatMayNoLongerBeWrittenRemovesNothingAndKeepsItsRow() {
+        val phone = opened()
+        val vault = phone.vault
+        val top = vault.resolve(family.rootId)
+        val rows = SaveRunJournal(File(app.cacheDir, "family-save-runs-${System.nanoTime()}/${SaveRunJournal.FILE}"), SaveRunJournal.Epoch())
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val run = SaveRun.start(writer, listOf(top), emptyList(), rows, pause = {})
+        val out = run.folder("Out", SaveSources.OwnWriting, top)
+        vault.areaLedger.uncommit(family.groupId, false)
+        val sent = server.requests.size
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertNull(server.node(out.id).trashedAt)
+        assertTrue(sentSince(sent).none { it.contains("trash") || it.startsWith("DELETE") })
+        assertEquals(listOf(out.id), rows.list().single().nodeIds)
+    }
+
+    /*
      * A new folder, a file uploaded into the top folder and moved into it, renamed, a new version of Sam's file, and a
      * trash put back: each lands, each row this phone keeps afterwards is the ledger's own, and another phone of the
      * account (a fresh session and ledger) opens all of it through its ledger and reads the bytes. Fails if a family

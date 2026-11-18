@@ -513,6 +513,8 @@ object SaveRuns {
                 else -> offered += row
             }
         }
+        // Signed out (or another account in) while the rows were read: none is offered, or looked for, for whoever is now.
+        if (!journal.live || writer.account != account) return emptyList()
         // On the quiet thread: the rows to offer come back now, never after the network.
         if (answered.isNotEmpty()) synchronized(quietLock) {
             quietWork = quiet.submit {
