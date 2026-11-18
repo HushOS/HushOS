@@ -44,12 +44,12 @@ import { Button } from '@/components/ui/button';
 import { unlockedNow } from '@/lib/auth-view';
 import { deviceSession } from '@/lib/device-session';
 import { driveError, folderQueryOptions, invalidateFolders, nodeSize } from '@/lib/drive';
-import { editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
+import { editorLanguage, loadLanguage, preloadLanguages, wrapsLines } from '@/lib/editor-languages';
 import { holdPageWhile } from '@/lib/leave-guard';
 import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
-import { parseFailure, parseWarning, structuredKind } from '@/lib/text-parse';
+import { parseFailure, parseWarning, preloadParsers, structuredKind } from '@/lib/text-parse';
 import { editTargetOf, saveCopy, saveVersion, type StartRun } from '@/lib/text-save';
 
 /*
@@ -64,6 +64,15 @@ import { editTargetOf, saveCopy, saveVersion, type StartRun } from '@/lib/text-s
  */
 
 export type EditGuard = { discarded: boolean };
+
+/*
+ * The editor with every grammar and parser it may use, fetched after unlock (lib/preload.ts,
+ * editing-design.md section 4): which ones a device fetched never says what was edited.
+ */
+export async function preloadEditor() {
+    await preloadLanguages();
+    await preloadParsers();
+}
 type GuardRef = { readonly current: EditGuard };
 
 type Phase =
@@ -81,6 +90,8 @@ export const editorWords = {
     saved: 'Saved',
     savedCopy: (name: string) => `Saved as “${name}”`,
     savedCopyEnded: 'Saved as a copy. Open it from its folder to keep editing.',
+    savedCopyEndedLater:
+        'Saved as a copy, without what you typed while it saved. Copy that text before you close.',
     failed: 'This file couldn’t be opened for editing.',
     tryAgain: 'Try again',
     staleTitle: 'This file changed',
@@ -191,6 +202,12 @@ const theme = EditorView.theme({
     '.cm-specialChar': { color: 'var(--destructive)' },
 });
 
+/* Whether the editor takes changes. */
+const fixed = (editable: boolean) => [
+    EditorState.readOnly.of(!editable),
+    EditorView.editable.of(editable),
+];
+
 /* Everything but the language, wrapping and whether it may be changed. */
 function baseExtensions(): Extension[] {
     return [
@@ -247,6 +264,7 @@ export function TextEditor({
     askDiscard,
     onTarget,
     onDirty,
+    onLeave,
 }: {
     /* The file as the viewer listed it when Edit was pressed. */
     node: DriveNode;
@@ -259,24 +277,38 @@ export function TextEditor({
     /* The file being written changed (Save as a copy, Open theirs): the header names it. */
     onTarget: (file: DriveNode) => void;
     onDirty: (dirty: boolean) => void;
+    /* A move away was let through (nothing unsaved, or it was discarded): the session ends. */
+    onLeave: () => void;
 }) {
     const queryClient = useQueryClient();
+    const leaving = useRef(onLeave);
+    useEffect(() => {
+        leaving.current = onLeave;
+    });
     const [phase, setPhase] = useState<Phase>({ kind: 'loading', progress: null });
     const [loadFrom, setLoadFrom] = useState(node);
     const [attempt, setAttempt] = useState(0);
     const target = useRef<Target>({ file: node, startedFrom: node.currentVersion?.id ?? null });
     const host = useRef<HTMLDivElement>(null);
     const view = useRef<EditorView | null>(null);
+    /* Whether the text may be changed: off for a read-only file, and once a copy's file can't be told. */
+    const editability = useRef(new Compartment());
     const saved = useRef<Text | null>(null);
     const [dirty, setDirty] = useState(false);
     const dirtyNow = useRef(false);
     const endedNow = useRef(false);
     const [saving, setSaving] = useState(false);
+    const savingNow = useRef(false);
     const [status, setStatus] = useState<string | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
     const [warning, setWarning] = useState<string | null>(null);
     const [edits, setEdits] = useState(0);
     const [stale, setStale] = useState<{ currentVersionId: string | null } | null>(null);
+    const staleNow = useRef(false);
+    useEffect(() => {
+        savingNow.current = saving;
+        staleNow.current = stale !== null;
+    }, [saving, stale]);
     const [confirmTheirs, setConfirmTheirs] = useState(false);
     /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
     const [ended, setEnded] = useState(false);
@@ -353,8 +385,7 @@ export function TextEditor({
                 extensions: [
                     baseExtensions(),
                     languageSlot.of([]),
-                    EditorState.readOnly.of(!editable),
-                    EditorView.editable.of(editable),
+                    editability.current.of(fixed(editable)),
                     wrapsLines(language) ? EditorView.lineWrapping : [],
                     EditorView.contentAttributes.of({
                         'aria-label': `Contents of ${loadFrom.name}`,
@@ -363,7 +394,7 @@ export function TextEditor({
                         autocapitalize: 'off',
                     }),
                     EditorView.updateListener.of((update) => {
-                        if (!update.docChanged || !saved.current || endedNow.current) return;
+                        if (!update.docChanged || !saved.current) return;
                         markDirty(!update.state.doc.eq(saved.current));
                         setEdits((count) => count + 1);
                     }),
@@ -413,9 +444,12 @@ export function TextEditor({
     // So does a move within the app (Back, a link), wherever it leads; a lock or a sign-out never waits.
     useBlocker({
         shouldBlockFn: async () => {
-            if (!dirtyNow.current || guard.current.discarded) return false;
             // Wherever it goes (a public page included); only a lock or a sign-out isn't held up.
-            if (sessionEnding()) return false;
+            // A move let through ends the session: Back that drops the viewer's address closes it.
+            if (!dirtyNow.current || guard.current.discarded || sessionEnding()) {
+                leaving.current();
+                return false;
+            }
             return !(await askDiscard());
         },
         enableBeforeUnload: false,
@@ -493,27 +527,31 @@ export function TextEditor({
                 text: doc.toString(),
             });
             // From here on the editor writes the copy: the file someone else saved is left as theirs.
-            // The copy is the run's own (its id and version); the listing only supplies its row, in
-            // the same folder and workspace.
-            const fresh = made ? await targetOf(queryClient, file).catch(() => null) : null;
-            const listed = fresh?.children.find(
-                (child) =>
-                    child.id === made?.id &&
-                    child.workspaceId === listing.folder.workspaceId &&
-                    child.parentId === listing.folder.id,
-            );
-            if (made && listed) {
-                settled(doc, listed, made.currentVersion?.id ?? null);
+            // The copy is the run's own (its id, and the version its upload minted, never the reply
+            // row's); a listing only supplies its row, in the same folder and workspace, asked twice.
+            const locate = async () =>
+                (await targetOf(queryClient, file).catch(() => null))?.children.find(
+                    (child) =>
+                        child.id === made.node?.id &&
+                        child.workspaceId === listing.folder.workspaceId &&
+                        child.parentId === listing.folder.id,
+                );
+            const listed = made.node ? ((await locate()) ?? (await locate())) : undefined;
+            if (made.node && listed) {
+                settled(doc, listed, made.versionId);
                 onTarget(listed);
                 setStatus(editorWords.savedCopy(listed.name));
             } else {
                 // Saved, but which file it became can't be told: nothing more is saved from here
-                // (never into the file someone else saved), and nothing asks before leaving.
+                // (never into the file someone else saved). The text stays, read-only, to copy from;
+                // what was typed while it saved isn't in the copy, so leaving still asks.
                 setEnded(true);
                 endedNow.current = true;
+                current.dispatch({ effects: editability.current.reconfigure(fixed(false)) });
                 saved.current = doc;
-                markDirty(false);
-                setStatus(editorWords.savedCopyEnded);
+                const later = !current.state.doc.eq(doc);
+                markDirty(later);
+                setStatus(later ? editorWords.savedCopyEndedLater : editorWords.savedCopyEnded);
             }
         } catch (error) {
             if (error instanceof SaveRefused && error.reason === 'no-room' && error.room)
@@ -540,11 +578,22 @@ export function TextEditor({
         setLoadFrom(listed);
     }, [queryClient, onTarget, markDirty]);
 
-    // Only with changes to save; otherwise it does nothing, and never opens the browser's Save Page.
-    useHotkey('Mod+S', () => void save(), {
-        enabled: editable && dirty && !ended && !saving && stale === null,
-        preventDefault: 'always',
-    });
+    // Always the editor's while it is open (the browser's Save Page never opens over it); it saves
+    // only when there are changes and nothing else is under way.
+    useHotkey(
+        'Mod+S',
+        () => {
+            if (
+                editable &&
+                dirtyNow.current &&
+                !endedNow.current &&
+                !savingNow.current &&
+                !staleNow.current
+            )
+                void save();
+        },
+        { preventDefault: true },
+    );
 
     const format = useFormatForDisplay();
     const savable = editable && dirty && !saving && !ended;

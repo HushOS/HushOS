@@ -558,6 +558,11 @@ export type ProducedFile = {
     modified?: number;
     /* The folder it goes into: the run's first target unless the run made one for it. */
     into?: DriveNode;
+    /*
+     * Hears the version the new file published, by the id it was minted with (null when the queue
+     * couldn't say), before the file is answered: a reply row may already show a newer one.
+     */
+    onVersion?: (versionId: string | null) => void;
 };
 
 export type ProducedVersion = {
@@ -595,6 +600,12 @@ export type SaveRun = {
     finish(): Promise<void>;
     /* Stops the run and removes the new files and folders it made; how it stopped. */
     cancel(): Promise<RunStopped>;
+    /*
+     * A finished run whose record this device wouldn't retire (finish threw RecordNotUpdated):
+     * let go of here (its lock and its listener), everything it saved kept; its row stays for the
+     * next open to settle. Does nothing for a run not finished.
+     */
+    release(): void;
     /* Results queued and not yet in. */
     waiting(): number;
 };
@@ -624,6 +635,32 @@ function ownedParts(bytes: Uint8Array | Uint8Array[], keepCallers = false) {
         handedBuffers.add(owned.buffer);
         return owned;
     });
+}
+
+/*
+ * Ends a run whose results are in (an editor's save): its record goes, its lock and listener with
+ * it. A record this device wouldn't retire is asked again, never the upload; past the tries the run
+ * is let go of (release: lock and listener freed, what it saved kept, its row left for the next open)
+ * and, if it never finished, cancelled. Never throws: what was saved stays saved. True when retired.
+ */
+export async function endRun(
+    run: SaveRun,
+    {
+        tries = 3,
+        pause = (ms: number) => sleep(ms),
+    }: { tries?: number; pause?: (ms: number) => Promise<void> } = {},
+) {
+    for (let attempt = 1; attempt <= tries; attempt++) {
+        try {
+            await run.finish();
+            return true;
+        } catch {
+            if (attempt < tries) await pause(250 * attempt);
+        }
+    }
+    run.release();
+    await run.cancel().catch(() => {});
+    return false;
 }
 
 /*
@@ -713,6 +750,8 @@ type Pending = {
     nodeId: string | null;
     /* Whether it took one of the run's planned thumbnails: given back if it ends stale, never published. */
     thumbnail: boolean;
+    /* A new file's caller, told the version it published (ProducedFile.onVersion). */
+    onVersion?: (versionId: string | null) => void;
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
 };
@@ -783,6 +822,8 @@ function createRun(
     let stopped: RunStopped | null = null;
     let stopping: Promise<RunStopped> | null = null;
     let finished = false;
+    /* Let go of after its record wouldn't retire (release): its lock and listener are gone. */
+    let released = false;
     let abandoned = false;
     /* Set by the clean-up just before it removes the row: no write may land after that. */
     let sealed = false;
@@ -935,6 +976,7 @@ function createRun(
         if (output.kind === 'version') keptVersions += 1;
         if (output.nodeId) mayBePublished.add(output.nodeId);
         void persist();
+        if (output.kind === 'file') output.onVersion?.(item.versionId ?? null);
         output.resolve(
             output.kind === 'version'
                 ? ({
@@ -951,10 +993,15 @@ function createRun(
         file: MemoryFile,
         parent: DriveNode,
         sources: ResultSources,
-        extra: { replaces?: DriveNode; startedFrom?: string | null },
+        extra: {
+            replaces?: DriveNode;
+            startedFrom?: string | null;
+            onVersion?: (versionId: string | null) => void;
+        },
     ) {
         const output: Pending = {
             kind,
+            onVersion: extra.onVersion,
             tracked: kind === 'file' && !madeFolders.has(parent.id),
             uploadId: null,
             nodeId: extra.replaces?.id ?? null,
@@ -1311,7 +1358,9 @@ function createRun(
                 // Checked again with nothing awaited before the enqueue: a stop that began while the
                 // folder was listed refuses this result, which then never reaches the queue.
                 await open();
-                return (await enqueue('file', file, into, result.sources, {})) as NodeView | null;
+                return (await enqueue('file', file, into, result.sources, {
+                    onVersion: result.onVersion,
+                })) as NodeView | null;
             });
         },
         version(result) {
@@ -1359,6 +1408,11 @@ function createRun(
             } else if (current() && !(await retire(deps.runs, row, current)) && current())
                 // Refused while still signed in; after a sign-out the run ends, writing nothing.
                 throw new RecordNotUpdated();
+            end();
+        },
+        release() {
+            if (!finished || stopped || released) return;
+            released = true;
             end();
         },
         async cancel() {

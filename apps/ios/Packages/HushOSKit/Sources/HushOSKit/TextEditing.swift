@@ -78,6 +78,12 @@ public enum TextEditing {
 
     public static func hasCarriageReturn(_ text: String) -> Bool { text.utf8.contains(13) }
 
+    /* Whether two texts are the same bytes: String's == takes "é" and "e" + U+0301 for equal, which a save must not. */
+    public static func same(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
+
+    /* The save's session ended (the screen closed, another sign-in): nothing was started. */
+    public struct SessionEnded: Error, Equatable {}
+
     /* Why a listing can't stand for the file's folder: it answered for another folder or another workspace. */
     public struct WrongFolder: Error, Equatable, WordedError {
         public init() {}
@@ -151,8 +157,11 @@ public enum TextSave {
      * thumbnail, signed as the person's own writing.
      */
     public static func version(_ text: String, of file: Opened, in folder: Opened, startedFrom: String?, start: Start,
+                               stillOn: @Sendable () async -> Bool = { true },
                                pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextSaved {
         let bytes = TextEditing.encode(text)
+        // Asked last thing before the run starts: a save whose session ended uploads nothing.
+        guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([file], [.known(size: UInt64(bytes.count), thumbnail: false)])
         let saved = try await run.version(bytes, of: file, in: folder, startedFrom: startedFrom, sources: .ownWriting, mime: file.metadata.mime)
         if let pause { await end(run, pause: pause) } else { await end(run) }
@@ -164,8 +173,10 @@ public enum TextSave {
 
     /* Save as a copy: a new file beside `file` under the next free name, signed as `file` is (`sources`). */
     public static func copy(_ text: String, of file: Opened, in folder: Opened, sources: SaveSources, start: Start,
+                            stillOn: @Sendable () async -> Bool = { true },
                             pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextCopy {
         let bytes = TextEditing.encode(text)
+        guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([folder], [.known(size: UInt64(bytes.count), thumbnail: false)])
         let minted = MintedVersion()
         let made = try await run.file(bytes, name: file.name, mime: file.metadata.mime, sources: sources, in: folder, minted: minted)
@@ -180,6 +191,16 @@ public enum TextSave {
  * mount is the file itself) isn't edited: its folder can't be listed, and a save needs it.
  */
 public enum EditRights {
+    /*
+     * Whether this person may change an item that isn't a family folder's: their own only when their own
+     * workspace is known and is the item's (never assumed before it loads), otherwise through an editor's
+     * mount covering it (mayEditShared).
+     */
+    public static func mayEdit(itemId: String, workspaceId: String, own: String?, roots: [String: String], parent: (String) -> String?) -> Bool {
+        if let own, own.lowercased() == workspaceId.lowercased() { return true }
+        return mayEditShared(itemId: itemId, roots: roots, parent: parent)
+    }
+
     /*
      * `roots`: the mounts in the item's workspace, by root id, with their roles. `parent`: an item's
      * parent within that same workspace, or nil when not known. True only for an editor's mount that

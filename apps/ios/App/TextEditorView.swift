@@ -39,6 +39,8 @@ struct TextEditorScreen: View {
     @State private var confirmLeave = false
     @State private var attempt = 0
     @State private var loadFrom: Opened?
+    /* The save on its way, cancelled when the screen goes or the session changes. */
+    @State private var work: Task<Void, Never>?
 
     private struct StaleVersion: Identifiable, Equatable {
         let currentVersionId: String?
@@ -60,19 +62,24 @@ struct TextEditorScreen: View {
         .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
         // Another session (a sign-out and in, another account): this text was the last one's.
         .onChange(of: ObjectIdentifier(store.vault)) { _, _ in
+            work?.cancel()
             editor.drop()
             dismiss()
         }
-        .onDisappear { editor.drop() }
+        .onDisappear {
+            // A save still on its way belongs to this screen's session: it stops with it.
+            work?.cancel()
+            editor.drop()
+        }
         .confirmationDialog(stale?.currentVersionId == nil ? EditorWords.goneTitle : EditorWords.staleTitle,
                             isPresented: Binding(get: { stale != nil && !confirmTheirs }, set: { if !$0 { stale = nil } }),
                             titleVisibility: .visible, presenting: stale) { choice in
             if let current = choice.currentVersionId {
-                Button(EditorWords.onTop) { stale = nil; Task { await save(onTopOf: current) } }
-                Button(EditorWords.copy) { stale = nil; Task { await saveCopy() } }
+                Button(EditorWords.onTop) { stale = nil; begin { await save(onTopOf: current) } }
+                Button(EditorWords.copy) { stale = nil; begin { await saveCopy() } }
                 Button(EditorWords.theirs, role: .destructive) { confirmTheirs = true }
             } else {
-                Button(EditorWords.copy) { stale = nil; Task { await saveCopy() } }
+                Button(EditorWords.copy) { stale = nil; begin { await saveCopy() } }
             }
             Button(EditorWords.cancel, role: .cancel) { stale = nil }
         } message: { choice in
@@ -102,7 +109,7 @@ struct TextEditorScreen: View {
         }
         if phase == .editing {
             ToolbarItem(placement: .confirmationAction) {
-                Button { Task { await save() } } label: {
+                Button { begin { await save() } } label: {
                     if saving { ProgressView() } else { HeaderWord(text: EditorWords.save) }
                 }
                 .disabled(!edited || saving)
@@ -186,22 +193,39 @@ struct TextEditorScreen: View {
         } catch {}
     }
 
+    private func begin(_ job: @escaping @MainActor () async -> Void) {
+        work?.cancel()
+        work = Task { await job() }
+    }
+
+    /*
+     * Whether a save begun under `vault` may still go on: its task not cancelled (the screen gone) and
+     * the store's session still that vault's. Asked before the run starts and before the screen changes.
+     */
+    private func stillOn(_ vault: Vault) -> Bool {
+        !Task.isCancelled && ObjectIdentifier(store.vault) == ObjectIdentifier(vault)
+    }
+
     /* Save, and Save on top (`onTopOf`: the version current now). */
     private func save(onTopOf: String? = nil) async {
         guard phase == .editing, !saving, let file = target else { return }
+        // The session it starts in: the vault and its journal, never a replacement's.
+        let vault = store.vault
         let text = editor.text
         saving = true
         failure = nil
         status = nil
         defer { saving = false }
         do {
-            let (folder, listed) = try await store.vault.editTarget(file)
+            let (folder, listed) = try await vault.editTarget(file)
+            guard stillOn(vault) else { return }
             guard let listed else {
                 stale = StaleVersion(currentVersionId: nil)
                 return
             }
             let saved = try await TextSave.version(text, of: listed, in: folder, startedFrom: onTopOf ?? startedFrom,
-                                                   start: TextSave.runs(store.vault))
+                                                   start: TextSave.runs(vault), stillOn: { @MainActor in stillOn(vault) })
+            guard stillOn(vault) else { return }
             switch saved {
             case .stale(let current):
                 stale = StaleVersion(currentVersionId: current)
@@ -211,34 +235,40 @@ struct TextEditorScreen: View {
                 // unknown, the next save asks the stale question.
                 startedFrom = versionId
                 onSaved(landed)
-                // Typed while it saved: still changed.
-                edited = editor.text != text
+                // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
+                edited = !TextEditing.same(editor.text, text)
                 status = EditorWords.saved
                 if let parent = landed.node.parentId { await store.refresh(folder: parent) }
             }
         } catch {
+            guard stillOn(vault) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
     }
 
     private func saveCopy() async {
         guard let file = target else { return }
+        let vault = store.vault
         let text = editor.text
         saving = true
         failure = nil
         defer { saving = false }
         do {
-            let (folder, _) = try await store.vault.editTarget(file)
-            let sources = try await store.vault.copySources(of: file)
-            let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(store.vault))
+            let (folder, _) = try await vault.editTarget(file)
+            let sources = try await vault.copySources(of: file)
+            guard stillOn(vault) else { return }
+            let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
+                                               stillOn: { @MainActor in stillOn(vault) })
+            guard stillOn(vault) else { return }
             // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
             // stays theirs.
             target = made.file
             startedFrom = made.versionId
-            edited = editor.text != text
+            edited = !TextEditing.same(editor.text, text)
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
         } catch {
+            guard stillOn(vault) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
     }

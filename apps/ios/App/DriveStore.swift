@@ -655,7 +655,6 @@ final class DriveStore {
      */
     func mayEdit(_ item: Opened) -> Bool {
         if isFamily(item) { return familyWritable(item) }
-        if isOwn(item) { return true }
         let workspace = item.node.workspaceId.lowercased()
         var roots: [String: String] = [:]
         for mount in mounts where mount.share.workspaceId.lowercased() == workspace {
@@ -663,7 +662,8 @@ final class DriveStore {
             // The widest of two mounts of the same folder.
             if roots[root.id] != "editor" { roots[root.id] = mount.share.role }
         }
-        return EditRights.mayEditShared(itemId: item.id, roots: roots) { id in
+        // Own only once the own workspace is known: before it loads, a received share's file is never taken for one's own.
+        return EditRights.mayEdit(itemId: item.id, workspaceId: item.node.workspaceId, own: myWorkspace, roots: roots) { id in
             let row = id == item.id ? item : self.known(id)
             guard let row, row.node.workspaceId.lowercased() == workspace else { return nil }
             return row.node.parentId

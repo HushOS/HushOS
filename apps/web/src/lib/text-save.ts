@@ -1,6 +1,6 @@
 import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
-import { OWN_WRITING, type RunPlan, type SaveRun } from '@hushos/drive/save-runs';
+import { endRun, OWN_WRITING, type RunPlan, type SaveRun } from '@hushos/drive/save-runs';
 import { encodeText } from '@/lib/text-edit';
 
 /*
@@ -63,30 +63,6 @@ export function editTargetOf(listing: FolderListing, file: DriveNode) {
     return { folder, file: listed };
 }
 
-/* Tries before a run whose record this device wouldn't update is let go of (its result is kept). */
-const FINISH_TRIES = 3;
-const FINISH_PAUSE_MS = 250;
-
-/*
- * Ends a run whose result is in: its record goes, its lock and its listener with it. A record this
- * device wouldn't update is asked again (never the upload); past the tries the run is cancelled,
- * which keeps a version that landed and lets everything else go, and its row is settled at the next
- * open. Never throws: what was saved stays saved.
- */
-export async function endRun(run: SaveRun, pause = (ms: number) => sleep(ms)) {
-    for (let attempt = 1; attempt <= FINISH_TRIES; attempt++) {
-        try {
-            await run.finish();
-            return true;
-        } catch {
-            if (attempt < FINISH_TRIES) await pause(FINISH_PAUSE_MS * attempt);
-        }
-    }
-    await run.cancel().catch(() => {});
-    return false;
-}
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 /* A new version of `file` holding `text`, unless the file moved on from `startedFrom`. */
 export async function saveVersion(
     start: StartRun,
@@ -106,29 +82,40 @@ export async function saveVersion(
         sources: OWN_WRITING,
         mime: edit.file.metadata?.mime ?? null,
     });
-    await endRun(run, pause);
+    await endRun(run, pause ? { pause } : {});
     if (saved.status === 'stale') return saved;
     return { status: 'saved', versionId: saved.versionId };
 }
 
-/* A new file beside `file` in `folder`, under the next free name, holding `text`. */
+/* A copy saved: the new file as its reply row came, and the version it published, as minted. */
+export type TextCopy = { node: NodeView | null; versionId: string | null };
+
+/*
+ * A new file beside `file` in `folder`, under the next free name, holding `text`. Its version is
+ * the one the upload minted, never the reply row's: a repeated completion answers with the node as
+ * it is by then, which may already carry another device's edit.
+ */
 export async function saveCopy(
     start: StartRun,
     edit: { file: DriveNode; folder: DriveNode; text: string },
     pause?: (ms: number) => Promise<void>,
-): Promise<NodeView | null> {
+): Promise<TextCopy> {
     const bytes = encodeText(edit.text);
     const run = await start({
         targets: [edit.folder],
         results: [{ size: bytes.byteLength, thumbnail: false }],
     });
+    let versionId: string | null = null;
     const made = await run.file({
         name: edit.file.name,
         bytes,
         mime: edit.file.metadata?.mime ?? null,
         sources: [{ node: edit.file, source: 'drive' }],
         into: edit.folder,
+        onVersion: (minted) => {
+            versionId = minted;
+        },
     });
-    await endRun(run, pause);
-    return made;
+    await endRun(run, pause ? { pause } : {});
+    return { node: made, versionId };
 }

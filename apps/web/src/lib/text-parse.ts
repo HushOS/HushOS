@@ -14,6 +14,11 @@ const NAMES: Record<StructuredKind, string> = {
     xml: 'XML',
 };
 
+/* The YAML and TOML parsers, for the post-unlock preload: fetched whether or not such a file is edited. */
+export async function preloadParsers() {
+    await Promise.all([import('yaml'), import('smol-toml')]);
+}
+
 /* Which check a file gets, from the editor's language for it; null for anything else (JSONC included). */
 export function structuredKind(language: string | null): StructuredKind | null {
     if (language === 'json') return 'json';

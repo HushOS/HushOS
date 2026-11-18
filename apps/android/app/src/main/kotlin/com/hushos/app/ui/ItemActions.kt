@@ -129,6 +129,17 @@ import java.time.temporal.ChronoUnit
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
 enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
 
+/*
+ * Whether this person may change the file's text here: never through ownerOf's ME guess while the own root isn't loaded;
+ * their own only once it is, otherwise the share that covers it, an editor's folder (EditRights).
+ */
+fun mayEditText(model: DriveViewModel, state: DriveState, item: Opened): Boolean {
+    if (model.families.isFamilyItem(item)) return model.families.writable(item)
+    val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
+    val mount = receivedVia(model, state, item)
+    return com.hushos.app.data.EditRights.mayEdit(item.node.workspaceId, own, mount?.let { it.share.role to (it.root?.id == item.id) })
+}
+
 /* A file the text editor opens: text by its name and type, no larger than the editor takes (TextEditing). */
 fun editsAsText(item: Opened) = com.hushos.app.data.TextEditing.opens(item) && (item.size ?: 0L) <= com.hushos.app.data.TextEditing.LIMIT
 
@@ -235,7 +246,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             }
             if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
             // A family folder's text file, while this phone may write there.
-            if (canEdit && editsAsText(item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
+            if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             if (canEdit) {
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
@@ -298,7 +309,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             SheetDivider()
             // Text and code, for whoever may change the file (an owner, an editor of the share). Never a file shared on its
             // own: its folder can't be listed, and a save needs it.
-            if (canEdit && editsAsText(item) && receivedVia(model, state, item)?.root?.id != item.id) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
+            if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }

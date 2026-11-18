@@ -120,7 +120,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var stale by mutableStateOf<Stale?>(null)
     private var work: Job? = null
     private var reading: RunControl? = null
-    private var ended = false
+    @Volatile private var ended = false
 
     private fun writer(vault: Vault) = VaultSaveWriter(vault, storage = { Auth.storage(context) })
     private fun start(vault: Vault) = TextSave.runs(writer(vault), SaveRunJournal.of(context))
@@ -167,8 +167,12 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     }
 
     /* Save, and Save on top (`onTopOf`: the version current now). */
+    /* Whether a save begun under `vault` may go on: this session not ended, and the model's vault still that one. */
+    private fun stillOn(vault: Vault) = !ended && vault() === vault
+
     fun save(onTopOf: String? = null) {
         if (phase != Phase.Editing || saving) return
+        // The session it starts in: the vault and its journal, never a replacement's.
         val vault = vault() ?: return
         val text = buffer.toString()
         val file = target
@@ -181,11 +185,12 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val writer = writer(vault)
                     val (folder, listed) = writer.editTarget(file)
                     if (listed == null) TextSaved.Stale(null)
-                    else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)))
+                    else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
+                        stillOn = { stillOn(vault) })
                 }
             }
             saving = false
-            if (ended) return@launch
+            if (!stillOn(vault)) return@launch
             result.onSuccess { done ->
                 when (done) {
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
@@ -195,7 +200,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                         // unknown, the next save asks the stale question.
                         startedFrom = done.versionId
                         // Typed while it saved: still changed.
-                        edited = buffer.toString() != text
+                        edited = !TextEditing.same(buffer, text)
                         status = EditorWords.SAVED
                         saved(done.item.node.parentId)
                     }
@@ -215,17 +220,18 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 runCatching {
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file)
-                    TextSave.copy(text, file, folder, writer.copySources(file), TextSave.runs(writer, SaveRunJournal.of(context)))
+                    TextSave.copy(text, file, folder, writer.copySources(file), TextSave.runs(writer, SaveRunJournal.of(context)),
+                        stillOn = { stillOn(vault) })
                 }
             }
             saving = false
-            if (ended) return@launch
+            if (!stillOn(vault)) return@launch
             result.onSuccess { made ->
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs.
                 target = made.file
                 startedFrom = made.versionId
-                edited = buffer.toString() != text
+                edited = !TextEditing.same(buffer, text)
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
             }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }

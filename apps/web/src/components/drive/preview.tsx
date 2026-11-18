@@ -204,6 +204,32 @@ export function Preview({
     useStepKey('ArrowLeft', previous, open, onChange);
     useStepKey('ArrowRight', next, open, onChange);
     /* "Discard your changes?", answered true to discard. Only while there are changes to lose. */
+    /*
+     * The session an editor's late result belongs to: a save that lands after its editor closed (and
+     * another opened) changes nothing of the new one.
+     */
+    const liveSession = useRef<number | null>(null);
+    useEffect(() => {
+        liveSession.current = editing?.session ?? null;
+    }, [editing?.session]);
+    const session = editing?.session ?? null;
+    const sessionCalls = useMemo(
+        () => ({
+            onDirty: (value: boolean) => {
+                if (session !== null && liveSession.current === session) setDirty(value);
+            },
+            onTarget: (target: DriveNode) =>
+                setEditing((now) => (now && now.session === session ? { ...now, target } : now)),
+            onLeave: () => {
+                if (session === null || liveSession.current !== session) return;
+                liveSession.current = null;
+                guard.current.discarded = true;
+                setEditing(null);
+                setDirty(false);
+            },
+        }),
+        [session],
+    );
     const askDiscard = useCallback(
         () =>
             new Promise<boolean>((resolve) => {
@@ -214,6 +240,7 @@ export function Preview({
             }).then((discard) => {
                 if (discard) {
                     guard.current.discarded = true;
+                    liveSession.current = null;
                     setEditing(null);
                     setDirty(false);
                 }
@@ -225,6 +252,7 @@ export function Preview({
     const close = async () => {
         if (editing && dirty && !guard.current.discarded && !(await askDiscard())) return;
         guard.current.discarded = true;
+        liveSession.current = null;
         setEditing(null);
         setDirty(false);
         onChange(null);
@@ -239,12 +267,11 @@ export function Preview({
     const startEditing = (node: DriveNode) => {
         setDirty(false);
         guard.current = { discarded: false };
-        setEditing({ session: ++sessions, start: node, target: node });
+        const session = ++sessions;
+        liveSession.current = session;
+        setEditing({ session, start: node, target: node });
     };
-    const onTarget = useCallback(
-        (target: DriveNode) => setEditing((now) => (now ? { ...now, target } : now)),
-        [],
-    );
+
     // Formatted | Source, offered by the renderer and kept per file.
     const [offered, setOffered] = useState(false);
     const [sourceFor, setSourceFor] = useState<string | null>(null);
@@ -471,8 +498,9 @@ export function Preview({
                                     actions={actions}
                                     guard={guard}
                                     askDiscard={askDiscard}
-                                    onTarget={onTarget}
-                                    onDirty={setDirty}
+                                    onTarget={sessionCalls.onTarget}
+                                    onDirty={sessionCalls.onDirty}
+                                    onLeave={sessionCalls.onLeave}
                                 />
                             </Suspense>
                         ) : (

@@ -23,7 +23,7 @@ import { editTargetOf, saveCopy, saveVersion } from '@/lib/text-save';
 type Stored = { id: string; name: string; versions: { id: string; bytes: number[] }[] };
 
 function bench(room = Infinity, finishFailures = 0) {
-    const ends = { finishes: 0, cancels: 0 };
+    const ends = { finishes: 0, releases: 0 };
     let failing = finishFailures;
     const files = new Map<string, Stored>();
     const plans: RunPlan[] = [];
@@ -64,11 +64,9 @@ function bench(room = Infinity, finishFailures = 0) {
                 for (let n = 2; taken.has(name.toLowerCase()); n++)
                     name = result.name.replace(/(\.[^.]+)?$/, ` (${n})$1`);
                 const id = `n${++ids}`;
-                files.set(id, {
-                    id,
-                    name,
-                    versions: [{ id: `v${++ids}`, bytes: flat(result.bytes) }],
-                });
+                const minted = `v${++ids}`;
+                files.set(id, { id, name, versions: [{ id: minted, bytes: flat(result.bytes) }] });
+                result.onVersion?.(minted);
                 return view(id);
             },
             version: async (result) => {
@@ -84,9 +82,9 @@ function bench(room = Infinity, finishFailures = 0) {
                 ends.finishes += 1;
                 if (failing-- > 0) throw new RecordNotUpdated();
             },
-            cancel: async () => {
-                ends.cancels += 1;
-                return new RunStopped('cancelled', 'Cancelled.', 'nothing', 1);
+            cancel: async () => new RunStopped('cancelled', 'Cancelled.', 'nothing', 1),
+            release: () => {
+                ends.releases += 1;
             },
             waiting: () => 0,
         };
@@ -201,7 +199,8 @@ describe('when someone else saved first', () => {
         const { b, id, file } = await stale();
         b.add('notes (2).txt', 'already here');
         const made = await saveCopy(b.start, { file, folder: b.folder, text: 'mine\n' });
-        const copy = b.files.get(made!.id)!;
+        const copy = b.files.get(made.node!.id)!;
+        expect(made.versionId).toBe(copy.versions[0]!.id);
         expect(copy.name).toBe('notes (3).txt');
         expect(b.text(copy.id)).toBe('mine\n');
         expect(b.text(id)).toBe('theirs\n');
@@ -241,7 +240,7 @@ describe('ending the run', () => {
         );
         expect(saved.status).toBe('saved');
         expect(b.files.get(id)!.versions).toHaveLength(2);
-        expect(b.ends).toEqual({ finishes: 3, cancels: 0 });
+        expect(b.ends).toEqual({ finishes: 3, releases: 0 });
     });
 
     test('a run that never finishes is let go of, and what it saved is still said saved', async () => {
@@ -255,7 +254,7 @@ describe('ending the run', () => {
         );
         expect(saved).toEqual({ status: 'saved', versionId: b.current(id) });
         expect(b.files.get(id)!.versions).toHaveLength(2);
-        expect(b.ends.cancels).toBe(1);
+        expect(b.ends.releases).toBe(1);
     });
 });
 

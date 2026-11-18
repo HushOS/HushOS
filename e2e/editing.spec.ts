@@ -88,6 +88,31 @@ test.afterAll(async () => {
     await page.context().close();
 });
 
+test('the editor, its grammars and its parsers come with the post-unlock preload, before any edit', async () => {
+    // Every request from a fresh load of the drive (the browser's own timing list fills up in development).
+    const fetched: string[] = [];
+    const listen = (request: { url(): string }) => fetched.push(request.url());
+    page.on('request', listen);
+    await page.reload();
+    await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
+        timeout: 90_000,
+    });
+    page.off('request', listen);
+    // What a device fetched never says which kind of file was edited: all of them, once.
+    for (const name of [
+        /text-editor/,
+        /lang[-_]yaml/,
+        /lang[-_]rust/,
+        /legacy[-_]modes/,
+        /smol[-_]toml/,
+    ])
+        expect(
+            fetched.some((url) => name.test(url)),
+            String(name),
+        ).toBe(true);
+    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 60_000 });
+});
+
 test('a save is a new version that changes only the edited bytes', async () => {
     await openEditor(page, 'notes.txt');
     await expect(editor(page)).toContainText('Grüße');
@@ -126,6 +151,8 @@ test('Ctrl or Cmd+S with nothing changed saves nothing', async () => {
     const before = await earlier();
     await openEditor(page, 'config.json');
     await editor(page).click();
+    // Twice: the second press is the editor's too, never the browser's Save Page.
+    await page.keyboard.press('ControlOrMeta+s');
     await page.keyboard.press('ControlOrMeta+s');
     await page.waitForTimeout(1_500);
     await expect(dialog(page).getByText('Saved', { exact: true })).toHaveCount(0);
@@ -133,6 +160,29 @@ test('Ctrl or Cmd+S with nothing changed saves nothing', async () => {
     await expect(editor(page)).toBeVisible();
     await close(page);
     expect(await earlier()).toBe(before);
+});
+
+test('Back that drops the viewer’s address closes an editor with nothing unsaved', async () => {
+    await openEditor(page, 'notes.txt');
+    await page.goBack();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    await expect(page).not.toHaveURL(/preview=/);
+    // Just saved, the same: it closes, and stays on the folder.
+    await openEditor(page, 'notes.txt');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('!');
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(editor(page)).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    await expect(page).toHaveURL(/\/app\/drive/);
+    await expect(page).not.toHaveURL(/preview=/);
+    expect((await downloaded(page, 'notes.txt')).toString()).toBe(
+        'Grüße ✓\nline two\nno final newline!',
+    );
 });
 
 test('a file the viewer found to be text by reading it offers Edit', async () => {
@@ -188,7 +238,7 @@ test('leaving with changes asks first', async () => {
     await ask.getByRole('button', { name: 'Discard changes' }).click();
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
     expect((await downloaded(page, 'notes.txt')).toString()).toBe(
-        'Grüße ✓\nline two\nno final newline',
+        'Grüße ✓\nline two\nno final newline!',
     );
 });
 

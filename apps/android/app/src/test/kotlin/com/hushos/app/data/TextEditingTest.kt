@@ -252,4 +252,37 @@ class TextEditingTest {
     @Test fun aPastedCRLFAloneIsLineFeed() {
         assertEquals("\n", TextEditing.lineFeeds("\r\n").toString())
     }
+
+    /* The editor closed or another session began while the folder was being listed: nothing starts, nothing uploads. */
+    @Test fun aSaveWhoseSessionEndedStartsNothing() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        assertThrows(TextEditing.SessionEnded::class.java) {
+            TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench), stillOn = { false })
+        }
+        assertThrows(TextEditing.SessionEnded::class.java) {
+            TextSave.copy("b", file, folder, SaveSources.OwnWriting, start(bench), stillOn = { false })
+        }
+        assertEquals(1, bench.versions.getValue(file.id).size)
+        assertEquals(1, bench.names.size)
+        assertTrue(bench.planned.isEmpty())
+    }
+
+    /* Typed during a save: "é" for "e" + U+0301 is a change, as the bytes a save writes are. */
+    @Test fun canonicallyEqualTextIsNotTheSameSave() {
+        assertTrue(!TextEditing.same("caf\u00e9", "cafe\u0301"))
+        assertTrue(TextEditing.same(StringBuilder("caf\u00e9"), "caf\u00e9"))
+    }
+
+    @Test fun ownershipIsNeverAssumedBeforeTheOwnWorkspaceIsKnown() {
+        // Not loaded yet: a viewer's share, or no share found, is not one's own.
+        assertTrue(!EditRights.mayEdit("theirs", null, "viewer" to false))
+        assertTrue(!EditRights.mayEdit("theirs", null, null))
+        // An editor's folder covering it counts; a file shared on its own doesn't.
+        assertTrue(EditRights.mayEdit("theirs", null, "editor" to false))
+        assertTrue(!EditRights.mayEdit("theirs", null, "editor" to true))
+        // Known and the item's: one's own.
+        assertTrue(EditRights.mayEdit("MINE", "mine", null))
+        assertTrue(!EditRights.mayEdit("theirs", "mine", null))
+    }
 }

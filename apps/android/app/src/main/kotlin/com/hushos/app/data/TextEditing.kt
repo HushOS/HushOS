@@ -59,6 +59,15 @@ object TextEditing {
     fun lineFeeds(inserted: CharSequence): CharSequence =
         if ('\r' !in inserted) inserted else inserted.toString().replace("\r\n", "\n").replace('\r', '\n')
 
+    /* The save's session ended (the editor closed, another sign-in): nothing was started. */
+    class SessionEnded : Exception("This editor was closed before the save started.")
+
+    /*
+     * Whether two texts are the same: Kotlin compares UTF-16 code units, so "é" and "e" + U+0301 differ, as the bytes
+     * a save writes do.
+     */
+    fun same(a: CharSequence, b: CharSequence): Boolean = a.toString() == b.toString()
+
     /* Why a listing can't stand for the file's folder: it answered for another folder or another workspace. */
     class WrongFolder : Exception("HushOS answered with a different folder than this file’s. Nothing was saved.")
 
@@ -135,8 +144,10 @@ object TextSave {
      * top passes the version current now). Planned as its UTF-8 bytes with no thumbnail, signed as the person's own writing.
      */
     fun version(text: CharSequence, file: Opened, folder: Opened, startedFrom: String?, start: Start,
-                pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextSaved {
+                stillOn: () -> Boolean = { true }, pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextSaved {
         val bytes = TextEditing.encode(text)
+        // Asked last thing before the run starts: a save whose session ended uploads nothing.
+        if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(file), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
         val saved = run.version(bytes, file, folder, startedFrom, SaveSources.OwnWriting, file.metadata.mime)
         // Its only result is in, saved or not: the row goes.
@@ -149,12 +160,27 @@ object TextSave {
 
     /* Save as a copy: a new file beside `file` under the next free name, signed as `file` is (`sources`). */
     fun copy(text: CharSequence, file: Opened, folder: Opened, sources: SaveSources, start: Start,
-             pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextCopy {
+             stillOn: () -> Boolean = { true }, pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextCopy {
         val bytes = TextEditing.encode(text)
+        if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(folder), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
         val minted = java.util.concurrent.atomic.AtomicReference<String?>(null)
         val made = run.file(bytes, file.name, file.metadata.mime, sources, folder = folder, minted = minted)
         end(run, pause = pause)
         return TextCopy(made, minted.get())
+    }
+}
+
+/*
+ * Who may change an item that isn't a family folder's: their own only when their own workspace is known and is the item's
+ * (never assumed before it loads), otherwise an editor's mount that covers it and is a folder above it (a file shared on
+ * its own can't be saved: its folder can't be listed).
+ */
+object EditRights {
+    /* `covering`: the mount the item came through, as its role and whether its root is the item itself; null when none. */
+    fun mayEdit(itemWorkspace: String, ownWorkspace: String?, covering: Pair<String, Boolean>?): Boolean {
+        if (ownWorkspace != null && ownWorkspace.equals(itemWorkspace, ignoreCase = true)) return true
+        val (role, rootIsItem) = covering ?: return false
+        return role == "editor" && !rootIsItem
     }
 }

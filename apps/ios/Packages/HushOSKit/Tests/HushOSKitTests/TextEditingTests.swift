@@ -140,6 +140,28 @@ private func word(_ reason: TextReadOnly) -> String {
         #expect(!EditRights.mayEditShared(itemId: "doc", roots: [:], parent: parent))
     }
 
+    /* Typed during a save: "é" for "e" + U+0301 is a change String's == can't see; the bytes do. */
+    @Test func canonicallyEqualTextIsNotTheSameSave() {
+        let composed = "caf\u{E9}"
+        let decomposed = "cafe\u{301}"
+        #expect(composed == decomposed)
+        #expect(!TextEditing.same(composed, decomposed))
+        #expect(TextEditing.same(composed, "caf\u{E9}"))
+    }
+
+    @Test func ownershipIsNeverAssumedBeforeTheOwnWorkspaceIsKnown() {
+        let parents = ["doc": "inner", "inner": "top"]
+        let parent = { (id: String) in parents[id] }
+        // Not loaded yet: a viewer's share is not taken for one's own.
+        #expect(!EditRights.mayEdit(itemId: "doc", workspaceId: "theirs", own: nil, roots: ["top": "viewer"], parent: parent))
+        #expect(!EditRights.mayEdit(itemId: "doc", workspaceId: "theirs", own: nil, roots: [:], parent: parent))
+        // An editor's mount covering it still counts.
+        #expect(EditRights.mayEdit(itemId: "doc", workspaceId: "theirs", own: nil, roots: ["top": "editor"], parent: parent))
+        // Known and the item's: one's own.
+        #expect(EditRights.mayEdit(itemId: "doc", workspaceId: "MINE", own: "mine", roots: [:], parent: parent))
+        #expect(!EditRights.mayEdit(itemId: "doc", workspaceId: "theirs", own: "mine", roots: [:], parent: parent))
+    }
+
     @Test func aViewerOffersEditForBytesThatReadAsText() {
         #expect(TextEditing.readsAsText(Data("Read me\n".utf8)))
         #expect(TextEditing.readsAsText(Data("a\r\nb".utf8)))
@@ -260,6 +282,21 @@ actor TextBench: SaveRunWriter {
         guard case .saved(_, let versionId) = saved else { Issue.record("not saved"); return }
         #expect(versionId == mine)
         #expect(await bench.text(file.id) == "theirs")
+    }
+
+    /* The screen closed or another session began while the folder was being listed: nothing starts, nothing uploads. */
+    @Test func aSaveWhoseSessionEndedStartsNothing() async throws {
+        let bench = TextBench()
+        let file = await bench.add("notes.txt", "a")
+        await #expect(throws: TextEditing.SessionEnded.self) {
+            _ = try await TextSave.version("b", of: file, in: opened("f"), startedFrom: file.node.currentVersion?.id, start: start(bench),
+                                           stillOn: { false })
+        }
+        await #expect(throws: TextEditing.SessionEnded.self) {
+            _ = try await TextSave.copy("b", of: file, in: opened("f"), sources: .ownWriting, start: start(bench), stillOn: { false })
+        }
+        #expect(await bench.versions[file.id]?.count == 1)
+        #expect(await bench.names.count == 1)
     }
 
     @Test func aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() async throws {

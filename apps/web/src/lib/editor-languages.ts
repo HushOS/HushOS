@@ -55,6 +55,14 @@ const LOADERS: Record<string, Loader> = {
     diff: () => legacy(async () => (await import('@codemirror/legacy-modes/mode/diff')).diff),
 };
 
+/*
+ * Every language at once, for the post-unlock preload (lib/preload.ts): fetched for whatever file
+ * is opened later, so which grammar a device fetched never says what kind of file was edited.
+ */
+export async function preloadLanguages() {
+    for (const load of Object.values(LOADERS)) await load().catch(() => {});
+}
+
 /* The editor's language for a file name, or null for plain text. */
 export function editorLanguage(name: string) {
     const language = languageFor(name);
