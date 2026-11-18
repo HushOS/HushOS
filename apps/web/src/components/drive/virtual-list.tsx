@@ -14,6 +14,7 @@ import {
     type ReactNode,
 } from 'react';
 import { FirstPaintContext } from '@/components/drive/first-paint';
+import { scrollsByKey } from '@/components/drive/scroll-keys';
 
 /*
  * A long list draws only the items near the screen. A folder of a few thousand files
@@ -81,25 +82,6 @@ type ListVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
  * a button, Close details say, moves nothing), the keys, the scrollbar.
  */
 const SCROLL_INPUTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
-const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
-/* Where every key edits or chooses rather than scrolls. */
-const EDITS =
-    'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role=textbox], [role=combobox], [role=listbox], [role=slider], [role=spinbutton]';
-/* Where Space presses the control rather than scrolls. */
-const PRESSES =
-    'button, a[href], summary, [role=button], [role=link], [role=checkbox], [role=radio], [role=switch], [role=option], [role=menuitem], [role=tab]';
-
-/**
- * Whether a key scrolls: one that scrolls the page, pressed outside a field, and for Space
- * not on a button or link either, where it presses it (Close details). The arrows on a row
- * of the list move the keys and the scroll with them, so they count.
- */
-function scrollsByKey(event: KeyboardEvent) {
-    if (!SCROLL_KEYS.has(event.key)) return false;
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest(EDITS)) return false;
-    return event.key !== ' ' || !target?.closest(PRESSES);
-}
 
 /* Whether a press is on the scroller itself, which is its scrollbar. */
 function onScrollbar(event: Event, scroller: Scroller) {
@@ -128,7 +110,11 @@ function observeOffset(
     let holding = false;
     const report = () => cb(offsetOf(list, follow.current()), scrolling || holding);
     const onInput = (event: Event) => {
-        if (event instanceof KeyboardEvent ? scrollsByKey(event) : event.type !== 'pointerdown')
+        if (
+            event instanceof KeyboardEvent
+                ? scrollsByKey(event.key, event.target)
+                : event.type !== 'pointerdown'
+        )
             input = performance.now();
         else if (event.type === 'pointerdown' && onScrollbar(event, follow.current())) {
             holding = true;
@@ -136,7 +122,8 @@ function observeOffset(
         }
     };
     // Let go wherever the pointer is by then; a move with no button down catches a release
-    // the browser kept to itself.
+    // the browser kept to itself. Letting go is not input: a drag's own scroll events have
+    // already counted, and a press that moved nothing leaves no scroll to protect.
     const onRelease = (event: Event) => {
         if (
             !holding ||
@@ -144,7 +131,6 @@ function observeOffset(
         )
             return;
         holding = false;
-        input = performance.now();
         report();
     };
     const onScroll = () => {
