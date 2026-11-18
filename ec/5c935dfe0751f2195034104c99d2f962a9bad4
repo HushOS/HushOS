@@ -1,0 +1,39 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_8b6efed9bf72b5 680
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveSessions.kt
+  s_c60e24772e04af::t_a36af772e8fe54 45-54,72-73,78,103,107,197-198,242,287,289,301-307,431-434,436-441,449
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_c60e24772e04af::t_0614a668ad3fa3 124,134,138-139,418-419
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_75079650dad703 152-153
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_163c9bd0d74484 278-301
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveBrowseTest.kt
+  s_c60e24772e04af::t_a5f8cc4e57a865 59-85
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_43f70c8ec8fbbc 729-730
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_4d374e732e35fc 48-49,136-137,139,141-146,156-157
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_9e96f0806b8873 45-48,59-100,144,154-155,341,387-388,448,463-464,510-535,571-575,617-620,622-625
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c60e24772e04af::t_3bb4f17924c640 235-239
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_3cce859a1988cd 353-399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ec5c935dfe0751f2195034104c99d2f962a9bad4",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
