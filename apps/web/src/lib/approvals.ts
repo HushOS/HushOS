@@ -35,6 +35,43 @@ const WHAT: Record<string, string> = {
 };
 
 /*
+ * The same, in parts, for the prompt's own dialog: what is asked as its title, then the device
+ * and the place as rows. A name that is the device's own word is in quotes under Calls itself,
+ * never under Device, and with the day it was added where it is one of the account's.
+ */
+export function approvalDetails(asked: Parameters<typeof approvalAsks>[0]) {
+    const name = asked.device.name?.trim();
+    const added = addedDay(asked.device.addedAt);
+    const device = !name
+        ? { label: 'Device', value: added ? `Unnamed, added ${added}` : 'New, unnamed' }
+        : !asked.selfNamed
+          ? { label: 'Device', value: name }
+          : {
+                label: 'Calls itself',
+                value: added ? `“${name}”, added ${added}` : `“${name}”, new`,
+            };
+    // The server words a place "near Lyon, France", or "in France" when only the country is
+    // known: the row says which.
+    const where = asked.location?.trim();
+    const near = where?.match(/^near\s+(.+)$/i);
+    const within = where?.match(/^in\s+(.+)$/i);
+    const place = where
+        ? near
+            ? { label: 'Near', value: near[1]! }
+            : within
+              ? { label: 'In', value: within[1]! }
+              : { label: 'Where', value: where }
+        : undefined;
+    return {
+        what:
+            asked.purpose === 'login'
+                ? 'Approve this sign-in?'
+                : (WHAT[asked.purpose] ?? 'A change to your account'),
+        rows: [device, ...(place ? [place] : [])],
+    };
+}
+
+/*
  * What is asked, by which device and roughly from where: "Change your password on Maya’s
  * Laptop", "Sign-in on a new device calling itself “Chrome on Windows”, near Lyon, France".
  * - `selfNamed`: the name is the asking device's own words, not the account's record of one
@@ -67,8 +104,8 @@ export function approvalAsks(asked: {
 }
 
 /*
- * This browser's own count of the prompts it has shown today, by class: at most five a day for
- * each, whatever the server lists, so requests from sign-ins nobody knows can never use up the
+ * This browser's own count of the prompts it has shown today, by class: at most ten a day for
+ * each class of sign-in and five for step-ups, whatever the server lists, so requests from sign-ins nobody knows can never use up the
  * room for the owner's own. Kept per browser; storage that cannot be read counts as empty.
  */
 const PROMPTS_KEY = 'hushos-approval-prompts';
@@ -97,7 +134,7 @@ function withinBudget(listed: ApprovalPrompt[]) {
         localStorage.setItem(PROMPTS_KEY, JSON.stringify(allowed.record));
         unstored = null;
     } catch {
-        // Not stored: without this the sixth prompt of a day would be the first again.
+        // Not stored: without this the eleventh prompt of a day would be the first again.
         unstored = { userId, record: allowed.record };
     }
     const shown = new Set(allowed.shown);

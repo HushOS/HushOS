@@ -8,11 +8,11 @@ tone: sage
 ---
 
 import { Cta } from '../../components/mdx';
-import { Shot } from '../../components/screenshot';
+import { Phones, Shot } from '../../components/screenshot';
 
 Turn on two-step sign-in and your password alone no longer signs anyone in to your HushOS account. After the password, HushOS asks for one more thing that only you have: a passkey, a code from an authenticator app, or a yes from a device you already use.
 
-Turn it on under **Account → Two-step sign-in**. All three ways work on the web today. In the iPhone and Android apps, authenticator codes work from version 1.6 and, on hushos.com, passkeys from 1.7. Approving on another device arrives in the apps with version 1.8.
+Turn it on under **Account → Two-step sign-in**. All three ways work on the web today. In the iPhone and Android apps, authenticator codes work from version 1.6 and, on hushos.com, passkeys from 1.7. Approving on another device works in the apps from version 1.8.
 
 <Shot
     name="two-step-settings"
@@ -32,28 +32,48 @@ The first one you turn on switches the step on and gives you ten backup codes.
 
 ## You choose which is asked first
 
-One way is your default, and a sign-in opens on it whenever it can be used there. It starts as the first way you turned on, and **Make default** in Account moves it. The others are one press away under **Use another way**, which changes the way for that sign-in only.
+One way is your default, and a sign-in starts with it whenever it can be used there: your passkey is asked for straight away, or your other device is. It starts as the first way you turned on, and **Make default** in Account moves it. The others are one press away under **Use another way**, which changes the way for that sign-in only.
 
 <Shot
     name="two-step-step"
     width={972}
-    height={856}
-    alt="The second step at sign-in, opened on the passkey, with the other ways listed: your authenticator app, another device, a backup code and your recovery phrase."
+    height={568}
+    alt="The second step at sign-in, opened on the passkey, with Use another way beneath it."
     sizes="(min-width: 30rem) 28rem, 100vw"
     className="mx-auto mt-6 block max-w-md"
 />
 
 ## Approve a sign-in on a device you already use
 
-When you choose another device, the new screen shows a short code: two digits and a word.
+When another device is your default, or you choose it, the new screen asks your other devices straight away. It shows a QR code a phone can scan, and once one of your devices opens the request, a short code: two digits and a word.
 
-<Shot
-    name="two-step-code"
-    width={972}
-    height={1292}
-    alt="The new browser showing the code for the other device, two digits and a word, with a QR code a phone can scan."
-    sizes="(min-width: 30rem) 28rem, 100vw"
-    className="mx-auto mt-6 block max-w-md"
+<div className="mt-6 grid items-start gap-4 sm:grid-cols-2">
+    <Shot
+        name="two-step-ask"
+        width={972}
+        height={992}
+        alt="The new browser asking another device: Choose Answer in HushOS on another device, or scan this with your phone, above a QR code."
+        sizes="(min-width: 40rem) 20rem, 100vw"
+        className="block"
+    />
+    <Shot
+        name="two-step-code"
+        width={972}
+        height={752}
+        alt="Once a device opened the request, the new browser shows the code for it, two digits and a word, waiting for approval."
+        sizes="(min-width: 40rem) 20rem, 100vw"
+        className="block"
+    />
+</div>
+
+From version 1.10 of the apps, signing in on a phone works the same way: the app opens on your default and asks your other devices at once.
+
+<Phones
+    screen="two-step"
+    alt="Signing in on a phone, asking another device: Choose Answer in HushOS on another device, or scan this with your phone, above a QR code"
+    sizes="(min-width: 40rem) 18rem, (min-width: 375px) 10rem, 8rem"
+    className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
+    phoneClassName="w-32 min-[375px]:w-40 sm:w-72"
 />
 
 A device of yours that's already signed in with two-step sign-in shows the request, with what is being asked, the device asking and roughly where it is. Type the code from the new screen, press **Approve**, and the new device is signed in. The phone apps, from version 1.8, can scan the new screen instead.
@@ -61,10 +81,20 @@ A device of yours that's already signed in with two-step sign-in shows the reque
 <Shot
     name="two-step-approve"
     width={992}
-    height={608}
-    alt="The request on a device already signed in: a sign-in on a new device calling itself Chrome on Windows, near Lyon, Auvergne-Rhône-Alpes, France, with the code typed in and the buttons This wasn’t me, Deny and Approve."
+    height={640}
+    alt="The request on a device already signed in: Approve this sign-in?, from a new device calling itself Chrome on Windows near Lyon, Auvergne-Rhône-Alpes, France, with the code typed in, This wasn’t me, Deny and Approve."
     sizes="(min-width: 30rem) 28rem, 100vw"
     className="mx-auto mt-6 block max-w-md"
+/>
+
+On a phone, the request opens as a sheet, from the banner on Home or from Devices in Account. From version 1.10 it looks like this:
+
+<Phones
+    screen="approve"
+    alt="Approve this sign-in? on a phone, from a new device calling itself Chrome on Windows near Lyon, Auvergne-Rhône-Alpes, France, with the code typed in"
+    sizes="(min-width: 40rem) 18rem, (min-width: 375px) 10rem, 8rem"
+    className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
+    phoneClassName="w-32 min-[375px]:w-40 sm:w-72"
 />
 
 The code ties the approval to the screen in front of you: a request goes through only when the code matches the one that screen is showing. If you didn't ask, **This wasn't me** ends the request and sends you a notice at once.

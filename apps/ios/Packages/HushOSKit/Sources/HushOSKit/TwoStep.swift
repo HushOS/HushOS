@@ -212,9 +212,13 @@ public enum StepWords {
      * request ended without an approval. Never who ended it.
      */
     public static let askOpen = "Open HushOS on another device and choose Answer."
+    /* Beside the QR code: the same, and the camera's way. */
+    public static let askScan = "Choose Answer in HushOS on another device, or scan this with your phone."
     /* Turning the method on: the one device the person chose is asked, and the panel says which to pick up. */
     public static func askOpen(on device: String?) -> String { device.map { "Open HushOS on \($0) and choose Answer." } ?? askOpen }
     public static let askCode = "Code for your other device"
+    /* Under the code, while the other device has it. */
+    public static let askPending = "Waiting for approval"
     public static let askWaiting = "Waiting for your other device"
     public static let askAgain = "Ask again"
     public static let askRefused = "Your other device didn’t approve this."
@@ -332,7 +336,7 @@ public enum StepOutcome: Sendable, Equatable {
      *   read as lost);
      * - the address's own 429: too many requests from here just now.
      * The same answer goes again for those. Dropping the approval there would send the person back
-     * to their other device for a new one, and spend one of the day's five requests on a hiccup.
+     * to their other device for a new one, and spend one of the day's ten requests on a hiccup.
      * A refusal the step itself gave ends it: that approval is not offered to the step again.
      */
     public static func keepsApproval(after error: Error) -> Bool {

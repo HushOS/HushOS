@@ -9,8 +9,9 @@ import { authError } from '@/lib/form';
  * Asking another device to approve a step (docs/two-step-design.md 12): at a sign-in, before a
  * change, and when the method is turned on. This browser commits first and shows a QR code of
  * that; once a device opens the request it shows the code, two digits and a word, for the
- * person to type there. Nothing is sent until a press asks for it: a form that merely opens on
- * this method must not spend the day's requests.
+ * person to type there. A sign-in step that opens on this method asks at once (it is the
+ * account's usual way); a dialog that merely opens on it waits for a press, so it does not spend
+ * the day's requests. Either way a step asks once: coming back to it shows the same request.
  *
  * Turning the method on (`approver`) is answered the other way round. This browser shows no
  * code and no QR code: the device that approves draws a code and shows it, and the person types
@@ -191,28 +192,37 @@ export function DeviceAsk({
                 Open HushOS on {approver.name} and choose Answer.
             </p>
         );
+    // A device opened the request, by its prompt or by the QR code: that code has done its part.
+    // One panel the width of the form for both: the QR code until a device opens the request,
+    // then the code in its place, with where things stand beneath.
+    const panel =
+        'flex flex-col items-center gap-3 rounded-xl border border-rule bg-muted/50 px-5 py-6 text-center';
+    if (state.state === 'code')
+        return (
+            <div className={panel} data-device-ask="code">
+                <p className="text-[13px] text-muted-foreground">Code for your other device</p>
+                <output
+                    data-device-code
+                    aria-live="polite"
+                    className="font-mono text-4xl leading-none font-semibold tracking-[0.04em]"
+                >
+                    {state.code}
+                </output>
+                <p className="text-[13px] text-muted-foreground">Waiting for approval</p>
+            </div>
+        );
     return (
-        <div className="flex flex-col gap-3" data-device-ask={state.state}>
-            {state.state === 'code' ? (
-                <div className="flex flex-col gap-1">
-                    <span className="text-[13px] font-semibold">Code for your other device</span>
-                    <output
-                        data-device-code
-                        aria-live="polite"
-                        className="font-mono text-[28px] leading-9 font-semibold tracking-[0.04em]"
-                    >
-                        {state.code}
-                    </output>
-                </div>
-            ) : (
-                <p className="text-sm">Open HushOS on another device and choose Answer.</p>
-            )}
+        <div className={panel} data-device-ask={state.state}>
+            <p className="text-[13px] text-balance text-muted-foreground">
+                Choose Answer in HushOS on another device,{' '}
+                <span className="sm:block">or scan this with your phone.</span>
+            </p>
             {/* Square modules at whole pixels: a phone's camera reads this off the screen. */}
-            <div className="self-start rounded-md border border-rule bg-white p-2">
+            <div className="rounded-lg bg-white p-2">
                 <QrCode
                     value={asked.qr}
                     kind="recovery"
-                    cell={4}
+                    cell={3}
                     title="QR code for your other device"
                 />
             </div>

@@ -1,7 +1,7 @@
 import type { StepMethod } from '@hushos/auth/api';
 import { cn } from 'cn';
-import { useEffect, useId, useRef, useState } from 'react';
-import { authLink } from '@/components/auth-layout';
+import { ChevronRightIcon } from 'lucide-react';
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { DeviceAsk } from '@/components/device-ask';
 import { SECRET_FIELD } from '@/components/password-input';
 import { Input } from '@/components/ui/input';
@@ -32,13 +32,19 @@ const others: Record<StepMethod, string> = {
     backup: 'Use a backup code',
     phrase: 'Use your recovery phrase',
 };
+/* Another device has no field: the request's own panel says what to do. */
 const hints: Record<StepMethod, string> = {
     webauthn: 'Your browser asks for it when you continue.',
-    totp: 'The 6-digit code. It changes every 30 seconds.',
-    device: 'A device already signed in to your account confirms it’s you.',
-    backup: 'One of the ten codes you saved. Each works once.',
-    phrase: 'All 24 words, in order. They stay on this device.',
+    // The label and the field say what to type: nothing beneath but what was wrong with it.
+    totp: '',
+    device: '',
+    backup: '',
+    phrase: '',
 };
+
+/* The quiet text actions under the step: Use another way, and the sign-in's Start again. */
+export const stepAction =
+    'h-9 cursor-pointer rounded-sm font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60';
 
 export function StepFields({
     methods,
@@ -51,6 +57,10 @@ export function StepFields({
     reload = false,
     note = '',
     ask,
+    start = false,
+    page = false,
+    actions,
+    aside,
 }: {
     /* What can answer this step, in the order to offer it. */
     methods: readonly StepMethod[];
@@ -72,13 +82,30 @@ export function StepFields({
     note?: string;
     /* The step itself, for asking another device: its token, and what it is for. */
     ask?: { token: string; purpose: string };
+    /* The usual way starts as the form opens: another device is asked without a press. */
+    start?: boolean;
+    /*
+     * The step is the whole page (the sign-in): choosing another way puts the field and its button
+     * away. In a dialog the dialog's own button stays pressable, so the field stays in sight.
+     */
+    page?: boolean;
+    /* The form's own button, under the field: put away with it while another way is chosen. */
+    actions?: ReactNode;
+    /* Beside Use another way, at the end of its row: the sign-in's Start again. */
+    aside?: ReactNode;
 }) {
     const id = useId();
     // The other ways stay behind one button until asked for; choosing one puts them away again.
     const [choosing, setChoosing] = useState(false);
-    // Another device is asked only on a press. Choosing it among the other ways is that press;
-    // a form that merely opened on it shows a button first.
-    const [pressed, setPressed] = useState(false);
+    // Opened from the keyboard, the cursor goes into the list: it comes before Back in the page.
+    const list = useRef<HTMLUListElement>(null);
+    const [opened, setOpened] = useState(0);
+    useEffect(() => {
+        if (opened) list.current?.querySelector('button')?.focus();
+    }, [opened]);
+    // Another device is asked on a press, or as the sign-in step opens on it (`start`). Choosing
+    // it among the other ways is that press; a dialog that merely opened on it shows a button first.
+    const [pressed, setPressed] = useState(start);
     // The library a key is asked through is fetched once a key is on offer, ahead of the press.
     const keyed = methods.includes('webauthn');
     useEffect(() => {
@@ -87,6 +114,15 @@ export function StepFields({
     const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
     // The draft follows the methods on offer (`draftFor`); this only guards a render between.
     const method = methods.includes(draft.method) ? draft.method : methods[0];
+    // A refusal, or a way taken away, puts the list back too: the field it shows is the news.
+    // Noticed while rendering (React's "adjusting state when a prop changes"), not in an effect.
+    const [seen, setSeen] = useState({ refocus, method });
+    if (seen.refocus !== refocus || seen.method !== method) {
+        setSeen({ refocus, method });
+        setChoosing(false);
+    }
+    // With one way left there is nothing to choose: never a list with no way back out of it.
+    const open = choosing && methods.length > 1;
     // After the person switched to another way, or the one they used was withdrawn, or an
     // answer was refused: the cursor goes to the field now shown, so the next thing typed
     // lands there and a screen reader is not left on a control that is gone.
@@ -102,14 +138,23 @@ export function StepFields({
     }, [method, refocus]);
     if (!method)
         return (
-            <p role="alert" className="text-sm text-destructive">
-                {reload
-                    ? 'This page can’t answer this account’s second step. Reload it to get the latest HushOS, then sign in again.'
-                    : 'There is no other way to answer this step from here right now. Start again in a while.'}
-            </p>
+            <div className="flex flex-col gap-2.5">
+                <p role="alert" className="text-sm text-destructive">
+                    {reload
+                        ? 'This page can’t answer this account’s second step. Reload it to get the latest HushOS, then sign in again.'
+                        : 'There is no other way to answer this step from here right now. Start again in a while.'}
+                </p>
+                {aside && <div className="flex min-h-9 items-center text-sm">{aside}</div>}
+            </div>
         );
     const describedBy = `${id}-note`;
-    const mono = 'font-mono text-[15px]';
+    // What is typed has a label of its own. A passkey has one only where the form's button is
+    // a dialog's Continue: on the sign-in page its button says Use your passkey. Another
+    // device's panel says what it is.
+    const typed = method === 'totp' || method === 'backup' || method === 'phrase';
+    const bare = method === 'device' || (method === 'webauthn' && page);
+    // The phrase, monospaced at the same size at every width.
+    const mono = 'font-mono text-[15px] sm:text-[15px]';
     const count = phraseWords(draft.phrase).length;
     return (
         <div className="flex flex-col gap-2.5" data-step-method={method}>
@@ -118,26 +163,29 @@ export function StepFields({
                     {note}
                 </p>
             )}
-            <div className="flex flex-col gap-1.5">
-                <div className="flex items-baseline justify-between gap-3">
-                    {method === 'webauthn' || method === 'device' ? (
-                        <span className="text-[13px] font-semibold">{labels[method]}</span>
-                    ) : (
-                        <label htmlFor={id} className="text-[13px] font-semibold">
-                            {labels[method]}
-                        </label>
-                    )}
-                    {method === 'phrase' && (
-                        <span
-                            className={cn(
-                                'text-[13px] tabular-nums',
-                                count === 24 ? 'text-success' : 'text-muted-foreground',
-                            )}
-                        >
-                            {count} of 24 words
-                        </span>
-                    )}
-                </div>
+            {/* Put away while another way is chosen only on the sign-in page (`page`): see `page`. */}
+            <div className="flex flex-col gap-1.5" hidden={open && page}>
+                {!bare && (
+                    <div className="flex items-baseline justify-between gap-3">
+                        {typed ? (
+                            <label htmlFor={id} className="text-[13px] font-semibold">
+                                {labels[method]}
+                            </label>
+                        ) : (
+                            <span className="text-[13px] font-semibold">{labels[method]}</span>
+                        )}
+                        {method === 'phrase' && (
+                            <span
+                                className={cn(
+                                    'text-[13px] tabular-nums',
+                                    count === 24 ? 'text-success' : 'text-muted-foreground',
+                                )}
+                            >
+                                {count} of 24 words
+                            </span>
+                        )}
+                    </div>
+                )}
                 {method === 'totp' && (
                     <Input
                         id={id}
@@ -160,7 +208,7 @@ export function StepFields({
                                 totp: event.target.value.replace(/[^\d\s]/g, ''),
                             })
                         }
-                        className={cn(mono, 'tracking-[0.2em]')}
+                        className="h-12 font-mono text-xl tracking-[0.3em] sm:text-xl"
                         {...SECRET_FIELD}
                     />
                 )}
@@ -193,7 +241,7 @@ export function StepFields({
                         onChange={(event) =>
                             onChange({ ...draft, method, backup: event.target.value.toUpperCase() })
                         }
-                        className={cn(mono, 'tracking-[0.08em]')}
+                        className="h-12 font-mono text-lg tracking-[0.08em] sm:text-lg"
                         {...SECRET_FIELD}
                     />
                 )}
@@ -215,25 +263,31 @@ export function StepFields({
                         {...SECRET_FIELD}
                     />
                 )}
-                <p
-                    id={describedBy}
-                    role={error ? 'alert' : undefined}
-                    className={cn(
-                        'text-[13px]',
-                        error ? 'text-destructive' : 'text-muted-foreground',
-                    )}
-                >
-                    {error || hints[method]}
-                </p>
+                {(error || (!bare && hints[method])) && (
+                    <p
+                        id={describedBy}
+                        role={error ? 'alert' : undefined}
+                        className={cn(
+                            'text-[13px]',
+                            error ? 'text-destructive' : 'text-muted-foreground',
+                        )}
+                    >
+                        {error || hints[method]}
+                    </p>
+                )}
             </div>
-            {methods.length > 1 && (
-                <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-sm">
-                    {choosing ? (
-                        methods
-                            .filter((other) => other !== method)
-                            .map((other) => (
+            {!open && actions}
+            {open && (
+                <ul
+                    ref={list}
+                    aria-label="Other ways"
+                    className="divide-y divide-rule overflow-hidden rounded-lg border border-rule"
+                >
+                    {methods
+                        .filter((other) => other !== method)
+                        .map((other) => (
+                            <li key={other}>
                                 <button
-                                    key={other}
                                     type="button"
                                     disabled={disabled}
                                     onClick={() => {
@@ -241,21 +295,35 @@ export function StepFields({
                                         setPressed(other === 'device');
                                         onChange({ ...draft, method: other });
                                     }}
-                                    className={cn(authLink, 'disabled:opacity-60')}
+                                    className="flex h-11 w-full items-center justify-between gap-3 px-3.5 text-left text-sm outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:opacity-60"
                                 >
                                     {others[other]}
+                                    <ChevronRightIcon
+                                        aria-hidden
+                                        className="size-4 text-muted-foreground"
+                                    />
                                 </button>
-                            ))
-                    ) : (
+                            </li>
+                        ))}
+                </ul>
+            )}
+            {(methods.length > 1 || aside) && (
+                <div className="flex min-h-9 items-center justify-between gap-3 text-sm">
+                    {methods.length > 1 && (
                         <button
                             type="button"
                             disabled={disabled}
-                            onClick={() => setChoosing(true)}
-                            className={cn(authLink, 'disabled:opacity-60')}
+                            aria-expanded={open}
+                            onClick={() => {
+                                if (!open) setOpened((count) => count + 1);
+                                setChoosing(!open);
+                            }}
+                            className={stepAction}
                         >
-                            Use another way
+                            {open ? 'Back' : 'Use another way'}
                         </button>
                     )}
+                    {aside && <div className="ml-auto">{aside}</div>}
                 </div>
             )}
         </div>

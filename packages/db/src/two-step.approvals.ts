@@ -59,16 +59,22 @@ import {
  * - where the asking device is, when the server was told, is kept only while the request is
  *   open: every way a request ends deletes it, and the table refuses an ended one that has it;
  * - requests are budgeted by class, and the classes never share room: a sign-in that proved no
- *   device (five a day for the account, one open at a time), a sign-in that proved its device
- *   (five a day for that device), and a step-up (five a day for that device, ten for the account);
+ *   device (ten a day for the account, one open at a time), a sign-in that proved its device
+ *   (ten a day for that device), and a step-up (five a day for that device, ten for the account);
  * - a request denied, answered with a wrong code, or left unanswered by a sign-in that proved no
  *   device is counted as a failed step, once.
  * Passing the step with an approved request is `passStep`'s (two-step.core.ts), under the same
  * lock as every other answer.
  */
 
-/* How many requests a day each budget allows (docs/two-step-design.md 12). */
-export const DEVICE_REQUESTS_A_DAY = 5;
+/*
+ * How many requests a day each budget allows (docs/two-step-design.md 12). A sign-in sends its
+ * request as soon as the step opens, so a reload or a second try spends one: ten, for the
+ * account from sign-ins that proved no device and for each device signing back in. A step-up is
+ * asked for on a press: five for a device, ten for the account.
+ */
+export const SIGN_IN_REQUESTS_A_DAY = 10;
+export const STEP_UP_REQUESTS_A_DAY = 5;
 export const CHANGE_REQUESTS_A_DAY = 10;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -494,7 +500,8 @@ export async function createDeviceRequest(input: {
                     .from(twoStepDeviceRequests)
                     .where(and(where, gt(twoStepDeviceRequests.createdAt, since)))
             )[0]?.count ?? 0;
-        if ((await made(scope)) >= DEVICE_REQUESTS_A_DAY) return { status: 'limit', counted };
+        const budget = asked.class === 'change' ? STEP_UP_REQUESTS_A_DAY : SIGN_IN_REQUESTS_A_DAY;
+        if ((await made(scope)) >= budget) return { status: 'limit', counted };
         if (
             asked.class === 'change' &&
             (await made(

@@ -87,11 +87,17 @@ async function twoBrowsers(browser: Browser) {
  * row and the dialog's heading must read. The banner above the app offers Answer too; the row
  * is the one under Your devices.
  */
-async function openRequest(page: Page, says: RegExp) {
+/*
+ * Opens the one request waiting: the line in the app says it in a sentence (`says`), and the
+ * prompt has it as a title, then the device and the place as rows (`device`: its row's label
+ * and value as one string, "Calls itself“Chrome on Windows”, new").
+ */
+async function openRequest(page: Page, says: { line: RegExp; title: string; device: RegExp }) {
     await expect(waiting(page)).toHaveCount(1, { timeout: 30_000 });
-    await expect(waiting(page)).toContainText(says);
+    await expect(waiting(page)).toContainText(says.line);
     await waiting(page).getByRole('button', { name: 'Answer' }).click();
-    await expect(answer(page).getByRole('heading', { name: says })).toBeVisible();
+    await expect(answer(page).getByRole('heading', { name: says.title })).toBeVisible();
+    await expect(answer(page).locator('[data-approval-details]')).toContainText(says.device);
 }
 
 /* The code the asking browser shows once the other one opened its request: two digits and a word. */
@@ -151,8 +157,11 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     // press, and then shows the code; A shows none, and no QR code, and waits for it typed.
     await openAccount(b);
     // With no second step yet, A's name is only A's word for itself: the prompt says so, and when it was added.
-    const turnOn =
-        /^Turn on Approve on another device on a device calling itself “.+”, added \d{1,2} \w+/;
+    const turnOn = {
+        line: /^Turn on Approve on another device on a device calling itself “.+”, added \d{1,2} \w+/,
+        title: 'Turn on Approve on another device',
+        device: /Calls itself“.+”, added \d{1,2} \w+/,
+    };
     const approveOn = async (page: Page) => {
         await openRequest(page, turnOn);
         await expect(
@@ -214,16 +223,17 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
         timeout: 60_000,
     });
 
-    // A sign-in on B: the step opens on the account's usual way, and asks nothing until a press.
+    // A sign-in on B: the step opens on the account's usual way, and asks the other device by itself.
     await signOut(b);
     await enterPassword(b, email);
     await expect(stepHeading(b)).toBeVisible({ timeout: 60_000 });
     await expect(b.locator('[data-step-method=device]')).toBeVisible();
-    await expect(ask(b, 'idle').getByRole('button', { name: 'Use another device' })).toBeVisible();
+    await expect(ask(b, 'waiting')).toBeVisible({ timeout: 30_000 });
     await expect(b.locator('[data-step-note]')).toHaveCount(0);
     await openAccount(a);
-    await expect(waiting(a)).toHaveCount(0);
-    // The other ways are behind Use another way, and coming back is the press that asks.
+    await expect(waiting(a)).toHaveCount(1, { timeout: 30_000 });
+    // The other ways are behind Use another way, and coming back shows the same request: it is
+    // not made again, so A still has the one to answer.
     await b.getByRole('button', { name: 'Use another way' }).click();
     await expect(b.getByRole('button', { name: /^Use (your|a) / })).toHaveText([
         'Use a backup code',
@@ -234,11 +244,15 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await b.getByRole('button', { name: 'Use another way' }).click();
     await b.getByRole('button', { name: 'Use another device' }).click();
     await expect(ask(b, 'waiting')).toContainText(
-        'Open HushOS on another device and choose Answer.',
+        'Choose Answer in HushOS on another device, or scan this with your phone.',
     );
 
     // A is asked. The name is the new browser's own word for itself, and the prompt says so.
-    const signIn = /^Sign-in on a new device calling itself “.+”/;
+    const signIn = {
+        line: /^Sign-in on a new device calling itself “.+”/,
+        title: 'Approve this sign-in?',
+        device: /Calls itself“.+”, new/,
+    };
     await openRequest(a, signIn);
     await expect(answer(a).getByText(/asked for this device/)).toHaveCount(0);
     // A wrong code: nothing is approved, the request is over, and B is not signed in.
@@ -295,7 +309,8 @@ test('another browser turns the step on, then answers a sign-in: a wrong code an
     await expect(step.getByRole('button', { name: /^Use (your|a|another) / })).toHaveText([
         'Use your recovery phrase',
     ]);
-    // A backup code still answers it, and nothing was asked of B.
+    // A backup code still answers it, and nothing was asked of B. Back puts the list away.
+    await step.getByRole('button', { name: 'Back' }).click();
     await step.getByLabel('Backup code').fill(codes[0]!);
     await off.getByRole('button', { name: 'Turn off' }).click();
     await expect(section(a).locator('[data-two-step=off]')).toBeVisible({ timeout: 60_000 });

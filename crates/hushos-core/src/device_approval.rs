@@ -46,8 +46,14 @@ const TURN_ON_PURPOSE: &str = "device-approval";
 const TURN_ON_CODE_DOMAIN: &str = "hushos/two-step/device/turn-on/code/v1";
 const TURN_ON_STATEMENT_DOMAIN: &str = "hushos/two-step/device/turn-on";
 const QR_PREFIX: &str = "hushos-approve:";
-/// How many prompts a day an approving device shows for each class of request.
-const PROMPTS_A_DAY: usize = 5;
+/// How many prompts a day an approving device shows for each class of request: ten for each
+/// class of sign-in, five for step-ups and for a later class.
+fn prompts_a_day(class: &str) -> usize {
+    match class {
+        "unknown" | "known" => 10,
+        _ => 5,
+    }
+}
 
 fn purpose_of(purpose: &str) -> CoreResult<&str> {
     let shaped = (2..=32).contains(&purpose.len())
@@ -498,27 +504,33 @@ pub struct PromptsAllowed {
     pub record: String,
 }
 
-/// The approving device's own limit on prompts (`docs/two-step-design.md` 12): at most
-/// five a day for each class of request, whatever the server sends, so requests from
-/// sign-ins it does not know can never use up the room for the owner's own. `record`
+/// The approving device's own limit on prompts (`docs/two-step-design.md` 12), for each
+/// class of request, whatever the server sends, so requests from sign-ins it does not know
+/// can never use up the room for the owner's own: ten a day for each class of sign-in, five
+/// for step-ups and for a class from a later release. `record`
 /// is what the device kept from before (empty at first, and anything unreadable counts
 /// as empty); `day` is today's date as the device writes it (`2026-11-14`). A request
-/// shown once stays shown; one past its class's five is not, that day.
+/// shown once stays shown; one past its class's limit is not, that day.
 ///
 /// ```
 /// use hushos_core::*;
 /// let ask = |id: &str, class: &str| PromptRequest { id: id.into(), class: class.into() };
-/// let strangers: Vec<_> = (0..7).map(|n| ask(&format!("s{n}"), "unknown")).collect();
+/// let strangers: Vec<_> = (0..12).map(|n| ask(&format!("s{n}"), "unknown")).collect();
 /// let first = approval_prompts_allowed(String::new(), "2026-11-14".into(), strangers.clone());
-/// assert_eq!(first.shown, vec!["s0", "s1", "s2", "s3", "s4"]);
+/// assert_eq!(first.shown.len(), 10);
+/// assert_eq!(first.shown.last().map(String::as_str), Some("s9"));
 /// // The owner's own request still has all its room, and what was shown stays shown.
 /// let mut next = strangers;
 /// next.push(ask("mine", "known"));
 /// let second = approval_prompts_allowed(first.record, "2026-11-14".into(), next.clone());
-/// assert_eq!(second.shown, vec!["s0", "s1", "s2", "s3", "s4", "mine"]);
+/// assert_eq!(second.shown.len(), 11);
+/// assert_eq!(second.shown.last().map(String::as_str), Some("mine"));
+/// // Step-ups have five.
+/// let changes: Vec<_> = (0..7).map(|n| ask(&format!("c{n}"), "change")).collect();
+/// assert_eq!(approval_prompts_allowed(String::new(), "2026-11-14".into(), changes).shown.len(), 5);
 /// // A new day starts each class again.
 /// let tomorrow = approval_prompts_allowed(second.record, "2026-11-15".into(), next);
-/// assert_eq!(tomorrow.shown.len(), 6);
+/// assert_eq!(tomorrow.shown.len(), 11);
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn approval_prompts_allowed(record: String, day: String, requests: Vec<PromptRequest>) -> PromptsAllowed {
@@ -538,7 +550,7 @@ pub fn approval_prompts_allowed(record: String, day: String, requests: Vec<Promp
             .map(|list| list.iter().filter_map(Value::as_str).map(str::to_owned).collect())
             .unwrap_or_default();
         if !ids.contains(&request.id) {
-            if ids.len() >= PROMPTS_A_DAY {
+            if ids.len() >= prompts_a_day(&request.class) {
                 *entry = json!(ids);
                 continue;
             }
@@ -641,7 +653,7 @@ mod tests {
     }
 
     #[test]
-    fn a_device_shows_no_more_than_five_prompts_a_day_for_a_class_whatever_it_is_sent() {
+    fn a_device_shows_no_more_than_ten_prompts_a_day_for_a_class_of_sign_in_whatever_it_is_sent() {
         let ask = |id: String, class: &str| PromptRequest { id, class: class.into() };
         let mut record = String::new();
         let mut shown = 0;
@@ -655,7 +667,7 @@ mod tests {
             shown += allowed.shown.len();
             record = allowed.record;
         }
-        assert_eq!(shown, 5);
+        assert_eq!(shown, 10);
         // They took nothing from the other classes.
         let own = approval_prompts_allowed(
             record.clone(),

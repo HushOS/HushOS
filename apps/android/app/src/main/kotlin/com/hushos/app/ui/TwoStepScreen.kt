@@ -9,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -109,8 +110,8 @@ import java.time.format.DateTimeFormatter
  * added, named, replaced and removed, one kind is made the default, new codes are made, and the
  * account's recent security activity is listed. Codes are checked on the server; the recovery phrase
  * is signed on this phone and never leaves it; a passkey or security key answers through the
- * system's own sheet (`PasskeySheet`), which opens only on a press. The words are the web's and the
- * server's own.
+ * system's own sheet (`PasskeySheet`): at a sign-in whose usual way it is, as the step opens, and
+ * otherwise on a press. The words are the web's and the server's own.
  */
 
 private val StepMethod.label: String get() = when (this) {
@@ -131,9 +132,8 @@ private val StepMethod.other: String get() = when (this) {
 
 private val StepMethod.hint: String get() = when (this) {
     StepMethod.WEBAUTHN -> "Your phone asks for it when you continue."
-    StepMethod.TOTP -> "The 6-digit code. It changes every 30 seconds."
-    StepMethod.BACKUP -> "One of the ten codes you saved. Each works once."
-    StepMethod.PHRASE -> "All 24 words, in order. They stay on this device."
+    // The label and the field say what to type: nothing beneath but what was wrong with it.
+    StepMethod.TOTP, StepMethod.BACKUP, StepMethod.PHRASE -> ""
     // Nothing is typed: the request's own panel says what to do (DeviceAskPanel).
     StepMethod.DEVICE -> ""
 }
@@ -155,13 +155,14 @@ private val mono @Composable get() = MaterialTheme.typography.bodyLarge.copy(fon
  * Another device has none either: its panel (`ask`: where the request to it stands) shows the QR code,
  * then the code to type there. `onAsk` makes the request, and is only ever called from a press;
  * `inlineAsk` puts that press in the panel, for a form whose own button sends the change.
- * `note`: the one line above the fields when the server left something out (StepNote).
+ * `note`: the one line above the fields when the server left something out (StepNote). `bare`: the sign-in
+ * screen, whose button says Use your passkey and whose request panel says what to do: neither has a label there.
  */
 @Composable
 internal fun StepFields(
     methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, problem: String, enabled: Boolean,
     focus: Boolean = false, offered: Boolean = true, onGo: (() -> Unit)? = null, note: String = "",
-    ask: AskPhase = AskPhase.Idle, onAsk: () -> Unit = {}, inlineAsk: Boolean = false,
+    ask: AskPhase = AskPhase.Idle, onAsk: () -> Unit = {}, inlineAsk: Boolean = false, bare: Boolean = false,
 ) {
     val alpine = Alpine.colors
     val method = draft.shown(methods)
@@ -178,7 +179,7 @@ internal fun StepFields(
             if (method == StepMethod.PHRASE) StepDraft.words(draft.phrase).size.let { count ->
                 Text("$count of 24 words", color = if (count == 24) alpine.success else alpine.inkMuted)
             }
-            Text(problem.ifEmpty { method.hint })
+            problem.ifEmpty { method.hint }.takeIf { it.isNotEmpty() }?.let { Text(it) }
         }
     }
     if (note.isNotEmpty()) Text(note, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
@@ -186,8 +187,8 @@ internal fun StepFields(
     NoKeyboardLearning {
         when (method) {
             // No field, and nothing asked yet: the phone's sheet opens when the form's button is pressed.
-            StepMethod.WEBAUTHN -> Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
-                FieldLabel(method.label)
+            StepMethod.WEBAUTHN -> if (!bare || problem.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+                if (!bare) FieldLabel(method.label)
                 Text(
                     problem.ifEmpty { method.hint }, style = MaterialTheme.typography.bodyMedium, color = if (problem.isEmpty()) alpine.inkMuted else alpine.danger,
                     // A key that wasn't used is said aloud: nothing else on the screen changed.
@@ -196,27 +197,27 @@ internal fun StepFields(
             }
             StepMethod.TOTP -> OutlinedTextField(
                 value = draft.totp, onValueChange = { typed -> onDraft(draft.copy(method = method, totp = typed.filter { it in '0'..'9' || it == ' ' }.take(7))) },
-                label = { Text(method.label) }, placeholder = { Text("000000") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote,
+                label = { Text(method.label) }, placeholder = { Text("000000") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = if (problem.isNotEmpty() || method.hint.isNotEmpty() || method == StepMethod.PHRASE) fieldNote else null,
                 textStyle = mono.copy(letterSpacing = 3.sp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Go, autoCorrectEnabled = false), keyboardActions = go,
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester).semantics { contentType = ContentType.SmsOtpCode },
             )
             StepMethod.BACKUP -> OutlinedTextField(
                 value = draft.backup, onValueChange = { typed -> onDraft(draft.copy(method = method, backup = typed.take(16))) },
-                label = { Text(method.label) }, placeholder = { Text("XXXXX-XXXXX") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote,
+                label = { Text(method.label) }, placeholder = { Text("XXXXX-XXXXX") }, singleLine = true, enabled = enabled, isError = problem.isNotEmpty(), supportingText = if (problem.isNotEmpty() || method.hint.isNotEmpty() || method == StepMethod.PHRASE) fieldNote else null,
                 textStyle = mono.copy(letterSpacing = 1.sp),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.Characters, imeAction = ImeAction.Go, autoCorrectEnabled = false),
                 keyboardActions = go, modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             )
             StepMethod.PHRASE -> OutlinedTextField(
                 value = draft.phrase, onValueChange = { typed -> onDraft(draft.copy(method = method, phrase = typed)) },
-                label = { Text(method.label) }, minLines = 4, enabled = enabled, isError = problem.isNotEmpty(), supportingText = fieldNote, textStyle = mono,
+                label = { Text(method.label) }, minLines = 4, enabled = enabled, isError = problem.isNotEmpty(), supportingText = if (problem.isNotEmpty() || method.hint.isNotEmpty() || method == StepMethod.PHRASE) fieldNote else null, textStyle = mono,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
                 modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             )
             // No field either: the other device's QR code, then the code to type there, and only what the server said beneath.
             StepMethod.DEVICE -> Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
-                FieldLabel(method.label)
+                if (!bare) FieldLabel(method.label)
                 // In a form the other device is asked from here, on this press; the form's own button sends the change once it approved.
                 if (inlineAsk && ask is AskPhase.Idle) TextButton(onClick = onAsk, enabled = enabled) { Text(method.other) }
                 else DeviceAskPanel(ask, inlineAgain = inlineAsk, enabled = enabled, again = onAsk)
@@ -224,11 +225,21 @@ internal fun StepFields(
             }
         }
     }
-    // The other ways, in the server's order, behind one control: a menu, as the platform offers a choice.
+    // The sign-in screen puts the other ways in its own row, beside Start again.
+    if (!bare) OtherWays(methods, draft, onDraft, enabled)
+}
+
+/* The other ways, in the server's order, behind one control: a menu, as the platform offers a choice. Flush with the field's edge. */
+@Composable
+internal fun OtherWays(methods: List<StepMethod>, draft: StepDraft, onDraft: (StepDraft) -> Unit, enabled: Boolean) {
+    val method = draft.shown(methods) ?: return
     val others = methods.filter { it != method }
-    if (others.isNotEmpty()) Box {
+    if (others.isEmpty()) return
+    Box {
         var choosing by remember { mutableStateOf(false) }
-        TextButton(enabled = enabled, onClick = { choosing = true }) { Text("Use another way") }
+        TextButton(enabled = enabled, onClick = { choosing = true }, contentPadding = PaddingValues(0.dp)) {
+            Text("Use another way", color = Alpine.colors.ink, fontWeight = FontWeight.SemiBold)
+        }
         DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
             for (other in others) DropdownMenuItem(text = { Text(other.other) }, onClick = { choosing = false; onDraft(draft.copy(method = other)) })
         }
@@ -388,7 +399,7 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
     var step by retain(challenge.token) { mutableStateOf(SignInStep(challenge)) }
     // Held by the view model, with the request: a screen rebuilt while the answer is out still shows it, and sends no second one.
     val busy = model.stepBusy
-    // The system's sheet for a key. Having it asks nothing: only the press below does.
+    // The system's sheet for a key. Having it asks nothing: the step opening on a key, or the press below, does.
     val sheet = rememberKeySheet()
     val scope = rememberCoroutineScope()
     /* The phone's sheet is up. This screen's own: one rebuilt meanwhile has left the sheet, and nothing was sent. */
@@ -398,7 +409,7 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
     val ask = model.stepAsk.phase
 
     /*
-     * Asks another device, with the key this sign-in holds for it. Only from a press. Once approved the view model
+     * Asks another device, with the key this sign-in holds for it: as the step opens on it, or from a press. Once approved the view model
      * answers the step with the request and the app is signed in; a request that ended stays here with Ask again.
      */
     fun askDevice() {
@@ -416,7 +427,8 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
         if (next.method == StepMethod.DEVICE) askDevice() else model.stepAsk.stop()
     }
 
-    fun submit() {
+    /* `quiet`: the sheet the step opened by itself. Closed, it says nothing: the button asks again. */
+    fun submit(quiet: Boolean = false) {
         if (busy || asking || method == null) return
         // Another device is asked, or asked again, from here; a lost reply to its answer goes the usual road below.
         if (method == StepMethod.DEVICE && step.lost == null) { if (step.pressable(busy, ask)) askDevice(); return }
@@ -424,7 +436,7 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 when (val pressed = step.pressed(sheet)) {
-                    is SignInStep.Pressed.Stay -> step = pressed.step
+                    is SignInStep.Pressed.Stay -> if (!quiet) step = pressed.step
                     is SignInStep.Pressed.Send -> {
                         step = pressed.step
                         model.answerStep(pressed.answer, pressed.step.methods) { outcome -> step = step.after(outcome, pressed.answer) }
@@ -436,13 +448,24 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
         }
     }
 
+    // The usual way starts by itself, once for each step: the key's sheet, or the request to another device.
+    var started by retain(challenge.token) { mutableStateOf(false) }
+    LaunchedEffect(challenge.token) {
+        if (started) return@LaunchedEffect
+        started = true
+        when (step.shown) {
+            StepMethod.WEBAUTHN -> submit(quiet = true)
+            StepMethod.DEVICE -> askDevice()
+            else -> {}
+        }
+    }
+
     BackHandler(enabled = !busy) { model.cancelStep() }
     Column(
         Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(AlpineSpace.S6),
         verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3),
     ) {
         Text("One more step", style = MaterialTheme.typography.headlineLarge)
-        Text("This account has two-step sign-in on.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted)
         Spacer(Modifier.height(AlpineSpace.S2))
         if (step.notice.isNotEmpty()) Text(
             step.notice, color = alpine.warning, style = MaterialTheme.typography.bodyMedium,
@@ -450,12 +473,18 @@ fun SignInStepScreen(model: DriveViewModel, challenge: com.hushos.core.StepChall
         )
         StepFields(
             step.methods, step.draft, ::typed, step.fieldError, enabled = !busy && !asking, focus = true, offered = challenge.methods.isNotEmpty(), onGo = ::submit,
-            note = StepNote.of(challenge, model.passkeys, change = false), ask = ask, onAsk = ::askDevice,
+            note = StepNote.of(challenge, model.passkeys, change = false), ask = ask, onAsk = ::askDevice, bare = true,
         )
-        if (method != null) Button(onClick = ::submit, enabled = !asking && step.pressable(busy, ask), modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
+        // Another device has no button while it is asked: its approval signs in. Ask again, or a lost reply's Try again, has one.
+        if (method != null && (method != StepMethod.DEVICE || step.pressable(busy, ask))) Button(onClick = ::submit, enabled = !asking && step.pressable(busy, ask), modifier = Modifier.fillMaxWidth().padding(top = AlpineSpace.S2).height(48.dp)) {
             Text(step.button(busy, ask))
         }
-        TextButton(onClick = { model.cancelStep() }, enabled = !busy, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("Start again") }
+        // One row under the button, flush with its edges: the other ways at the start, Start again at the end.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            OtherWays(step.methods, step.draft, ::typed, enabled = !busy && !asking)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { model.cancelStep() }, enabled = !busy, contentPadding = PaddingValues(0.dp)) { Text("Start again", color = alpine.inkMuted) }
+        }
     }
 }
 

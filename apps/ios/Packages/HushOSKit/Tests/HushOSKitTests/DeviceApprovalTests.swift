@@ -19,7 +19,7 @@ import Testing
  *   request (`wrong-code`) on anything else;
  * - its half of the code is its own: an open the server answers with another value, and a request
  *   already opened that this run holds no value for, are ended with nothing opened or signed;
- * - it shows at most five prompts a day for each class, whatever the server lists;
+ * - it shows at most ten prompts a day for each class of sign-in and five for changes, whatever the server lists;
  * - its list does not follow the settings route's 501, and holds nothing of a session that is gone;
  * - turning the method on asks only the device the person chose and never chooses one for them,
  *   sends nothing before one is, shows no code and no QR code and works none out, confirms nothing
@@ -842,7 +842,12 @@ private func wrong(_ code: String) -> String {
         server.selfNamed = true
         server.addedAt = "2026-11-14T12:00:00.000Z"
         _ = server.asked(purpose: DeviceEnrolment.purpose)
-        #expect(try await answering(server).flow.asks.hasPrefix("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 1"))
+        let flow = try await answering(server).flow
+        #expect(flow.asks.hasPrefix("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 1"))
+        // The sheet shows it in parts: the device's own word is under Calls itself, never under Device.
+        #expect(flow.details.what == "Turn on Approve on another device")
+        #expect(flow.details.rows.map(\.label) == ["Calls itself"])
+        #expect(flow.details.rows.first?.value.hasPrefix("“Maya’s Laptop”, added 1") == true)
     }
 
     @Test func aRequestThatNamedThisPhoneSaysSoUnderItsTitle() async throws {
@@ -1207,27 +1212,31 @@ private func wrong(_ code: String) -> String {
 
     private func id(_ number: Int) -> String { String(format: "00000000-0000-4000-8000-%012d", number) }
 
-    @Test func noMoreThanFivePromptsADayForEachClassWhateverTheServerLists() async throws {
+    @Test func noMoreThanTenPromptsADayForEachClassOfSignInAndFiveForChangesWhateverTheServerLists() async throws {
         let server = ApprovalServer()
         _ = server.asked()
         server.set("ended")
         let box = Box()
-        // Eight sign-ins this phone does not know, and one request of the owner's own device.
-        server.others = (0 ..< 8).map { (id($0), "unknown") } + [(id(100), "known")]
+        // Twelve sign-ins this phone does not know, and one request of the owner's own device.
+        server.others = (0 ..< 12).map { (id($0), "unknown") } + [(id(100), "known")]
         let first = try await DeviceApprovals.list(wire: server.wire(), limit: box.limit, day: "2026-11-14")
-        #expect(first.map(\.id) == (0 ..< 5).map(id) + [id(100)])
-        // Later the same day, eight more strangers: none is shown, on a phone that kept its count (a new look, the same store).
-        server.others = (10 ..< 18).map { (id($0), "unknown") } + [(id(3), "unknown"), (id(100), "known"), (id(200), "change")]
+        #expect(first.map(\.id) == (0 ..< 10).map(id) + [id(100)])
+        // Later the same day, twelve more strangers: none is shown, on a phone that kept its count (a new look, the same store).
+        server.others = (20 ..< 32).map { (id($0), "unknown") } + [(id(3), "unknown"), (id(100), "known"), (id(200), "change")]
         let second = try await DeviceApprovals.list(wire: server.wire(), limit: box.limit, day: "2026-11-14")
         // What was shown stays shown while it is listed; the owner's own classes still have all their room.
         #expect(second.map(\.id) == [id(3), id(100), id(200)])
         // The next day each class starts again.
         let tomorrow = try await DeviceApprovals.list(wire: server.wire(), limit: box.limit, day: "2026-11-15")
-        #expect(tomorrow.filter { $0.class == "unknown" }.count == 5)
+        #expect(tomorrow.filter { $0.class == "unknown" }.count == 10)
         // A phone that lost its count (the account's state wiped at sign-out) starts again too: the count is the store's.
         let wiped = try await DeviceApprovals.list(wire: server.wire(), limit: Box().limit, day: "2026-11-14")
-        #expect(wiped.filter { $0.class == "unknown" }.map(\.id) == (10 ..< 15).map(id))
+        #expect(wiped.filter { $0.class == "unknown" }.map(\.id) == (20 ..< 30).map(id))
         #expect(!box.record.isEmpty)
+        // Changes have five.
+        server.others = (300 ..< 307).map { (id($0), "change") }
+        let changes = try await DeviceApprovals.list(wire: server.wire(), limit: Box().limit, day: "2026-11-14")
+        #expect(changes.map(\.id) == (300 ..< 305).map(id))
     }
 
     @Test func theDayIsThisPhonesOwnDate() {

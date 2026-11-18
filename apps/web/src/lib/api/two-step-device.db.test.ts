@@ -871,10 +871,15 @@ describe('a sign-in on a new device', () => {
             }
         }
         expect(await edge.notices('step-failed')).toHaveLength(1);
-        // The sixth request of the day is refused before any device is asked.
-        const sixth = await ask((await toStep(who)).token, 'login', newKey());
-        expect(sixth.reply.status).toBe(429);
-        expect(sixth.reply.body.code).toBe('device-limited');
+        // The account's ten a day count requests, not sign-ins: one more sign-in asks five times
+        // (each replacing the last), and the eleventh request of the day is refused before any
+        // device is asked.
+        const last = (await toStep(who)).token;
+        for (let round = 6; round <= 10; round++)
+            expect((await ask(last, 'login', newKey())).reply.status).toBe(200);
+        const eleventh = await ask(last, 'login', newKey());
+        expect(eleventh.reply.status).toBe(429);
+        expect(eleventh.reply.body.code).toBe('device-limited');
     });
 
     test('answering the step another way ends the request', async () => {

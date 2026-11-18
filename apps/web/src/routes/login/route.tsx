@@ -178,11 +178,7 @@ function LoginPage() {
         : null;
     if (step)
         return (
-            <AuthLayout
-                title="One more step"
-                description="This account has two-step sign-in on."
-                art="CODE"
-            >
+            <AuthLayout title="One more step" art="CODE">
                 <SignInStep
                     key={step.token}
                     challenge={step}

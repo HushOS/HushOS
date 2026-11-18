@@ -430,6 +430,9 @@ object StepWords {
      * request ended without an approval. Never who ended it.
      */
     const val ASK_OPEN = "Open HushOS on another device and choose Answer."
+
+    /* Beside the QR code: the same, and the camera's way. */
+    const val ASK_SCAN = "Choose Answer in HushOS on another device, or scan this with your phone."
     /* Turning the method on: the one device the person chose is the only one asked, and is named. */
     fun askOpen(device: String) = "Open HushOS on $device and choose Answer."
     /* Once that device approved it shows the code, and the person types it here. */
@@ -441,6 +444,9 @@ object StepWords {
     /* Under "Remove my other devices" when another device is the method: it stays signed in. */
     const val OTHERS_BUT_APPROVER = "All but this one and the one that approves. They’ll need to sign in again."
     const val ASK_CODE = "Code for your other device"
+
+    /* Under the code, while the other device has it. */
+    const val ASK_PENDING = "Waiting for approval"
     const val ASK_WAITING = "Waiting for your other device"
     const val ASK_AGAIN = "Ask again"
     const val ASK_REFUSED = "Your other device didn’t approve this."
@@ -527,7 +533,7 @@ sealed class StepOutcome {
          * - the address's own limit (a 429 without the step's code): nothing about the step was looked at;
          * - `step-pending`: the approval had not landed where the answer went.
          * The same answer goes again for those. Dropping the approval there would send the person back to their
-         * other device for a new one, and spend one of the day's five requests on a hiccup. Any refusal the step
+         * other device for a new one, and spend one of the day's ten requests on a hiccup. Any refusal the step
          * itself gave ends it, and so does anything that failed on this phone: the other device is asked afresh.
          */
         fun keepsApproval(error: Throwable): Boolean = when (error) {
@@ -600,8 +606,9 @@ data class StepDraft(
 
     /*
      * The answer to `challenge`, made as it is sent. A key is asked here and nowhere else: the phone's
-     * sheet opens on the press that sends the answer, never when the step appears. One that did not
-     * answer (a closed sheet, no key) is `KeyUnused`: nothing goes out, and the step stays.
+     * sheet opens with the answer being sent, which is the press, or the step opening when a key is its
+     * usual way. One that did not answer (a closed sheet, no key) is `KeyUnused`: nothing goes out, and
+     * the step stays.
      */
     suspend fun proved(challenge: StepChallenge, method: StepMethod, sheet: KeySheet): StepAnswer {
         if (method != StepMethod.WEBAUTHN) return answer(challenge, method)

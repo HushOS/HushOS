@@ -2,6 +2,7 @@ package com.hushos.app.data
 
 import android.content.Context
 import com.hushos.core.ApprovalAckReply
+import com.hushos.core.ApprovalDetails
 import com.hushos.core.ApprovalEnded
 import com.hushos.core.ApprovalPrompt
 import com.hushos.core.ApprovalStartReply
@@ -16,6 +17,7 @@ import com.hushos.core.StepRefusal
 import com.hushos.core.approvalAckReplyRead
 import com.hushos.core.approvalApproveJson
 import com.hushos.core.approvalAsks
+import com.hushos.core.approvalDetails
 import com.hushos.core.approvalCodeDraw
 import com.hushos.core.approvalCodeExpected
 import com.hushos.core.approvalCodeNormalize
@@ -340,8 +342,8 @@ data class ApprovedRequest(val token: String, val requestId: String)
 /* MARK: The phone that answers */
 
 /*
- * The approving phone's own limit on prompts (docs/two-step-design.md 12): at most five a day for
- * each class of request, whatever the server lists, counted by the core (`approvalPromptsAllowed`).
+ * The approving phone's own limit on prompts (docs/two-step-design.md 12): at most ten a day for
+ * each class of sign-in and five for step-ups, whatever the server lists, counted by the core (`approvalPromptsAllowed`).
  * What it counted is kept with the account's files on this phone and goes with them at sign-out.
  */
 class PromptLimit(private val load: () -> String, private val save: (String) -> Unit) {
@@ -393,6 +395,13 @@ object DeviceApprovals {
      */
     fun asks(asked: ApprovalPrompt, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): String =
         approvalAsks(asked.purpose, asked.deviceName, asked.selfNamed, addedDay(asked.deviceAddedAt, today, zone), asked.location)
+
+    /*
+     * The same words in parts, for the answer sheet (the core's `approvalDetails`, the web's too): what is asked as its
+     * title ("Approve this sign-in?"), then the device and the place as rows ("Calls itself", "Near").
+     */
+    fun details(asked: ApprovalPrompt, today: LocalDate = LocalDate.now(), zone: ZoneId = ZoneId.systemDefault()): ApprovalDetails =
+        approvalDetails(asked.purpose, asked.deviceName, asked.selfNamed, addedDay(asked.deviceAddedAt, today, zone), asked.location)
 
     /*
      * The day a device was added, as the lists word a day (`whenText`, and the web's `formatDay`): "14 Nov", with
@@ -505,6 +514,9 @@ class ApprovalAnswering(
 
     /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device (in its own words, with the day it was added, where the server does not vouch for its name), and roughly from where when the server was told. */
     val asks: String = DeviceApprovals.asks(asked)
+
+    /* The same, in parts for the sheet: its title, then the device and the place as rows. */
+    val details: ApprovalDetails = DeviceApprovals.details(asked)
 
     /* The asking device chose this phone to answer: no other device is shown the request. */
     val chosen: Boolean = asked.chosen

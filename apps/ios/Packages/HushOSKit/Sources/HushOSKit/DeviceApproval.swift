@@ -359,8 +359,8 @@ public extension DeviceAsk {
 /* MARK: The phone that answers */
 
 /*
- * The approving phone's own limit on prompts (docs/two-step-design.md 12): at most five a day for
- * each class of request, whatever the server lists, counted by the core (`approvalPromptsAllowed`).
+ * The approving phone's own limit on prompts (docs/two-step-design.md 12): at most ten a day for
+ * each class of sign-in and five for step-ups, whatever the server lists, counted by the core (`approvalPromptsAllowed`).
  * What it counted is kept with the account's state on this phone and goes with it at sign-out.
  */
 public struct PromptLimit: Sendable {
@@ -455,6 +455,14 @@ public extension ApprovalPrompt {
     func asks(now: Date = Date(), calendar: Calendar = .current) -> String {
         approvalAsks(purpose: purpose, deviceName: deviceName, selfNamed: selfNamed, added: addedDay(now: now, calendar: calendar), location: location)
     }
+
+    /*
+     * The same words in parts, for the answer sheet (the core's `approvalDetails`, the web's too): what is asked as
+     * its title ("Approve this sign-in?"), then the device and the place as rows ("Calls itself", "Near").
+     */
+    func details(now: Date = Date(), calendar: Calendar = .current) -> ApprovalDetails {
+        approvalDetails(purpose: purpose, deviceName: deviceName, selfNamed: selfNamed, added: addedDay(now: now, calendar: calendar), location: location)
+    }
 }
 
 /* Why an approval did not happen, in words for the person who was answering. */
@@ -541,6 +549,8 @@ public actor ApprovalAnswering {
     public nonisolated let id: String
     /* "Sign-in on Chrome on Windows, near Lyon, France": what is asked, by which device, and roughly from where when the server was told (`ApprovalPrompt.asks`). */
     public nonisolated let asks: String
+    /* The same, in parts for the sheet: its title, then the device and the place as rows (`ApprovalPrompt.details`). */
+    public nonisolated let details: ApprovalDetails
     /* "The other device asked for this device to approve.", when it named this one; nil otherwise. */
     public nonisolated let chosenLine: String?
     /*
@@ -581,6 +591,7 @@ public actor ApprovalAnswering {
         id = prompt.id
         // A name the server does not vouch for is said as the asking device's own words, with the day it was added where the server gave one.
         asks = before.asks()
+        details = before.details()
         chosenLine = before.chosen ? StepWords.approvalChosen : nil
         turnsOn = approvalTurnsOn(purpose: before.purpose)
         asked = before
@@ -804,7 +815,7 @@ public actor ApprovalAnswering {
 }
 
 /*
- * The requests this phone may answer now, after its own limit of five a day for each class
+ * The requests this phone may answer now, after its own daily limit for each class
  * (`PromptLimit`). The app reads it when it comes to the front, every five seconds while Account is
  * on screen, and when a push arrives; Home's banner and Devices' rows show `prompts`.
  *

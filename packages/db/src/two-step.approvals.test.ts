@@ -1153,11 +1153,11 @@ describe('who may approve a change', () => {
 });
 
 describe('budgets', () => {
-    test('a sign-in that proved no device has five requests a day for the account, and they are not the known devices’', async () => {
+    test('a sign-in that proved no device has ten requests a day for the account, and they are not the known devices’', async () => {
         const { userId, laptop, phone } = await withDeviceStep();
         await age(laptop, 8);
         await age(phone, 8);
-        for (let round = 0; round < 5; round++)
+        for (let round = 0; round < 10; round++)
             expect((await request(await loginToken(userId), asking('login'))).status).toBe('ok');
         expect((await request(await loginToken(userId), asking('login'))).status).toBe('limit');
         // The owner's own devices are untouched by that: each has its own room.
@@ -1179,9 +1179,9 @@ describe('budgets', () => {
         expect((await request(await loginToken(userId), asking('login'))).status).toBe('ok');
     });
 
-    test('a known device’s five requests are its own: they take nothing from another device or from new sign-ins', async () => {
+    test('a known device’s ten requests are its own: they take nothing from another device or from new sign-ins', async () => {
         const { userId, laptop, phone } = await withDeviceStep();
-        for (let round = 0; round < 5; round++)
+        for (let round = 0; round < 10; round++)
             expect(
                 (await request(await loginToken(userId, laptop), asking('login', laptop.publicKey)))
                     .status,

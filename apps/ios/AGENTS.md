@@ -371,7 +371,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 - A step's methods are the server's order, never reordered (`StepOffer.methods`). The screen opens on the first; the rest are behind one Menu, Use another way.
     - A key is offered only with its `keyRequest`, on a phone that can use one for this server.
     - The line above the fields is `StepOffer.note`: update, or usual way, never both.
-- The system's sheet opens only from a press. `SignInStep.press` and `StepUp.prove` return a `StepSending` and ask nothing; `StepSending.answer(key:)` asks the key, and is called by `AppModel.answerStep` and `StepUpModel.answer` inside the button's task.
+- At a sign-in the step starts its default by itself, once (`SignInStepView.start`): the key's sheet (a closed one says nothing) or the request to another device. Elsewhere the system's sheet opens only from a press. `SignInStep.press` and `StepUp.prove` return a `StepSending` and ask nothing; `StepSending.answer(key:)` asks the key, and is called by `AppModel.answerStep` and `StepUpModel.answer` inside the button's task.
     - A closed sheet, or no key, is `KeyUnused`: nothing is sent, and the step or setup stays. Keep it that way with its tests.
     - A lost reply keeps the key's answer and sends the same one again (`SignInStep.lost`).
 - `PasskeySheet`: one `ASAuthorizationController` with a platform request and a security-key request, for an assertion and for a registration.
@@ -388,7 +388,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 `docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check, and what holds the answer sheet (`ApprovalAnswer`); `App/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
 
 - Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer.
-    - Nothing is asked without a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
+    - At a sign-in whose default is another device, it is asked as the step opens. Otherwise only from a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
     - The key: `StepDeviceKey`. A sign-in that sent its device proof asks with that key; one that sent none makes a key before it has a session and registers with it (`Auth.registerDevice(made:)`). A change asks with the stored key (`DeviceApprovals.ownKey`), and names `device` only when there is one.
     - `twoStepMethods` always names `device` at sign-in (`Auth.namedAtSignIn`).
     - Once approved, the approval is the step's until the step refuses it (the web's `afterRefusal`; `StepOutcome.keepsApproval`). An answer the step never judged keeps it: no reply, a lost one (a 5xx without the step's code), the address's own 429, `step-pending`. A refusal the step gave drops it.
@@ -409,7 +409,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
     - `ApprovalInbox` (HushOSKit) reads the list when the app comes to the front, every five seconds while Account is on screen, and when a push is shown in the foreground. Home's first row and Devices' rows open `ApprovalSheet` (MainView's sheet).
         - It asks only the approvals routes, on any server. It never follows `TwoStep.status()`'s nil (501): an account that has the step is still asked for it where setup is off.
         - Everything it holds is one session's (prompts, the request being answered, each request as first listed, `ApprovalMemory`). `load()` and `answer()` drop it all the moment the keychain's session is another one, before the in-flight guard, and a reply is used only for the session it was asked under.
-    - `PromptLimit`: five prompts a day for each class, counted by the core, kept in `state/approval-prompts.json` (wiped with the account). Counted only after the reply is known to be the current session's.
+    - `PromptLimit`: ten prompts a day for each class of sign-in and five for step-ups, counted by the core, kept in `state/approval-prompts.json` (wiped with the account). Counted only after the reply is known to be the current session's.
 - Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice` (needs a device in `approvers`); Turn off is `RemoveMethodSheet`.
 - Turning it on is `DeviceMethodSheet` over HushOSKit's `DeviceSetup`, which decides what is sent and when the sheet may close.
     - The person chooses the approving device from `TwoStepStatus.approvers`. None is ever chosen for them, even when there is one: a device's name and kind are its own words. Nothing is sent with none chosen: not the pending method, not a request. Every request, Ask again included, carries it (`DeviceAsk.Request.approver`, `approverDeviceId`).

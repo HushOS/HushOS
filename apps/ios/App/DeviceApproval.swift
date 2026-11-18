@@ -156,11 +156,11 @@ struct DeviceAskView: View {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 44)
             case .waiting(let qr):
                 if let qr, approver == nil {
-                    VStack(spacing: Alpine.Space.s4) {
-                        BrandQRCode(text: qr, dots: false, label: StepWords.askCode).frame(width: 208, height: 208)
-                        Text(StepWords.askOpen(on: approver)).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    // What to do first, then the QR code it mentions, in one panel the width of the form, as the web has it.
+                    AskBox {
+                        Text(StepWords.askScan).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                        BrandQRCode(text: qr, dots: false, label: StepWords.askCode).frame(width: 192, height: 192)
                     }
-                    .frame(maxWidth: .infinity)
                 } else {
                     pickUp
                 }
@@ -170,7 +170,11 @@ struct DeviceAskView: View {
                 // The approval is half of it: the sheet asks for the code that device now shows.
                 EmptyView()
             case .code(let code):
-                ShownCode(code: code)
+                // The QR code's place, once a device opened the request: the code, and where things stand.
+                AskBox {
+                    ShownCode(code: code)
+                    Text(StepWords.askPending).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                }
             case .approved:
                 ApprovedLine()
             case .ended(let line):
@@ -184,6 +188,58 @@ struct DeviceAskView: View {
             }
         }
         .padding(.vertical, Alpine.Space.s2)
+    }
+}
+
+/* The asking side's panel: a quiet box the width of the form, its content centred in it. */
+private struct AskBox<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: Alpine.Space.s3) { content }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20).padding(.vertical, Alpine.Space.s6)
+            .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .alpineCardEdge(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
+/*
+ * The asking device and where it is, as rows ("Calls itself", "Near"): labels in a column, each value beside its label
+ * and wrapping in the rest of the line. At the accessibility sizes a label beside its value would leave the value, the
+ * thing to read before approving, no room: each label then sits over its value. VoiceOver reads every row as one line.
+ */
+struct ApprovalDetailRows: View {
+    let details: ApprovalDetails
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                    ForEach(details.rows, id: \.label) { row in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(row.label).foregroundStyle(Alpine.inkMuted)
+                            Text(row.value).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            } else {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Alpine.Space.s6, verticalSpacing: Alpine.Space.s1) {
+                    ForEach(details.rows, id: \.label) { row in
+                        GridRow {
+                            Text(row.label).foregroundStyle(Alpine.inkMuted).fixedSize()
+                            Text(row.value).foregroundStyle(Alpine.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+        .font(Theme.Text.callout)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(details.rows.map { "\($0.label): \($0.value)" }.joined(separator: ". "))
     }
 }
 
@@ -207,7 +263,7 @@ struct ShownCode: View {
 
     var body: some View {
         VStack(spacing: Alpine.Space.s2) {
-            Text(StepWords.askCode).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink)
+            Text(StepWords.askCode).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
             if capture.active {
                 Label("Hidden while your screen is recorded or shared.", systemImage: "eye.slash")
                     .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
@@ -401,11 +457,12 @@ struct ApprovalSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                // What is asked, and by which device, whole: a bar's title would cut a long device name short.
+                // What is asked, then the device and where it is as rows, whole: a bar's title would cut a long device name short.
                 Section {} header: {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                        Text(flow.asks).font(Theme.Text.title).foregroundStyle(Alpine.ink)
+                    VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+                        Text(flow.details.what).font(Theme.Text.title).foregroundStyle(Alpine.ink)
                             .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                        ApprovalDetailRows(details: flow.details)
                         // The asking device named this one: no other device was shown the request.
                         if let chosen = flow.chosenLine {
                             Text(chosen).font(Theme.Text.callout).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)

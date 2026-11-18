@@ -1638,7 +1638,24 @@ pub fn approval_asks(
     added: Option<String>,
     location: Option<String>,
 ) -> String {
-    let what = match purpose.as_str() {
+    let what = approval_what(&purpose);
+    let name = asked_name(device_name);
+    let added = asked_day(added);
+    let device = match (name, added) {
+        (Some(name), Some(day)) if self_named => format!("a device calling itself “{name}”, added {day}"),
+        (Some(name), _) if self_named => format!("a new device calling itself “{name}”"),
+        (Some(name), _) => name,
+        (None, _) => "a new device".to_string(),
+    };
+    let asks = format!("{what} on {device}");
+    match asked_place(location) {
+        Some(place) => format!("{asks}, {place}"),
+        None => asks,
+    }
+}
+
+fn approval_what(purpose: &str) -> &'static str {
+    match purpose {
         "login" => "Sign-in",
         "password" => "Change your password",
         "master-key" => "Rotate your account key",
@@ -1647,22 +1664,101 @@ pub fn approval_asks(
         "two-step" => "Change two-step sign-in",
         "device-approval" => "Turn on Approve on another device",
         _ => "A change to your account",
-    };
-    let name = device_name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty());
-    // A day is a few words: anything longer, or with a mark that hides or reorders, is not said.
-    let added =
-        added.map(|day| day.trim().to_string()).filter(|day| day.chars().count() <= 40 && place_shaped(day));
-    let device = match (name, added) {
-        (Some(name), Some(day)) if self_named => format!("a device calling itself “{name}”, added {day}"),
-        (Some(name), _) if self_named => format!("a new device calling itself “{name}”"),
-        (Some(name), _) => name,
-        (None, _) => "a new device".to_string(),
-    };
-    let asks = format!("{what} on {device}");
-    match location.map(|place| place.trim().to_string()).filter(|place| place_shaped(place)) {
-        Some(place) => format!("{asks}, {place}"),
-        None => asks,
     }
+}
+
+fn asked_name(name: Option<String>) -> Option<String> {
+    name.map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
+/// A day is a few words: anything longer, or with a mark that hides or reorders, is not said.
+fn asked_day(day: Option<String>) -> Option<String> {
+    day.map(|day| day.trim().to_string()).filter(|day| day.chars().count() <= 40 && place_shaped(day))
+}
+
+fn asked_place(place: Option<String>) -> Option<String> {
+    place.map(|place| place.trim().to_string()).filter(|place| place_shaped(place))
+}
+
+/// One row of an approval prompt: a label and what it says ("Near", "Lyon, France").
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ApprovalRow {
+    pub label: String,
+    pub value: String,
+}
+
+/// An approval prompt in parts, for the answer sheet: what is asked as its title, then the
+/// device and the place as rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct ApprovalDetails {
+    pub what: String,
+    pub rows: Vec<ApprovalRow>,
+}
+
+/// The words of [`approval_asks`], in parts for the answer sheet (the web's `approvalDetails`,
+/// `apps/web/src/lib/approvals.ts`): what is asked as its title ("Approve this sign-in?" for a
+/// sign-in), then the device and the place as rows. A name that is the device's own word is in
+/// quotes under "Calls itself", never under "Device", with the day it was added where it is one
+/// of the account's. The server words a place "near Lyon, France", or "in France" when only the
+/// country is known: the row says which ("Near", "In"), and anything else is "Where".
+///
+/// ```
+/// use hushos_core::{approval_details, ApprovalRow};
+/// let row = |label: &str, value: &str| ApprovalRow { label: label.into(), value: value.into() };
+/// let asked = approval_details("login".into(), Some("Chrome on Windows".into()), true, None, Some("near Lyon, France".into()));
+/// assert_eq!(asked.what, "Approve this sign-in?");
+/// assert_eq!(asked.rows, vec![row("Calls itself", "“Chrome on Windows”, new"), row("Near", "Lyon, France")]);
+/// let asked = approval_details("password".into(), Some("Maya’s iPhone".into()), false, Some("3 Nov".into()), Some("in France".into()));
+/// assert_eq!(asked.what, "Change your password");
+/// assert_eq!(asked.rows, vec![row("Device", "Maya’s iPhone"), row("In", "France")]);
+/// let asked = approval_details("device-approval".into(), Some("Maya’s Laptop".into()), true, Some("14 Nov".into()), None);
+/// assert_eq!(asked.rows, vec![row("Calls itself", "“Maya’s Laptop”, added 14 Nov")]);
+/// // No name, a place in other words, a mark that would rewrite the row, a later purpose.
+/// assert_eq!(approval_details("login".into(), None, true, None, Some("Lyon".into())).rows, vec![row("Device", "New, unnamed"), row("Where", "Lyon")]);
+/// assert_eq!(approval_details("login".into(), None, false, Some("2 Nov".into()), Some("near Lyon\u{202e}".into())).rows, vec![row("Device", "Unnamed, added 2 Nov")]);
+/// assert_eq!(approval_details("later".into(), Some("Pixel 9".into()), false, None, None).what, "A change to your account");
+/// assert_eq!(approval_details("login".into(), None, true, None, Some("NEAR\u{a0}Lyon".into())).rows[1], row("Near", "Lyon"));
+/// assert_eq!(approval_details("login".into(), None, true, None, Some("Innsbruck, Austria".into())).rows[1], row("Where", "Innsbruck, Austria"));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn approval_details(
+    purpose: String,
+    device_name: Option<String>,
+    self_named: bool,
+    added: Option<String>,
+    location: Option<String>,
+) -> ApprovalDetails {
+    let what = if purpose == "login" { "Approve this sign-in?" } else { approval_what(&purpose) };
+    let added = asked_day(added);
+    let device = match (asked_name(device_name), added) {
+        (None, Some(day)) => row("Device", format!("Unnamed, added {day}")),
+        (None, None) => row("Device", "New, unnamed".to_string()),
+        (Some(name), _) if !self_named => row("Device", name),
+        (Some(name), Some(day)) => row("Calls itself", format!("“{name}”, added {day}")),
+        (Some(name), None) => row("Calls itself", format!("“{name}”, new")),
+    };
+    let place = asked_place(location).map(|place| {
+        // The word, then any space (a no-break space too, as the web's `\s` takes it), then the place.
+        let after = |word: &str| {
+            let rest = place
+                .get(..word.len())
+                .filter(|start| start.eq_ignore_ascii_case(word))
+                .map(|_| &place[word.len()..])?;
+            rest.starts_with(char::is_whitespace).then(|| rest.trim())
+        };
+        match (after("near"), after("in")) {
+            (Some(rest), _) if !rest.is_empty() => row("Near", rest.to_string()),
+            (_, Some(rest)) if !rest.is_empty() => row("In", rest.to_string()),
+            _ => row("Where", place.clone()),
+        }
+    });
+    ApprovalDetails { what: what.to_string(), rows: std::iter::once(device).chain(place).collect() }
+}
+
+fn row(label: &str, value: String) -> ApprovalRow {
+    ApprovalRow { label: label.to_string(), value }
 }
 
 #[cfg(test)]

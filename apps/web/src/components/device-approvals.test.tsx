@@ -63,6 +63,14 @@ beforeEach(() => {
     localStorage.clear();
 });
 
+/* The open prompt's rows, label and value: who is asking, and from roughly where. */
+function details() {
+    const list = document.querySelector('[data-approval-details]');
+    const terms = [...(list?.querySelectorAll('dt') ?? [])].map((term) => term.textContent);
+    const values = [...(list?.querySelectorAll('dd') ?? [])].map((value) => value.textContent);
+    return terms.map((term, index) => [term, values[index]]);
+}
+
 describe('another device waiting for an answer', () => {
     test('is shown and can be answered where the server no longer offers the step', async () => {
         api.approvals.mockResolvedValue([asked()]);
@@ -82,11 +90,12 @@ describe('another device waiting for an answer', () => {
         api.approvals.mockResolvedValue([asked({ location: 'near Lyon, France' })]);
         const first = view();
         await person.click(await screen.findByRole('button', { name: 'Answer' }));
-        expect(
-            await screen.findByRole('heading', {
-                name: 'Sign-in on a new device calling itself “Maya’s Laptop”, near Lyon, France',
-            }),
-        ).toBeTruthy();
+        expect(await screen.findByRole('heading', { name: 'Approve this sign-in?' })).toBeTruthy();
+        // Its own words, in quotes under Calls itself: never under Device, where the account's names are.
+        expect(details()).toEqual([
+            ['Calls itself', '“Maya’s Laptop”, new'],
+            ['Near', 'Lyon, France'],
+        ]);
         expect(screen.queryByText(/asked for this device/)).toBeNull();
         first.unmount();
 
@@ -97,10 +106,9 @@ describe('another device waiting for an answer', () => {
         view();
         await person.click(await screen.findByRole('button', { name: 'Answer' }));
         expect(
-            await screen.findByRole('heading', {
-                name: 'Turn on Approve on another device on Maya’s Laptop',
-            }),
+            await screen.findByRole('heading', { name: 'Turn on Approve on another device' }),
         ).toBeTruthy();
+        expect(details()).toEqual([['Device', 'Maya’s Laptop']]);
         expect(screen.getByText('The other device asked for this device to approve.')).toBeTruthy();
     });
 

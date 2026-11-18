@@ -5,8 +5,12 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -79,6 +83,7 @@ import com.hushos.app.data.StepWords
 import com.hushos.app.data.TwoStep
 import com.hushos.app.data.TwoStepFlow
 import com.hushos.app.data.TwoStepStatus
+import com.hushos.core.ApprovalDetails
 import com.hushos.core.ApprovalPrompt
 import com.hushos.core.StepMethod
 import com.hushos.core.StepProof
@@ -497,17 +502,23 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
     when (phase) {
         AskPhase.Idle -> {}
         AskPhase.Starting -> Box(Modifier.fillMaxWidth().heightIn(min = 48.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp) }
-        is AskPhase.Waiting -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+        // What to do first, then the QR code it mentions, in one panel the width of the form, as the web has it.
+        is AskPhase.Waiting -> AskBox {
+            Text(if (open == StepWords.ASK_OPEN) StepWords.ASK_SCAN else open, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
             val bitmap = remember(phase.qr) { runCatching { BrandQr.bitmap(phase.qr, dots = false, side = 624) }.getOrNull() }
             // Dark on white in every theme, with its quiet zone: scanners expect it.
-            if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(AlpineSpace.S3)) {
-                Image(bitmap.asImageBitmap(), contentDescription = "QR code for your other device", modifier = Modifier.size(208.dp))
+            if (bitmap != null) Box(Modifier.background(Color.White, RoundedCornerShape(12.dp)).padding(AlpineSpace.S2)) {
+                Image(bitmap.asImageBitmap(), contentDescription = "QR code for your other device", modifier = Modifier.size(192.dp))
             }
-            Text(open, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, textAlign = TextAlign.Center)
         }
         // Turning the method on: no QR code and no code here, only which device to pick up.
         AskPhase.Asked -> Text(open, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite })
-        is AskPhase.Code -> ShownCode(phase.code)
+        // The QR code's place, once a device opened the request: the code, and where things stand.
+        is AskPhase.Code -> AskBox(Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }) {
+            Text(StepWords.ASK_CODE, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Text(phase.code, style = MaterialTheme.typography.displaySmall.copy(fontFamily = FontFamily.Monospace), fontWeight = FontWeight.Bold, color = alpine.ink, maxLines = 1)
+            Text(StepWords.ASK_PENDING, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+        }
         AskPhase.Approved -> Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Outlined.CheckCircle, null, tint = alpine.success)
             Text(StepWords.APPROVED, style = MaterialTheme.typography.bodyLarge, color = alpine.success, modifier = Modifier.padding(start = AlpineSpace.S2))
@@ -518,6 +529,45 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
             if (inlineAgain) TextButton(onClick = again, enabled = enabled) { Text(StepWords.ASK_AGAIN) }
         }
     }
+}
+
+/*
+ * The asking device and where it is, as rows ("Calls itself", "Near"): the labels as wide as the widest of them, so the
+ * values line up at any font size, each value wrapping in the rest of the line. At the largest font sizes a label beside
+ * its value would leave the value, the thing to read before approving, no room: each label then sits over its value.
+ * TalkBack reads every row as one.
+ */
+@Composable
+internal fun ApprovalDetailRows(details: ApprovalDetails, modifier: Modifier = Modifier) {
+    val alpine = Alpine.colors
+    val style = MaterialTheme.typography.bodyMedium
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val stacked = density.fontScale >= 1.5f
+    val labels = with(density) { details.rows.maxOfOrNull { measurer.measure(it.label, style).size.width }?.toDp() ?: 0.dp }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(if (stacked) AlpineSpace.S2 else AlpineSpace.S1)) {
+        for (row in details.rows) {
+            val merged = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}
+            if (stacked) Column(merged) {
+                Text(row.label, style = style, color = alpine.inkMuted)
+                Text(row.value, style = style, color = alpine.ink)
+            } else Row(merged, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S6)) {
+                Text(row.label, style = style, color = alpine.inkMuted, modifier = Modifier.width(labels))
+                Text(row.value, style = style, color = alpine.ink, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
+/* The asking side's panel: a quiet box the width of the form, its content centred in it. */
+@Composable
+private fun AskBox(modifier: Modifier = Modifier, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(16.dp)
+    Column(
+        modifier.fillMaxWidth().background(alpine.fill, shape).border(1.dp, alpine.rule, shape).padding(horizontal = 20.dp, vertical = AlpineSpace.S6),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3), content = content,
+    )
 }
 
 /* A code for the person to type on their other device, under its label: large and monospaced, read out when it appears. */
@@ -558,7 +608,7 @@ internal fun CodeField(label: String, typed: String, completions: List<String>, 
 /* MARK: Answering */
 
 /*
- * The requests this phone may answer now, after its own limit of five a day for each class
+ * The requests this phone may answer now, after its own daily limit for each class
  * (`PromptLimit`). Read when the app comes to the front, every five seconds while Account is on
  * screen, and when a push arrives; Home's banner and Devices' rows show them. Held by the view
  * model, with the request being answered: its sheet is `Main`'s, and survives a rebuilt screen.
@@ -725,6 +775,7 @@ internal class ApprovalAnswer(
 
     val id: String get() = flow.id
     val asks: String get() = flow.asks
+    val details: ApprovalDetails get() = flow.details
 
     /* The one line under what is asked: that the other device chose this phone to answer, when it did. */
     val note: String? get() = StepWords.APPROVAL_CHOSEN.takeIf { flow.chosen }
@@ -935,9 +986,10 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
     Sheet(onDismissRequest = { if (!busy) inbox.dismiss() }, secure = true) {
         // The sheet itself rises over the keyboard: nothing here pays that inset again.
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
-            // What is asked, and by which device, whole: never cut short.
-            Text(answer.asks, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink,
+            // What is asked, then the device and where it is as rows, whole: never cut short.
+            Text(answer.details.what, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3).semantics { heading() })
+            ApprovalDetailRows(answer.details, Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4))
             answer.note?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3)) }
             when (answer.phase) {
                 // Turning the method on is never scanned or typed here: this is only where an open that got no answer is asked again.

@@ -93,7 +93,11 @@ export function Shot({
     );
 }
 
-/* The phone captures (from the apps themselves, by scripts/site-phone-shots.sh) and their 2x sizes. */
+/*
+ * The phone captures (from the apps themselves: Home and the folder by scripts/site-phone-shots.sh;
+ * the + menu, the second step and an approval prompt by hand, the same way) and their 2x sizes.
+ */
+type PhoneScreen = 'home' | 'folder' | 'scan' | 'two-step' | 'approve';
 const phones = {
     // `corners`: 8% of the width, across and (as a share of the height) down. `scale`: the iPhone is
     // an 18 Pro Max (440 x 956 points), the size of the Pixel beside it (448 x 997 dp), so the two
@@ -122,7 +126,7 @@ export function PhoneShot({
     crop = false,
 }: {
     platform: keyof typeof phones;
-    screen: 'home' | 'folder' | 'scan';
+    screen: PhoneScreen;
     /* What the capture shows; the alt adds which phone it is. */
     alt: string;
     sizes?: string;
@@ -151,7 +155,7 @@ export function PhoneShot({
 
 /*
  * The iPhone and Android apps side by side, each a real capture of the same
- * screen. `screen` names the capture (`home`, `folder` or `scan`); each phone keeps its
+ * screen. `screen` names the capture (`home`, `folder`, `scan`, `two-step` or `approve`); each phone keeps its
  * own proportions and the pair lines up along the bottom.
  */
 export function Phones({
@@ -162,7 +166,7 @@ export function Phones({
     phoneClassName = 'w-40 sm:w-48',
     priority = false,
 }: {
-    screen: 'home' | 'folder' | 'scan';
+    screen: PhoneScreen;
     /* What both captures show, said once; each image adds which phone it is. */
     alt: string;
     sizes?: string;

@@ -37,9 +37,8 @@ private extension StepMethod {
 
     var hint: String {
         switch self {
-        case .totp: "The 6-digit code. It changes every 30 seconds."
-        case .backup: "One of the ten codes you saved. Each works once."
-        case .phrase: "All 24 words, in order. They stay on this device."
+        // The label and the field say what to type: nothing beneath but what was wrong with it.
+        case .totp, .backup, .phrase: ""
         case .webauthn: "Your phone asks for it when you continue."
         // Nothing is typed: the request's own panel says what to do (DeviceAskView).
         case .device: ""
@@ -59,7 +58,7 @@ private struct OtherWays: View {
                     Button(other.other) { choose(other) }
                 }
             }
-            .foregroundStyle(Alpine.primary)
+            .foregroundStyle(Alpine.ink)
         }
     }
 }
@@ -120,7 +119,8 @@ private struct StepNote: View {
                 let count = StepDraft.words(draft.phrase).count
                 Text("\(count) of 24 words").monospacedDigit().foregroundStyle(count == 24 ? Alpine.success : Alpine.inkMuted)
             }
-            Text(problem.isEmpty ? method.hint : problem).foregroundStyle(problem.isEmpty ? Alpine.inkMuted : Alpine.danger)
+            let said = problem.isEmpty ? method.hint : problem
+            if !said.isEmpty { Text(said).foregroundStyle(problem.isEmpty ? Alpine.inkMuted : Alpine.danger) }
         }
         .font(Theme.Text.footnote)
     }
@@ -294,6 +294,8 @@ struct SignInStepView: View {
     @State private var busy = false
     /* The request to another device, while that is the way on screen. */
     @State private var asking = DeviceAskModel()
+    /* The usual way has been started for this step (`start`). */
+    @State private var started = false
 
     init(pending: PendingSignIn) {
         self.pending = pending
@@ -304,14 +306,11 @@ struct SignInStepView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Alpine.Space.s6) {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                        Text("This account has two-step sign-in on.").font(.body).foregroundStyle(Alpine.inkMuted)
-                        // The usual way is not on offer, or a newer HushOS has more: one line, never why.
-                        if !step.note.isEmpty {
-                            Text(step.note).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
-                        }
+                    // The usual way is not on offer, or a newer HushOS has more: one line, never why.
+                    if !step.note.isEmpty {
+                        Text(step.note).font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted)
+                            .padding(.horizontal, Alpine.Space.s4)
                     }
-                    .padding(.horizontal, Alpine.Space.s1)
                     if !step.notice.isEmpty {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "exclamationmark.circle").font(Theme.Text.callout.weight(.semibold))
@@ -325,7 +324,10 @@ struct SignInStepView: View {
                     }
                     if let method = step.shown {
                         VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                            FieldLabel(method.label).padding(.horizontal, Alpine.Space.s4)
+                            // What is typed has a label. The passkey's button says Use your passkey, and the other device's panel says what to do.
+                            if method != .webauthn, method != .device {
+                                FieldLabel(method.label).padding(.horizontal, Alpine.Space.s4)
+                            }
                             if method == .device {
                                 if step.deviceApproved, asking.idle {
                                     // Approved, and the answer that carried it got no verdict: the button sends the same one again.
@@ -333,7 +335,6 @@ struct SignInStepView: View {
                                 } else {
                                     // Nothing is typed here: the other device's QR code, then the code to type there.
                                     DeviceAskView(model: asking, inlineAgain: false) { askDevice() }
-                                        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
                                 }
                                 if !step.fieldError.isEmpty {
                                     Text(step.fieldError).font(Theme.Text.footnote).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
@@ -341,47 +342,49 @@ struct SignInStepView: View {
                             } else {
                                 // A passkey or security key has no field: the button below asks it.
                                 if method != .webauthn {
-                                    StepField(method: method, draft: $step.draft, submit: submit, focus: true)
+                                    StepField(method: method, draft: $step.draft, submit: { submit() }, focus: true)
                                         .disabled(busy)
                                         .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s3)
                                         .frame(minHeight: 52)
                                         .background(Alpine.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                                         .alpineCardEdge(RoundedRectangle(cornerRadius: 26, style: .continuous))
                                 }
-                                StepNote(method: method, draft: step.draft, problem: step.fieldError).padding(.horizontal, Alpine.Space.s4)
+                                if method != .webauthn || !step.fieldError.isEmpty {
+                                    StepNote(method: method, draft: step.draft, problem: step.fieldError).padding(.horizontal, Alpine.Space.s4)
+                                }
                             }
                         }
-                        OtherWays(others: step.others) { choose($0) }
-                            .font(Theme.Text.callout.weight(.semibold))
-                            .frame(minHeight: Theme.control).disabled(busy)
-                            .padding(.horizontal, Alpine.Space.s4)
                     } else {
                         // Nothing this build knows was offered: update. The ways ran out after refusals: updating would not help.
                         Text(step.nothingLeft)
                             .font(Theme.Text.callout).foregroundStyle(Alpine.danger).padding(.horizontal, Alpine.Space.s4)
                     }
+                    // The button under the field, as the web has it. Another device has none while it is asked: its approval signs in.
+                    if step.shown != nil, !(step.shown == .device && step.lost == nil && (asking.out || asking.phase == .approved)) {
+                        Button(action: { submit() }) {
+                            Text(action).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
+                        }
+                        .buttonStyle(PrimaryCapsuleStyle())
+                        .disabled(busy)
+                    }
+                    // One row under it: the other ways at the start, Start again at the end, in line with the field's text.
+                    HStack {
+                        OtherWays(others: step.others) { choose($0) }
+                            .font(Theme.Text.callout.weight(.semibold)).disabled(busy)
+                        Spacer(minLength: Alpine.Space.s4)
+                        Button("Start again") { model.cancelStep() }
+                            .font(Theme.Text.callout).foregroundStyle(Alpine.inkMuted).disabled(busy)
+                    }
+                    .frame(minHeight: Theme.control)
+                    .padding(.horizontal, Alpine.Space.s4)
                 }
-                .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2)
+                .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s2).padding(.bottom, Alpine.Space.s4)
             }
             .scrollDismissesKeyboard(.interactively)
-
-            VStack(spacing: Alpine.Space.s2) {
-                if step.shown != nil {
-                    Button(action: submit) {
-                        Text(action).font(.body.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 52)
-                    }
-                    .buttonStyle(PrimaryCapsuleStyle())
-                    // While a request is out, or its approval's answer is, there is nothing to press.
-                    .disabled(busy || (step.shown == .device && step.lost == nil && (asking.out || asking.phase == .approved)))
-                }
-                Button("Start again") { model.cancelStep() }
-                    .font(.body.weight(.semibold)).foregroundStyle(Alpine.primary).frame(minHeight: Theme.control)
-                    .disabled(busy)
-            }
-            .padding(.horizontal, Alpine.Space.s4).padding(.top, Alpine.Space.s3).padding(.bottom, Alpine.Space.s4)
         }
         .background(Alpine.ground.ignoresSafeArea())
         .navigationTitle("One more step")
+        .onAppear(perform: start)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(busy)
         // Left (answered, started again, timed out): nothing goes on asking behind a screen that is gone.
@@ -414,7 +417,7 @@ struct SignInStepView: View {
 
     /*
      * Asks another device, with the key this sign-in holds for it (the phone's own, or the one made
-     * for this sign-in). Only from a press. Once approved the step is answered with the request,
+     * for this sign-in): as the step opens on it, or from a press. Once approved the step is answered with the request,
      * and the app is signed in; a request that ended stays on screen with Ask again.
      */
     private func askDevice() {
@@ -439,14 +442,16 @@ struct SignInStepView: View {
         )
     }
 
-    private func submit() {
+    /* `quiet`: the sheet the step opened by itself. Closed, it says nothing: the button asks again. */
+    private func submit(quiet: Bool = false) {
         // Another device is asked, or asked again, from here; an approval it already gave goes the usual road below, as it went.
         if step.shown == .device, !step.sendsAgain {
             askDevice()
             return
         }
-        // The press decides what goes. For a passkey or security key the system's sheet opens from here, and only from here.
+        // The press decides what goes. For a passkey or security key the system's sheet opens from here.
         guard !busy, let sending = step.press() else { return }
+        let before = step
         busy = true
         Task {
             var sent: StepAnswer?
@@ -456,9 +461,23 @@ struct SignInStepView: View {
                 // A sheet that was closed sent nothing and keeps the step; a lost reply keeps the answer to send again.
                 if let over = step.failed(error, tried: sending.method, answer: sent) {
                     model.cancelStep(over, token: pending.challenge.token)
+                } else if quiet, sent == nil, step.methods == before.methods {
+                    // The sheet that opened by itself was closed: nothing to say about it.
+                    step = before
                 }
             }
             busy = false
+        }
+    }
+
+    /* The usual way starts by itself, once for each step: the key's sheet, or the request to another device. */
+    private func start() {
+        guard !started else { return }
+        started = true
+        switch step.shown {
+        case .webauthn: submit(quiet: true)
+        case .device: askDevice()
+        default: break
         }
     }
 }
