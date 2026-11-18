@@ -784,6 +784,60 @@ describe('download manager', () => {
         expect((await later).byteLength).toBe(1);
     });
 
+    test('a close ends a read waiting on a chunk that never comes', async () => {
+        // Two chunks; the second never arrives (offline, a worker that doesn't answer).
+        const size = CHUNK + 100;
+        const h = harness({
+            decide: (_object, index) => (index === 1 ? new Promise(() => {}) : null),
+        });
+        const reader = h.manager.openReader(file('nv', size), 1, { tool: true, uncapped: true });
+        const head = reader.read(0, CHUNK);
+        await settle(100);
+        expect((await head).byteLength).toBe(CHUNK);
+        let outcome: unknown = 'waiting';
+        const tail = reader.read(CHUNK, 100).then(
+            () => 'read',
+            (error: unknown) => error,
+        );
+        void tail.then((value) => (outcome = value));
+        await settle(1_000);
+        expect(outcome).toBe('waiting');
+        // Closed: the read waiting on the second chunk ends now, so nothing holds the first one waiting on it.
+        void reader.close();
+        await settle(0);
+        expect(outcome).toBeInstanceOf(Error);
+    });
+
+    test('a close lets go of a drain waiting on a tool’s padding, which is still fetched to the end', async () => {
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-hd': { plaintextSize: size, thumbnailBytes: 1000 } };
+        // The first padding chunk hangs, as one fetched offline would.
+        let answer!: (value: { status: number; length: number }) => void;
+        const h = harness({
+            sealed,
+            raw: (_v, index) =>
+                index === 64 ? new Promise((resolve) => (answer = resolve)) : null,
+        });
+        const reader = h.manager.openReader(paddedFile('hd', size, 1000), 1, { tool: true });
+        const read = reader.read(size - 10, 10);
+        await settle(100);
+        await read;
+        let drained = false;
+        const draining = reader.drain!().then(() => (drained = true));
+        await settle(1_000);
+        expect(drained).toBe(false);
+        // Closed while the padding hangs: the drain returns now, not when the padding does.
+        const closing = reader.close();
+        await settle(0);
+        expect(drained).toBe(true);
+        await draining;
+        // The padding is still fetched to its end, with the reader gone.
+        answer({ status: 206, length: CHUNK + 16 });
+        await settle(1_000);
+        await closing;
+        expect(h.raw).toEqual(['v-hd:64', 'v-hd:65']);
+    });
+
     test('after the reader closed, each padding chunk is tried once', async () => {
         const size = 512 * 1024 * 1024 - 100;
         const sealed = { 'o-cz': { plaintextSize: size, thumbnailBytes: 1000 } };
@@ -813,6 +867,42 @@ describe('download manager', () => {
         const fetched = [...h.attempts.values()].reduce((sum, n) => sum + n, 0);
         expect(fetched).toBe(16);
         await reader.close();
+    });
+
+    test('an uncapped reader charges each chunk it fetches, not the bytes a read asked for', async () => {
+        const size = 6 * CHUNK - 100;
+        const h = harness({});
+        const charged: number[] = [];
+        const reader = h.manager.openReader(file('ch', size), 4, {
+            tool: true,
+            uncapped: true,
+            onFetch: (bytes) => {
+                if (charged.length === 12) throw new Error('Past the allowance.');
+                charged.push(bytes);
+            },
+        });
+        // One-byte reads cycling over chunks 0 to 4, past a cache of four: every read a fetch.
+        let error: unknown = null;
+        for (let read = 0; read < 20 && !error; read++) {
+            reader.read((read % 5) * CHUNK, 1).catch((e: unknown) => (error = e));
+            await settle(100);
+        }
+        expect(charged).toEqual(Array(12).fill(CHUNK));
+        expect(String(error)).toMatch(/Past the allowance/);
+        // Refused, nothing was fetched for it: the fetches are the ones charged.
+        const fetched = [...h.attempts.values()].reduce((sum, n) => sum + n, 0);
+        expect(fetched).toBe(12);
+        // The file's last chunk is charged its own size.
+        const tail = h.manager.openReader(file('ct', size), 4, {
+            tool: true,
+            uncapped: true,
+            onFetch: (bytes) => charged.push(bytes),
+        });
+        void tail.read(size - 1, 1);
+        await settle(100);
+        expect(charged.at(-1)).toBe(CHUNK - 100);
+        await reader.close();
+        await tail.close();
     });
 
     test('a version whose envelope promises another chunk count than the listing is refused', async () => {

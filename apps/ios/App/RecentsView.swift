@@ -570,6 +570,8 @@ struct OnThisPhoneView: View {
     @Environment(DriveStore.self) private var store
     @State private var action: NodeAction?
     @State private var preview: URL?
+    /* A kept zip with only its offline record: opened in the archive viewer from its copy. */
+    @State private var keptArchive: Offline.Entry?
     @State private var viewing: Opened?
     @State private var showing: Opened?
     /* The opened items behind the rows, for a full row and Send a copy. */
@@ -690,6 +692,7 @@ struct OnThisPhoneView: View {
         }
         .nodeActionSheets(action: $action, store: store)
         .quickLookPreview($preview)
+        .fullScreenCover(item: $keptArchive) { entry in KeptArchiveViewer(entry: entry).environment(store) }
         .fileViewer($viewing, among: entries.compactMap { items[$0.id] }, store: store)
         .task(id: "\(store.offlineVersion)-\(store.catalogueVersion)") {
             var found: [String: Opened] = [:]
@@ -701,7 +704,9 @@ struct OnThisPhoneView: View {
     @ViewBuilder private func row(_ entry: Offline.Entry) -> some View {
         Button {
             if let item = items[entry.id] ?? store.everything.first(where: { $0.id == entry.id }) { Opener.open(item, store: store) { viewing = $0 } }
-            // Kept from a share this session hasn't opened: the copy on the phone is all there is.
+            // Kept from a share this session hasn't opened: the copy on the phone is all there is. A zip opens as its list,
+            // read from that copy by range into memory; anything else in QuickLook.
+            else if ArchiveEntries.handles(name: entry.name, mime: entry.mime) { keptArchive = entry }
             else { preview = Offline.file(for: entry) }
         } label: {
             if let item = items[entry.id] {
@@ -836,5 +841,48 @@ private struct RestoreProblemBanner: View {
             return "“\(first.item.name)” went back to Files, because its folder" + (first.folder.map { " “\($0)”" } ?? "") + " is still in the Trash."
         }
         return "\(problem.moved.count) items went back to Files, because their folders are still in the Trash."
+    }
+}
+
+/* A kept zip with only its offline record, opened as its list from the copy on this phone: the viewer's header, the archive below. */
+private struct KeptArchiveViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(DriveStore.self) private var store
+    let entry: Offline.Entry
+    /* The kept file on its way to another app (Send a copy). */
+    @State private var sending: URL?
+
+    var body: some View {
+        NavigationStack {
+            ArchiveScreen(kept: Offline.file(for: entry), name: entry.name, workspace: entry.workspaceId, node: entry.id)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button { dismiss() } label: { HeaderWord(text: "Done") }
+                    }
+                    ToolbarItem(placement: .principal) {
+                        Text(entry.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
+                    }
+                    // The way on for a zip HushOS can't open (or one the person wants elsewhere): the kept file itself,
+                    // as a drive row's Send a copy hands on its own.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: send) { HeaderIcon(symbol: "square.and.arrow.up") }
+                            .accessibilityLabel("Send a copy")
+                    }
+                }
+                .sheet(isPresented: Binding(get: { sending != nil }, set: { if !$0 { sending = nil } })) {
+                    if let sending { ActivityView(url: sending) { self.sending = nil } }
+                }
+        }
+    }
+
+    /* Only while it may still leave: its folder not proven a family's, let go of or purged since, and the copy still there. */
+    private func send() {
+        let file = Offline.file(for: entry)
+        guard ArchiveSessions.keptMayLeave(workspace: entry.workspaceId, node: entry.id), FileManager.default.fileExists(atPath: file.path) else {
+            store.notify(FamilyWords.openAgain)
+            return
+        }
+        sending = file
     }
 }

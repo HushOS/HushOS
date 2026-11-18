@@ -48,6 +48,8 @@ class AccountStore(private val files: File, private val cache: File, private val
         ToolRuns.budget.clear()
         // The background padding drains too: they hold the old account's address and API client.
         PaddingDrains.shared.cancelAll()
+        // Every archive open in the viewer: its password goes, and its calls end.
+        ArchiveSessions.shared.closeAll()
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()

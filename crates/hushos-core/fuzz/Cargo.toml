@@ -29,6 +29,13 @@ x25519-dalek = { version = "3", features = ["static_secrets"] }
 debug = 1
 
 [[bin]]
+name = "archive"
+path = "fuzz_targets/archive.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "canonical"
 path = "fuzz_targets/canonical.rs"
 test = false

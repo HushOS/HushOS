@@ -306,7 +306,7 @@ public enum TemporaryCopies {
     @discardableResult
     public static func forgetFamily(_ workspaces: [String], in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
         let family = temporary.appendingPathComponent("opened", isDirectory: true).appendingPathComponent(familyFolder, isDirectory: true)
-        return forgetLock.withLock {
+        let forgot = forgetLock.withLock { () -> Bool in
             // An ended session's cleanup touches nothing: the copies there now may be the next session's.
             if let session, !session.open { return false }
             for id in workspaces {
@@ -317,6 +317,9 @@ public enum TemporaryCopies {
             }
             return true
         }
+        // A zip of those folders open in the viewer closes too, even one nothing is reading.
+        if forgot { ArchiveSessions.closeFamily(workspaces, session: session) }
+        return forgot
     }
 
     /*
@@ -324,6 +327,10 @@ public enum TemporaryCopies {
      * isn't in `keeping` goes, its forget generation moved first so no download of it writes after.
      * Under the copies' lock, and never from an ended session. Copies go whatever any record
      * remembers; an empty `keeping` (a cold start) deletes them all, which only costs a download.
+     * Copies only, never an open zip: the allowlist is the families proven since this sync began
+     * (empty as it starts), so a zip of a family not proven again yet would close for nothing.
+     * Every revocation closes zips through `forgetFamily` before it sweeps: a refusal or a fork
+     * (FamilySync.forgetOpened), a wipe, a folder the family stopped listing, an unreadable record.
      */
     @discardableResult
     public static func sweepFamily(keeping: Set<String>, in temporary: URL = FileManager.default.temporaryDirectory, session: CopySession? = nil) -> Bool {
@@ -479,10 +486,15 @@ public struct FamilyCopyGate: Sendable {
     /* `body` under the copies' lock, while the session and the family stand; refused when either ended since. */
     public func perform<T>(_ body: () throws -> T) throws -> T {
         try TemporaryCopies.forgetLock.withLock {
-            guard account.value == epoch else { throw CancellationError() }
-            if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
+            try checkLocked()
             return try body()
         }
+    }
+
+    /* `check()` for a caller holding the copies' lock already (ArchiveSessions' registry): NSLock doesn't nest. */
+    func checkLocked() throws {
+        guard account.value == epoch else { throw CancellationError() }
+        if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
     }
 
     /* Whether the copy may still be handed on: throws when its family was forgotten since. */

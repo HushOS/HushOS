@@ -276,6 +276,89 @@ class FamilySyncTest {
     }
 
     /*
+     * A zip of the family's folder opened through a share before the folder was proven: it holds the share's content
+     * key. Once route 25 proves the folder, the archive closes at once, idle, and every later read says the family's
+     * words. Fails if a share's archive keeps serving after its workspace became a family's.
+     */
+    @Test
+    fun aZipAShareOpenedClosesWhenItsFolderIsProvenAFamilys() = kotlinx.coroutines.runBlocking {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        val zip = server.file(family.rootId, "notes.zip", File(File(System.getProperty("user.dir"), "../../../e2e/fixtures/archives"), "basic.zip").readBytes())
+        server.shareWithMe(zip)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val sessions = ArchiveSessions.shared
+        val shareKey = phone.vault.nodes.key(root)!!
+        val archive = phone.vault.openArchive(root, sessions)
+        val readme = archive.entries.first { it.path == "docs/readme.txt" }
+        assertTrue(archive.preview(readme.index, 1024).decodeToString().contains("Read me."))
+        accepted(phone)
+        assertTrue("a share's archive outlived its folder becoming a family's", archive.closed)
+        val refused = runCatching { archive.preview(readme.index, 1024) }.exceptionOrNull()
+        assertTrue("read after the proof: $refused", refused is FamilyFailure)
+        assertEquals(FamilyWords.OPEN_AGAIN, refused!!.message)
+        // A share's key still held for it (another vault of the session, as a share mount would leave it): never opened.
+        phone.vault.nodes.put(root, shareKey)
+        val again = runCatching { phone.vault.openArchive(root, sessions) }.exceptionOrNull()
+        assertTrue("opened under a share's key after the proof: $again", again is FamilyFailure)
+    }
+
+    /*
+     * A zip's scope is taken before its key, and the registry checks it as it admits the archive, under the lock a
+     * forget moves the folder's count under: a forget landing between the two (of a folder route 25 never proved, so
+     * not a family folder by name) is seen there, and one after closes it. A forget bound to another session closes
+     * nothing of this one's. Fails if a share's zip is held only to the folder being proven, or registers unchecked.
+     */
+    @Test
+    fun aForgetBetweenAZipsScopeAndItsRegistrationIsSeenThere() = kotlinx.coroutines.runBlocking {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        val bytes = File(File(System.getProperty("user.dir"), "../../../e2e/fixtures/archives"), "basic.zip")
+        val zip = server.file(family.rootId, "notes.zip", bytes.readBytes())
+        server.shareWithMe(zip)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val ws = root.node.workspaceId
+        val sessions = ArchiveSessions.shared
+        // A copy kept by its record, of this share's folder or known only by its node: it may leave until the forget.
+        assertTrue(phone.vault.keptMayLeave(ws, root.id))
+        assertTrue(phone.vault.keptMayLeave(null, root.id))
+        // Open before the forget: one by its workspace, one known only by its node (a kept record from before its
+        // workspace was kept). And a scope taken before the forget, whose archive registers after it.
+        val first = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))
+        val nodeOnly = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(null, root.id))
+        val late = phone.vault.archiveScope(ws, root.id)
+        phone.vault.forgetWorkspaces(listOf(ws))
+        assertFalse(phone.vault.isFamilyWorkspace(ws))
+        assertTrue("a forget left its folder's zip open", first.closed)
+        assertTrue("a node-only kept zip outlived its folder's forget (the forgotten node ids)", nodeOnly.closed)
+        // And its kept copy is handed on no more (Send a copy), by its folder or, known only by its node, by that.
+        assertFalse("a kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(ws, root.id))
+        assertFalse("a node-only kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(null, root.id))
+        assertTrue("another workspace’s kept zip was held back", phone.vault.keptMayLeave(java.util.UUID.randomUUID().toString(), "other-node"))
+        // Reopened from "On this phone" after the forget, with a scope taken now (the count already moved): refused against
+        // the revocation the session holds, not opened because nothing changed since the tap.
+        val reopened = runCatching { phone.vault.openKeptArchive(bytes, ws, root.id, sessions) }.exceptionOrNull()
+        assertTrue("a kept zip of a forgotten folder reopened: $reopened", reopened is FamilyFailure)
+        // A record with a workspace is judged by it, never by a node id another workspace's purge named.
+        assertTrue(phone.vault.keptAdmits(java.util.UUID.randomUUID().toString(), root.id))
+        val before = sessions.count
+        val refused = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = late) }.exceptionOrNull()
+        assertTrue("registered across a forget: $refused", refused is FamilyFailure)
+        val again = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(null, root.id)) }.exceptionOrNull()
+        assertTrue("a node-only kept zip opened after the forget: $again", again is FamilyFailure)
+        assertEquals(before, sessions.count)
+
+        val archive = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))
+        // Another session's forget of the same folder: this session's zip stays open.
+        sessions.closeWorkspaces(FamilySessionState("another-session"), listOf(ws))
+        assertFalse(archive.closed)
+        phone.vault.forgetWorkspaces(listOf(ws))
+        assertTrue("a forget after it registered left it open", archive.closed)
+    }
+
+    /*
      * #247 check, round 3: after a fork cleared the family, a share refresh can't put the family's file back, and a
      * download of it refuses; nor does a row and key put there any way but the ledger download. Fails if a share mount or
      * a cached row stands in for the ledger.

@@ -22,6 +22,8 @@ export type PreviewKind =
     | 'video'
     | 'audio'
     | 'office'
+    /* A zip, which opens as the list of what is inside it (components/drive/archive-view.tsx). */
+    | 'archive'
     | 'none';
 
 export {
@@ -107,6 +109,8 @@ export function previewKind(node: DriveNode): PreviewKind {
     if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx')
         return 'markdown';
     if (officeKind(node.name, mime)) return 'office';
+    if (mime === 'application/zip' || mime === 'application/x-zip-compressed' || ext === 'zip')
+        return 'archive';
     if (
         mime.startsWith('text/') ||
         mime === 'application/json' ||
@@ -330,6 +334,8 @@ export type RememberedPreview =
     | { kind: 'text'; text: string; truncated: boolean; bytes: number }
     | { kind: 'image'; url: string; bytes: number }
     | { kind: 'document'; data: Uint8Array; bytes: number }
+    /* A small zip's bytes for its worker: apart from documents, so a file renamed from .zip never shows them as one. */
+    | { kind: 'archive'; data: Uint8Array; bytes: number }
     | { kind: 'media'; url: string; bytes: number };
 
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
@@ -380,6 +386,11 @@ function evict(versionId: string, entry: RememberedPreview) {
     remembered.delete(versionId);
     rememberedBytes -= entry.bytes;
     if (entry.kind === 'image' || entry.kind === 'media') URL.revokeObjectURL(entry.url);
+}
+
+/* The remembered previews whose version ids `match`: what one closed archive session opened. */
+export function forgetPreviewsWhere(match: (versionId: string) => boolean) {
+    for (const [id, entry] of remembered) if (match(id)) evict(id, entry);
 }
 
 export function forgetPreviews() {
