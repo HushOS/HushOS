@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.9.0](https://github.com/HushOS/HushOS/compare/v1.8.0...v1.9.0) (2026-11-18)
+
+
+### Features
+
+* **apps:** browse zip archives in the viewer, on the web, iPhone and Android ([#450](https://github.com/HushOS/HushOS/issues/450)) ([546560d](https://github.com/HushOS/HushOS/commit/546560dc63764e489717b903b096c7f40dd3e9f7))
+* **apps:** draw the HushOS mark in QR codes on iPhone and Android ([#445](https://github.com/HushOS/HushOS/issues/445)) ([5b19ea0](https://github.com/HushOS/HushOS/commit/5b19ea0e5b5618f34d45bcf2f13d9a2f796d891d))
+* **apps:** run file tools under one harness with a range reader, watchdog and budget ([#442](https://github.com/HushOS/HushOS/issues/442)) ([de6b794](https://github.com/HushOS/HushOS/commit/de6b7946ba414790661a5e3dc4b732056f1c06e9))
+* **apps:** save file-tool results into Drive with a run journal, on the web, iPhone and Android ([#451](https://github.com/HushOS/HushOS/issues/451)) ([32fbf65](https://github.com/HushOS/HushOS/commit/32fbf65547aa807da90184d6ba833d559c87d7b2))
+
+
+### Bug fixes
+
+* **android:** read every approval QR code the camera sees ([#446](https://github.com/HushOS/HushOS/issues/446)) ([e766586](https://github.com/HushOS/HushOS/commit/e7665869be142b7f3f5c178af13fb7346b3b07c5))
+* **ios:** run background task launch handlers on the main queue ([#449](https://github.com/HushOS/HushOS/issues/449)) ([07d1dd4](https://github.com/HushOS/HushOS/commit/07d1dd40070886a81b1956df9c5370b214fb26ba))
+
+
+### Performance
+
+* **apps:** draw only the rows near the screen in a Drive folder ([#448](https://github.com/HushOS/HushOS/issues/448)) ([a44516a](https://github.com/HushOS/HushOS/commit/a44516a4b22e604e4e8ca3c6f521a6fd5ede9254))
+* **apps:** open the drive in fewer round trips on the web, iPhone and Android ([#447](https://github.com/HushOS/HushOS/issues/447)) ([85f1112](https://github.com/HushOS/HushOS/commit/85f111271d148eb062f51b46a6bbf74242f6958d))
+
 ## [1.8.0](https://github.com/HushOS/HushOS/compare/v1.7.0...v1.8.0) (2026-11-16)
 
 
