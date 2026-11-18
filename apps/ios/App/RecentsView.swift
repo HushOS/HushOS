@@ -847,7 +847,10 @@ private struct RestoreProblemBanner: View {
 /* A kept zip with only its offline record, opened as its list from the copy on this phone: the viewer's header, the archive below. */
 private struct KeptArchiveViewer: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(DriveStore.self) private var store
     let entry: Offline.Entry
+    /* The kept file on its way to another app (Send a copy). */
+    @State private var sending: URL?
 
     var body: some View {
         NavigationStack {
@@ -860,7 +863,26 @@ private struct KeptArchiveViewer: View {
                     ToolbarItem(placement: .principal) {
                         Text(entry.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
                     }
+                    // The way on for a zip HushOS can't open (or one the person wants elsewhere): the kept file itself,
+                    // as a drive row's Send a copy hands on its own.
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(action: send) { HeaderIcon(symbol: "square.and.arrow.up") }
+                            .accessibilityLabel("Send a copy")
+                    }
+                }
+                .sheet(isPresented: Binding(get: { sending != nil }, set: { if !$0 { sending = nil } })) {
+                    if let sending { ActivityView(url: sending) { self.sending = nil } }
                 }
         }
+    }
+
+    /* Only while it may still leave: its folder not proven a family's, let go of or purged since, and the copy still there. */
+    private func send() {
+        let file = Offline.file(for: entry)
+        guard ArchiveSessions.keptMayLeave(workspace: entry.workspaceId, node: entry.id), FileManager.default.fileExists(atPath: file.path) else {
+            store.notify(FamilyWords.openAgain)
+            return
+        }
+        sending = file
     }
 }

@@ -185,7 +185,14 @@ class ArchiveBrowse(
         if (closed || archive == null) return
         val record = EntryDownload(entry)
         downloads.add(record)
-        record.job = scope.launch {
+        // One download to a document at a time, in the whole app: two would truncate and overwrite each other, and the
+        // first one's stop would delete what the second finished. Refused, and said so, before anything opens it.
+        if (!SaveReservations.take(destination.key)) {
+            record.error.value = ALREADY_SAVING
+            return
+        }
+        // Started whatever comes (ATOMIC): a cancel before it runs still reaches the cleanup that lets the document go.
+        record.job = scope.launch(start = kotlinx.coroutines.CoroutineStart.ATOMIC) {
             val stream = SaveStream(destination)
             var failure: Throwable? = null
             try {
@@ -224,6 +231,8 @@ class ArchiveBrowse(
                     }
                     // Only what this download wrote to: never a document it didn't touch, however empty.
                     if (failure != null && closing.wrote) destination.delete()
+                    // Let go of only once it is closed and cleaned up: the next download to it starts after.
+                    SaveReservations.release(destination.key)
                 }
             }
             val error = failure
@@ -280,6 +289,12 @@ class ArchiveBrowse(
         archive = null
         tree = null
         opened = null
+        // Nothing waiting on it goes on either: a large download's confirmation, the Save dialog's entry, a download
+        // waiting on a password, or a password asked again.
+        asking = null
+        waitingFor = null
+        downloadAfterPassword = null
+        reprompt.clear()
         failure = words
     }
 
@@ -300,7 +315,19 @@ class EntryDownload(val entry: ArchiveEntry) {
 }
 
 /* Where a download is saved: the document the Save dialog picked. */
+/* What a download to a document already being saved says (Android's alone: elsewhere a download makes its own file). */
+internal const val ALREADY_SAVING = "Another download is saving to this file. Choose another name."
+
+/* The documents downloads are saving to now, in the whole process (SaveDestination.key). */
+internal object SaveReservations {
+    private val held = HashSet<String>()
+    @Synchronized fun take(key: String): Boolean = held.add(key)
+    @Synchronized fun release(key: String) { held.remove(key) }
+}
+
 interface SaveDestination {
+    /* Which document it is, the same for two destinations of the same document (its URI). */
+    val key: String
     /* Opened for writing from its start, truncated ("wt"). */
     fun open(): java.io.OutputStream
     fun delete()
@@ -308,6 +335,7 @@ interface SaveDestination {
 
 /* The document the Save dialog returned: a new one, or (Android 10's DocumentsUI and later) one the person chose to overwrite. */
 class DocumentDestination(private val resolver: ContentResolver, private val uri: Uri) : SaveDestination {
+    override val key: String = uri.toString()
     override fun open(): java.io.OutputStream = resolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("No stream.")
     override fun delete() {
         runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }

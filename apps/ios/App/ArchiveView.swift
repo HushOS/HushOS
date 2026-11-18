@@ -95,7 +95,8 @@ struct ArchiveScreen: View {
                 }
                 if let opened {
                     ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, doubted: $doubted, askPassword: passwordFor == opened.index,
-                                     onDownload: { start(opened) })
+                                     // Only for the entry still open: a password answered after the person moved on starts nothing.
+                                     onDownload: { if self.opened?.index == opened.index { start(opened) } })
                         .id(opened.index)
                 } else if let rows = tree.made(in: path.last ?? 0) ?? listed.flatMap({ $0.tree === tree && $0.folder == (path.last ?? 0) ? $0.rows : nil }) {
                     list(rows, hidden: archive.hidden)
@@ -140,6 +141,10 @@ struct ArchiveScreen: View {
             opened = nil
             unlocked = false
             passwordFor = nil
+            // The last open's failure and downloads go too: a new tree is never shown under an old error.
+            failure = nil
+            for download in downloads { download.task?.cancel() }
+            downloads = []
             let open: OpenArchive
             do {
                 if let item { open = try await OpenArchive.open(item, vault: store.vault) } else if let kept {
@@ -314,24 +319,27 @@ struct ArchiveScreen: View {
             let scoped = folder.startAccessingSecurityScopedResource()
             defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
             var target: ArchiveSaveTarget?
+            var sink: ArchiveSink?
             do {
                 // The name the core made safe: no bidi override, no NUL, no separator, at most 255 bytes. Created
                 // exclusively, off the main actor, so only a file this download made is ever written, or removed.
                 let made = try await ArchiveSaveTarget.reserve(in: folder, name: entry.saveName)
                 target = made
-                try await archive.download(entry, into: ArchiveSink { chunk in
+                let into = ArchiveSink { chunk in
                     try made.write(chunk)
                     // Its size only: the progress waiting on the main actor never keeps the plaintext alive.
                     let count = UInt64(chunk.count)
                     Task { @MainActor in progress.written += count }
-                })
+                }
+                sink = into
+                try await archive.download(entry, into: into)
                 // Closed as part of the save, off the main actor: a file that fails as it is written out failed the download.
                 try await made.finish()
                 await MainActor.run { downloads.removeAll { $0 === progress } }
             } catch {
                 // A cancel answers before the call's thread is out of its piece: that piece is waited out (off the
                 // main thread), so the file is removed after its last write, never before it.
-                await archive.settled()
+                await sink?.settled()
                 // Only while the path is still this download's file (Files may have moved it), off the main actor.
                 await target?.discard()
                 await MainActor.run {
@@ -675,6 +683,8 @@ private struct ArchivePasswordCard: View {
     /* Said before anything is typed: why the password is asked for again. */
     var note: String?
     let onUnlocked: () -> Void
+    /* The try under way: cancelled when the card goes (another entry, Back), so its answer never acts for it. */
+    @State private var trying: Task<Void, Never>?
     @State private var password = ""
     @State private var busy = false
     @State private var wrong = false
@@ -703,6 +713,10 @@ private struct ArchivePasswordCard: View {
         }
         .padding(Alpine.Space.s6)
         .frame(maxWidth: 400)
+        .onDisappear {
+            trying?.cancel()
+            trying = nil
+        }
     }
 
     private func submit() {
@@ -711,11 +725,14 @@ private struct ArchivePasswordCard: View {
         wrong = false
         error = nil
         let typed = password
-        Task {
+        trying = Task {
             do {
-                if try await archive.unlock(typed, entry: entry) { onUnlocked() } else { wrong = true }
+                let opens = try await archive.unlock(typed, entry: entry)
+                // Left meanwhile: the password is held (it opened), but nothing it was asked for goes on.
+                guard !Task.isCancelled else { return }
+                if opens { onUnlocked() } else { wrong = true }
             } catch {
-                self.error = failureWords(error, store: store)
+                if !Task.isCancelled { self.error = failureWords(error, store: store) }
             }
             busy = false
         }

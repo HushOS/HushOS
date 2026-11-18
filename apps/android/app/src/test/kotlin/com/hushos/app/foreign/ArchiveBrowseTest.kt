@@ -111,6 +111,7 @@ class ArchiveBrowseTest {
 
     /* The Save dialog's document as a file: made empty, or one already there that the person chose to replace. */
     private class FileDestination(val file: File) : com.hushos.app.ui.SaveDestination {
+        override val key: String get() = file.absolutePath
         @Volatile var deleted = false
         val hold = java.util.concurrent.CountDownLatch(1)
         val writing = java.util.concurrent.CountDownLatch(1)
@@ -196,6 +197,36 @@ class ArchiveBrowseTest {
         withTimeout(10_000) { while (!replaced.deleted) kotlinx.coroutines.delay(20) }
         assertFalse(replaced.file.exists())
         bigBrowse.close()
+        scope.cancel()
+    }
+
+    @Test fun aSecondDownloadToTheSameDocumentIsRefusedAndTheFirstFinishes() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val browse = ArchiveBrowse(ArchiveSubject("b", "big.zip"), scope, open = { ArchiveSessions().openLocal(big()) })
+        withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
+        val entry = browse.archive!!.entries.single()
+        val file = File.createTempFile("save", ".bin")
+        val first = FileDestination(file)
+        var finished = false
+        browse.startDownload(entry, first) { finished = true }
+        assertTrue(first.writing.await(30, java.util.concurrent.TimeUnit.SECONDS))
+        // The same document again (the Save dialog handed it back): refused, said so, nothing opened or deleted.
+        val second = FileDestination(file).apply { hold.countDown() }
+        browse.startDownload(entry, second) {}
+        val refused = browse.downloads.last()
+        assertEquals(com.hushos.app.ui.ALREADY_SAVING, refused.error.value)
+        browse.stop(refused)
+        first.hold.countDown()
+        withTimeout(30_000) { while (!finished) kotlinx.coroutines.delay(20) }
+        assertFalse(first.deleted)
+        assertFalse(second.deleted)
+        assertEquals(3L shl 20, file.length())
+        // Let go of once the first is closed: a later download to it starts.
+        val third = FileDestination(file).apply { hold.countDown() }
+        var again = false
+        browse.startDownload(entry, third) { again = true }
+        withTimeout(30_000) { while (!again) kotlinx.coroutines.delay(20) }
+        browse.close()
         scope.cancel()
     }
 

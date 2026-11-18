@@ -113,16 +113,24 @@ public enum ArchiveSessions {
         }
     }
 
+    /*
+     * Whether a zip kept on this phone, by its offline record (`workspace`, or only its `node`), may
+     * still be handed on (Send a copy): not proven a family's, let go of or purged since.
+     */
+    public static func keptMayLeave(workspace: String?, node: String?) -> Bool {
+        refusal(Scope(gate: nil, workspace: workspace?.lowercased(), node: node?.lowercased(), family: false)) == nil
+    }
+
     /* Whether `scope` stands now (a call's start and end, `serves`). */
     static func refusal(_ scope: Scope) -> ArchiveFailure? { lock.withLock { refusalLocked(scope) } }
 
     /*
      * `body` (a downloaded piece written out) while the archive stands: checked under the registry's
-     * lock, written under the archive's own (`writing`), never the registry's, so a write to a slow
+     * lock, written under the download's own (its sink's `writing`), never the registry's, so a write to a slow
      * provider holds up no forget, sign-out or screen. A forget, a proof or a sign-out takes the archive
      * out of the registry under the registry's lock first: a piece not yet checked is refused; one
      * already being written finishes, and the download's failure removes its file, that piece with it
-     * (`OpenArchive.settled` waits it out first, off the main thread). `registered`: an archive a
+     * (`ArchiveSink.settled` waits it out first, off the main thread). `registered`: an archive a
      * sign-out reaches, which must still be in the registry.
      */
     static func whileStanding<T>(archive id: UUID, registered: Bool, _ scope: Scope, writing: NSLock, _ body: () throws -> T) throws -> T {
@@ -384,7 +392,25 @@ private final class ArchiveFetchBox: @unchecked Sendable {
 /* Where an entry being downloaded goes: each piece handed on as it comes, on the call's thread. */
 public final class ArchiveSink: EntrySink, @unchecked Sendable {
     private let put: @Sendable (Data) throws -> Void
+    /* Held while one of its pieces is written out: this download's own, never another's or the registry's. */
+    let writing = NSLock()
     public init(_ put: @escaping @Sendable (Data) throws -> Void) { self.put = put }
+
+    /*
+     * Returns once none of its pieces is being written (a call's thread may still be in one after a
+     * cancel), waited for off the main thread: a download's cleanup removes its file after its last
+     * piece, never before it, and never waits on another download's write.
+     */
+    public func settled() async {
+        let writing = self.writing
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            ArchiveSessions.closeQueue.async {
+                writing.lock()
+                writing.unlock()
+                done.resume()
+            }
+        }
+    }
     public func write(chunk: Data) throws {
         do { try put(chunk) } catch { throw FetchError.Failed(reason: ErrorWords.say(error, otherwise: ArchiveWords.notSaved) ?? "Cancelled.") }
     }
@@ -504,8 +530,6 @@ public final class OpenArchive: @unchecked Sendable {
     private let calls = ArchiveCalls()
     private let siblings = ArchiveSiblings()
     private let id = UUID()
-    /* Held while a downloaded piece is written out: the archive's own lock, never the registry's (`ArchiveSessions.whileStanding`). */
-    private let writing = NSLock()
     /* Who this archive is, in `ArchiveSessions.familyClosed`. */
     public var identity: UUID { id }
     private let watchdog: Duration
@@ -694,8 +718,9 @@ public final class OpenArchive: @unchecked Sendable {
         defer { if let done = siblings.remove(key) { OpenArchive.closeOffMain(done) } }
         // Asked of every piece too: a family let go of mid-download writes nothing more.
         // Checked and written in one step under the registry's lock: no forget, proof or sign-out lands between.
-        let held: EntrySink = ArchiveSink { [id, registered, scope, writing] chunk in
-            try ArchiveSessions.whileStanding(archive: id, registered: registered, scope, writing: writing) { try sink.write(chunk: chunk) }
+        // Under the download's own lock (its sink's): a stalled provider holds up no other download, nor another's stop.
+        let held: EntrySink = ArchiveSink { [id, registered, scope] chunk in
+            try ArchiveSessions.whileStanding(archive: id, registered: registered, scope, writing: sink.writing) { try sink.write(chunk: chunk) }
         }
         do {
             try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
@@ -712,22 +737,6 @@ public final class OpenArchive: @unchecked Sendable {
      * Closes the archive: every call in flight on it is cancelled first, then the core wipes the
      * password and the key off the main thread. Any later call fails.
      */
-    /*
-     * Returns once no piece is being written out (a call's thread may still be in one after a cancel):
-     * waited for off the main thread, so a download's cleanup removes its file after its last piece, never
-     * before it. Nothing waits on a write from the main thread.
-     */
-    public func settled() async {
-        let writing = self.writing
-        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-            ArchiveSessions.closeQueue.async {
-                writing.lock()
-                writing.unlock()
-                done.resume()
-            }
-        }
-    }
-
     public func close() {
         calls.cancelAll()
         for sibling in siblings.takeAll() { OpenArchive.closeOffMain(sibling) }

@@ -137,6 +137,8 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         browse.startDownload(entry, destination) { model.notify(ArchiveWords.DOWNLOADED) }
     }
     fun pick(entry: ArchiveEntry) {
+        // Closed meanwhile (a family let go of it): no Save dialog, so no empty file for a download that can't run.
+        if (browse.archive == null) return
         browse.waitingFor = entry
         // Under the name made safe by the core: no bidi override can make "…exe" read as "…txt".
         picker.launch(entry.saveName)
