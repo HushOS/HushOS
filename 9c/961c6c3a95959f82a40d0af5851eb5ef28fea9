@@ -1,0 +1,33 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveSessions.kt
+  s_c60e24772e04af::t_efa483a1df84e2 348-353
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveTree.kt
+  s_c60e24772e04af::t_274de20f554dcc 63-67,73-74,76,78-95
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_db82fb47ad71f0 151-153,179,183-184,190-193,197-198,206-209,217-218,251,255-265
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveScreen.kt
+  s_c60e24772e04af::t_8c0812ef12b700 133,566-591
+apps/android/app/src/test/kotlin/com/hushos/app/data/ArchiveTreeTest.kt
+  s_c60e24772e04af::t_8962b87ee7ca26 162-178
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_4d93f134cf5db5 309-311
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_5dcad5f943e6b5 53-56,75,77-79,89-90,104,127-128,130-132,135-136,199-203,994-998,1030-1031
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_c05a6cde71cbd9 392-410,433-435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9c961c6c3a95959f82a40d0af5851eb5ef28fea9",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
