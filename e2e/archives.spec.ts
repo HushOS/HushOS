@@ -1,4 +1,12 @@
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+    lstatSync,
+    mkdtempSync,
+    readdirSync,
+    readFileSync,
+    rmSync,
+    statSync,
+    writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { inflateRawSync } from 'node:zlib';
 import { basename, dirname, join } from 'node:path';
@@ -319,9 +327,18 @@ test('a download of the canary stopped part way is let go of', async () => {
                 }, 60_000);
             }),
     );
+    const downloading = page.waitForEvent('download', { timeout: 60_000 });
     await items(page).getByRole('button', { name: 'Download canary.txt' }).click();
     expect(await stopped).toMatch(/[1-9]\d?%$/);
     await expect(dialog(page).getByRole('button', { name: 'Stop' })).toHaveCount(0);
+    // The browser's download ended with the stop: failed or cancelled, or (an engine that keeps what came)
+    // short of the whole entry. Never all 48 MiB, which a stop that did nothing would leave.
+    const download = await downloading;
+    const failure = await download.failure();
+    if (failure === null) {
+        const path = await download.path().catch(() => null);
+        expect(path ? statSync(path).size : 0).toBeLessThan(48 * 1024 * 1024);
+    }
     await close(page);
 });
 

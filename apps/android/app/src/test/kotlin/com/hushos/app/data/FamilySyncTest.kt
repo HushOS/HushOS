@@ -337,6 +337,12 @@ class FamilySyncTest {
         assertFalse("a kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(ws, root.id))
         assertFalse("a node-only kept zip of a forgotten folder may still be sent", phone.vault.keptMayLeave(null, root.id))
         assertTrue("another workspace’s kept zip was held back", phone.vault.keptMayLeave(java.util.UUID.randomUUID().toString(), "other-node"))
+        // Reopened from "On this phone" after the forget, with a scope taken now (the count already moved): refused against
+        // the revocation the session holds, not opened because nothing changed since the tap.
+        val reopened = runCatching { phone.vault.openKeptArchive(bytes, ws, root.id, sessions) }.exceptionOrNull()
+        assertTrue("a kept zip of a forgotten folder reopened: $reopened", reopened is FamilyFailure)
+        // A record with a workspace is judged by it, never by a node id another workspace's purge named.
+        assertTrue(phone.vault.keptAdmits(java.util.UUID.randomUUID().toString(), root.id))
         val before = sessions.count
         val refused = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = late) }.exceptionOrNull()
         assertTrue("registered across a forget: $refused", refused is FamilyFailure)

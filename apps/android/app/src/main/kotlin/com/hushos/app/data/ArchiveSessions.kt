@@ -552,7 +552,12 @@ suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveS
     // (noteFamilyWorkspaces, ArchiveSessions.closeWorkspaces), idle or not.
     // Taken before the key is: a forget or a proof from here on is seen by the registry when it admits the archive.
     val scope = archiveScope(item.node.workspaceId, item.id)
-    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), scope = scope) }
+    Offline.localCopy(context, item)?.let { kept ->
+        // Held to every revocation the session holds, not only those since this tap: a share's folder let go of before
+        // (its count moved then) keeps its copy shut, and a family's opens only through its ledger, as openVersion asks.
+        if (!keptAdmits(workspace = item.node.workspaceId, node = item.id, viaFamily = true)) throw FamilyFailure(FamilyWords.OPEN_AGAIN)
+        return sessions.openLocal(FileLocalSource(kept), scope = scope)
+    }
     val opened = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { openVersion(item) }
     val current = CallControl()
     val source = archiveSourceOf(

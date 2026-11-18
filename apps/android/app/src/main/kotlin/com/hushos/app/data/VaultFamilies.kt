@@ -460,18 +460,37 @@ internal fun Vault.sweepFamilyCopies(keep: Set<String>) = synchronized(familyCop
 }
 
 /*
- * Whether a zip kept on this phone by its offline record (`workspace`, or only its `node`) may still be handed on (Send a
- * copy), as iOS's ArchiveSessions.keptMayLeave: not while this session ended, nor once its folder was proven a family's
- * or let go of (a forget moved its count), nor, known only by its node, once a proof or a forget purged that node.
- * Under the lock those take, so it is never half-way through one. This account's own drive always may.
+ * Whether a zip kept on this phone (`workspace`, or only its `node` for a record kept before its workspace was) still
+ * stands against every revocation this session holds, not only those since a tap: not while the session ended, nor once
+ * its folder was let go of (a forget moved its count, whether or not route 25 had proven it), nor, a folder proven a
+ * family's, unless it opened through that family's ledger (`viaFamily` and the ledger's own row). By workspace when the
+ * record has one; the node-only purge set only for a record without one. This account's own drive always stands. Under
+ * the lock forgets and proofs take, so never half-way through one.
  */
-fun Vault.keptMayLeave(workspace: String?, node: String?): Boolean = synchronized(familyCopiesLock) {
+private fun Vault.keptStands(workspace: String?, node: String?, viaFamily: Boolean): Boolean = synchronized(familyCopiesLock) {
     if (closed) return false
     val id = node?.lowercase()
-    if (id != null && (id in familyState.archivePurged || familyPurged.any { it.equals(id, ignoreCase = true) })) return false
-    val ws = workspace?.lowercase() ?: return true
+    val ws = workspace?.lowercase()
+        ?: return id == null || (id !in familyState.archivePurged && familyPurged.none { it.equals(id, ignoreCase = true) })
     if (ws == ownWorkspaceId?.lowercase()) return true
-    !isFamilyWorkspace(ws) && !familyEpochs.containsKey(ws)
+    if (isFamilyWorkspace(ws)) return viaFamily && id != null && nodes.viaLedger(ws, id)
+    !familyEpochs.containsKey(ws)
+}
+
+/* Whether a kept zip may be opened (`Vault.openArchive`'s kept copy, a record's `openKeptArchive`). */
+fun Vault.keptAdmits(workspace: String?, node: String?, viaFamily: Boolean = false): Boolean = keptStands(workspace, node, viaFamily)
+
+/* Whether a zip kept by its record may be handed on (Send a copy), as iOS's ArchiveSessions.keptMayLeave: never a family folder's. */
+fun Vault.keptMayLeave(workspace: String?, node: String?): Boolean = keptStands(workspace, node, viaFamily = false)
+
+/*
+ * A zip kept on this phone by its offline record, opened from that copy: refused first against every revocation the
+ * session holds (`keptAdmits`), then held to its scope from here on.
+ */
+suspend fun Vault.openKeptArchive(file: java.io.File, workspace: String?, node: String?, sessions: ArchiveSessions = ArchiveSessions.shared): OpenArchive {
+    val scope = archiveScope(workspace, node)
+    if (!keptAdmits(workspace, node)) throw FamilyFailure(FamilyWords.OPEN_AGAIN)
+    return sessions.openLocal(FileLocalSource(file), scope = scope)
 }
 
 /* A family folder's invalidation count (0 until a forget): a download or a listing captures it before it begins. */
