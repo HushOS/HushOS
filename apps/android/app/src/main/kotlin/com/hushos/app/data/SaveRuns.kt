@@ -444,7 +444,19 @@ object SaveRuns {
         }
         // On the quiet thread: the rows to offer come back now, never after the network.
         if (answered.isNotEmpty()) synchronized(quietLock) {
-            quietWork = quiet.submit { for (row in answered) runCatching { journal.recovering(row.id) { lookAgain(row, writer, journal, now) } } }
+            quietWork = quiet.submit {
+                for (row in answered) {
+                    try {
+                        journal.recovering(row.id) { lookAgain(row, writer, journal, now) }
+                    } catch (interrupted: InterruptedException) {
+                        // Interrupted: the interrupt kept, the rest looked for at the next launch.
+                        Thread.currentThread().interrupt()
+                        break
+                    } catch (_: Exception) {
+                        // No answer: looked for again at the next launch.
+                    }
+                }
+            }
         }
         return offered
     }
@@ -540,9 +552,21 @@ object SaveRuns {
         if (!journal.live) SaveKeep.SIGNED_OUT else throw SaveRecordNotUpdated()
     }
 
-    /* An abort's answer; never throws. */
-    internal fun abort(writer: SaveRunWriter, uploadId: String, workspaceId: String) =
-        runCatching { writer.abortUpload(uploadId, workspaceId) }.getOrDefault(SaveAbortFate.UNKNOWN)
+    /* An abort's answer; a failure is UNKNOWN, but an interrupt (its pause cut short) is thrown, never swallowed. */
+    internal fun abort(writer: SaveRunWriter, uploadId: String, workspaceId: String): SaveAbortFate =
+        orUnknown { writer.abortUpload(uploadId, workspaceId) } ?: SaveAbortFate.UNKNOWN
+
+    /*
+     * `work`'s result, or null for any failure but an interrupt: an InterruptedException (a sleep, a wait, a latch cut short)
+     * is thrown on, so the thread's owner hears it (apps/android/AGENTS.md, threads).
+     */
+    internal inline fun <T> orUnknown(work: () -> T): T? = try {
+        work()
+    } catch (interrupted: InterruptedException) {
+        throw interrupted
+    } catch (_: Exception) {
+        null
+    }
 
     /*
      * What a clean-up did, how many new versions it found landed, how many may have, and whether new files or folders may
@@ -656,6 +680,8 @@ object SaveRuns {
             val purged = writer.purge(inTrash, workspaceId)
             if (inTrash.any { purged[it] == SaveItemFate.HELD }) { onHeld(); return SaveCleanup.LEFT }
             if (inTrash.all { purged[it] == SaveItemFate.DONE || purged[it] == SaveItemFate.GONE }) SaveCleanup.DELETED else SaveCleanup.LEFT
+        } catch (interrupted: InterruptedException) {
+            throw interrupted
         } catch (error: Exception) {
             SaveCleanup.LEFT
         }
@@ -874,8 +900,11 @@ class SaveRun private constructor(
      */
     private fun failed(error: Exception): Exception {
         if (error is SaveRunStopped || error is SaveStale) return error
-        synchronized(lock) { stopping }?.let { return it.get() }
+        synchronized(lock) { stopping }?.let { return it.get().also { keepInterrupt(error) } }
+        // Interrupted on its way (a pause, a wait cut short): it stops and cleans up as any failure does, then the interrupt
+        // is kept for the thread's owner.
         return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else error.message)
+            .also { keepInterrupt(error) }
     }
 
     /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
@@ -980,9 +1009,8 @@ class SaveRun private constructor(
         try {
             pause(attempt)
         } catch (error: Exception) {
-            val done = failed(error)
-            if (error is InterruptedException) Thread.currentThread().interrupt()
-            throw done
+            // An interrupt is kept on the thread once the stop is done (failed).
+            throw failed(error)
         }
     }
 
@@ -1003,6 +1031,7 @@ class SaveRun private constructor(
             } catch (stale: SaveStale) {
                 throw stale
             } catch (error: Exception) {
+                if (error is InterruptedException) throw failed(error)
                 synchronized(lock) { stopping }?.let { throw it.get() }
                 if (!FamilyUploads.waits(error, true)) throw stop(SaveRunStopped.Reason.FAILED, error.message)
                 val start = wait.since ?: now()
@@ -1081,6 +1110,7 @@ class SaveRun private constructor(
             } catch (done: SaveRunStopped) {
                 throw done
             } catch (error: Exception) {
+                if (error is InterruptedException) throw failed(error)
                 synchronized(lock) { stopping }?.let { throw it.get() }
                 val rekeyed = error is SaveRekeyed
                 if (rekeyed || FamilyUploads.waits(error, since != null)) {
@@ -1137,6 +1167,7 @@ class SaveRun private constructor(
             // The run's session: a sign-out while the stop waits (an abort, a folder creation settling) stops it there.
             val stillOn = { journal.live }
             val asked = synchronized(lock) { row.uploadIds.toList() }.associateWith {
+                // An abort's pause cut short throws here too (SaveRuns.abort never swallows an interrupt).
                 if (stillOn()) SaveRuns.abort(writer, it, ws) else SaveAbortFate.UNKNOWN
             }
             // Folder creations already sent settle next (a lost answer included): one the server creates after the clean-up
@@ -1160,6 +1191,11 @@ class SaveRun private constructor(
             // launch offers what was made.
             future.complete(done ?: leftForLater(reason, failure))
         }
+    }
+
+    /* An interrupt caught as a failure is kept on the thread once the stop it led to is done. */
+    private fun keepInterrupt(error: Exception) {
+        if (error is InterruptedException) Thread.currentThread().interrupt()
     }
 
     /* A stop that couldn't finish its clean-up: the row is kept for the next launch, and what may remain is said so. */
@@ -1320,7 +1356,7 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         if (!vault.isFamilyWorkspace(workspaceId)) return
         val groupId = vault.familyOf(workspaceId) ?: return
         val sync = vault.familyJudge ?: return
-        runCatching {
+        SaveRuns.orUnknown {
             sync.list().firstOrNull { it.id.equals(groupId, ignoreCase = true) }?.let { sync.sync(it) }
         }
     }

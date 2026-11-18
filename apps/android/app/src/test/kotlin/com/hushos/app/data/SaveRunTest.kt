@@ -179,7 +179,10 @@ class SaveRunTest {
             refreshAnswers.removeFirstOrNull()?.invoke()
             return Opened(folder.node.copy(keyEpoch = folder.node.keyEpoch + 1uL), folder.metadata)
         }
+        /* Runs as each abort is asked (the vault's pause while an upload is still finishing). */
+        var abortPause: (() -> Unit)? = null
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate {
+            abortPause?.invoke()
             if (offline) return SaveAbortFate.UNKNOWN
             if (held) return SaveAbortFate.HELD
             if (denied) return SaveAbortFate.DENIED
@@ -1332,6 +1335,63 @@ class SaveRunTest {
         } finally {
             go.countDown()
             pool.shutdownNow()
+        }
+    }
+
+    /* A stop interrupted in an abort's pause: the interrupt is kept, the outcome settled, nothing removed, the row left for later. */
+    @Test
+    fun aStopInterruptedInAnAbortsPauseSettlesItsOutcomeAndRemovesNothing() {
+        val uploading = CountDownLatch(1)
+        val go = CountDownLatch(1)
+        val pausing = CountDownLatch(1)
+        val writer = FakeWriter().apply { this.uploading = { uploading.countDown(); go.await(5, TimeUnit.SECONDS) } }
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val saving = pool.submit<Opened> { run.file(byteArrayOf(1), "a", null, own) }
+            assertTrue(uploading.await(5, TimeUnit.SECONDS))
+            writer.abortPause = { pausing.countDown(); Thread.sleep(10_000) }
+            var stopped: SaveRunStopped? = null
+            var stillInterrupted = false
+            val stopper = Thread {
+                stopped = run.cancel()
+                stillInterrupted = Thread.currentThread().isInterrupted
+            }
+            stopper.start()
+            assertTrue(pausing.await(5, TimeUnit.SECONDS))
+            stopper.interrupt()
+            stopper.join(5_000)
+            assertFalse(stopper.isAlive)
+            assertTrue(stillInterrupted)
+            assertEquals(SaveCleanup.LEFT, stopped?.cleanup)
+            assertTrue(stopped?.message.orEmpty(), stopped?.message.orEmpty().contains("asked about it next time"))
+            writer.abortPause = null
+            assertEquals(stopped, pool.submit<SaveRunStopped> { run.cancel() }.get(5, TimeUnit.SECONDS))
+            assertTrue(writer.sent.none { it == "trash" || it == "purge" })
+            assertEquals(listOf("up-1"), rows.list().single().uploadIds)
+            go.countDown()
+            runCatching { saving.get(5, TimeUnit.SECONDS) }
+        } finally {
+            go.countDown()
+            pool.shutdownNow()
+        }
+    }
+
+    /* The abort helper never swallows an interrupt; any other failure is an unknown answer. */
+    @Test
+    fun anAbortCutShortByAnInterruptIsThrownAndAnyOtherFailureIsUnknown() {
+        val writer = FakeWriter().apply { abortPause = { throw InterruptedException() } }
+        assertThrows(InterruptedException::class.java) { SaveRuns.abort(writer, "up-x", "ws") }
+        writer.abortPause = { throw IllegalStateException("no answer") }
+        assertEquals(SaveAbortFate.UNKNOWN, SaveRuns.abort(writer, "up-x", "ws"))
+        writer.abortPause = { throw InterruptedException() }
+        // A trash cut short by an interrupt is thrown on too, never taken for "left".
+        val trashing = FakeWriter().apply { live += "node-x"; afterTrash = { throw InterruptedException() } }
+        assertThrows(InterruptedException::class.java) { SaveRuns.discard(listOf("node-x"), "ws", trashing, stillOn = { true }) }
+        // Through a clean-up too: the interrupt reaches its caller.
+        assertThrows(InterruptedException::class.java) {
+            SaveRuns.clean(SaveRunRow("r", "ws", emptyList(), listOf("up-x"), 1L, "l"), writer, journal(), emptySet(), null, null, stillOn = { true })
         }
     }
 
