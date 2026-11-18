@@ -496,6 +496,40 @@ test('when the window narrows deep in the grid, the tile at the top of the scree
     }
 });
 
+test('across the width where the window takes over the scroll, the rows on screen stay on screen', async () => {
+    await reset(page);
+    const size = page.viewportSize()!;
+    await scrollToRow(page, 120);
+    await settledScroll(page);
+    await settledItems(page);
+    // A row a little way down the screen, and where it is on screen.
+    const picked = await page.evaluate(() => {
+        const box = document
+            .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+            .getBoundingClientRect();
+        return [...document.querySelectorAll<HTMLElement>('tbody [data-node-id]')]
+            .find((item) => item.getBoundingClientRect().top >= box.top + 100)!
+            .querySelector('[data-row-name]')!.textContent!;
+    });
+    const held = row(page, Number(picked.slice(4)));
+    const top = () => held.evaluate((item) => item.getBoundingClientRect().top);
+    const height = await held.evaluate((item) => item.getBoundingClientRect().height);
+    const was = await top();
+    try {
+        // Below md the window scrolls rather than the app's sheet, and starts at its own top.
+        await page.setViewportSize({ width: 700, height: size.height });
+        await expect(held).toBeInViewport();
+        await settledItems(page);
+        expect(Math.abs((await top()) - was)).toBeLessThan(height);
+        await page.setViewportSize(size);
+        await expect(held).toBeInViewport();
+        await settledItems(page);
+        expect(Math.abs((await top()) - was)).toBeLessThan(height);
+    } finally {
+        await page.setViewportSize(size);
+    }
+});
+
 test('at a phone’s width the window scrolls and the rows drawn follow it', async () => {
     await reset(page);
     const size = page.viewportSize()!;

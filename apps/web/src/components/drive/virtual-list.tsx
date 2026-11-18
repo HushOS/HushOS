@@ -295,7 +295,15 @@ type KeepProps = {
     total: number;
 };
 /* The anchor before a commit: where it was on screen, and the list's width then. */
-type Anchored = { id: string; top: number; offset: number; width: number; shifted: boolean } | null;
+type Anchored = {
+    id: string;
+    top: number;
+    offset: number;
+    width: number;
+    shifted: boolean;
+    /* Another element scrolls the list since the anchor was last seen. */
+    carried?: boolean;
+} | null;
 /*
  * The anchor as last seen: how far down the list it sits, which no scroll changes, and
  * where it sat on screen at what scroll. `held`: put there by a correction, so it stays the
@@ -355,7 +363,19 @@ class KeepInPlace extends Component<KeepProps> {
         const now = onScreen(element, list, scroller);
         // Moved within the list since it was last seen, with no commit (the window resized
         // and the grid reflowed): it belongs where it was before that.
-        const mark = this.mark?.id === from && this.mark.scroller === scroller ? this.mark : null;
+        // The window crossed a breakpoint and another element scrolls the list now (the
+        // window for the app's sheet, or back), starting from its own top: the anchor goes to
+        // where it was on screen in the old one.
+        if (this.mark?.id === from && this.mark.scroller !== scroller)
+            return {
+                id,
+                top: this.mark.top,
+                offset: virtualizer.scrollOffset ?? 0,
+                width: list.clientWidth,
+                shifted: true,
+                carried: true,
+            };
+        const mark = this.mark?.id === from ? this.mark : null;
         const shift = mark ? inList(element, list) - mark.inList : 0;
         const shifted = Math.abs(shift) >= 1;
         // Unmoved and unscrolled since it was put back, it belongs where it was put, not where
@@ -401,7 +421,9 @@ class KeepInPlace extends Component<KeepProps> {
     private correct(previous: KeepProps, anchored: NonNullable<Anchored>) {
         const { virtualizer, ids, where, perLine, size, total } = this.props;
         const list = virtualizer.scrollElement;
-        if (!list || anchored.offset <= 0) return;
+        // At the top of the list the top stays in view, but a new scroller starts at its own
+        // top whatever the person was looking at.
+        if (!list || (anchored.offset <= 0 && !anchored.carried)) return;
         // A commit that only draws another range as the list scrolls moves nothing: the list
         // corrects only when its items, its shape or its width changed, or something moved
         // the anchor before the commit. Correcting a range's drawing too would chase any
@@ -436,8 +458,11 @@ class KeepInPlace extends Component<KeepProps> {
         if (!element || list.offsetHeight === 0) return;
         const scroller = scrollerOf(list);
         const moved = onScreen(element, list, scroller) - top;
-        if (Math.abs(moved) < 1) return;
-        scroller.scrollBy({ top: moved, behavior: 'instant' });
+        const mark = this.mark;
+        // Already in place, and already the one held: nothing to do. Another item already in
+        // place (the anchor left and the next one landed where it was) is held from now on.
+        if (Math.abs(moved) < 1 && mark?.id === id && mark.scroller === scroller) return;
+        if (Math.abs(moved) >= 1) scroller.scrollBy({ top: moved, behavior: 'instant' });
         // Within a pixel, the place it was meant for (whole-pixel scrolling and rounding);
         // further out, the scroll was clamped at an end, and where it is now is what counts.
         const now = onScreen(element, list, scroller);
@@ -449,7 +474,10 @@ class KeepInPlace extends Component<KeepProps> {
             scrolled: scrolledBy(scroller),
             held: true,
         };
-        this.props.memory.current = { anchors: [id], ids: this.props.ids };
+        // The rest of the items on screen stay behind it, should it leave too.
+        const { ids, where, memory } = this.props;
+        const rest = memory.current.anchors.filter((other) => other !== id && where.has(other));
+        memory.current = { anchors: [id, ...rest], ids };
     }
 
     /*
@@ -463,7 +491,9 @@ class KeepInPlace extends Component<KeepProps> {
         const mark = this.mark;
         if (!list || !mark) return;
         const scroller = scrollerOf(list);
-        if (scroller !== mark.scroller) return this.record();
+        // Another element scrolls the list now, from its own top: the anchor goes to where it
+        // was on screen in the old one.
+        if (scroller !== mark.scroller) return this.put(list, mark.id, mark.top);
         // At the top of the list, as on a commit, the top stays in view.
         if (offsetOf(list, scroller) <= 0) return;
         const element = drawnItem(list, mark.id);
@@ -491,7 +521,12 @@ class KeepInPlace extends Component<KeepProps> {
         // reflow under way, the first item of its row would be another item each time, and
         // the place would drift.
         const mark = this.mark;
-        if (mark?.held && mark.scroller === scroller && mark.scrolled === scrolledBy(scroller))
+        if (
+            mark?.held &&
+            mark.scroller === scroller &&
+            mark.scrolled === scrolledBy(scroller) &&
+            this.props.where.has(mark.id)
+        )
             return;
         const top = viewportTop(scroller);
         const bottom = top + viewportHeight(scroller);
