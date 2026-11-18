@@ -1,0 +1,19 @@
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_f91ab94a6f8d95 334-335
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d2976efdeabdfad2ed033cdb48bb34b686b0af16",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
