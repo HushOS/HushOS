@@ -232,7 +232,11 @@ extension Vault {
         // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
         // the family's ledger, and goes with its keys and its place in the parent index.
         let newly = family.filter { !familyWorkspaces.contains($0) }
-        if !newly.isEmpty { forgetWorkspaces(newly, lettingGo: false) }
+        if !newly.isEmpty {
+            forgetWorkspaces(newly, lettingGo: false)
+            // A zip a share opened from one holds that share's content key: closed now, its downloads with it.
+            ArchiveSessions.proveFamilies(newly)
+        }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }

@@ -350,6 +350,53 @@ import Testing
         archive.close()
     }
 
+    @Test func aZipAShareOpenedClosesWhenItsWorkspaceIsProvenAFamilys() async throws {
+        let workspace = UUID().uuidString.lowercased()
+        // Opened through a share: nothing yet names its workspace a family's.
+        let archive = try await Self.open("aes.zip", registered: true)
+        try archive.mark(workspace, family: false)
+        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+        #expect(try await archive.unlock("correct horse battery"))
+        #expect(archive.serves)
+        let heard = Counter()
+        let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
+            if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+        }
+        defer { NotificationCenter.default.removeObserver(listening) }
+        // Route 25 proves it a family folder: the share's archive closes at once, idle, its key and password gone.
+        ArchiveSessions.proveFamilies([workspace])
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!archive.unlocked)
+        #expect(!archive.serves)
+        await #expect(throws: ArchiveFailure.self) { try await archive.preview(secret, limit: 1024) }
+        await #expect(throws: ArchiveFailure.self) { try await archive.download(secret, into: ArchiveSink { _ in }) }
+        for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(heard.value == 1)
+        // One opened from it by a share after the proof is refused as it is marked.
+        let late = try await Self.open("aes.zip", registered: true)
+        #expect(throws: ArchiveFailure.self) { try late.mark(workspace, family: false) }
+        #expect(!late.serves)
+        // Another workspace's share is untouched.
+        let other = try await Self.open("aes.zip", registered: true)
+        try other.mark(UUID().uuidString, family: false)
+        #expect(other.serves)
+        other.close()
+    }
+
+    @Test func aZipWhoseFamilyGoesWhileItsTreeBuildsIsNeverShown() async throws {
+        // What the screen asks before it publishes the tree it built off the main thread.
+        let workspace = UUID().uuidString.lowercased()
+        let archive = try await Self.open("aes.zip", registered: true)
+        archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
+        try archive.mark(workspace, family: true)
+        _ = archive.takeFolders()
+        #expect(archive.serves)
+        // The family is let go of while the tree builds: by then the archive is closed, and the screen shows nothing of it.
+        TemporaryCopies.forgetFamily([workspace])
+        ArchiveSessions.closeQueue.sync {}
+        #expect(!archive.serves)
+    }
+
     @Test func anIdleFamilyZipClosesTheMomentItsFamilyIsLetGoOf() async throws {
         let workspace = UUID().uuidString.lowercased()
         let archive = try await Self.open("aes.zip", registered: true)

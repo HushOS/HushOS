@@ -45,6 +45,8 @@ struct ArchiveScreen: View {
     @State private var asking: ArchiveEntry?
     /* An entry whose Download waits on its password: asked for in its pane, then the download goes on. */
     @State private var passwordFor: UInt32?
+    /* The archive whose tree is being built, not shown yet: a family's close meanwhile is heard for it too. */
+    @State private var pending: UUID?
     /* Every download running or failed, a row each: a second never hides the first. */
     @State private var downloads: [ArchiveDownload] = []
 
@@ -131,8 +133,17 @@ struct ArchiveScreen: View {
             // meanwhile: until it is shown, nothing else would close it.
             let entries = open.entries
             let folders = open.takeFolders()
+            // Known while its tree builds, so a family's close meanwhile reaches this screen (familyClosed).
+            pending = open.identity
             let built = await Task.detached(priority: .userInitiated) { ArchiveTree(entries, folders: folders) }.value
+            pending = nil
             guard !Task.isCancelled else { open.close(); return }
+            // Closed meanwhile (its family let go of, its workspace proven a family's, a sign-out): never shown.
+            guard open.serves else {
+                open.close()
+                failure = FamilyWords.openAgain
+                return
+            }
             tree = built
             archive = open
             if let item, let row = open.row, row.node != item.node {
@@ -142,7 +153,8 @@ struct ArchiveScreen: View {
         }
         // Its family let go of (a removal, a fork): the core closed the archive already, and what it showed goes too.
         .onReceive(NotificationCenter.default.publisher(for: ArchiveSessions.familyClosed)) { note in
-            guard let archive, note.userInfo?["archive"] as? UUID == archive.identity else { return }
+            guard let closed = note.userInfo?["archive"] as? UUID, closed == archive?.identity || closed == pending else { return }
+            pending = nil
             for download in downloads { download.task?.cancel() }
             self.archive = nil
             tree = nil

@@ -121,6 +121,7 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     // Under the lock a share mount, an open and a write's answer keep their rows under: proven and emptied at once, so
     // nothing kept by another way lands between the two.
     val gone = HashSet<String>()
+    val proven = HashSet<String>()
     synchronized(familyCopiesLock) {
         for (id in ids.map { it.lowercase() }) {
             if (id == own) continue
@@ -130,9 +131,12 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
                 val held = nodes.forgetWorkspace(id)
                 gone.addAll(held)
                 familyPurged.addAll(purgeShareCopies(id, held))
+                proven.add(id)
             }
         }
     }
+    // A zip open from it by a share holds that share's content key: closed now, its downloads with it.
+    ArchiveSessions.shared.closeWorkspaces(proven)
     forgetParents(gone)
 }
 
@@ -411,6 +415,8 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
             gone.addAll(nodes.forgetWorkspace(id))
         }
     }
+    // Its zips close now, idle ones included: their keys don't wait for a next call to find the count moved.
+    ArchiveSessions.shared.closeWorkspaces(ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) })
     forgetParents(gone)
     return gone
 }

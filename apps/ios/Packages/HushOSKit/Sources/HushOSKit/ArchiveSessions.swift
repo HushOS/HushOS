@@ -42,6 +42,10 @@ public enum ArchiveSessions {
         var generation: UInt64 = 0
         /* The family workspace each family file's archive was opened from (lowercase). */
         var families: [UUID: String] = [:]
+        /* The workspace each other archive (a share's, the account's own) was opened from (lowercase). */
+        var shares: [UUID: String] = [:]
+        /* Workspaces proven family folders this session (route 25): nothing opened another way serves from them. */
+        var proven: Set<String> = []
     }
 
     /* Posted on the main queue when a family's archive is closed because its family was let go of: `archive` is its `identity`. */
@@ -50,6 +54,48 @@ public enum ArchiveSessions {
     /* `archive` is a file of the family folder `workspace`: a forget of that folder closes it at once (`closeFamily`). */
     static func mark(archive id: UUID, family workspace: String) {
         live.lock.withLock { if live.archives[id] != nil { live.families[id] = workspace.lowercased() } }
+    }
+
+    /*
+     * `archive` was opened from `workspace` by a share or the account's own drive, not a family's
+     * ledger: false, and nothing marked, if that workspace has been proven a family folder already
+     * (the caller closes it). Under the lock a proof takes, so either the proof sees the mark and
+     * closes the archive, or the mark sees the proof.
+     */
+    static func mark(archive id: UUID, share workspace: String) -> Bool {
+        let key = workspace.lowercased()
+        return live.lock.withLock {
+            guard !live.proven.contains(key) else { return false }
+            if live.archives[id] != nil { live.shares[id] = key }
+            return true
+        }
+    }
+
+    /* Whether `workspace` has been proven a family folder this session. */
+    static func provenFamily(_ workspace: String) -> Bool {
+        live.lock.withLock { live.proven.contains(workspace.lowercased()) }
+    }
+
+    /*
+     * Route 25 proved these workspaces family folders (`Vault.noteFamilyWorkspaces`): an archive a
+     * share opened from one holds that share's content key, and closes now, idle or not, its
+     * downloads with it; its screen is told as for a family let go of. From here they serve only
+     * through the family's ledger.
+     */
+    static func proveFamilies(_ workspaces: [String]) {
+        let proven = Set(workspaces.map { $0.lowercased() })
+        let closes = live.lock.withLock {
+            live.proven.formUnion(proven)
+            let ids = live.shares.filter { proven.contains($0.value) }.map(\.key)
+            return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
+                live.shares[id] = nil
+                return live.archives.removeValue(forKey: id).map { (id, $0) }
+            }
+        }
+        for (id, close) in closes {
+            close()
+            DispatchQueue.main.async { NotificationCenter.default.post(name: familyClosed, object: nil, userInfo: ["archive": id]) }
+        }
     }
 
     /*
@@ -95,6 +141,7 @@ public enum ArchiveSessions {
         live.lock.withLock {
             live.archives[id] = nil
             live.families[id] = nil
+            live.shares[id] = nil
         }
     }
     static func track(call id: UUID, _ control: RunControl) { live.lock.withLock { live.calls[id] = control } }
@@ -104,6 +151,8 @@ public enum ArchiveSessions {
     public static func closeAll() {
         let (closes, controls) = live.lock.withLock {
             live.generation &+= 1
+            // The next session proves its own family folders.
+            live.proven = []
             return (Array(live.archives.values), Array(live.calls.values))
         }
         for control in controls { control.cancel() }
@@ -289,6 +338,7 @@ final class ArchiveCalls: @unchecked Sendable {
         for control in all { control.cancel() }
     }
     var count: Int { lock.withLock { controls.count } }
+    var isClosed: Bool { lock.withLock { closed } }
 }
 
 /*
@@ -334,6 +384,8 @@ public final class OpenArchive: @unchecked Sendable {
      * first refusal: a family's removal or fork leaves no listing, password or bytes behind.
      */
     var gate: FamilyCopyGate?
+    /* For a file not opened through a family's ledger: its workspace, which must not be proven a family's since (`stands`). */
+    var shareWorkspace: String?
     private let session: ZipArchiveSession
     private let turns = ArchiveTurns()
     private let calls = ArchiveCalls()
@@ -393,7 +445,7 @@ public final class OpenArchive: @unchecked Sendable {
         if let url = Offline.localCopy(of: item), let copy = try? KeptCopy(url: url) {
             let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
             archive.gate = gate
-            if family { ArchiveSessions.mark(archive: archive.id, family: item.node.workspaceId) }
+            try archive.mark(item.node.workspaceId, family: family)
             try archive.stands()
             return archive
         }
@@ -408,8 +460,8 @@ public final class OpenArchive: @unchecked Sendable {
         let archive = try OpenArchive(session: session, born: born, watchdog: watchdog, poll: poll)
         archive.row = current
         archive.gate = gate
-        // Marked, then the gate asked: a forget before the mark is seen there, one after it closes the archive.
-        if family { ArchiveSessions.mark(archive: archive.id, family: item.node.workspaceId) }
+        // Marked, then the gate asked: a forget (or a proof) before the mark is seen there, one after it closes the archive.
+        try archive.mark(current.node.workspaceId, family: family)
         try archive.stands()
         return archive
     }
@@ -455,6 +507,32 @@ public final class OpenArchive: @unchecked Sendable {
     /* Whether a password is held. */
     public var unlocked: Bool { session.unlocked() }
 
+    /*
+     * Marked with the workspace it came from: a family's, closed when the family is let go of; any
+     * other, closed when that workspace is proven a family's (and refused here if it already is).
+     */
+    func mark(_ workspace: String, family: Bool) throws {
+        if family {
+            ArchiveSessions.mark(archive: id, family: workspace)
+            return
+        }
+        shareWorkspace = workspace.lowercased()
+        guard ArchiveSessions.mark(archive: id, share: workspace) else {
+            close()
+            throw ArchiveFailure(code: nil, message: FamilyWords.openAgain)
+        }
+    }
+
+    /*
+     * Whether it may still be shown: not closed (a family let go of, a workspace proven a family's,
+     * a sign-out) and still allowed. A screen asks before it publishes what it built off the main
+     * thread, since a close meanwhile came while it had nothing to drop.
+     */
+    public var serves: Bool {
+        guard !calls.isClosed else { return false }
+        return (try? stands()) != nil
+    }
+
     /* Calls in flight, and siblings open for downloads: for tests. */
     var running: Int { calls.count }
     var downloading: Int { siblings.count }
@@ -490,7 +568,11 @@ public final class OpenArchive: @unchecked Sendable {
         }
         defer { if let done = siblings.remove(key) { OpenArchive.closeOffMain(done) } }
         // Asked of every piece too: a family let go of mid-download writes nothing more.
-        let held: EntrySink = gate.map { gate in ArchiveSink { chunk in try gate.check(); try sink.write(chunk: chunk) } } ?? sink
+        let held: EntrySink = ArchiveSink { [gate, shareWorkspace] chunk in
+            try gate?.check()
+            if let shareWorkspace, ArchiveSessions.provenFamily(shareWorkspace) { throw ArchiveFailure(code: nil, message: FamilyWords.openAgain) }
+            try sink.write(chunk: chunk)
+        }
         do {
             try await Self.call(watchdog: watchdog, poll: poll, scope: .entry, on: calls, registered: registered) { control in
                 try sibling.download(index: entry.index, sink: held, control: control)
@@ -532,8 +614,15 @@ public final class OpenArchive: @unchecked Sendable {
         return value
     }
 
-    /* Throws, and closes the archive, once its session or its family folder was let go of since the open began (`gate`). */
+    /*
+     * Throws, and closes the archive, once its session or its family folder was let go of since the
+     * open began (`gate`), or, opened another way, once its workspace was proven a family's.
+     */
     func stands() throws {
+        if let shareWorkspace, ArchiveSessions.provenFamily(shareWorkspace) {
+            close()
+            throw ArchiveFailure(code: nil, message: FamilyWords.openAgain)
+        }
         guard let gate else { return }
         do { try gate.check() } catch {
             close()

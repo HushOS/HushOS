@@ -149,6 +149,8 @@ class ArchiveBrowse(
                 opened = open { now -> if (!closed) subject = now }
                 if (closed) return@launch
                 val built = build(opened.entries, opened.takeFolders())
+                // Closed while the tree was built (its family let go of, its workspace proven a family's): never shown.
+                opened.refusal()?.let { words -> failure = words; return@launch }
                 // The archive before its tree: whoever sees the tree may already use the archive.
                 hidden = opened.hidden
                 archive = opened

@@ -276,6 +276,30 @@ class FamilySyncTest {
     }
 
     /*
+     * A zip of the family's folder opened through a share before the folder was proven: it holds the share's content
+     * key. Once route 25 proves the folder, the archive closes at once, idle, and every later read says the family's
+     * words. Fails if a share's archive keeps serving after its workspace became a family's.
+     */
+    @Test
+    fun aZipAShareOpenedClosesWhenItsFolderIsProvenAFamilys() = kotlinx.coroutines.runBlocking {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        val zip = server.file(family.rootId, "notes.zip", File(File(System.getProperty("user.dir"), "../../../e2e/fixtures/archives"), "basic.zip").readBytes())
+        server.shareWithMe(zip)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val sessions = ArchiveSessions.shared
+        val archive = phone.vault.openArchive(root, sessions)
+        val readme = archive.entries.first { it.path == "docs/readme.txt" }
+        assertTrue(archive.preview(readme.index, 1024).decodeToString().contains("Read me."))
+        accepted(phone)
+        assertTrue("a share's archive outlived its folder becoming a family's", archive.closed)
+        val refused = runCatching { archive.preview(readme.index, 1024) }.exceptionOrNull()
+        assertTrue("read after the proof: $refused", refused is FamilyFailure)
+        assertEquals(FamilyWords.OPEN_AGAIN, refused!!.message)
+    }
+
+    /*
      * #247 check, round 3: after a fork cleared the family, a share refresh can't put the family's file back, and a
      * download of it refuses; nor does a row and key put there any way but the ledger download. Fails if a share mount or
      * a cached row stands in for the ledger.

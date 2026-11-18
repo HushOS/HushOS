@@ -56,6 +56,33 @@ class ArchiveBrowseTest {
         scope.cancel()
     }
 
+    @Test fun anArchiveWhoseFamilyGoesWhileItsTreeBuildsIsNeverShown() = runBlocking {
+        val sessions = ArchiveSessions()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val workspace = "11111111-1111-4111-8111-111111111111"
+        val words = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val opened = CompletableDeferred<OpenArchive>()
+        val browse = ArchiveBrowse(
+            ArchiveSubject("a", "basic.zip"),
+            scope,
+            open = { sessions.openLocal(kept("basic.zip"), stands = { words.get() }, workspace = workspace).also { opened.complete(it) } },
+            // While the tree builds, the family is let go of (or the share's workspace proven a family's): closed then.
+            build = { entries, folders ->
+                words.set("Open the family again, then try again.")
+                sessions.closeWorkspaces(listOf(workspace))
+                com.hushos.app.data.ArchiveTree(entries, folders)
+            },
+        )
+        withTimeout(10_000) { while (browse.failure == null && browse.tree == null) kotlinx.coroutines.delay(20) }
+        // Never shown: no tree, no archive, the family's words, and the session closed.
+        assertNull(browse.tree)
+        assertNull(browse.archive)
+        assertEquals("Open the family again, then try again.", browse.failure)
+        assertTrue(opened.await().closed)
+        browse.close()
+        scope.cancel()
+    }
+
     @Test fun aDownloadRefusedForItsPasswordOpensTheItemToAskForIt() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })

@@ -42,6 +42,16 @@ class ArchiveSessions {
     internal fun add(archive: OpenArchive) = open.add(archive)
     internal fun remove(archive: OpenArchive) = open.remove(archive)
 
+    /*
+     * The workspaces `ids` became family folders (route 25's proof), or a family let go of them:
+     * every archive open from them closes now, idle or not, its siblings with it, so no key a share
+     * (or the family) gave it outlives the proof. Its next call says the family's words.
+     */
+    fun closeWorkspaces(ids: Collection<String>) {
+        val gone = ids.map { it.lowercase() }.toSet()
+        for (archive in ArrayList(open)) if (archive.workspace?.lowercase() in gone) archive.close()
+    }
+
     /* Tests only: heard on the call's thread once a session is made and handed to its archive, before the caller hears. */
     @Volatile internal var made: ((ZipArchiveSession) -> Unit)? = null
 
@@ -59,10 +69,13 @@ class ArchiveSessions {
         stands: (() -> String?)? = null,
         /* The session the store's reads go under: a 401 names it (ArchiveSessionRefused). */
         signedIn: Shared.Session? = null,
+        /* The workspace it was opened from: a proof that it is a family's closes it (closeWorkspaces). */
+        workspace: String? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, current, watchdogMillis, pollMillis, clock)
         archive.stands = stands
         archive.signedIn = signedIn
+        archive.workspace = workspace
         add(archive)
         try {
             // The content (which carries the key) is the core's from here; nothing in Kotlin keeps it.
@@ -87,9 +100,11 @@ class ArchiveSessions {
         pollMillis: Long = 1_000,
         clock: ToolClock? = null,
         stands: (() -> String?)? = null,
+        workspace: String? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, CallControl(), watchdogMillis, pollMillis, clock)
         archive.stands = stands
+        archive.workspace = workspace
         add(archive)
         try {
             archive.call { control -> archive.adopt(ZipArchiveSession.openLocal(source, control)) }
@@ -179,6 +194,8 @@ class OpenArchive internal constructor(
     @Volatile internal var stands: (() -> String?)? = null
     /* The session the store's reads go under, named by a 401 (ArchiveSessionRefused). */
     @Volatile internal var signedIn: Shared.Session? = null
+    /* The workspace it was opened from (null for a kept copy known by its record alone). */
+    @Volatile internal var workspace: String? = null
     private val turn = Mutex()
     /* The call going now, by what ends it: what close calls. */
     private val calls = ConcurrentHashMap.newKeySet<() -> Unit>()
@@ -222,6 +239,7 @@ class OpenArchive internal constructor(
         val child = OpenArchive(owner, current, watchdogMillis, pollMillis, clock)
         child.stands = stands
         child.signedIn = signedIn
+        child.workspace = workspace
         // Known before it exists, so a close or a sign-out meanwhile reaches it; made under
         // NonCancellable, so a cancel while the core makes it can't drop the session unclosed.
         owner.add(child)
@@ -266,8 +284,9 @@ class OpenArchive internal constructor(
      * when the watchdog fires, and the core's ArchiveException otherwise.
      */
     internal suspend fun <T> call(work: (RunControl) -> T): T {
-        if (closed) throw CancellationException("Closed.")
+        // The family's words first: an archive a proof or a forget closed says why, not merely that it closed.
         letGoIfFamilyMoved()
+        if (closed) throw CancellationException("Closed.")
         val result = try {
             callOnce(work)
         } catch (error: Throwable) {
@@ -278,6 +297,13 @@ class OpenArchive internal constructor(
         letGoIfFamilyMoved()
         return result
     }
+
+    /*
+     * The family's words if it may no longer be shown (its family let go of, its workspace proven a
+     * family's), or the plain close's (a sign-out, Back); null while it stands. A screen asks before
+     * it shows what it built meanwhile.
+     */
+    fun refusal(): String? = stands?.invoke() ?: if (closed) FamilyWords.OPEN_AGAIN else null
 
     /* Closes the archive and throws the family's words once its family folder was let go of. */
     private fun letGoIfFamilyMoved() {
@@ -402,10 +428,17 @@ fun archiveSourceOf(
  * zip kept on this phone opens from the kept copy, offline included.
  */
 suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveSessions.shared): OpenArchive {
-    // A family's file is held to its folder's invalidation count as it was before anything began.
+    // A family's file is held to its folder's invalidation count as it was before anything began; any other (a share's,
+    // this account's own) to its workspace never being proven a family's since: from then it is served only through the
+    // family's ledger, and an archive opened by another way says so at its next call. A proof also closes it at once
+    // (noteFamilyWorkspaces, ArchiveSessions.closeWorkspaces), idle or not.
     val workspace = item.node.workspaceId
-    val stands = if (isFamilyWorkspace(workspace)) familyEpoch(workspace).let { epoch -> { familyWordsSince(workspace, epoch) } } else null
-    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), stands = stands) }
+    val stands: () -> String? = if (isFamilyWorkspace(workspace)) {
+        familyEpoch(workspace).let { epoch -> { familyWordsSince(workspace, epoch) } }
+    } else {
+        { if (isFamilyWorkspace(workspace)) FamilyWords.OPEN_AGAIN else null }
+    }
+    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), stands = stands, workspace = workspace) }
     val opened = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { openVersion(item) }
     val current = CallControl()
     val source = archiveSourceOf(
@@ -413,5 +446,5 @@ suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveS
         online = { Resumable.online(context) },
         metered = { context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false },
     )
-    return sessions.open(source, opened.content, current, stands = stands, signedIn = api.session)
+    return sessions.open(source, opened.content, current, stands = stands, signedIn = api.session, workspace = workspace)
 }
