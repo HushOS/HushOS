@@ -47,9 +47,13 @@ class ArchiveSessions {
      * every archive open from them closes now, idle or not, its siblings with it, so no key a share
      * (or the family) gave it outlives the proof. Its next call says the family's words.
      */
-    fun closeWorkspaces(ids: Collection<String>) {
+    fun closeWorkspaces(ids: Collection<String>, nodes: Collection<String> = emptyList(), words: String = FamilyWords.OPEN_AGAIN) {
         val gone = ids.map { it.lowercase() }.toSet()
-        for (archive in ArrayList(open)) if (archive.workspace?.lowercase() in gone) archive.close()
+        val purged = nodes.map { it.lowercase() }.toSet()
+        // By workspace, or (a kept copy whose record predates its workspace's) by the node the purge named.
+        for (archive in ArrayList(open)) {
+            if (archive.workspace?.lowercase() in gone || archive.node?.lowercase() in purged) archive.closeFor(words)
+        }
     }
 
     /* Tests only: heard on the call's thread once a session is made and handed to its archive, before the caller hears. */
@@ -101,10 +105,13 @@ class ArchiveSessions {
         clock: ToolClock? = null,
         stands: (() -> String?)? = null,
         workspace: String? = null,
+        /* The node it is a copy of, from its kept record: a purge of that node closes it. */
+        node: String? = null,
     ): OpenArchive {
         val archive = OpenArchive(this, CallControl(), watchdogMillis, pollMillis, clock)
         archive.stands = stands
         archive.workspace = workspace
+        archive.node = node
         add(archive)
         try {
             archive.call { control -> archive.adopt(ZipArchiveSession.openLocal(source, control)) }
@@ -133,7 +140,8 @@ class FileLocalSource(private val file: java.io.File) : LocalSource {
             bytes
         }
     } catch (error: Exception) {
-        throw FetchException.Failed(error.message ?: "The kept copy couldn't be read.")
+        // In HushOS's words, never the system's (a path).
+        throw FetchException.Failed(ArchiveWords.KEPT_UNREADABLE)
     }
 }
 
@@ -194,8 +202,19 @@ class OpenArchive internal constructor(
     @Volatile internal var stands: (() -> String?)? = null
     /* The session the store's reads go under, named by a 401 (ArchiveSessionRefused). */
     @Volatile internal var signedIn: Shared.Session? = null
-    /* The workspace it was opened from (null for a kept copy known by its record alone). */
+    /* The workspace it was opened from (null for a kept copy whose record predates its workspace's). */
     @Volatile internal var workspace: String? = null
+    @Volatile internal var node: String? = null
+    /* The screen showing it: told, with the family's words, when a proof or a forget closes it. */
+    @Volatile var onFamilyClosed: ((String) -> Unit)? = null
+
+    /* Closed because its workspace was proven a family's or let go of: the screen drops what it shows. */
+    internal fun closeFor(words: String) {
+        val told = onFamilyClosed
+        onFamilyClosed = null
+        close()
+        told?.invoke(words)
+    }
     private val turn = Mutex()
     /* The call going now, by what ends it: what close calls. */
     private val calls = ConcurrentHashMap.newKeySet<() -> Unit>()
@@ -240,6 +259,7 @@ class OpenArchive internal constructor(
         child.stands = stands
         child.signedIn = signedIn
         child.workspace = workspace
+        child.node = node
         // Known before it exists, so a close or a sign-out meanwhile reaches it; made under
         // NonCancellable, so a cancel while the core makes it can't drop the session unclosed.
         owner.add(child)
@@ -419,6 +439,10 @@ fun archiveSourceOf(
             // Kept for the call, which throws it as itself once the core gives up.
             current.refuse(error)
             throw error
+        } catch (error: Exception) {
+            if (error is kotlin.coroutines.cancellation.CancellationException || error is FetchException) throw error
+            // In HushOS's words, never the system's (a host, a path): StoreSource hands the message to the core.
+            throw java.io.IOException(Problems.say(error, ArchiveWords.UNREADABLE))
         }
     }
 }
@@ -438,7 +462,7 @@ suspend fun Vault.openArchive(item: Opened, sessions: ArchiveSessions = ArchiveS
     } else {
         { if (isFamilyWorkspace(workspace)) FamilyWords.OPEN_AGAIN else null }
     }
-    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), stands = stands, workspace = workspace) }
+    Offline.localCopy(context, item)?.let { kept -> return sessions.openLocal(FileLocalSource(kept), stands = stands, workspace = workspace, node = item.id) }
     val opened = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { openVersion(item) }
     val current = CallControl()
     val source = archiveSourceOf(

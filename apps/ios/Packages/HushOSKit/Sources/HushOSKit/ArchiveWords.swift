@@ -31,6 +31,10 @@ public enum ArchiveWords {
     public static let download = "Download"
     public static let cancel = "Cancel"
     public static let folders = "Folders in the archive"
+    /* A read underneath that failed (the store, the network), and a download's destination that refused a piece. */
+    public static let unreadable = "Couldn’t read this archive. Check your connection, then try again."
+    public static let keptUnreadable = "Couldn’t read the copy kept on this phone."
+    public static let notSaved = "Couldn’t save it there. Check the folder has room, then try again."
     /* The viewer's own words, as the web's viewerWords say them. */
     public static let noPreview = "This kind of file has no preview yet."
     public static let broken = "This file can’t be shown"

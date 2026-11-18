@@ -2521,7 +2521,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (!com.hushos.app.data.ArchiveTree.isZip(entry.name, entry.mime)) return false
         val file = Offline.file(context, entry)
         return showArchive(ArchiveSubject(entry.id, entry.name, kept = file)) {
-            com.hushos.app.data.ArchiveSessions.shared.openLocal(com.hushos.app.data.FileLocalSource(file))
+            // Its workspace and node from its record: a proof that the workspace is a family's (which purges the copy)
+            // closes it, and the screen drops what it showed.
+            com.hushos.app.data.ArchiveSessions.shared.openLocal(com.hushos.app.data.FileLocalSource(file), workspace = entry.workspaceId, node = entry.id)
         }
     }
 

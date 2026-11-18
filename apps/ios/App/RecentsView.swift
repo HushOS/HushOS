@@ -851,7 +851,7 @@ private struct KeptArchiveViewer: View {
 
     var body: some View {
         NavigationStack {
-            ArchiveScreen(kept: Offline.file(for: entry), name: entry.name)
+            ArchiveScreen(kept: Offline.file(for: entry), name: entry.name, workspace: entry.workspaceId, node: entry.id)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {

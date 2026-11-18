@@ -233,11 +233,14 @@ private fun DownloadBar(record: EntryDownload, dismiss: () -> Unit) {
 @Composable
 private fun Crumbs(name: String, path: List<String>, opened: ArchiveEntry?, go: (Int) -> Unit) {
     val alpine = Alpine.colors
+    val steps = listOf(name) + path + listOfNotNull(opened?.name)
+    // One line however deep, scrolled to its end as the path changes: the crumb shown is the last.
+    val scroll = rememberScrollState()
+    LaunchedEffect(steps) { scroll.scrollTo(scroll.maxValue) }
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).heightIn(min = 48.dp).padding(horizontal = AlpineSpace.S2),
+        Modifier.fillMaxWidth().horizontalScroll(scroll).heightIn(min = 48.dp).padding(horizontal = AlpineSpace.S2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val steps = listOf(name) + path + listOfNotNull(opened?.name)
         steps.forEachIndexed { index, step ->
             if (index > 0) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted, modifier = Modifier.size(18.dp))
             val last = index == steps.lastIndex

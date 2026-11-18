@@ -83,6 +83,32 @@ class ArchiveBrowseTest {
         scope.cancel()
     }
 
+    @Test fun aShownArchiveWhoseWorkspaceIsProvenAFamilysLeavesTheScreen() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val sessions = ArchiveSessions()
+        val workspace = "22222222-2222-4222-8222-222222222222"
+        val browse = ArchiveBrowse(ArchiveSubject("a", "basic.zip"), scope, open = { sessions.openLocal(kept("basic.zip"), workspace = workspace) })
+        withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
+        val shown = browse.archive!!
+        browse.opened = shown.entries.first { it.path == "docs/readme.txt" }
+        // The proof (noteFamilyWorkspaces) closes it: the list and the item shown leave the screen, the family's words stay.
+        sessions.closeWorkspaces(listOf(workspace))
+        withTimeout(10_000) { while (browse.tree != null) kotlinx.coroutines.delay(20) }
+        assertNull(browse.archive)
+        assertNull(browse.opened)
+        assertEquals("Open the family again, then try again.", browse.failure)
+        assertTrue(shown.closed)
+        browse.close()
+        // A kept copy whose record predates its workspace's: found by the node the purge named.
+        val kept = ArchiveBrowse(ArchiveSubject("k", "basic.zip"), scope, open = { sessions.openLocal(kept("basic.zip"), node = "node-kept") })
+        withTimeout(10_000) { while (kept.tree == null) kotlinx.coroutines.delay(20) }
+        sessions.closeWorkspaces(emptyList(), nodes = listOf("node-kept"))
+        withTimeout(10_000) { while (kept.tree != null) kotlinx.coroutines.delay(20) }
+        assertNull(kept.archive)
+        kept.close()
+        scope.cancel()
+    }
+
     @Test fun aDownloadRefusedForItsPasswordOpensTheItemToAskForIt() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })

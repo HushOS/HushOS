@@ -240,20 +240,23 @@ import Testing
     }
 
     @Test func aZipKeptOnThePhoneOpensFromItsCopyAlone() async throws {
-        // The copy as Offline keeps it: a file on the phone, read by range, with no vault and no store.
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let file = folder.appendingPathComponent("aes.zip")
-        try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: file)
-        let archive = try await OpenArchive.openKept(file)
-        defer { archive.close() }
-        #expect(archive.kept)
-        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
-        #expect(try await archive.unlock("correct horse battery", entry: secret))
-        #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("AES-256, AE-2."))
-        // Nothing beside the copy: the folder holds the zip and no plaintext of its entries.
-        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["aes.zip"])
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            // The copy as Offline keeps it: a file on the phone, read by range, with no vault and no store.
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let file = folder.appendingPathComponent("aes.zip")
+            try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: file)
+            let archive = try await OpenArchive.openKept(file)
+            defer { archive.close() }
+            #expect(archive.kept)
+            let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+            #expect(try await archive.unlock("correct horse battery", entry: secret))
+            #expect(String(decoding: try await archive.preview(secret, limit: 1024), as: UTF8.self).contains("AES-256, AE-2."))
+            // Nothing beside the copy: the folder holds the zip and no plaintext of its entries.
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["aes.zip"])
+        }
     }
 
     @Test func anEntrysOwnPasswordIsTriedOnThatEntryFirst() async throws {
@@ -351,94 +354,167 @@ import Testing
     }
 
     @Test func aZipAShareOpenedClosesWhenItsWorkspaceIsProvenAFamilys() async throws {
-        let workspace = UUID().uuidString.lowercased()
-        // Opened through a share: nothing yet names its workspace a family's.
-        let archive = try await Self.open("aes.zip", registered: true)
-        try archive.mark(workspace, family: false)
-        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
-        #expect(try await archive.unlock("correct horse battery"))
-        #expect(archive.serves)
-        let heard = Counter()
-        let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
-            if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let workspace = UUID().uuidString.lowercased()
+            // Opened through a share: nothing yet names its workspace a family's.
+            let archive = try await Self.open("aes.zip", registered: true)
+            try archive.mark(workspace, family: false)
+            let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+            #expect(try await archive.unlock("correct horse battery"))
+            #expect(archive.serves)
+            let heard = Counter()
+            let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
+                if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+            }
+            defer { NotificationCenter.default.removeObserver(listening) }
+            // Route 25 proves it a family folder: the share's archive closes at once, idle, its key and password gone.
+            ArchiveSessions.proveFamilies([workspace])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.unlocked)
+            #expect(!archive.serves)
+            await #expect(throws: ArchiveFailure.self) { try await archive.preview(secret, limit: 1024) }
+            await #expect(throws: ArchiveFailure.self) { try await archive.download(secret, into: ArchiveSink { _ in }) }
+            for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(heard.value == 1)
+            // One opened from it by a share after the proof is refused as it is marked.
+            let late = try await Self.open("aes.zip", registered: true)
+            #expect(throws: ArchiveFailure.self) { try late.mark(workspace, family: false) }
+            #expect(!late.serves)
+            // Another workspace's share is untouched.
+            let other = try await Self.open("aes.zip", registered: true)
+            try other.mark(UUID().uuidString, family: false)
+            #expect(other.serves)
+            other.close()
         }
-        defer { NotificationCenter.default.removeObserver(listening) }
-        // Route 25 proves it a family folder: the share's archive closes at once, idle, its key and password gone.
-        ArchiveSessions.proveFamilies([workspace])
-        ArchiveSessions.closeQueue.sync {}
-        #expect(!archive.unlocked)
-        #expect(!archive.serves)
-        await #expect(throws: ArchiveFailure.self) { try await archive.preview(secret, limit: 1024) }
-        await #expect(throws: ArchiveFailure.self) { try await archive.download(secret, into: ArchiveSink { _ in }) }
-        for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
-        #expect(heard.value == 1)
-        // One opened from it by a share after the proof is refused as it is marked.
-        let late = try await Self.open("aes.zip", registered: true)
-        #expect(throws: ArchiveFailure.self) { try late.mark(workspace, family: false) }
-        #expect(!late.serves)
-        // Another workspace's share is untouched.
-        let other = try await Self.open("aes.zip", registered: true)
-        try other.mark(UUID().uuidString, family: false)
-        #expect(other.serves)
-        other.close()
+    }
+
+    @Test func aKeptZipClosesWhenItsWorkspaceIsProvenAFamilysOrItsCopyIsPurged() async throws {
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let copy = dir.appendingPathComponent("kept.zip")
+            try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: copy)
+            // Opened by its offline record: its workspace and node marked.
+            let workspace = UUID().uuidString.lowercased()
+            let kept = try await OpenArchive.openKept(copy, workspace: workspace, node: "node-kept")
+            #expect(try await kept.unlock("correct horse battery"))
+            ArchiveSessions.proveFamilies([workspace])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!kept.unlocked)
+            #expect(!kept.serves)
+            // A record kept before its workspace was recorded: found by the node the proof purged.
+            let older = try await OpenArchive.openKept(copy, workspace: nil, node: "node-older")
+            #expect(older.serves)
+            ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-older"])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!older.serves)
+        }
+    }
+
+    @Test func aDownloadReservesAFileOfItsOwnAndNeverTouchesOneAlreadyThere() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let theirs = dir.appendingPathComponent("report.pdf")
+        try Data("someone else's".utf8).write(to: theirs)
+        let (first, a) = try ArchiveSaveName.reserve(in: dir, name: "report.pdf")
+        let (second, b) = try ArchiveSaveName.reserve(in: dir, name: "report.pdf")
+        try a.close()
+        try b.close()
+        #expect(first.lastPathComponent == "report (2).pdf")
+        #expect(second.lastPathComponent == "report (3).pdf")
+        #expect(try Data(contentsOf: theirs) == Data("someone else's".utf8))
+        // Every number taken: refused, nothing opened.
+        #expect(throws: CocoaError.self) { _ = try ArchiveSaveName.reserve(in: dir, name: "report.pdf", tries: 3) }
+    }
+
+    @Test func aReadThatFailsUnderneathIsSaidInHushOSsWordsNeverTheSystems() async throws {
+        let (content, _) = try Self.sealed("basic.zip")
+        let source = ArchiveSource(drainLater: { _ in }) { _ in throw URLError(.notConnectedToInternet) }
+        do {
+            _ = try await OpenArchive.open(source: source, content: content, watchdog: .seconds(30), registered: false)
+            Issue.record("opened without the store")
+        } catch let failure as ArchiveFailure {
+            #expect(failure.message == AuthError.unreachable)
+        }
+        let failing = ArchiveSource(drainLater: { _ in }) { _ in throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: "/private/var/secret/path"]) }
+        do {
+            _ = try await OpenArchive.open(source: failing, content: content, watchdog: .seconds(30), registered: false)
+            Issue.record("opened without the store")
+        } catch let failure as ArchiveFailure {
+            #expect(failure.message == ArchiveWords.unreadable)
+            #expect(!failure.message.contains("/private"))
+        }
     }
 
     @Test func aZipWhoseFamilyGoesWhileItsTreeBuildsIsNeverShown() async throws {
-        // What the screen asks before it publishes the tree it built off the main thread.
-        let workspace = UUID().uuidString.lowercased()
-        let archive = try await Self.open("aes.zip", registered: true)
-        archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
-        try archive.mark(workspace, family: true)
-        _ = archive.takeFolders()
-        #expect(archive.serves)
-        // The family is let go of while the tree builds: by then the archive is closed, and the screen shows nothing of it.
-        TemporaryCopies.forgetFamily([workspace])
-        ArchiveSessions.closeQueue.sync {}
-        #expect(!archive.serves)
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            // What the screen asks before it publishes the tree it built off the main thread.
+            let workspace = UUID().uuidString.lowercased()
+            let archive = try await Self.open("aes.zip", registered: true)
+            archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
+            try archive.mark(workspace, family: true)
+            _ = archive.takeFolders()
+            #expect(archive.serves)
+            // The family is let go of while the tree builds: by then the archive is closed, and the screen shows nothing of it.
+            TemporaryCopies.forgetFamily([workspace])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.serves)
+        }
     }
 
     @Test func anIdleFamilyZipClosesTheMomentItsFamilyIsLetGoOf() async throws {
-        let workspace = UUID().uuidString.lowercased()
-        let archive = try await Self.open("aes.zip", registered: true)
-        archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
-        ArchiveSessions.mark(archive: archive.identity, family: workspace)
-        #expect(try await archive.unlock("correct horse battery"))
-        // Nothing is asked of it: the forget alone closes it, and its screen hears.
-        let heard = Counter()
-        let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
-            if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let workspace = UUID().uuidString.lowercased()
+            let archive = try await Self.open("aes.zip", registered: true)
+            archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
+            ArchiveSessions.mark(archive: archive.identity, family: workspace)
+            #expect(try await archive.unlock("correct horse battery"))
+            // Nothing is asked of it: the forget alone closes it, and its screen hears.
+            let heard = Counter()
+            let listening = NotificationCenter.default.addObserver(forName: ArchiveSessions.familyClosed, object: nil, queue: nil) { note in
+                if note.userInfo?["archive"] as? UUID == archive.identity { _ = heard.next() }
+            }
+            defer { NotificationCenter.default.removeObserver(listening) }
+            TemporaryCopies.forgetFamily([workspace])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.unlocked)
+            for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
+            #expect(heard.value == 1)
+            // Another family's forget leaves an archive of this one alone.
+            let other = try await Self.open("aes.zip", registered: true)
+            ArchiveSessions.mark(archive: other.identity, family: UUID().uuidString)
+            #expect(try await other.unlock("correct horse battery"))
+            TemporaryCopies.forgetFamily([UUID().uuidString])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(other.unlocked)
+            other.close()
         }
-        defer { NotificationCenter.default.removeObserver(listening) }
-        TemporaryCopies.forgetFamily([workspace])
-        ArchiveSessions.closeQueue.sync {}
-        #expect(!archive.unlocked)
-        for _ in 0 ..< 50 where heard.value == 0 { try await Task.sleep(for: .milliseconds(20)) }
-        #expect(heard.value == 1)
-        // Another family's forget leaves an archive of this one alone.
-        let other = try await Self.open("aes.zip", registered: true)
-        ArchiveSessions.mark(archive: other.identity, family: UUID().uuidString)
-        #expect(try await other.unlock("correct horse battery"))
-        TemporaryCopies.forgetFamily([UUID().uuidString])
-        ArchiveSessions.closeQueue.sync {}
-        #expect(other.unlocked)
-        other.close()
     }
 
     @Test func theAllowlistSweepLeavesAnOpenZipToItsFamilysForget() async throws {
-        // A family not proven again since the sync began: its copies swept, its open zip left alone.
-        let family = UUID().uuidString.lowercased()
-        let archive = try await Self.open("aes.zip", registered: true)
-        ArchiveSessions.mark(archive: archive.identity, family: family)
-        #expect(try await archive.unlock("correct horse battery"))
-        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: temporary) }
-        #expect(TemporaryCopies.sweepFamily(keeping: [], in: temporary))
-        ArchiveSessions.closeQueue.sync {}
-        #expect(archive.unlocked)
-        // Its revocation is what closes it.
-        TemporaryCopies.forgetFamily([family], in: temporary)
-        ArchiveSessions.closeQueue.sync {}
-        #expect(!archive.unlocked)
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            // A family not proven again since the sync began: its copies swept, its open zip left alone.
+            let family = UUID().uuidString.lowercased()
+            let archive = try await Self.open("aes.zip", registered: true)
+            ArchiveSessions.mark(archive: archive.identity, family: family)
+            #expect(try await archive.unlock("correct horse battery"))
+            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            #expect(TemporaryCopies.sweepFamily(keeping: [], in: temporary))
+            ArchiveSessions.closeQueue.sync {}
+            #expect(archive.unlocked)
+            // Its revocation is what closes it.
+            TemporaryCopies.forgetFamily([family], in: temporary)
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.unlocked)
+        }
     }
 
     final class Total: @unchecked Sendable {
@@ -456,13 +532,16 @@ import Testing
     }
 
     @Test func signingOutWipesEveryOpenArchivesPassword() async throws {
-        let archive = try await Self.open("aes.zip", registered: true)
-        #expect(try await archive.unlock("correct horse battery"))
-        ArchiveSessions.closeAll()
-        ArchiveSessions.closeQueue.sync {}
-        #expect(!archive.unlocked)
-        let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
-        #expect(await code { try await archive.preview(secret, limit: 1024) } == nil)
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let archive = try await Self.open("aes.zip", registered: true)
+            #expect(try await archive.unlock("correct horse battery"))
+            ArchiveSessions.closeAll()
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.unlocked)
+            let secret = try #require(archive.entries.first { $0.path == "secret.txt" })
+            #expect(await code { try await archive.preview(secret, limit: 1024) } == nil)
+        }
     }
 
     @Test func aBombIsRefusedInItsOwnWordsAndAPreviewIsHeldToItsLimit() async throws {

@@ -38,12 +38,16 @@ public enum ArchiveSessions {
         let lock = NSLock()
         var archives: [UUID: @Sendable () -> Void] = [:]
         var calls: [UUID: RunControl] = [:]
-        /* Moved by every sign-out: an archive opened across one is never registered (PaddingDrains' rule). */
-        var generation: UInt64 = 0
+        /* The account each archive and call belongs to (`account`; "" for the app's). */
+        var accounts: [UUID: String] = [:]
+        /* Moved by every sign-out of an account: an archive opened across one is never registered (PaddingDrains' rule). */
+        var generations: [String: UInt64] = [:]
         /* The family workspace each family file's archive was opened from (lowercase). */
         var families: [UUID: String] = [:]
-        /* The workspace each other archive (a share's, the account's own) was opened from (lowercase). */
+        /* The workspace each other archive (a share's, the account's own, a kept copy's) was opened from (lowercase). */
         var shares: [UUID: String] = [:]
+        /* The node each such archive is a copy of: a kept copy recorded before its workspace was is found by it. */
+        var nodes: [UUID: String] = [:]
         /* Workspaces proven family folders this session (route 25): nothing opened another way serves from them. */
         var proven: Set<String> = []
     }
@@ -62,11 +66,13 @@ public enum ArchiveSessions {
      * (the caller closes it). Under the lock a proof takes, so either the proof sees the mark and
      * closes the archive, or the mark sees the proof.
      */
-    static func mark(archive id: UUID, share workspace: String) -> Bool {
-        let key = workspace.lowercased()
+    static func mark(archive id: UUID, share workspace: String?, node: String? = nil) -> Bool {
+        let key = workspace?.lowercased()
         return live.lock.withLock {
-            guard !live.proven.contains(key) else { return false }
-            if live.archives[id] != nil { live.shares[id] = key }
+            if let key, live.proven.contains(key) { return false }
+            guard live.archives[id] != nil else { return true }
+            if let key { live.shares[id] = key }
+            if let node { live.nodes[id] = node.lowercased() }
             return true
         }
     }
@@ -82,13 +88,17 @@ public enum ArchiveSessions {
      * downloads with it; its screen is told as for a family let go of. From here they serve only
      * through the family's ledger.
      */
-    static func proveFamilies(_ workspaces: [String]) {
+    static func proveFamilies(_ workspaces: [String], nodes: Set<String> = []) {
         let proven = Set(workspaces.map { $0.lowercased() })
+        let gone = Set(nodes.map { $0.lowercased() })
         let closes = live.lock.withLock {
             live.proven.formUnion(proven)
-            let ids = live.shares.filter { proven.contains($0.value) }.map(\.key)
+            // By workspace, or (a kept copy recorded before its workspace was) by the node the proof purged.
+            let ids = Set(live.shares.filter { proven.contains($0.value) }.map(\.key))
+                .union(live.nodes.filter { gone.contains($0.value) }.map(\.key))
             return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
                 live.shares[id] = nil
+                live.nodes[id] = nil
                 return live.archives.removeValue(forKey: id).map { (id, $0) }
             }
         }
@@ -123,17 +133,26 @@ public enum ArchiveSessions {
     }
     private static let live = Live()
 
+    /*
+     * Whose archives a sign-out closes: the app has one account (""). A test signs its own out
+     * under a name of its own, so another suite's sign-out, running beside it, never closes its
+     * archives mid-test, nor its never theirs.
+     */
+    @TaskLocal static var account = ""
+
     /* Taken before an archive starts opening, and given back when it registers. */
-    static var generation: UInt64 { live.lock.withLock { live.generation } }
+    static var generation: UInt64 { live.lock.withLock { live.generations[account, default: 0] } }
 
     /*
      * Registers an archive opened since `born`; false, and nothing registered, when a sign-out came
      * between: its open call had ended, so the sign-out had nothing of it to close.
      */
     static func track(archive id: UUID, born: UInt64, close: @escaping @Sendable () -> Void) -> Bool {
-        live.lock.withLock {
-            guard live.generation == born else { return false }
+        let account = account
+        return live.lock.withLock {
+            guard live.generations[account, default: 0] == born else { return false }
             live.archives[id] = close
+            live.accounts[id] = account
             return true
         }
     }
@@ -142,18 +161,33 @@ public enum ArchiveSessions {
             live.archives[id] = nil
             live.families[id] = nil
             live.shares[id] = nil
+            live.nodes[id] = nil
+            live.accounts[id] = nil
         }
     }
-    static func track(call id: UUID, _ control: RunControl) { live.lock.withLock { live.calls[id] = control } }
-    static func untrack(call id: UUID) { _ = live.lock.withLock { live.calls.removeValue(forKey: id) } }
+    static func track(call id: UUID, _ control: RunControl) {
+        let account = account
+        live.lock.withLock {
+            live.calls[id] = control
+            live.accounts[id] = account
+        }
+    }
+    static func untrack(call id: UUID) {
+        live.lock.withLock {
+            live.calls[id] = nil
+            live.accounts[id] = nil
+        }
+    }
 
     /* Sign-out: every call in flight is cancelled, and every archive is closed, its password wiped. */
     public static func closeAll() {
+        let account = account
         let (closes, controls) = live.lock.withLock {
-            live.generation &+= 1
+            live.generations[account, default: 0] &+= 1
             // The next session proves its own family folders.
-            live.proven = []
-            return (Array(live.archives.values), Array(live.calls.values))
+            if account.isEmpty { live.proven = [] }
+            let mine = { (id: UUID) in live.accounts[id, default: ""] == account }
+            return (live.archives.filter { mine($0.key) }.map(\.value), live.calls.filter { mine($0.key) }.map(\.value))
         }
         for control in controls { control.cancel() }
         for close in closes { close() }
@@ -258,7 +292,8 @@ final class ArchiveSource: ObjectSource, @unchecked Sendable {
         case .success(let data): return data
         case .failure(let error):
             if endsSession(error) { Thread.current.threadDictionary[refusedKey] = error }
-            throw FetchError.Failed(reason: error.localizedDescription)
+            // In HushOS's words, never the system's (a URL, a path): the 401 is kept apart above.
+            throw FetchError.Failed(reason: ErrorWords.say(error, otherwise: ArchiveWords.unreadable) ?? "Cancelled.")
         }
     }
 
@@ -276,7 +311,7 @@ public final class ArchiveSink: EntrySink, @unchecked Sendable {
     private let put: @Sendable (Data) throws -> Void
     public init(_ put: @escaping @Sendable (Data) throws -> Void) { self.put = put }
     public func write(chunk: Data) throws {
-        do { try put(chunk) } catch { throw FetchError.Failed(reason: error.localizedDescription) }
+        do { try put(chunk) } catch { throw FetchError.Failed(reason: ErrorWords.say(error, otherwise: ArchiveWords.notSaved) ?? "Cancelled.") }
     }
 }
 
@@ -305,7 +340,7 @@ final class KeptCopy: LocalSource, @unchecked Sendable {
                 return try handle.read(upToCount: Int(length)) ?? Data()
             }
         } catch {
-            throw FetchError.Failed(reason: error.localizedDescription)
+            throw FetchError.Failed(reason: ArchiveWords.keptUnreadable)
         }
     }
 }
@@ -445,7 +480,7 @@ public final class OpenArchive: @unchecked Sendable {
         if let url = Offline.localCopy(of: item), let copy = try? KeptCopy(url: url) {
             let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
             archive.gate = gate
-            try archive.mark(item.node.workspaceId, family: family)
+            try archive.mark(item.node.workspaceId, node: item.id, family: family)
             try archive.stands()
             return archive
         }
@@ -461,7 +496,7 @@ public final class OpenArchive: @unchecked Sendable {
         archive.row = current
         archive.gate = gate
         // Marked, then the gate asked: a forget (or a proof) before the mark is seen there, one after it closes the archive.
-        try archive.mark(current.node.workspaceId, family: family)
+        try archive.mark(current.node.workspaceId, node: current.id, family: family)
         try archive.stands()
         return archive
     }
@@ -480,10 +515,18 @@ public final class OpenArchive: @unchecked Sendable {
     }
 
     /* A zip this phone keeps with only its offline record (kept from a share this session hasn't opened): its copy, read by range. */
-    public static func openKept(_ url: URL, watchdog: Duration = .milliseconds(Int(toolWatchdogMillis())), poll: Duration = .seconds(1)) async throws -> OpenArchive {
+    /*
+     * A zip kept on this phone, by its offline record alone: marked with the workspace and node the
+     * record names, so a proof that the workspace is a family's (which purges the kept copy) closes
+     * it, its copy's handle with it.
+     */
+    public static func openKept(_ url: URL, workspace: String? = nil, node: String? = nil, watchdog: Duration = .milliseconds(Int(toolWatchdogMillis())), poll: Duration = .seconds(1)) async throws -> OpenArchive {
         let copy: KeptCopy
         do { copy = try KeptCopy(url: url) } catch { throw ArchiveFailure(code: nil, message: ErrorWords.generic) }
-        return try await open(local: copy, watchdog: watchdog, poll: poll)
+        let archive = try await open(local: copy, watchdog: watchdog, poll: poll)
+        try archive.mark(workspace, node: node, family: false)
+        try archive.stands()
+        return archive
     }
 
     /* An archive over any source (the tests' sealed fixtures). */
@@ -511,13 +554,13 @@ public final class OpenArchive: @unchecked Sendable {
      * Marked with the workspace it came from: a family's, closed when the family is let go of; any
      * other, closed when that workspace is proven a family's (and refused here if it already is).
      */
-    func mark(_ workspace: String, family: Bool) throws {
-        if family {
+    func mark(_ workspace: String?, node: String? = nil, family: Bool) throws {
+        if family, let workspace {
             ArchiveSessions.mark(archive: id, family: workspace)
             return
         }
-        shareWorkspace = workspace.lowercased()
-        guard ArchiveSessions.mark(archive: id, share: workspace) else {
+        shareWorkspace = workspace?.lowercased()
+        guard ArchiveSessions.mark(archive: id, share: workspace, node: node) else {
             close()
             throw ArchiveFailure(code: nil, message: FamilyWords.openAgain)
         }
@@ -884,6 +927,24 @@ public enum ArchiveEntries {
  */
 public enum ArchiveSaveName {
     public static let maxBytes = 255
+
+    /*
+     * A file of its own for a download in `folder`, created exclusively: `name`, else "name (2)"
+     * and on, the next number on each collision, so a file already there (or one another download
+     * just made) is never opened, written or deleted. The URL and a handle open for writing; the
+     * caller deletes only that URL, and only if the download fails.
+     */
+    public static func reserve(in folder: URL, name: String, tries: Int = 10_000) throws -> (URL, FileHandle) {
+        for n in 1 ... max(1, tries) {
+            let candidate = folder.appendingPathComponent(n == 1 ? name : numbered(name, n))
+            let fd = candidate.withUnsafeFileSystemRepresentation { path in
+                path.map { open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644) } ?? -1
+            }
+            if fd >= 0 { return (candidate, FileHandle(fileDescriptor: fd, closeOnDealloc: true)) }
+            if errno != EEXIST { throw CocoaError(.fileWriteNoPermission) }
+        }
+        throw CocoaError(.fileWriteFileExists)
+    }
 
     public static func numbered(_ name: String, _ n: Int) -> String {
         let dot = name.lastIndex(of: ".")

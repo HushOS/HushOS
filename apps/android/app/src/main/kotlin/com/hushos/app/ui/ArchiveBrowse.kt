@@ -149,9 +149,11 @@ class ArchiveBrowse(
                 opened = open { now -> if (!closed) subject = now }
                 if (closed) return@launch
                 val built = build(opened.entries, opened.takeFolders())
+                // The archive before its tree: whoever sees the tree may already use the archive. A proof or a
+                // forget that closes it from here takes the list and the item shown off the screen at once.
+                opened.onFamilyClosed = { words -> scope.launch { familyClosed(opened, words) } }
                 // Closed while the tree was built (its family let go of, its workspace proven a family's): never shown.
                 opened.refusal()?.let { words -> failure = words; return@launch }
-                // The archive before its tree: whoever sees the tree may already use the archive.
                 hidden = opened.hidden
                 archive = opened
                 tree = built
@@ -187,7 +189,8 @@ class ArchiveBrowse(
                                 try {
                                     out.write(chunk)
                                 } catch (error: Exception) {
-                                    throw FetchException.Failed(error.message ?: "The file couldn't be written.")
+                                    // In HushOS's words, never the system's (a provider's message, a path).
+                                    throw FetchException.Failed(com.hushos.app.data.Problems.say(error, com.hushos.app.data.ArchiveWords.NOT_SAVED))
                                 }
                                 record.written.value += chunk.size
                             }
@@ -239,6 +242,20 @@ class ArchiveBrowse(
     fun stop(record: EntryDownload) {
         record.job?.cancel()
         downloads.remove(record)
+    }
+
+    /*
+     * Its workspace proven a family's, or its family let go of: the archive is closed, and nothing it
+     * showed stays (the list, the item open, the downloads), only the family's words.
+     */
+    private fun familyClosed(which: OpenArchive, words: String) {
+        if (archive !== which) return
+        for (record in downloads.toList()) record.job?.cancel()
+        downloads.clear()
+        archive = null
+        tree = null
+        opened = null
+        failure = words
     }
 
     fun close() {

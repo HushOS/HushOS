@@ -19,6 +19,9 @@ struct ArchiveScreen: View {
     /* The zip in Drive, or (`kept`) the copy of one this phone keeps with only its offline record. */
     let item: Opened?
     let kept: URL?
+    /* The kept copy's workspace and node, from its offline record: a proof that the workspace is a family's closes it. */
+    var keptWorkspace: String?
+    var keptNode: String?
     let name: String
     /*
      * Hears of the row the archive opened when it is newer than `item` (a family's file another
@@ -57,10 +60,12 @@ struct ArchiveScreen: View {
         self.adopted = adopted
     }
 
-    init(kept url: URL, name: String) {
+    init(kept url: URL, name: String, workspace: String? = nil, node: String? = nil) {
         item = nil
         kept = url
         self.name = name
+        keptWorkspace = workspace
+        keptNode = node
     }
 
     private var title: String { archive?.row?.name ?? name }
@@ -123,7 +128,7 @@ struct ArchiveScreen: View {
             let open: OpenArchive
             do {
                 if let item { open = try await OpenArchive.open(item, vault: store.vault) } else if let kept {
-                    open = try await OpenArchive.openKept(kept)
+                    open = try await OpenArchive.openKept(kept, workspace: keptWorkspace, node: keptNode)
                 } else { return }
             } catch {
                 if !Task.isCancelled { failure = failureWords(error, store: store) }
@@ -199,6 +204,8 @@ struct ArchiveScreen: View {
             }
             .padding(.horizontal, Alpine.Space.s4)
         }
+        // One line however deep, held at its end: the crumb shown is the last.
+        .defaultScrollAnchor(.trailing)
         .frame(minHeight: 44)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(ArchiveWords.folders)
@@ -292,11 +299,10 @@ struct ArchiveScreen: View {
             defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
             var target: URL?
             do {
-                // The name the core made safe: no bidi override, no NUL, no separator, at most 255 bytes.
-                let file = ArchiveFiles.freeURL(in: folder, name: entry.saveName)
+                // The name the core made safe: no bidi override, no NUL, no separator, at most 255 bytes. Created
+                // exclusively, so only a file this download made is ever written, or deleted when it fails.
+                let (file, handle) = try ArchiveSaveName.reserve(in: folder, name: entry.saveName)
                 target = file
-                guard FileManager.default.createFile(atPath: file.path, contents: nil) else { throw CocoaError(.fileWriteNoPermission) }
-                let handle = try FileHandle(forWritingTo: file)
                 defer { try? handle.close() }
                 try await archive.download(entry, into: ArchiveSink { chunk in
                     try handle.write(contentsOf: chunk)
@@ -367,19 +373,6 @@ final class ArchiveDownload: Identifiable {
     var error: String?
     var task: Task<Void, Never>?
     init(entry: ArchiveEntry) { self.entry = entry }
-}
-
-enum ArchiveFiles {
-    /* `name` in `folder`, or "name (2).ext" and on when taken, each within a file name's 255 bytes. */
-    static func freeURL(in folder: URL, name: String) -> URL {
-        var candidate = folder.appendingPathComponent(name)
-        var n = 2
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = folder.appendingPathComponent(ArchiveSaveName.numbered(name, n))
-            n += 1
-        }
-        return candidate
-    }
 }
 
 extension ArchiveRow {

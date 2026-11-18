@@ -233,9 +233,10 @@ extension Vault {
         // the family's ledger, and goes with its keys and its place in the parent index.
         let newly = family.filter { !familyWorkspaces.contains($0) }
         if !newly.isEmpty {
-            forgetWorkspaces(newly, lettingGo: false)
-            // A zip a share opened from one holds that share's content key: closed now, its downloads with it.
-            ArchiveSessions.proveFamilies(newly)
+            let gone = forgetWorkspaces(newly, lettingGo: false)
+            // A zip a share opened from one holds that share's content key: closed now, its downloads with it, and so
+            // is one opened from a copy kept of it (found by its node when its record predates the workspace's).
+            ArchiveSessions.proveFamilies(newly, nodes: gone)
         }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }

@@ -34,6 +34,10 @@ object ArchiveWords {
     /* A PDF before Android 11: PdfRenderer needs a file, and an entry is never written to one. */
     const val PDF_NEEDS_ANDROID_11 = "PDFs inside an archive preview on Android 11 and later. Download it to open it in another app."
     const val DOWNLOADED = "Downloaded."
+    /* A read underneath that failed (the store, the network), the kept copy, and a destination that refused a piece. */
+    const val UNREADABLE = "Couldn’t read this archive. Check your connection, then try again."
+    const val KEPT_UNREADABLE = "Couldn’t read the copy kept on this phone."
+    const val NOT_SAVED = "Couldn’t save it there. Check the folder has room, then try again."
 
     fun hidden(count: Int) = if (count == 1) "1 Mac resource file isn’t shown." else "$count Mac resource files aren’t shown."
     fun items(count: Int) = if (count == 1) "1 item" else "${String.format(java.util.Locale.US, "%,d", count)} items"

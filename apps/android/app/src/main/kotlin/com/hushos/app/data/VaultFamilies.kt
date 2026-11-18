@@ -122,6 +122,7 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     // nothing kept by another way lands between the two.
     val gone = HashSet<String>()
     val proven = HashSet<String>()
+    val purged = HashSet<String>()
     synchronized(familyCopiesLock) {
         for (id in ids.map { it.lowercase() }) {
             if (id == own) continue
@@ -130,13 +131,15 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
             if (familyAreas.put(id, groupId.lowercase()) == null) {
                 val held = nodes.forgetWorkspace(id)
                 gone.addAll(held)
-                familyPurged.addAll(purgeShareCopies(id, held))
+                val ids = purgeShareCopies(id, held)
+                familyPurged.addAll(ids)
+                purged.addAll(ids)
                 proven.add(id)
             }
         }
     }
     // A zip open from it by a share holds that share's content key: closed now, its downloads with it.
-    ArchiveSessions.shared.closeWorkspaces(proven)
+    ArchiveSessions.shared.closeWorkspaces(proven, nodes = purged)
     forgetParents(gone)
 }
 
