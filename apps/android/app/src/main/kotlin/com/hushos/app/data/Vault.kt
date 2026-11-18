@@ -1726,15 +1726,32 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
             onMinted(id)
             sendingIntoFamily(ws)
-            val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
+            val served = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
                 .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
                 .put("metadataSignature", signature))
+            // A reply naming another folder is no answer (checkWritten throws). The row filed is the folder as it was sent (its
+            // place, key epochs, envelopes and signature); the reply gives only what the server assigns (its change number,
+            // times, the signer it recorded), as the web's createFolderPath does.
+            checkWritten(served, ws, id)
+            val node = createdAsSent(served, parent, epoch, base64urlEncode(wrapped), base64urlEncode(sealed), signature)
             adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
         } catch (error: Exception) {
             // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
             if (family) areaLedger.forgetNodeKey(ws, id)
             throw error
         }
+    }
+
+    /* A folder this device created, as it sent it: only the server's own fields come from its reply. */
+    private fun createdAsSent(served: NodeView, parent: Opened, epoch: ULong, keyEnvelope: String, metadataEnvelope: String, signature: String): NodeView {
+        val raw = (runCatching { JSONObject(served.rawJson) }.getOrNull() ?: JSONObject().put("id", served.id).put("workspaceId", served.workspaceId))
+            .put("parentId", parent.id).put("kind", "folder").put("keyEpoch", epoch.toLong()).put("parentKeyEpoch", parent.node.keyEpoch.toLong())
+            .put("keyEnvelope", keyEnvelope).put("metadataVersion", 1).put("metadataEnvelope", metadataEnvelope).put("metadataSignature", signature)
+            .put("currentVersion", JSONObject.NULL).put("trashedAt", JSONObject.NULL).put("envelopeSuite", ENVELOPE_SUITE)
+            .put("prevKeyEnvelope", JSONObject.NULL).put("prevKeyEpoch", JSONObject.NULL).put("prevParentKeyEpoch", JSONObject.NULL)
+        return served.copy(parentId = parent.id, kind = "folder", keyEpoch = epoch, parentKeyEpoch = parent.node.keyEpoch, keyEnvelope = keyEnvelope,
+            metadataVersion = 1uL, metadataEnvelope = metadataEnvelope, currentVersion = null, trashedAt = null, rawJson = raw.toString(),
+            envelopeSuite = ENVELOPE_SUITE, metadataSignature = signature)
     }
 
     fun rename(id: String, name: String): Opened = writing {

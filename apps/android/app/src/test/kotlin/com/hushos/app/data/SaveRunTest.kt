@@ -1699,6 +1699,48 @@ class SaveResultTest {
         server.extraRoutes = null
     }
 
+    /*
+     * A folder this device created is filed as it sent it: the reply's parent, key epochs and envelopes are ignored (only the
+     * server's own fields, such as its change number, are taken), and a reply naming another folder is no answer.
+     */
+    @Test
+    fun aCreatedFolderIsFiledAsItWasSentNeverAsTheReplyDescribesIt() {
+        fun reply(folder: JSONObject, id: String = folder.getString("id")) = JSONObject().put("nodes", org.json.JSONArray().put(
+            JSONObject().put("id", id).put("workspaceId", vault.workspaceId).put("parentId", "someone-elses-folder").put("kind", "folder")
+                .put("keyEpoch", 99).put("parentKeyEpoch", 42).put("keyEnvelope", "theirs").put("metadataVersion", 1)
+                .put("metadataEnvelope", "theirs-too").put("currentVersion", JSONObject.NULL).put("trashedAt", JSONObject.NULL)
+                .put("createdAt", "2026-11-18T00:00:00Z").put("updatedAt", "2026-11-18T00:00:00Z").put("changeSeq", 7)))
+        var sent: JSONObject? = null
+        server.extraRoutes = { method, segments, _, body ->
+            if (method == "POST" && segments == listOf("drive", "folders")) {
+                sent = body.getJSONArray("folders").getJSONObject(0)
+                200 to reply(sent!!)
+            } else null
+        }
+        val made = vault.createFolder(server.root, "Out")
+        val asSent = sent!!
+        assertEquals(server.root, made.node.parentId)
+        assertEquals(asSent.getLong("keyEpoch").toULong(), made.node.keyEpoch)
+        assertEquals(asSent.getLong("parentKeyEpoch").toULong(), made.node.parentKeyEpoch)
+        assertEquals(asSent.getString("keyEnvelope"), made.node.keyEnvelope)
+        assertEquals(asSent.getString("metadataEnvelope"), made.node.metadataEnvelope)
+        assertEquals("Out", made.name)
+        // The server's own field is taken.
+        assertEquals(7, made.node.changeSeq)
+        // The row this device keeps says the same, its stored JSON included.
+        val held = vault.nodes.row(vault.workspaceId, made.id)!!
+        assertEquals(server.root, held.node.parentId)
+        assertEquals(asSent.getString("keyEnvelope"), JSONObject(held.node.rawJson).getString("keyEnvelope"))
+        // A reply naming another folder is no answer.
+        server.extraRoutes = { method, segments, _, body ->
+            if (method == "POST" && segments == listOf("drive", "folders")) 200 to reply(body.getJSONArray("folders").getJSONObject(0), "another-folder")
+            else null
+        }
+        assertThrows(ApiError::class.java) { vault.createFolder(server.root, "Again") }
+        assertEquals(null, vault.nodes.row(vault.workspaceId, "another-folder"))
+        server.extraRoutes = null
+    }
+
     /* On a server without the batch route, a clean-up's trash goes one request an item, the session asked before each. */
     @Test
     fun aCleanUpOnAServerWithoutTheBatchRouteTrashesOneItemAtATime() {
