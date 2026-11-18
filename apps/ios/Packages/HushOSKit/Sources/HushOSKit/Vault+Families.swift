@@ -236,7 +236,7 @@ extension Vault {
             let gone = forgetWorkspaces(newly, lettingGo: false)
             // A zip a share opened from one holds that share's content key: closed now, its downloads with it, and so
             // is one opened from a copy kept of it (found by its node when its record predates the workspace's).
-            ArchiveSessions.proveFamilies(newly, nodes: gone)
+            ArchiveSessions.proveFamilies(newly, nodes: gone, session: copySession)
         }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }
@@ -289,7 +289,7 @@ extension Vault {
         forgetParents(gone)
         // A zip open from any of it (a family's file, a share's, a copy kept here, found by its node when its record
         // predates its workspace's) closes now: a let-go here, the proof's own call otherwise (noteFamilyWorkspaces).
-        if lettingGo { ArchiveSessions.closeFamily(Array(workspaces), nodes: gone.union(kept)) }
+        if lettingGo { ArchiveSessions.closeFamily(Array(workspaces), nodes: gone.union(kept), session: copySession) }
         return gone.union(kept)
     }
 

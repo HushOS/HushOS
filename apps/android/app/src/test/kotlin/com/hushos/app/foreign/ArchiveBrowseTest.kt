@@ -69,7 +69,7 @@ class ArchiveBrowseTest {
             // While the tree builds, the family is let go of (or the share's workspace proven a family's): closed then.
             build = { entries, folders ->
                 words.set("Open the family again, then try again.")
-                sessions.closeWorkspaces(listOf(workspace))
+                sessions.closeWorkspaces(null, listOf(workspace))
                 com.hushos.app.data.ArchiveTree(entries, folders)
             },
         )
@@ -92,7 +92,7 @@ class ArchiveBrowseTest {
         val shown = browse.archive!!
         browse.opened = shown.entries.first { it.path == "docs/readme.txt" }
         // The proof (noteFamilyWorkspaces) closes it: the list and the item shown leave the screen, the family's words stay.
-        sessions.closeWorkspaces(listOf(workspace))
+        sessions.closeWorkspaces(null, listOf(workspace))
         withTimeout(10_000) { while (browse.tree != null) kotlinx.coroutines.delay(20) }
         assertNull(browse.archive)
         assertNull(browse.opened)
@@ -102,7 +102,7 @@ class ArchiveBrowseTest {
         // A kept copy whose record predates its workspace's: found by the node the purge named.
         val kept = ArchiveBrowse(ArchiveSubject("k", "basic.zip"), scope, open = { sessions.openLocal(kept("basic.zip"), node = "node-kept") })
         withTimeout(10_000) { while (kept.tree == null) kotlinx.coroutines.delay(20) }
-        sessions.closeWorkspaces(emptyList(), nodes = listOf("node-kept"))
+        sessions.closeWorkspaces(null, emptyList(), nodes = listOf("node-kept"))
         withTimeout(10_000) { while (kept.tree != null) kotlinx.coroutines.delay(20) }
         assertNull(kept.archive)
         kept.close()
@@ -110,11 +110,12 @@ class ArchiveBrowseTest {
     }
 
     /* The Save dialog's document as a file: made empty, or one already there that the person chose to replace. */
-    private class FileDestination(val file: File, private val known: Boolean = true) : com.hushos.app.ui.SaveDestination {
+    private class FileDestination(val file: File, private val known: Boolean = true, private val pickedAt: Long = System.currentTimeMillis() - 1_000) : com.hushos.app.ui.SaveDestination {
         @Volatile var deleted = false
         val hold = java.util.concurrent.CountDownLatch(1)
         val writing = java.util.concurrent.CountDownLatch(1)
-        override fun size(): Long? = if (known && file.exists()) file.length() else null
+        // As DocumentDestination judges it: empty, and changed since the dialog was asked for.
+        override fun made(): Boolean = known && file.exists() && file.length() == 0L && file.lastModified() >= pickedAt - 2_000
         override fun open(): java.io.OutputStream = object : java.io.FileOutputStream(file, false) {
             // Both: FileOutputStream's write(ByteArray) doesn't go through write(ByteArray, Int, Int).
             override fun write(b: ByteArray) = write(b, 0, b.size)
@@ -182,6 +183,14 @@ class ArchiveBrowseTest {
         val unknown = FileDestination(File.createTempFile("save", ".txt").apply { writeText("unknown") }, known = false).apply { hold.countDown() }
         browse.discardIfMade(unknown)
         assertFalse(unknown.deleted)
+        // An empty file of the person's, chosen to overwrite (last changed before the dialog): kept. One the dialog made: gone.
+        val emptyTheirs = FileDestination(File.createTempFile("save", ".txt").apply { setLastModified(System.currentTimeMillis() - 3_600_000) }).apply { hold.countDown() }
+        browse.discardIfMade(emptyTheirs)
+        assertFalse(emptyTheirs.deleted)
+        assertTrue(emptyTheirs.file.exists())
+        val dialogs = FileDestination(File.createTempFile("save", ".txt")).apply { hold.countDown() }
+        browse.discardIfMade(dialogs)
+        assertTrue(dialogs.deleted)
         browse.close()
         // A replaced file that a part was written to, then the download stopped: gone, never a part under its name.
         val bigBrowse = ArchiveBrowse(ArchiveSubject("b", "big.zip"), scope, open = { ArchiveSessions().openLocal(big()) })

@@ -32,6 +32,8 @@ class FamilySessionState internal constructor(val userId: String) {
     val guardDebts = ConcurrentHashMap<String, MutableSet<GuardDebt>>()
     /* Ids whose copies a family's proof deleted, until the screens drop them. */
     val purged: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    /* Nodes a proof purged, for the session: a kept zip known only by its node never serves after (ArchiveScope). */
+    val archivePurged: MutableSet<String> = ConcurrentHashMap.newKeySet()
     /* The session ended (a sign-out, a lost session, another sign-in): nothing of it is written again, by any of its vaults. */
     @Volatile var closed = false
         internal set

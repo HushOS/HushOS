@@ -14,6 +14,7 @@ import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.familyEpoch
+import com.hushos.app.data.archiveScope
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyOf
 import com.hushos.app.data.isFamilyWorkspace
@@ -2523,7 +2524,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         return showArchive(ArchiveSubject(entry.id, entry.name, kept = file)) {
             // Its workspace and node from its record: a proof that the workspace is a family's (which purges the copy)
             // closes it, and the screen drops what it showed.
-            com.hushos.app.data.ArchiveSessions.shared.openLocal(com.hushos.app.data.FileLocalSource(file), workspace = entry.workspaceId, node = entry.id)
+            // Scoped to this session, as a drive row's zip is: a forget or a proof the registry sees closes it, however late.
+            val scope = vault?.archiveScope(entry.workspaceId, entry.id) ?: throw kotlin.coroutines.cancellation.CancellationException("Signed out.")
+            com.hushos.app.data.ArchiveSessions.shared.openLocal(com.hushos.app.data.FileLocalSource(file), scope = scope)
         }
     }
 

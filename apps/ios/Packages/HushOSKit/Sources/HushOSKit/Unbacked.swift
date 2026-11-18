@@ -318,7 +318,7 @@ public enum TemporaryCopies {
             return true
         }
         // A zip of those folders open in the viewer closes too, even one nothing is reading.
-        if forgot { ArchiveSessions.closeFamily(workspaces) }
+        if forgot { ArchiveSessions.closeFamily(workspaces, session: session) }
         return forgot
     }
 
@@ -486,10 +486,15 @@ public struct FamilyCopyGate: Sendable {
     /* `body` under the copies' lock, while the session and the family stand; refused when either ended since. */
     public func perform<T>(_ body: () throws -> T) throws -> T {
         try TemporaryCopies.forgetLock.withLock {
-            guard account.value == epoch else { throw CancellationError() }
-            if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
+            try checkLocked()
             return try body()
         }
+    }
+
+    /* `check()` for a caller holding the copies' lock already (ArchiveSessions' registry): NSLock doesn't nest. */
+    func checkLocked() throws {
+        guard account.value == epoch else { throw CancellationError() }
+        if let workspace, TemporaryCopies.forgotten[workspace, default: 0] != generation { throw FamilyFailure(message: FamilyWords.openAgain) }
     }
 
     /* Whether the copy may still be handed on: throws when its family was forgotten since. */

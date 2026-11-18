@@ -131,12 +131,13 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         val entry = browse.waitingFor
         browse.waitingFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        val destination = DocumentDestination(context.contentResolver, uri)
+        val destination = DocumentDestination(context.contentResolver, uri, browse.pickedAt)
         if (entry == null) { browse.discardIfMade(destination); return@rememberLauncherForActivityResult }
         browse.startDownload(entry, destination) { model.notify(ArchiveWords.DOWNLOADED) }
     }
     fun pick(entry: ArchiveEntry) {
         browse.waitingFor = entry
+        browse.pickedAt = System.currentTimeMillis()
         // Under the name made safe by the core: no bidi override can make "…exe" read as "…txt".
         picker.launch(entry.saveName)
     }
@@ -433,11 +434,20 @@ private fun EntryPane(
 private fun EntryPreview(archive: OpenArchive, entry: ArchiveEntry, kind: String, limit: Long, attempt: Int, onWrongPassword: () -> Unit, onPasswordLost: (Boolean) -> Unit, onDownload: () -> Unit, failed: (Throwable, Boolean) -> String) {
     val alpine = Alpine.colors
     var shown by remember(entry.index, attempt) { mutableStateOf<Shown>(Shown.Loading) }
+    // A PDF's renderer is this pane's from the moment it is shown until the pane goes, shown or not by then.
+    DisposableEffect(entry.index, attempt) { onDispose { (shown as? Shown.Pdf)?.document?.close() } }
     LaunchedEffect(entry.index, attempt) {
         shown = try {
             val bytes = archive.preview(entry.index, limit)
-            // Decoded off the main thread: an image or a PDF's first pages, the text cut into blocks.
-            withContext(Dispatchers.Default) { decode(kind, entry.name, bytes) }
+            // Decoded off the main thread: an image or a PDF's first pages, the text cut into blocks. A renderer
+            // made there is owned here until it is shown: a leave or a rotation meanwhile closes it.
+            var made: Shown? = null
+            try {
+                withContext(Dispatchers.Default) { made = decode(kind, entry.name, bytes) }
+                made!!.also { made = null }
+            } finally {
+                (made as? Shown.Pdf)?.document?.close()
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
@@ -571,7 +581,11 @@ internal class PdfDocumentHolder private constructor(private val renderer: PdfRe
         }
     }.getOrNull()
 
+    private val closed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /* Once, whoever asks first (the page, the pane): the renderer closed on its own thread, after any page drawing. */
     fun close() {
+        if (!closed.compareAndSet(false, true)) return
         thread.execute { runCatching { renderer.close() } }
         thread.shutdown()
     }

@@ -275,13 +275,33 @@ import Testing
         #expect(try await archive.unlock("correct horse battery"))
         let zeros = try #require(archive.entries.first)
         let pieces = Counter()
+        let writing = DispatchSemaphore(value: 0)
+        let forgot = DispatchSemaphore(value: 0)
+        let atForget = Counter()
+        // The family is let go of (a removal, a fork) from another thread once the first piece is written.
+        DispatchQueue.global().async {
+            writing.wait()
+            TemporaryCopies.forgetFamily([workspace])
+            for _ in 0 ..< pieces.value { _ = atForget.next() }
+            forgot.signal()
+        }
         await #expect(throws: ArchiveFailure(code: nil, message: FamilyWords.openAgain)) {
             try await archive.download(zeros, into: ArchiveSink { _ in
-                // The family is let go of (a removal, a fork) while the first piece is written.
-                if pieces.next() == 1 { TemporaryCopies.forgetFamily([workspace]) }
+                // The second piece waits for the forget to finish (it can't while a piece is written under the lock):
+                // a check made before the forget, with the write after it, would write this piece past the forget.
+                if pieces.value == 1 { _ = forgot.wait(timeout: .now() + .milliseconds(300)) }
+                if pieces.next() == 1 { writing.signal() }
             })
         }
-        #expect(pieces.value == 1)
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                _ = forgot.wait(timeout: .now() + .seconds(5))
+                done.resume()
+            }
+        }
+        // Nothing written after the forget returned.
+        #expect(pieces.value == atForget.value)
+        #expect(pieces.value >= 1)
         // The archive closed with it: its password gone, and every later call refused before it reads.
         ArchiveSessions.closeQueue.sync {}
         #expect(!archive.unlocked)
@@ -386,6 +406,51 @@ import Testing
             try other.mark(UUID().uuidString, family: false)
             #expect(other.serves)
             other.close()
+        }
+    }
+
+    @Test func aPurgeByNodeClosesOnlyAZipKnownByThatNodeAlone() async throws {
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            // A share's zip of one workspace whose node id is also named by another workspace's purge (a collision).
+            let mine = try await Self.open("aes.zip", registered: true)
+            try mine.mark(UUID().uuidString, node: "node-collides", family: false)
+            ArchiveSessions.closeFamily([UUID().uuidString], nodes: ["node-collides"])
+            ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-collides"])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(mine.serves)
+            // And one opened after that purge, of a known workspace, is admitted.
+            let later = try await Self.open("aes.zip", registered: true)
+            try later.mark(UUID().uuidString, node: "node-collides", family: false)
+            #expect(later.serves)
+            mine.close()
+            later.close()
+        }
+    }
+
+    @Test func aLetGoOrProofOfAnEndedSessionClosesAndFillsNothing() async throws {
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let account = CopyEpoch()
+            let ended = TemporaryCopies.session(account)
+            TemporaryCopies.endAccount(account)
+            // The next session's zip of the same folder.
+            let workspace = UUID().uuidString.lowercased()
+            let archive = try await Self.open("aes.zip", registered: true)
+            try archive.mark(workspace, family: false)
+            // The ended session's late let-go and proof: this session's zip stays, and a zip of it opened later is admitted.
+            ArchiveSessions.closeFamily([workspace], session: ended)
+            ArchiveSessions.proveFamilies([workspace], session: ended)
+            ArchiveSessions.closeQueue.sync {}
+            #expect(archive.serves)
+            let later = try await Self.open("aes.zip", registered: true)
+            try later.mark(workspace, family: false)
+            #expect(later.serves)
+            // The session's own let-go closes both.
+            ArchiveSessions.closeFamily([workspace], session: TemporaryCopies.session(account))
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!archive.serves)
+            #expect(!later.serves)
         }
     }
 
@@ -506,7 +571,7 @@ import Testing
             let workspace = UUID().uuidString.lowercased()
             let archive = try await Self.open("aes.zip", registered: true)
             archive.gate = TemporaryCopies.copyGate(familyWorkspace: workspace)
-            ArchiveSessions.mark(archive: archive.identity, family: workspace)
+            try archive.mark(workspace, family: true)
             #expect(try await archive.unlock("correct horse battery"))
             // Nothing is asked of it: the forget alone closes it, and its screen hears.
             let heard = Counter()
@@ -521,7 +586,7 @@ import Testing
             #expect(heard.value == 1)
             // Another family's forget leaves an archive of this one alone.
             let other = try await Self.open("aes.zip", registered: true)
-            ArchiveSessions.mark(archive: other.identity, family: UUID().uuidString)
+            try other.mark(UUID().uuidString, family: true)
             #expect(try await other.unlock("correct horse battery"))
             TemporaryCopies.forgetFamily([UUID().uuidString])
             ArchiveSessions.closeQueue.sync {}
@@ -536,7 +601,7 @@ import Testing
             // A family not proven again since the sync began: its copies swept, its open zip left alone.
             let family = UUID().uuidString.lowercased()
             let archive = try await Self.open("aes.zip", registered: true)
-            ArchiveSessions.mark(archive: archive.identity, family: family)
+            try archive.mark(family, family: true)
             #expect(try await archive.unlock("correct horse battery"))
             let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
             defer { try? FileManager.default.removeItem(at: temporary) }

@@ -49,6 +49,8 @@ class ArchiveTree(entries: List<ArchiveEntry>, folders: ArchiveFolders) {
     fun rows(id: Int): List<Row> {
         kept[id]?.let { return it }
         if (id < 0 || id >= parents.size) return emptyList()
+        // A collator of its own: two folders may sort at once (each off the main thread), and an ICU collator isn't safe across threads.
+        val collator = this.collator.clone() as java.text.Collator
         val byName = Comparator<String> { a, b -> numberAware(a, b, collator) }
         val inside = ArrayList<Row.Folder>()
         for (k in 1 until parents.size) if (parents[k] == id) inside.add(Row.Folder(k, name(k), counts[k]))

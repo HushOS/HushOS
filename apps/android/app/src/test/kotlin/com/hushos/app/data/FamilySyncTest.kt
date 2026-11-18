@@ -305,6 +305,39 @@ class FamilySyncTest {
     }
 
     /*
+     * A zip's scope is taken before its key, and the registry checks it as it admits the archive, under the lock a
+     * forget moves the folder's count under: a forget landing between the two (of a folder route 25 never proved, so
+     * not a family folder by name) is seen there, and one after closes it. A forget bound to another session closes
+     * nothing of this one's. Fails if a share's zip is held only to the folder being proven, or registers unchecked.
+     */
+    @Test
+    fun aForgetBetweenAZipsScopeAndItsRegistrationIsSeenThere() = kotlinx.coroutines.runBlocking {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        val bytes = File(File(System.getProperty("user.dir"), "../../../e2e/fixtures/archives"), "basic.zip")
+        val zip = server.file(family.rootId, "notes.zip", bytes.readBytes())
+        server.shareWithMe(zip)
+        server.pinGrace()
+        val root = phone.vault.mountShares().single().root!!
+        val ws = root.node.workspaceId
+        val sessions = ArchiveSessions.shared
+        val late = phone.vault.archiveScope(ws, root.id)
+        phone.vault.forgetWorkspaces(listOf(ws))
+        assertFalse(phone.vault.isFamilyWorkspace(ws))
+        val before = sessions.count
+        val refused = runCatching { sessions.openLocal(FileLocalSource(bytes), scope = late) }.exceptionOrNull()
+        assertTrue("registered across a forget: $refused", refused is FamilyFailure)
+        assertEquals(before, sessions.count)
+
+        val archive = sessions.openLocal(FileLocalSource(bytes), scope = phone.vault.archiveScope(ws, root.id))
+        // Another session's forget of the same folder: this session's zip stays open.
+        sessions.closeWorkspaces(FamilySessionState("another-session"), listOf(ws))
+        assertFalse(archive.closed)
+        phone.vault.forgetWorkspaces(listOf(ws))
+        assertTrue("a forget after it registered left it open", archive.closed)
+    }
+
+    /*
      * #247 check, round 3: after a fork cleared the family, a share refresh can't put the family's file back, and a
      * download of it refuses; nor does a row and key put there any way but the ledger download. Fails if a share mount or
      * a cached row stands in for the ledger.

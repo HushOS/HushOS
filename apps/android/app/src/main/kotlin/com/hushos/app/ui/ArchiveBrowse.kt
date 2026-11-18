@@ -123,6 +123,8 @@ class ArchiveBrowse(
     var asking by mutableStateOf<ArchiveEntry?>(null)
     /* The download whose place the Save dialog is choosing: kept across a rotation. */
     var waitingFor by mutableStateOf<ArchiveEntry?>(null)
+    /* When the Save dialog was asked for it: a document empty and changed since then is one it made (SaveDestination.made). */
+    var pickedAt = 0L
     /* Items whose own password is asked for (the one held didn't open them). */
     val reprompt = mutableStateListOf<UInt>()
     val downloads = mutableStateListOf<EntryDownload>()
@@ -175,21 +177,22 @@ class ArchiveBrowse(
     /*
      * Streams `entry` into the file the person picked (`destination`), nothing of it anywhere else.
      * Opened ("wt": truncated) only at its first piece. A download that fails or is stopped deletes
-     * the file when the Save dialog made it (empty before it began) or when anything was written to
-     * it (a file it replaces is already gone by then, and a part of the entry is never left under
-     * that name); one refused before any piece leaves a replaced file as it was.
+     * the file when the Save dialog is known to have made it for this download (`made`) or when
+     * anything was written to it (a file it replaces is already gone by then, and a part of the entry
+     * is never left under that name); one refused before any piece leaves any other file as it was,
+     * an empty one the person chose to overwrite included.
      */
     fun startDownload(entry: ArchiveEntry, destination: SaveDestination, done: () -> Unit) {
         if (closed || archive == null) { discardIfMade(destination); return }
         val record = EntryDownload(entry)
         downloads.add(record)
         record.job = scope.launch {
-            // Empty when the Save dialog made it for this download (unknown is never taken as made).
+            // Known to be made by the Save dialog for this download; unknown is never taken as made.
             var made: Boolean? = null
             val stream = SaveStream(destination)
             var failure: Throwable? = null
             try {
-                made = withContext(Dispatchers.IO) { destination.size() == 0L }
+                made = withContext(Dispatchers.IO) { destination.made() }
                 val main = archive ?: throw CancellationException("Closed.")
                 val session = main.sibling()
                 try {
@@ -220,10 +223,11 @@ class ArchiveBrowse(
                     val closing = stream.close()
                     // A provider that fails as it commits failed the download, however much was written.
                     if (failure == null && closing.error != null) {
-                        failure = FetchException.Failed(com.hushos.app.data.Problems.say(closing.error, com.hushos.app.data.ArchiveWords.NOT_SAVED))
+                        // As the core says a write that failed, so the bar shows these words, not the generic ones.
+                        failure = ArchiveException.Failed(com.hushos.app.data.Problems.say(closing.error, com.hushos.app.data.ArchiveWords.NOT_SAVED))
                     }
                     // Nothing was written before `made` was known, so it can be asked now when a cancel came first.
-                    if (failure != null && (closing.wrote || (made ?: (destination.size() == 0L)))) destination.delete()
+                    if (failure != null && (closing.wrote || (made ?: destination.made()))) destination.delete()
                 }
             }
             val error = failure
@@ -263,9 +267,9 @@ class ArchiveBrowse(
         record.error.value = failed(error, entry = true)
     }
 
-    /* A picked file no download will fill: deleted if the Save dialog made it (empty), left if it was there before or unknown. */
+    /* A picked file no download will fill: deleted if the Save dialog is known to have made it, left if it was there before or unknown. */
     fun discardIfMade(destination: SaveDestination) {
-        if (destination.size() == 0L) destination.delete()
+        if (destination.made()) destination.delete()
     }
 
     fun stop(record: EntryDownload) {
@@ -305,22 +309,38 @@ class EntryDownload(val entry: ArchiveEntry) {
 
 /* Where a download is saved: the document the Save dialog picked. */
 interface SaveDestination {
-    /* Its size before anything is written: 0 for one the Save dialog made, null when the provider doesn't say. */
-    fun size(): Long?
+    /*
+     * Whether the Save dialog is known to have made it for this download, asked before anything is
+     * written: never for a document the person chose to overwrite, however empty, nor when the
+     * provider doesn't say.
+     */
+    fun made(): Boolean
     /* Opened for writing from its start, truncated ("wt"). */
     fun open(): java.io.OutputStream
     fun delete()
 }
 
-class DocumentDestination(private val resolver: ContentResolver, private val uri: Uri) : SaveDestination {
-    override fun size(): Long? = runCatching {
-        resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { row ->
-            if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null
-        }
-    }.getOrNull()
+/*
+ * The document the Save dialog returned, asked for at `pickedAt`. The dialog makes a new document, or (Android
+ * 10's DocumentsUI and later) hands back one already there that the person chose to overwrite, untouched: only
+ * one empty and last changed since the dialog was asked for is taken as made. A provider that says neither
+ * (or a clock that differs, a cloud's) is never taken as made, so an empty file of the person's is kept.
+ */
+class DocumentDestination(private val resolver: ContentResolver, private val uri: Uri, private val pickedAt: Long) : SaveDestination {
+    override fun made(): Boolean = runCatching {
+        val columns = arrayOf(android.provider.OpenableColumns.SIZE, android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+        resolver.query(uri, columns, null, null, null)?.use { row ->
+            row.moveToFirst() && !row.isNull(0) && row.getLong(0) == 0L && !row.isNull(1) && pickedAt > 0 && row.getLong(1) >= pickedAt - CLOCK_SLACK_MILLIS
+        } ?: false
+    }.getOrDefault(false)
     override fun open(): java.io.OutputStream = resolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("No stream.")
     override fun delete() {
         runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
+    }
+
+    private companion object {
+        /* A file system's times are kept to the second on some providers: a document made as the dialog opened still counts. */
+        const val CLOCK_SLACK_MILLIS = 2_000L
     }
 }
 

@@ -139,7 +139,7 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
         }
     }
     // A zip open from it by a share holds that share's content key: closed now, its downloads with it.
-    ArchiveSessions.shared.closeWorkspaces(proven, nodes = purged)
+    ArchiveSessions.shared.closeWorkspaces(familyState, proven, nodes = purged)
     forgetParents(gone)
 }
 
@@ -419,7 +419,7 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
         }
     }
     // Its zips close now, idle ones included: their keys don't wait for a next call to find the count moved.
-    ArchiveSessions.shared.closeWorkspaces(ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) })
+    ArchiveSessions.shared.closeWorkspaces(familyState, ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) })
     forgetParents(gone)
     return gone
 }
