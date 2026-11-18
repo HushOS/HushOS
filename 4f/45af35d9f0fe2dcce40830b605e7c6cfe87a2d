@@ -1,0 +1,37 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveSessions.kt
+  s_c60e24772e04af::t_bc920fb10f707b 555-560
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_c60e24772e04af::t_30c40f22f986c9 463-468,470,473-474,476-493
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_4f36cf3d4e5857 19,2529-2532
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_a9c31aa5fe0c51 340-345
+e2e/archives.spec.ts
+  s_c60e24772e04af::t_328cc3d4278948 1-9,330,334-341
+apps/android/AGENTS.md
+  s_d47b3779b66102::t_a82b2d8add10c8 680
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4f45af35d9f0fe2dcce40830b605e7c6cfe87a2d",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_d47b3779b66102": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a5e8ebd19861c057a",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
