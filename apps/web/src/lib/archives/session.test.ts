@@ -229,6 +229,51 @@ describe('a stopped preview', () => {
     });
 });
 
+describe('a download paused on its sink beside a stuck preview', () => {
+    it('stops the clock only while every operation waits on the page: the stuck preview is still ended', async () => {
+        vi.useFakeTimers();
+        try {
+            const { openArchive } = await import('./session');
+            const { memoryReader } = await import('@/lib/tools/ranges');
+            const open = async () => {
+                const worker = driven();
+                const session = openArchive(
+                    memoryReader(new Uint8Array(4 << 20)),
+                    () => worker.fake as unknown as Worker,
+                );
+                const item = big(0, 2 << 20);
+                worker.send({ type: 'listing', ...message([item, big(1, 100)]) });
+                await session.listing;
+                // The browser's download is paused: the sink never takes the first chunk.
+                const download = session.download(item as ArchiveEntry, {
+                    write: () => new Promise<void>(() => {}),
+                    close: async () => {},
+                    abort: async () => {},
+                });
+                download.done.catch(() => {});
+                await vi.advanceTimersByTimeAsync(0);
+                const asked = worker.asked.find((message) => message.type === 'download')!;
+                worker.send({ type: 'chunk', id: asked.id, bytes: new ArrayBuffer(1 << 20) });
+                await vi.advanceTimersByTimeAsync(0);
+                return { worker, session };
+            };
+            // The paused download alone: waiting on the page, never the worker's time.
+            const alone = await open();
+            await vi.advanceTimersByTimeAsync(31_000);
+            expect(alone.worker.terminated()).toBe(false);
+            alone.session.close();
+            // Beside it, a preview the worker never answers (a decode that never ends): ended by the watchdog.
+            const beside = await open();
+            const previewing = beside.session.preview(big(1, 100) as ArchiveEntry, 1024);
+            previewing.catch(() => {});
+            await vi.advanceTimersByTimeAsync(31_000);
+            expect(beside.worker.terminated()).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe('a worker cycling one-byte reads across chunks', () => {
     it('is charged each 8 MiB chunk fetched, and stopped once its actions’ allowance is spent', async () => {
         const { openArchive } = await import('./session');

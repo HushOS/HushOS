@@ -263,15 +263,47 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     }
     const broken = () => end(new Error(TOOL_FAILED));
 
+    /*
+     * Operations waiting on the page alone (a download whose chunk the sink is still taking: a browser's
+     * paused download, a slow disk). The clock stops only while every operation under way waits so: a
+     * paused download beside a preview stuck in a decode never keeps the watchdog from ending it.
+     * (Ranges the worker is served, `hold` below, stop it outright: the worker itself waits on them.)
+     */
+    let paused = 0;
+    let pausedHold: (() => void) | null = null;
+    function judgePause() {
+        const all = active > 0 && paused >= active;
+        if (all && !pausedHold) pausedHold = watchdog?.hold() ?? null;
+        else if (!all && pausedHold) {
+            pausedHold();
+            pausedHold = null;
+        }
+    }
+    /* One operation waits on the page; call what it returns when it no longer does. */
+    function pause() {
+        paused++;
+        judgePause();
+        let over = false;
+        return () => {
+            if (over) return;
+            over = true;
+            paused--;
+            judgePause();
+        };
+    }
+
     // While anything is asked of the worker, it must keep reporting progress.
     function begin() {
         if (active++ === 0) watchdog = createWatchdog(TOOL_WATCHDOG_MS, broken);
+        judgePause();
     }
     function idle() {
         if (--active === 0) {
             watchdog?.stop();
             watchdog = null;
+            pausedHold = null;
         }
+        judgePause();
     }
 
     const counted: RangeReader = {
@@ -581,8 +613,9 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                             return;
                         }
                         busy = true;
-                        // Writing the chunk is a wait on the page (or the browser's download), not the worker's time.
-                        const release = watchdog?.hold();
+                        // Writing the chunk is a wait on the page (or the browser's download), not the worker's time:
+                        // this download's alone, so the clock still runs for anything else under way.
+                        const release = pause();
                         writing = writing
                             .then(() => sink.write(new Uint8Array(bytes)))
                             .then(

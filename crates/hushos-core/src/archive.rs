@@ -979,7 +979,17 @@ pub(crate) fn list_entries(entries: &mut [Entry]) -> Result<(Vec<ArchiveEntry>, 
             from = end;
         }
         depth[i] = parts as u16;
-        if parts > LIST_DEPTH_MAX || (parts == 0 && !entry.directory) {
+        let mac = next_part(&entry.path, 0).is_some_and(|(start, end)| &entry.path[start..end] == "__MACOSX");
+        // A Mac resource entry first, however deep: under a top __MACOSX it is hidden, never listed flat at the top.
+        if parts > LIST_DEPTH_MAX && mac {
+            hidden[i] = true;
+            // Named by its last part, as one found level by level is.
+            let mut from = 0;
+            while let Some(span) = next_part(&entry.path, from) {
+                name[i] = span;
+                from = span.1;
+            }
+        } else if parts > LIST_DEPTH_MAX || (parts == 0 && !entry.directory) {
             name[i] = (0, entry.path.len());
             flat.push(i as u32);
         } else if parts > 0 {

@@ -623,9 +623,14 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         /* Settles when the reader closes: a drain waiting on a tool's padding is let go of then. */
         let released!: () => void;
         const closing = new Promise<void>((resolve) => (released = resolve));
-        /* Rejects when the reader closes: a read waiting on a chunk (its RPC, a connection back) ends then. */
-        const closedRead = closing.then(() => Promise.reject(new Error('The preview was closed.')));
-        closedRead.catch(() => {});
+        /*
+         * The reads waiting now, each by what ends it: a close ends them (a chunk's RPC, a connection back,
+         * may never come). One per read, dropped as the read settles. Never a race against one promise
+         * shared by every read: each race adds a reaction to it, and JavaScriptCore keeps every winning
+         * result (the decrypted chunks) reachable through those reactions until the shared promise settles,
+         * so a long read on Safari held the whole file until the close.
+         */
+        const waiting = new Set<(error: Error) => void>();
         let fetches = 0;
         function fetchOne(index: number) {
             if (options.tool && !options.uncapped && ++fetches > TOOL_FETCH_FACTOR * source.total)
@@ -690,12 +695,20 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 const last = Math.floor((end - 1) / CHUNK_SIZE);
                 // A close ends the wait at once: whoever holds what was read before (readAll's buffer) lets go now,
                 // not when a chunk that may never come (offline) comes.
-                const pieces = await Promise.race([
-                    Promise.all(
-                        Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
-                    ),
-                    closedRead,
-                ]);
+                let stop!: (error: Error) => void;
+                const stopped = new Promise<never>((_, reject) => (stop = reject));
+                waiting.add(stop);
+                let pieces: Uint8Array[];
+                try {
+                    pieces = await Promise.race([
+                        Promise.all(
+                            Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
+                        ),
+                        stopped,
+                    ]);
+                } finally {
+                    waiting.delete(stop);
+                }
                 const out = new Uint8Array(end - offset);
                 let written = 0;
                 for (let i = 0; i < pieces.length; i++) {
@@ -726,6 +739,8 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 // for after, so a lock while offline holds no decrypted bytes meanwhile.
                 closed = true;
                 released();
+                for (const stop of waiting) stop(new Error('The preview was closed.'));
+                waiting.clear();
                 cache.clear();
                 tail = null;
                 listeners.clear();

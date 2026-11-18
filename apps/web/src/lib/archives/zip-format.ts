@@ -782,7 +782,16 @@ export function listEntries(entries: ZipEntry[]): { listed: Listed[]; folders: F
         )
             parts++;
         depth[i] = parts;
-        if (parts > LIST_DEPTH_MAX || (parts === 0 && !entry.directory)) {
+        const first = nextPart(entry.path, 0);
+        // A Mac resource entry first, however deep: under a top __MACOSX it is hidden, never listed flat at the top.
+        if (parts > LIST_DEPTH_MAX && sameName(entry.path, first, partEnd, '__MACOSX', 0, 8)) {
+            hidden[i] = 1;
+            // Named by its last part, as one found level by level is.
+            for (let at = first; at >= 0; at = nextPart(entry.path, partEnd)) {
+                nameAt[i] = at;
+                nameEnd[i] = partEnd;
+            }
+        } else if (parts > LIST_DEPTH_MAX || (parts === 0 && !entry.directory)) {
             flat[i] = 1;
             nameEnd[i] = entry.path ? entry.path.length : 1;
             flats.push(i);

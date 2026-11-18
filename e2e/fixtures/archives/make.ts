@@ -1447,6 +1447,8 @@ function macosxNameFixture() {
         { name: '__MACOSX', data: utf8('a file, not the resource folder\n'), method: 0 },
         { name: 'note.txt', data: utf8('note\n') },
         { name: '__MACOSX/._note.txt', data: utf8('resource fork\n') },
+        // Deeper than the 256 parts listed as folders: still a Mac resource entry, hidden, never flat at the top.
+        { name: `__MACOSX/${'d/'.repeat(300)}._deep.txt`, data: utf8('resource fork\n') },
     ]);
 }
 
@@ -1609,6 +1611,23 @@ function ambiguousFixture() {
     fake.u16(tail);
     const data = concat([body, fake.done()]);
     return writeRaw([{ name, packed: data, size: data.length, crc: crc32(data), method: 0 }]);
+}
+
+/*
+ * A locked entry too short for its 12-byte header, smallest so an unlock tries it first: damaged,
+ * on every client, never a wrong password, so the unlock goes on to the whole entry after it.
+ */
+function lockedShortFixture() {
+    const whole = zipCryptoEncrypt(FOX, PASSWORD, crc32(FOX) >>> 24, fixed(311, 12));
+    const locked = (name: string, packed: Uint8Array): Raw => ({
+        name,
+        packed,
+        size: FOX.length,
+        crc: crc32(FOX),
+        method: 0,
+        flags: 1,
+    });
+    return writeRaw([locked('short.txt', whole.slice(0, 11)), locked('fox.txt', whole)]);
 }
 
 /* ZipCrypto with a data descriptor's check byte (from the time) and stored; AES at every strength, AE-1 and AE-2, stored and deflated. */
@@ -1790,6 +1809,7 @@ export const FIXTURES: Fixture[] = [
     { name: 'descriptor-overlap.zip', large: false, build: descriptorOverlapFixture },
     { name: 'descriptor-crc.zip', large: false, build: descriptorCrcFixture },
     { name: 'macosx-name.zip', large: false, build: macosxNameFixture },
+    { name: 'locked-short.zip', large: false, build: lockedShortFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },

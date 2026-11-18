@@ -1274,9 +1274,35 @@
                 }
             ]
         },
+        "locked-short.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "unlock": {
+                "right": true,
+                "wrong": false
+            },
+            "entries": [
+                {
+                    "path": "short.txt",
+                    "lock": "zipcrypto",
+                    "check": "damaged",
+                    "download": "damaged",
+                    "withoutPassword": "password",
+                    "wrongPassword": "damaged"
+                },
+                {
+                    "path": "fox.txt",
+                    "lock": "zipcrypto",
+                    "check": "ok",
+                    "download": "ok",
+                    "withoutPassword": "password",
+                    "wrongPassword": "wrong-password"
+                }
+            ]
+        },
         "macosx-name.zip": {
             "listing": "ok",
-            "hidden": 1,
+            "hidden": 2,
             "entries": [
                 {
                     "path": "__MACOSX",
@@ -1291,6 +1317,12 @@
                 },
                 {
                     "path": "__MACOSX/._note.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "hidden": true
+                },
+                {
+                    "path": "__MACOSX/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/._deep.txt",
                     "check": "ok",
                     "download": "ok",
                     "hidden": true

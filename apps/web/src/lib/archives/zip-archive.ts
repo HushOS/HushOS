@@ -359,6 +359,14 @@ export class ZipArchive {
         // Stored and plain, the bytes are the entry: more or fewer than declared is known at once.
         if (entry.method === 0 && entry.lock === 'none' && entry.packed !== entry.size)
             throw new ZipError(entry.packed > entry.size ? 'size' : 'short');
+        // Too short for its own encryption header (ZipCrypto's 12 bytes; AES's salt, check and code):
+        // damaged, as the core says, never left to zip.js, which reads past it and calls the password
+        // wrong. An unlock then tries the next entry rather than giving up on the password.
+        if (entry.lock === 'zipcrypto' && entry.packed < 12) throw new ZipError('damaged');
+        if (entry.lock === 'aes') {
+            const salt = entry.aes?.strength === 1 ? 8 : entry.aes?.strength === 2 ? 12 : 16;
+            if (entry.packed < salt + 2 + 10) throw new ZipError('damaged');
+        }
         const counter = new InflateCounter(entry.size, options.ratio);
         let found: FileEntry;
         try {
