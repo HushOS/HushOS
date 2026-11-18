@@ -1,0 +1,25 @@
+apps/web/src/components/drive/archive-view.tsx
+  s_c60e24772e04af::t_be90ef9b5ca548 76-77,85-87,311-312,754-762,770-772,775-776,778
+apps/web/src/lib/archives/rows.ts
+  s_c60e24772e04af::t_6595c81ec701b7 33-34,38,43,47
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_d0664931b8f414 572-593
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_b69f713224baf4 579-586,588-594
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "88c5c6231bca45d1262eb4bdfb37945771671c5d",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
