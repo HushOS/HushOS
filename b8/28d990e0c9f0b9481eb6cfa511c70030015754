@@ -1,0 +1,21 @@
+apps/web/src/components/drive/virtual-list.tsx
+  s_c60e24772e04af::t_8cca216c9e2d16 17,177-179,181,235-243,251-252,254-263,265-269,271-286,292-310,318-330,334,338-342,344,347-352,355-370,374,379,384-387,392-399,402,405-416,418-419,425-428,430-436,438,441-452,455-477,486-487,491-495,498-499,501-502,504,506-518,548-551
+e2e/long-list.spec.ts
+  s_c60e24772e04af::t_e01a3908089a2b 171-180,435-498,688-738
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b828d990e0c9f0b9481eb6cfa511c70030015754",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
