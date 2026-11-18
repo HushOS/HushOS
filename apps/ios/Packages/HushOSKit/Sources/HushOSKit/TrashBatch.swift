@@ -310,6 +310,8 @@ public enum TrashBatch {
             if status == 404 { throw DriveAPIError.notFound(message ?? "This item no longer exists.") }
             // A family manager paused changes: nothing ended (DriveAPI's `held`, as the single routes say it).
             if status == 403, code == "held" { throw DriveAPIError.held(message ?? "A group manager has paused changes to this folder.") }
+            // Any other coded 403 is the API refusing the write, as the single routes read it (DriveAPI.perform): lost access.
+            if status == 403, code != nil { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, code == "conflict" { throw RequestRefusal.busy }
             if status == 429 { throw RequestRefusal.tooMany }
             if status == 413 { throw RequestRefusal.tooLarge }

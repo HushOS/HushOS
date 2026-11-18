@@ -650,6 +650,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
             error.status == 409 && error.data?.optString("upload") == "completed" -> Reservations.Abort.COMPLETED
             // A server from before `data.upload` says so only in words.
             error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            // A family manager's pause refused it: nothing ended, and the reservation stays (asked again later).
+            error.status == 403 && error.code == "held" -> Reservations.Abort.PENDING
             error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
             else -> Reservations.Abort.PENDING
         }

@@ -176,6 +176,26 @@ import Testing
         #expect(throws: TrashBatch.RequestRefusal.busy) { try reply(409, #"{"message":"Too many changes","code":"conflict"}"#) }
         #expect(throws: TrashBatch.RequestRefusal.tooMany) { try reply(429, #"{"message":"Too many requests.","code":"conflict"}"#) }
         #expect(throws: TrashBatch.RequestRefusal.tooLarge) { try reply(413, #"{"message":"Request is too large.","code":"too-large"}"#) }
+        // A coded 403 is the API refusing the write, as the single routes read it: lost access (a clean-up settles its row),
+        // a held one is the family's pause, and an uncoded one (the store's) stays a server answer.
+        #expect {
+            try reply(403, #"{"message":"You can’t change this.","code":"forbidden"}"#)
+        } throws: { error in
+            if case DriveAPIError.forbidden = error { return true }
+            return false
+        }
+        #expect {
+            try reply(403, #"{"message":"Paused.","code":"held"}"#)
+        } throws: { error in
+            if case DriveAPIError.held = error { return true }
+            return false
+        }
+        #expect {
+            try reply(403, #"{"message":"Expired."}"#)
+        } throws: { error in
+            if case DriveAPIError.server(403, _) = error { return true }
+            return false
+        }
         let answers = try reply(200, #"{"results":[{"id":"a","status":"trashed","trashedAt":"t","changeSeq":7},{"id":"b","status":"covered","by":"a"},{"id":"c","status":"refused","reason":"root","message":"No"},{"id":"d","status":"restored","changeSeq":9}]}"#)
         #expect(answers == [.trashed(id: "a", changeSeq: 7), .covered(id: "b", by: "a"), .refused(id: "c", reason: "root", message: "No"), .restored(id: "d", changeSeq: 9)])
         #expect(throws: DriveAPIError.self) { try reply(200, "<html>") }

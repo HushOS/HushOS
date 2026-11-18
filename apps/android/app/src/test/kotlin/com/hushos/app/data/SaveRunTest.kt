@@ -40,9 +40,10 @@ import java.util.concurrent.TimeUnit
  * written after a sign-out.
  */
 class SaveRunTest {
-    private fun opened(id: String, parent: String? = "root", version: String? = null, keyEpoch: ULong = 1uL, name: String = id): Opened {
+    private fun opened(id: String, parent: String? = "root", version: String? = null, keyEpoch: ULong = 1uL, name: String = id,
+                       workspace: String = "ws"): Opened {
         val current = version?.let { VersionView(it, "o", "", "ready", 3u, 1, "n", null, null, null) }
-        val node = NodeView(id, "ws", parent, if (version == null) "folder" else "file", keyEpoch, 1uL, "", 1uL, "", current, null, null, null)
+        val node = NodeView(id, workspace, parent, if (version == null) "folder" else "file", keyEpoch, 1uL, "", 1uL, "", current, null, null, null)
         return Opened(node, NodeMetadata(name, null, null, null, emptyMap()))
     }
 
@@ -1395,6 +1396,65 @@ class SaveRunTest {
         }
     }
 
+    /* A journal file it can't read is never written over: the other runs' rows in it stay, and every write is refused. */
+    @Test
+    fun anUnreadableJournalIsNeverWrittenOver() {
+        val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
+        val rows = SaveRunJournal(file, SaveRunJournal.Epoch())
+        val other = SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        rows.put(other)
+        // Cut short (a write torn by something outside this app), or unreadable: not "no rows".
+        val torn = file.readText().dropLast(5)
+        file.writeText(torn)
+        assertThrows(SaveJournalUnreadable::class.java) { rows.list() }
+        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-y"), emptyList(), 1L, "l")) }
+        assertFalse(rows.retire(other))
+        assertFalse(rows.swap(other, null))
+        rows.dropDone()
+        assertEquals(torn, file.readText())
+        // A run refuses to start rather than publish what no row names.
+        assertThrows(SaveRunStopped::class.java) { SaveRun.start(FakeWriter(), listOf(opened("f")), emptyList(), rows) }
+        assertEquals(torn, file.readText())
+        // Only a journal that isn't there is empty.
+        file.delete()
+        assertEquals(emptyList<SaveRunRow>(), rows.list())
+    }
+
+    /* A raw failure's own text (a path, a parser's words) is never what a stopped run says; the server's and the app's words are. */
+    @Test
+    fun aRawFailureIsNeverSaidInItsOwnWords() {
+        val writer = FakeWriter()
+        writer.folderAnswers.addLast { throw IllegalStateException("/data/user/0/com.hushos.app/files/save-runs.json: open failed: EACCES") }
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), journal())
+        val stopped = assertThrows(SaveRunStopped::class.java) { run.folder("Out", own) }
+        assertFalse(stopped.message.orEmpty().contains("/data"))
+        assertEquals(SaveRuns.words(SaveRunStopped.Reason.FAILED, false, null, 0), stopped.message)
+        // The server's own sentence is still said.
+        assertEquals("Not allowed here.", SaveRuns.reason(ApiError(403, "Not allowed here.")))
+        assertEquals(null, SaveRuns.reason(java.io.IOException("/data/x: ENOSPC")))
+    }
+
+    /* A result asked into another Drive than the run's is refused before anything is listed, minted or sent. */
+    @Test
+    fun aResultIntoAnotherDriveThanTheRunsIsRefusedBeforeAnythingIsSent() {
+        val writer = FakeWriter()
+        val rows = journal()
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        val elsewhere = opened("b", workspace = "ws-other")
+        assertEquals(SaveRuns.OUTSIDE_RUN, assertThrows(SaveRunRefusal::class.java) { run.file(byteArrayOf(1), "a", null, own, folder = elsewhere) }.message)
+        assertEquals(SaveRuns.OUTSIDE_RUN, assertThrows(SaveRunRefusal::class.java) { run.folder("Out", own, elsewhere) }.message)
+        assertEquals(SaveRuns.OUTSIDE_RUN, assertThrows(SaveRunRefusal::class.java) {
+            run.version(byteArrayOf(1), opened("doc", "b", version = "v1", workspace = "ws-other"), elsewhere, "v1", own)
+        }.message)
+        assertTrue(writer.uploads.isEmpty())
+        assertTrue(writer.folderEpochs.isEmpty())
+        assertEquals(emptyList<String>(), rows.list().single().nodeIds)
+        // The run itself goes on.
+        run.file(byteArrayOf(1), "b", null, own)
+        assertEquals(1, writer.uploads.size)
+        run.cancel()
+    }
+
     /* A sign-out while a stop waits for a folder's creation: nothing more is asked of the server, and it says what may stay. */
     @Test
     fun aSignOutWhileAStopWaitsSendsNothingMoreAndSaysWhatMayStay() {
@@ -1573,6 +1633,46 @@ class SaveResultTest {
         server.extraRoutes = null
     }
 
+    /* A run that stops while its completion is being sent again (the first answer lost) sends it no more, and aborts nothing blind. */
+    @Test
+    fun aRunThatStopsWhileACompletionIsRetriedSendsItNoMore() {
+        val before = Resumable.pause
+        Resumable.pause = {}
+        try {
+            // Every completion's answer lost: it is asked again after a pause.
+            server.dropReply = { method, path -> method == "POST" && path.endsWith("/complete") }
+            var asked = 0
+            val thrown = runCatching {
+                vault.uploadResult("tool output".toByteArray(), "out.txt", "text/plain", server.root, null, null, copy = null,
+                    onCompleting = { if (asked++ > 0) throw IllegalStateException("This save run is stopping.") })
+            }.exceptionOrNull()
+            assertTrue(thrown.toString(), thrown is IllegalStateException)
+            assertEquals(2, asked)
+            assertEquals(1, server.requests.count { it.endsWith("/complete") })
+            // The first send may have landed: never aborted blind.
+            assertTrue(server.requests.none { it.endsWith("/abort") })
+        } finally {
+            Resumable.pause = before
+            server.dropReply = null
+        }
+    }
+
+    /* The vault's writer refuses a destination it holds under another workspace than the one asked, before anything is sent. */
+    @Test
+    fun aDestinationNotHeldUnderItsOwnWorkspaceIsRefusedBeforeAnythingIsSent() {
+        vault.listChildren(server.root)
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val sent = server.requests.size
+        // The own root's id, named as another workspace's row.
+        val real = vault.resolve(server.root)
+        val shared = Opened(real.node.copy(workspaceId = "0b6c0f4e-0000-4000-8000-00000000beef"), real.metadata)
+        assertThrows(FamilyFailure::class.java) { writer.makeFolder(shared, "Out", null) {} }
+        assertThrows(FamilyFailure::class.java) {
+            writer.uploadResult(byteArrayOf(1), "a", null, shared, null, null, null, null, onBegun = {}, onCompleting = {})
+        }
+        assertEquals(sent, server.requests.size)
+    }
+
     /* A family manager's pause answers 403 `held`: the save path reads it as held, never as lost access (DENIED). */
     @Test
     fun aHeldAnswerIsHeldNeverLostAccess() {
@@ -1589,6 +1689,8 @@ class SaveResultTest {
         assertEquals(mapOf("node-x" to SaveItemFate.HELD), writer.trash(listOf("node-x"), vault.workspaceId))
         assertEquals(mapOf("node-x" to SaveItemFate.HELD), writer.purge(listOf("node-x"), vault.workspaceId))
         assertEquals(SaveAbortFate.HELD, vault.api.abortUploadFate("up-x", vault.workspaceId))
+        // The reservations ledger keeps it too: nothing ended, asked again after the hold (never taken for gone).
+        assertEquals(Reservations.Abort.PENDING, vault.api.abortUpload("up-x", vault.workspaceId))
         server.extraRoutes = null
     }
 
@@ -1678,6 +1780,26 @@ class SaveResultTest {
         assertEquals(version, server.node(id).metadataVersion)
         assertEquals(envelope, server.node(id).metadataEnvelope)
         assertFalse(server.requests.drop(sent).any { it.contains("/nodes/$id/metadata") })
+    }
+
+    /*
+     * A tool's new version of a file another device renamed while it went up: the name is theirs, as the server serves it,
+     * never the one the upload began from (and nothing is signed again). Fails if the old name is kept for the newer record.
+     */
+    @Test
+    fun aToolsNewVersionOfAFileRenamedMeanwhileTakesTheServersName() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        var renamed = false
+        server.beforeAnswer = { method, path ->
+            if (!renamed && method == "PUT" && path.startsWith("/store/")) { renamed = true; server.renameAs(id, "renamed.txt") }
+        }
+        val landed = vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, doc.node.currentVersion!!.id, copy = null)
+        server.beforeAnswer = null
+        assertTrue(renamed)
+        assertEquals("renamed.txt", landed.name)
+        assertEquals("renamed.txt", vault.resolve(id).name)
+        assertEquals(server.node(id).metadataVersion.toULong(), landed.node.metadataVersion)
     }
 
     /* A sign-out during the first of two trash batches sends no second; a purge or an abort sends nothing after it either. */

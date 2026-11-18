@@ -119,6 +119,9 @@ actor FakeWriter: SaveRunWriter {
     func makeLive(_ id: String) { live.insert(id) }
     func set(namesFail: Bool) { self.namesFail = namesFail }
     func set(uploading: @escaping @Sendable () async -> Void) { self.uploading = uploading }
+    /* A completion whose reply names another item than the one written. */
+    var landedAs: String?
+    func set(landedAs: String?) { self.landedAs = landedAs }
     func uploadResult(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing: Opened?, startedFrom: String?, thumbnail: Data?,
                       signing: (metadata: Signing, version: Signing), onBegun: @escaping @Sendable (Vault.BegunIds) throws -> Void,
                       onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
@@ -157,7 +160,7 @@ actor FakeWriter: SaveRunWriter {
         await landing?()
         finish("up-\(n)")
         if replacing == nil { live.insert(nodeId) }
-        return opened(nodeId, parent: folder.id)
+        return opened(landedAs ?? nodeId, parent: folder.id)
     }
     func refreshFolder(_ folder: Opened) async throws -> Opened {
         refreshes += 1
@@ -235,12 +238,13 @@ actor FakeWriter: SaveRunWriter {
     }
 }
 
-func opened(_ id: String, parent: String? = "root", version: String? = nil, keyEpoch: UInt64 = 1, name: String? = nil) -> Opened {
+func opened(_ id: String, parent: String? = "root", version: String? = nil, keyEpoch: UInt64 = 1, name: String? = nil,
+            workspace: String = "ws") -> Opened {
     let current = version.map {
         VersionView(id: $0, objectId: "o", contentKeyEnvelope: "", status: "ready", contentSuite: 3, chunkCount: 1, contentNonce: "",
                     plaintextSize: nil, ciphertextSize: nil, readyAt: nil)
     }
-    let node = NodeView(id: id, workspaceId: "ws", parentId: parent, kind: version == nil ? "folder" : "file", keyEpoch: keyEpoch, parentKeyEpoch: 1,
+    let node = NodeView(id: id, workspaceId: workspace, parentId: parent, kind: version == nil ? "folder" : "file", keyEpoch: keyEpoch, parentKeyEpoch: 1,
                         keyEnvelope: "", metadataVersion: 1, metadataEnvelope: "", currentVersion: current, trashedAt: nil, changeSeq: 1,
                         createdAt: nil, updatedAt: nil)
     return Opened(node: node, metadata: NodeMetadata(name: name ?? id, mime: nil, size: nil, modified: nil, attributes: [:]), nodeKey: nil)
@@ -362,6 +366,88 @@ let own = SaveSources.ownWriting
         await gone.set(fresh: nil)
         let next = try await SaveRun.start(writer: gone, targets: [doc], results: [], journal: journal(), pause: { _ in })
         #expect(try await next.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own) == .stale(currentVersionId: nil))
+    }
+
+    /* A journal file it can't read is never written over or removed: the other runs' rows in it stay, and writes are refused. */
+    @Test func anUnreadableJournalIsNeverWrittenOver() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("save-runs-\(UUID().uuidString).json")
+        let rows = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch())
+        let other = SaveRunRow(id: "other", workspaceId: "ws", nodeIds: ["node-x"], uploadIds: [], at: Date(), launch: "an-earlier-launch")
+        try rows.put(other)
+        // Cut short (a write torn by something outside this app): not "no rows", and not another account's file.
+        let torn = try Data(contentsOf: url).dropLast(5)
+        try torn.write(to: url)
+        #expect(throws: SaveUnrecorded.self) { try rows.put(SaveRunRow(id: "next", workspaceId: "ws", nodeIds: [], uploadIds: [], at: Date(), launch: "l")) }
+        #expect(!rows.retire(other))
+        #expect(!rows.swap(other, nil))
+        rows.dropDone()
+        #expect(rows.list().isEmpty)
+        #expect(try Data(contentsOf: url) == torn)
+        // A run refuses to start rather than publish what no row names.
+        await #expect(throws: SaveRunStopped.self) { _ = try await SaveRun.start(writer: FakeWriter(), targets: [opened("f")], results: [], journal: rows) }
+        #expect(try Data(contentsOf: url) == torn)
+        // Another account's file, read whole, is still dropped.
+        let theirs = SaveRunJournal(url: url, epoch: SaveRunJournal.Epoch(), owner: AccountOwner(userId: "someone-else", origin: "https://drive.test"))
+        try FileManager.default.removeItem(at: url)
+        try theirs.put(other)
+        #expect(rows.list().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+    }
+
+    /* An abort a family manager's pause refused keeps its upload's id: the quiet settle never drops it, and the hold lifting does. */
+    @Test func anAbortAPauseRefusedKeepsItsIdUntilTheHoldLifts() async throws {
+        let rows = journal()
+        let left = SaveRunRow(id: "r", workspaceId: "ws", nodeIds: [], uploadIds: ["up-a"], at: Date(), launch: "an-earlier-launch")
+        try rows.put(left)
+        let writer = FakeWriter()
+        await writer.set(held: true)
+        #expect(await SaveRuns.interrupted(writer: writer, journal: rows).isEmpty)
+        await SaveRuns.quietlySettled()
+        #expect(rows.list().first?.uploadIds == ["up-a"])
+        await writer.set(held: false)
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        await SaveRuns.quietlySettled()
+        #expect(rows.list().isEmpty)
+        #expect(DriveAPI.AbortFate.held.unsettled)
+        #expect(!DriveAPI.AbortFate.denied.unsettled)
+    }
+
+    /* A result asked into another Drive than the run's is refused before anything is listed, minted or sent. */
+    @Test func aResultIntoAnotherDriveThanTheRunsIsRefusedBeforeAnythingIsSent() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let elsewhere = opened("b", workspace: "ws-other")
+        await #expect(throws: SaveRunRefusal(message: SaveRuns.outsideRun)) {
+            _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own, in: elsewhere)
+        }
+        await #expect(throws: SaveRunRefusal(message: SaveRuns.outsideRun)) { _ = try await run.folder("Out", in: elsewhere, sources: own) }
+        await #expect(throws: SaveRunRefusal(message: SaveRuns.outsideRun)) {
+            _ = try await run.version(Data([1]), of: opened("doc", parent: "b", version: "v1", workspace: "ws-other"), in: elsewhere,
+                                      startedFrom: "v1", sources: own)
+        }
+        #expect(await writer.uploads.isEmpty)
+        #expect(await !writer.live.contains("made-Out"))
+        #expect(rows.list().first?.nodeIds ?? [] == [])
+        // The run itself goes on.
+        _ = try await run.file(Data([1]), name: "b", mime: nil, sources: own)
+        #expect(await writer.uploads.count == 1)
+        _ = await run.cancel()
+    }
+
+    /* A completion naming another node than the one written stops the run, and that node is never deleted. */
+    @Test func aCompletionNamingAnotherNodeStopsTheRunAndNeverDeletesIt() async throws {
+        let writer = FakeWriter()
+        await writer.makeLive("node-theirs")
+        await writer.set(landedAs: "node-theirs")
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        let stopped = await #expect(throws: SaveRunStopped.self) { _ = try await run.file(Data([1]), name: "a", mime: nil, sources: own) }
+        #expect(stopped?.reason == .failed)
+        #expect(await !writer.purged.contains("node-theirs"))
+        #expect(await !writer.trashed.contains("node-theirs"))
+        // What this run minted is what its clean-up removed.
+        #expect(await writer.purged.contains("node-1"))
     }
 
     @Test func aCancelDeletesForeverWhatWasPublishedAndTheRowGoes() async throws {
@@ -769,6 +855,22 @@ let own = SaveSources.ownWriting
         } catch let stopped as SaveRunStopped {
             #expect(stopped.message.hasPrefix(DriveAPIError.transport("The network connection was lost.").localizedDescription.trimmingCharacters(in: .whitespaces)))
         }
+    }
+
+    /* A raw failure's own text (a path, a framework's words) is never what a stopped run says; the app's words are. */
+    @Test func aRawFailureIsNeverSaidInItsOwnWords() async throws {
+        struct Raw: LocalizedError {
+            var errorDescription: String? { "The file “/private/var/mobile/Containers/Data/x.json” couldn’t be opened." }
+        }
+        let writer = FakeWriter()
+        await writer.folderAnswer { throw Raw() }
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: journal())
+        let stopped = await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+        #expect(stopped?.message.contains("/private") == false)
+        #expect(stopped?.message == SaveRuns.words(.failed, shared: false, failure: nil, kept: 0))
+        // Its words are read as the app's own (WordedError), never lost to a generic line.
+        #expect(ErrorWords.say(stopped!) == stopped!.message)
+        #expect(ErrorWords.say(SaveRunRefusal(message: SaveRuns.outsideRun)) == SaveRuns.outsideRun)
     }
 
     /* A cancel that overtakes a folder's creation waits for its answer: a folder made after the clean-up looked is still removed. */
@@ -1655,6 +1757,50 @@ extension OnFakeDrive {
             #expect(after.metadataVersion == before.metadataVersion)
             #expect(after.metadataEnvelope == before.metadataEnvelope)
             #expect(landed.name == g.name)
+        }
+
+        /*
+         * A tool's new version of a file another device renamed while it went up: the name is theirs, as the server serves
+         * it, never the one the upload began from (and nothing is signed again). Fails if the old name is kept for the newer record.
+         */
+        @Test func aToolsNewVersionOfAFileRenamedMeanwhileTakesTheServersName() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            server.beforeComplete = { try? server.renamedElsewhere(server.g, to: "renamed.txt") }
+            let landed = try await vault.uploadResult(Data([1, 2]), name: g.name, mime: nil, in: b.id, replacing: g,
+                                                      startedFrom: g.node.currentVersion!.id, signing: (.own, .own))
+            server.beforeComplete = nil
+            #expect(landed.name == "renamed.txt")
+            #expect(landed.node.metadataVersion == g.node.metadataVersion + 1)
+            #expect(try await vault.resolve(server.g).name == "renamed.txt")
+        }
+
+        /*
+         * A destination the vault holds under another workspace than the one asked (the own Drive's folder of the same id, say)
+         * is refused before anything is minted or sent: a save never lands in another Drive than its run's.
+         */
+        @Test func aDestinationNotHeldUnderItsOwnWorkspaceIsRefusedBeforeAnythingIsSent() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let writes = Locked(0)
+            server.intercept = { method, _, _ in
+                if method != "GET" { writes.value += 1 }
+                return nil
+            }
+            // The own folder's id, named as another workspace's row.
+            let shared = opened(server.b, workspace: "0b6c0f4e-0000-4000-8000-00000000beef")
+            await #expect(throws: IdCollision.self) {
+                _ = try await vault.makeFolder(in: shared, name: "Out", signing: .own, minted: { _ in })
+            }
+            await #expect(throws: IdCollision.self) {
+                _ = try await vault.uploadResult(Data([1]), name: "a", mime: nil, in: shared, replacing: nil, startedFrom: nil, thumbnail: nil,
+                                                 signing: (.own, .own), onBegun: { _ in }, onCompleting: { _ in })
+            }
+            #expect(writes.value == 0)
+            server.intercept = nil
         }
 
         /* A sign-out during the first of two trash batches sends no second; a purge or an abort sends nothing after it either. */

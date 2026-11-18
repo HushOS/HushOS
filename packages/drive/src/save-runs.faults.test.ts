@@ -328,7 +328,7 @@ function processOf(
                 if (h.over) return;
                 landed = await call('attach', () => srv.complete(uploadId, sibling), refuse);
             } else landed = await call('complete', () => srv.complete(uploadId), refuse);
-            end('done', { node: { id: landed } as NodeView });
+            end('done', { node: { id: landed, workspaceId: 'ws' } as NodeView });
         } catch (error) {
             end('failed', {
                 error: error instanceof Error ? error.message : 'failed',

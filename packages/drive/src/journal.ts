@@ -173,6 +173,11 @@ export type RunRow = {
      */
     chosen?: 'delete' | 'keep';
     holds?: number;
+    /*
+     * When a Delete claimed the row, in one journal transaction, just before it trashed anything
+     * (a tab without Web Locks): a Keep meanwhile says the Delete is under way, never "kept".
+     */
+    deleting?: number;
 };
 
 export interface RunJournal {

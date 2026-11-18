@@ -2283,8 +2283,14 @@ class Vault(internal val context: Context, val api: DriveApi) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw error
         }
+        // Each send after the first is asked of the run again: one that stopped during a retry's pause sends nothing more (the
+        // first send may have landed, so nothing is aborted blind either: UploadFinish throws such a refusal on).
+        var sends = 0
         var node = try {
-            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { abortReserved(begun.uploadId, ws) })
+            UploadFinish.complete({
+                if (sends++ > 0) onCompleting(begun.uploadId)
+                refusedHere { api.completeUpload(begun.uploadId, ws, etags) }
+            }, { abortReserved(begun.uploadId, ws) })
         } catch (refused: UploadFinish.RefusedHere) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw refused.cause!!
@@ -2343,6 +2349,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
                              keptName: Integrity?, mime: String?, size: ULong, modified: String, keepName: Boolean = false): Opened {
         var node = landed
         checkWritten(node, ws, nodeId)
+        // A tool's new version keeps the name record as it is: one another device changed while the version went up is the
+        // server's now, opened as it is served (its signature checked), never kept with the name this upload began from.
+        if (keepName && replacing != null && node.metadataVersion != replacing.node.metadataVersion) {
+            val served = if (isFamilyWorkspace(ws)) openListed(node) else open(node, replace = true)
+            return served.also { foldersChanged(listOf(it.node.parentId)) }
+        }
         var final = metadata
         if (replacing != null && !keepName) {
             // The name is signed again only while the family write still stands (its reply gate, before anything is sealed).

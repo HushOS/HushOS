@@ -468,6 +468,8 @@ const pendingKeyChange = () => new DriveApiError(KEY_CHANGE_PENDING, 'rotating',
 /* An abort refused with an answer that settles it: gone, no longer this person's, or finished. */
 function abortSettled(failure: unknown) {
     if (!(failure instanceof DriveApiError)) return false;
+    // A family manager's pause refused it: nothing ended, and the reservation stays.
+    if (failure.status === 403 && failure.code === 'held') return false;
     if ([401, 403, 404].includes(failure.status)) return true;
     return (
         failure.status === 409 &&

@@ -2045,6 +2045,34 @@ describe('produced results', () => {
         expect(h.item(id!).stale).toEqual({ currentVersionId: 'v-theirs', released: false });
     });
 
+    test('a stale version whose abort a family manager’s pause refused is not released', async () => {
+        let current = 'v1';
+        const h = harness({
+            serverVersion: () => current,
+            ...listedAt(() => current),
+            encryptHold: () => void (current = 'v-theirs'),
+        });
+        Object.assign(h.api, {
+            abortUpload: async () => {
+                throw new DriveApiError(
+                    'A group manager has paused changes to this folder.',
+                    'held',
+                    403,
+                );
+            },
+        });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).stale).toEqual({ currentVersionId: 'v-theirs', released: false });
+    });
+
     test('the same race, uploaded as a dropped file is, still becomes a conflict copy', async () => {
         let current = 'v1';
         const h = harness({

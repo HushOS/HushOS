@@ -367,7 +367,15 @@ public final class DriveAPI: Sendable {
      * person's any more), or unknown (no answer).
      */
     /* `held`: a family manager paused changes (403 `held`): nothing ended, asked again after the hold. */
-    public enum AbortFate: Sendable, Equatable { case aborted, gone, finished, finishing, denied, held, unknown }
+    public enum AbortFate: Sendable, Equatable {
+        case aborted, gone, finished, finishing, denied, held, unknown
+
+        /*
+         * Its upload's reservation may still be held: no answer, still finishing, or a family manager's pause (refused,
+         * nothing ended). Its id is kept and asked again later.
+         */
+        public var unsettled: Bool { self == .unknown || self == .finishing || self == .held }
+    }
 
     /* An older server's abort refusals (packages/drive/src/server.ts abortUpload), before it named them in `data.upload`. */
     static let abortFinishing = "This upload is finishing and cannot be cancelled."

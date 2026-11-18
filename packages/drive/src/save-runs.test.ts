@@ -26,6 +26,7 @@ import {
     ALREADY_SAVED,
     NO_ROOM,
     NO_ROOM_SHARED,
+    OUTSIDE_RUN,
     RecordNotUpdated,
     OWN_WRITING,
     RUN_CANCELLED,
@@ -34,6 +35,7 @@ import {
     SaveRefused,
     abandonRuns,
     CREATION_SETTLE_MS,
+    DELETE_CLAIM_MS,
     abortFateOf,
     askAbort,
     cleanUpInterrupted,
@@ -50,6 +52,7 @@ import {
     SignedOutError,
     startRun,
     trashInBatches,
+    unsettledAbort,
     unknownResultSize,
     whileSignedIn,
     type ItemFate,
@@ -563,7 +566,7 @@ function world(
         }
         if (!held.input.replaces) server.live.add(nodeId);
         held.item.status = 'done';
-        held.item.node = { id: nodeId } as NodeView;
+        held.item.node = { id: nodeId, workspaceId: held.input.parent.workspaceId } as NodeView;
         emit({ type: 'done', item: held.item });
     }
     function failWith(
@@ -584,6 +587,7 @@ function world(
         deps,
         runs,
         queued,
+        emit,
         cancelled,
         server,
         madeFolders,
@@ -716,7 +720,7 @@ describe('a save run', () => {
         w.land(a!, 'node-a', 'up-a');
         w.begin(b!, 'up-b', 'node-b');
         w.failWith(b!, 'over-quota', { error: 'There isn’t enough room. 12 MB free.' });
-        await expect(first).resolves.toEqual({ id: 'node-a' });
+        await expect(first).resolves.toEqual({ id: 'node-a', workspaceId: 'ws-owner' });
         const stopped = (await second.catch((error: unknown) => error)) as RunStopped;
         expect(stopped).toBeInstanceOf(RunStopped);
         expect(stopped).toMatchObject({ reason: 'no-room', cleanup: 'trashed' });
@@ -1746,6 +1750,52 @@ describe('a save run', () => {
         expect(w.runs.rows.size).toBe(0);
     });
 
+    test('an abort a family manager’s pause refused keeps its id: finish and the quiet settle never drop it', async () => {
+        const w = world();
+        // A nodeless row (a stale version's reservation): settled quietly at the next open.
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: ['up-a'],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        w.server.open.add('up-a');
+        w.server.held = true;
+        expect(await interruptedRuns({ ...w.deps, isLive: async () => false })).toEqual([]);
+        await quietlySettled();
+        expect(w.runs.rows.get('r')?.uploadIds).toEqual(['up-a']);
+        w.server.held = false;
+        await interruptedRuns({ ...w.deps, isLive: async () => false });
+        await quietlySettled();
+        expect(w.runs.rows.has('r')).toBe(false);
+        // finish: a stale version's abort refused `held` stays in a row of its own.
+        const v = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const stale = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-v', 'doc');
+        v.failWith(v.ids()[0]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: false },
+        });
+        await stale;
+        v.server.open.add('up-v');
+        v.server.held = true;
+        await run.finish();
+        expect([...v.runs.rows.values()].map((row) => row.uploadIds)).toEqual([['up-v']]);
+        expect(unsettledAbort('held')).toBe(true);
+        expect(unsettledAbort('denied')).toBe(false);
+    });
+
     test('a held answer is not lost access: its own fate, never denied', () => {
         const held = new DriveApiError(
             'A group manager has paused changes to this folder.',
@@ -2094,6 +2144,73 @@ describe('a save run', () => {
         expect(w.server.live.has('node-a')).toBe(true);
     });
 
+    test('without Web Locks, a Keep while another tab’s Delete is trashing defers to it, never kept', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        let release!: () => void;
+        const paused = new Promise<void>((resolve) => (release = resolve));
+        let reached!: () => void;
+        const atTrash = new Promise<void>((resolve) => (reached = resolve));
+        const trash = w.deps.trash;
+        const deleting = cleanUpInterrupted(
+            {
+                ...w.deps,
+                trash: async (workspaceId, ids) => {
+                    reached();
+                    await paused;
+                    return trash(workspaceId, ids);
+                },
+            },
+            left,
+        );
+        await atTrash;
+        // Another tab with no lock to share: the Delete claimed the row before its trash went, so
+        // this Keep says a Delete is under way and writes no kept mark the Delete would remove.
+        expect(await keepInterrupted({ ...w.deps, exclusive: (_id, work) => work() }, left)).toBe(
+            'deleting',
+        );
+        expect(w.runs.rows.get('r')?.chosen).toBeUndefined();
+        release();
+        expect(await deleting).toBe('deleted');
+        expect(w.runs.rows.size).toBe(0);
+        // A claim a dead tab left holds off a Keep only for a while.
+        const v = world();
+        await v.runs.put({ ...left, deleting: 1 });
+        expect(
+            await keepInterrupted(
+                { ...v.deps, now: () => 1 + DELETE_CLAIM_MS },
+                { ...left, deleting: 1 },
+            ),
+        ).toBe('kept');
+    });
+
+    test('without Web Locks, a Delete that can’t finish lets its claim go, and the row is offered again', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        const left: RunRow = {
+            id: 'r',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+            beat: 1,
+        };
+        await w.runs.put(left);
+        w.server.offline = true;
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('left');
+        expect(w.runs.rows.get('r')).toEqual(left);
+        expect(await keepInterrupted(w.deps, left)).toBe('kept');
+    });
+
     test('without Web Locks, Keep in the same tab waits for its Delete, and never says kept of what went', async () => {
         const w = world();
         w.server.live.add('node-a');
@@ -2124,6 +2241,66 @@ describe('a save run', () => {
         expect(await deleting).toBe('deleted');
         expect(await keeping).toBe('gone');
         expect(w.server.purged.has('node-a')).toBe(true);
+    });
+
+    test('a result asked into another Drive than the run’s is refused before anything is listed, minted or queued', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const elsewhere = folder('b', 'ws-other');
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, into: elsewhere, ...own }),
+        ).rejects.toThrow(OUTSIDE_RUN);
+        await expect(run.folder('Out', { into: elsewhere, ...own })).rejects.toThrow(OUTSIDE_RUN);
+        const theirs = { ...folder('doc', 'ws-other'), kind: 'file', parentId: 'b' } as DriveNode;
+        await expect(
+            run.version({
+                file: theirs,
+                folder: elsewhere,
+                startedFrom: 'v1',
+                bytes: bytes(),
+                ...own,
+            }),
+        ).rejects.toThrow(OUTSIDE_RUN);
+        expect(w.queued.size).toBe(0);
+        expect(w.madeFolders).toEqual([]);
+        expect(w.runs.rows.get(run.id)?.nodeIds ?? []).toEqual([]);
+        // The run itself goes on.
+        const saving = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        expect(w.queued.size).toBe(1);
+        await run.cancel();
+        await saving.catch(() => {});
+    });
+
+    test('a completion naming another node than the one written stops the run and never deletes that node', async () => {
+        const w = world();
+        // Someone's unrelated file, in the same Drive.
+        w.server.live.add('node-theirs');
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saving = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        // The reply names node-theirs: never adopted, never a deletion target.
+        w.land(w.ids()[0]!, 'node-theirs', 'up-a');
+        await expect(saving).rejects.toMatchObject({ reason: 'failed' });
+        expect(w.server.live.has('node-theirs')).toBe(true);
+        expect(w.server.trash.has('node-theirs')).toBe(false);
+        expect(w.server.purged.has('node-theirs')).toBe(false);
+        // The id this run minted is the one its clean-up looked for.
+        expect([...w.server.trash, ...w.server.purged]).not.toContain('node-theirs');
+        // And one in another workspace, even naming the minted id, is no answer either.
+        const v = world();
+        const other = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const next = other.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-b', 'node-b');
+        await tick();
+        const held = v.queued.get(v.ids()[0]!)!;
+        held.item.status = 'done';
+        held.item.node = { id: 'node-b', workspaceId: 'ws-elsewhere' } as NodeView;
+        v.emit({ type: 'done', item: held.item });
+        await expect(next).rejects.toMatchObject({ reason: 'failed' });
     });
 
     test('a sign-out while a live run stops sends nothing more, and says what may stay', async () => {
@@ -2202,7 +2379,9 @@ describe('a save run', () => {
         expect(await cleanUpInterrupted(v.deps, left)).toBe('left');
         expect(vremovals).toBe(1);
         expect(vwrites).toEqual([]);
-        expect(v.runs.rows.get('left')).toEqual(left);
+        // As it was (with this Delete's claim, which a sign-out leaves for the cleared journal), never `done`.
+        expect(v.runs.rows.get('left')).toMatchObject(left);
+        expect(v.runs.rows.get('left')!.done).toBeUndefined();
     });
 
     test('a finish whose record the journal won’t update says so, stays live, and can be asked again', async () => {

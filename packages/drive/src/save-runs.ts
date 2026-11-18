@@ -82,6 +82,9 @@ export function resultSignatures(sources: ResultSources): UploadSignatures {
 }
 
 /* Why a run did not start: nothing was made. */
+/* A result asked into a folder of another workspace than the run's: refused, nothing made. */
+export const OUTSIDE_RUN = 'This is saved in another Drive than the rest. Save it on its own.';
+
 export class SaveRefused extends Error {
     constructor(
         readonly reason: 'read-only' | 'no-room',
@@ -266,6 +269,13 @@ export function roomOf(
 
 /* The server's answer to aborting an upload; `unknown` when there was none (offline, a 5xx). */
 export type AbortFate = 'aborted' | 'gone' | 'finished' | 'denied' | 'held' | 'unknown';
+/*
+ * An abort whose upload's reservation may still be held: no answer (`unknown`), or a family
+ * manager's pause (`held`: refused, nothing ended). Its id stays in the row, asked again later.
+ */
+export function unsettledAbort(fate: AbortFate) {
+    return fate === 'unknown' || fate === 'held';
+}
 /*
  * The server's answer for one item of a batch: `done` (in the Trash, or deleted
  * forever), `gone` (not found: nothing to remove), `refused` (anything else, a
@@ -653,6 +663,11 @@ type Pending = {
     /* The node begin made for a new file, while the run keeps it in its row (not inside a run's folder). */
     tracked: boolean;
     uploadId: string | null;
+    /*
+     * The node this upload writes, as this run minted it (begin, or a key change's attach) or the
+     * file a version replaces: the only id a reply may name. A reply naming another is no answer
+     * to file, and never a deletion target.
+     */
     nodeId: string | null;
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
@@ -855,16 +870,22 @@ function createRun(
         void persist();
     }
     function settled(item: UploadItem, output: Pending) {
+        // The reply must name what this run wrote, in its workspace: one naming anything else is
+        // no answer to file. The run stops, and its row still names the id it minted (a reply is
+        // never adopted as something to delete).
+        const landed = item.node;
+        if (
+            landed &&
+            (landed.workspaceId !== row.workspaceId ||
+                (output.nodeId !== null && landed.id !== output.nodeId))
+        ) {
+            void stop('failed');
+            return;
+        }
         pending.delete(item.id);
         row.uploadIds = row.uploadIds.filter((id) => id !== output.uploadId);
         if (output.kind === 'version') keptVersions += 1;
-        // A new file a key change moved under is attached as a node of its own: that one is kept.
-        const landed = item.node?.id ?? null;
-        if (landed) mayBePublished.add(landed);
-        if (output.tracked && landed && landed !== output.nodeId) {
-            row.nodeIds = row.nodeIds.filter((id) => id !== output.nodeId);
-            if (!row.nodeIds.includes(landed)) row.nodeIds.push(landed);
-        }
+        if (output.nodeId) mayBePublished.add(output.nodeId);
         void persist();
         output.resolve(
             output.kind === 'version'
@@ -884,7 +905,7 @@ function createRun(
             kind,
             tracked: kind === 'file' && !madeFolders.has(parent.id),
             uploadId: null,
-            nodeId: null,
+            nodeId: extra.replaces?.id ?? null,
             resolve: () => {},
             reject: () => {},
         };
@@ -915,20 +936,20 @@ function createRun(
                             output.uploadId = uploadId;
                             if (kind === 'version') versionUploads.add(uploadId);
                             row.uploadIds.push(uploadId);
-                            if (output.tracked) {
-                                output.nodeId = nodeId;
-                                row.nodeIds.push(nodeId);
-                            }
+                            // A new file's node as minted here (a version's is the file it replaces).
+                            if (kind === 'file') output.nodeId = nodeId;
+                            if (output.tracked) row.nodeIds.push(nodeId);
                             void persist();
                         },
                         onAttach: async ({ nodeId }) => {
                             // Stopping: the attach is not sent, so no node lands after the clean-up.
                             if (stopping || !current())
                                 throw new Error('This save run is stopping.');
+                            // The attach's node is minted here too: the only id its reply may name.
+                            output.nodeId = nodeId;
                             if (!output.tracked) return;
                             // Both kept until it lands: the begun node never published, the new one may.
                             if (!row.nodeIds.includes(nodeId)) row.nodeIds.push(nodeId);
-                            output.nodeId = nodeId;
                             void persist();
                             // On disk before the attach is sent, or not sent at all.
                             await recorded();
@@ -1063,10 +1084,20 @@ function createRun(
         liveRuns.delete(run);
     }
 
+    /*
+     * A destination outside the run's workspace is refused before anything is listed, minted or
+     * queued: the row, and every clean-up, names only that workspace's nodes.
+     */
+    function inRun(...nodes: DriveNode[]) {
+        if (nodes.some((node) => node.workspaceId !== row.workspaceId))
+            throw new Error(OUTSIDE_RUN);
+    }
+
     async function makeFolder(
         name: string,
         { into = plan.targets[0]!, sources }: { into?: DriveNode; sources: ResultSources },
     ): Promise<DriveNode> {
+        inRun(into);
         await open();
         const signAs = resultSignatures(sources).metadata;
         // A folder inside one the run made goes with it and needs no row of its own.
@@ -1152,8 +1183,9 @@ function createRun(
         },
         file(result) {
             return onItsWay(async () => {
-                await open();
                 const into = result.into ?? plan.targets[0]!;
+                inRun(into);
+                await open();
                 const thumbnail = takeThumbnail(result.thumbnail);
                 let file: MemoryFile;
                 try {
@@ -1170,6 +1202,7 @@ function createRun(
         },
         version(result) {
             return onItsWay(async () => {
+                inRun(result.folder, result.file);
                 await open();
                 if (result.folder.id !== result.file.parentId)
                     throw new Error('A new version is saved from the folder its file is in.');
@@ -1199,7 +1232,7 @@ function createRun(
             const loose: string[] = [];
             if (current())
                 for (const uploadId of row.uploadIds)
-                    if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown')
+                    if (unsettledAbort(await deps.abortUpload(row.workspaceId, uploadId)))
                         loose.push(uploadId);
             // Not retired: the run stays live (its row is never taken for interrupted here) and
             // finish may be asked again; nothing more is taken in (`finished`).
@@ -1286,10 +1319,11 @@ async function cleanUp(
         /* The run's session: once it ends (a sign-out) nothing more is asked or written. */
         current: () => boolean;
         /*
-         * Asked just before anything is trashed (an interrupted run's Delete without a lock shared
-         * by tabs): false (the row kept, changed or gone in another tab) removes nothing.
+         * Claims the row for this clean-up just before anything is trashed (an interrupted run's
+         * Delete without a lock shared by tabs), in one journal transaction: false (the row kept,
+         * changed or gone in another tab) removes nothing.
          */
-        stillTheRow?: () => Promise<boolean>;
+        claim?: () => Promise<boolean>;
     },
 ): Promise<{
     cleanup: Cleanup;
@@ -1305,7 +1339,7 @@ async function cleanUp(
     waiting: boolean;
     /* Those folders, when they are all that kept the row: everything else was settled. */
     onlyWaitingOn: string[] | null;
-    /* Stopped before removing anything: the row was no longer the one read (stillTheRow). */
+    /* Stopped before removing anything: the row was no longer the one read (claim). */
     changed?: boolean;
 }> {
     await Promise.allSettled(live.map((id) => deps.transfers.cancel(id)));
@@ -1378,7 +1412,7 @@ async function cleanUp(
         } else if (fate === 'finished' && options.versionUploads?.has(uploadId)) keptVersions += 1;
     }
     if (!stillOn()) return signedOutNow();
-    if (options.stillTheRow && !(await options.stillTheRow()))
+    if (options.claim && !(await options.claim()))
         return {
             cleanup: 'left',
             keptVersions,
@@ -1683,22 +1717,30 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     // The session this clean-up began in: after a sign-out it asks nothing more and writes nothing.
     const current = () => signedIn(deps);
     if (!current()) return 'left';
-    // Without a lock shared by tabs, another tab's Keep may land while this one aborts: the row is
-    // read again just before anything is trashed, and a row kept, changed or gone removes nothing.
-    const stillTheRow = deps.exclusive
+    // Without a lock shared by tabs, another tab's Keep may land while this one runs: just before
+    // anything is trashed the row is claimed for this Delete, compared and written in one journal
+    // transaction. A row kept, changed or gone meanwhile removes nothing; a Keep after the claim
+    // sees the Delete under way and never says kept (keepInterrupted).
+    let held = row;
+    const claim = deps.exclusive
         ? undefined
         : async () => {
-              const held = await readRow(deps.runs, row.id);
-              return held !== undefined && held.chosen !== 'keep' && stable(held) === stable(row);
+              const claimed: RunRow = { ...row, deleting: deps.now?.() ?? Date.now() };
+              if (!(await swapRow(deps, row, claimed).catch(() => false))) return false;
+              held = claimed;
+              return true;
           };
-    const result = await cleanUp(deps, row, [], { mayExist, current, stillTheRow });
+    const result = await cleanUp(deps, row, [], { mayExist, current, claim });
     if (result.changed) return 'changed';
     // Kept only to wait for folders that may still land, all else done: the row names just those,
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
+    if (result.cleanup === 'left' && !waitingOn && held !== row && current())
+        // Left (no answer, an item refused): the claim goes, and the row is offered again as it was.
+        await swapRow(deps, held, row).catch(() => {});
     if (result.cleanup === 'left' && waitingOn && current()) {
         const { holds: _seen, ...rest } = row;
-        await swapRow(deps, row, {
+        await swapRow(deps, held, {
             ...rest,
             nodeIds: waitingOn,
             uploadIds: [],
@@ -1716,7 +1758,7 @@ async function settleUploads(
 ) {
     const left: string[] = [];
     for (const uploadId of row.uploadIds) {
-        if ((await deps.abortUpload(row.workspaceId, uploadId)) === 'unknown') left.push(uploadId);
+        if (unsettledAbort(await deps.abortUpload(row.workspaceId, uploadId))) left.push(uploadId);
         if (!signedIn(deps)) return;
     }
     if (left.length === row.uploadIds.length) return;
@@ -1732,9 +1774,9 @@ async function settleUploads(
  */
 export async function keepInterrupted(
     deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current'> &
-        Partial<Pick<SaveRunDeps, 'exclusive'>>,
+        Partial<Pick<SaveRunDeps, 'exclusive' | 'now'>>,
     row: RunRow,
-): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone'> {
+): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone' | 'deleting'> {
     return recovering(deps, row.id, async () => {
         // Signed out meanwhile: nothing more asked of the server or changed in that account's journal.
         const stillOn = () => signedIn(deps);
@@ -1742,8 +1784,19 @@ export async function keepInterrupted(
         // As the journal holds it now, under the run's recovery lock: a Delete another tab finished
         // (gone), or a Keep already made.
         const held = await readRow(deps.runs, row.id);
-        if (!held) return 'gone';
-        if (held.chosen === 'keep') return 'kept';
+        const now = deps.now?.() ?? Date.now();
+        const answer = (found: RunRow | undefined) =>
+            !found
+                ? ('gone' as const)
+                : found.chosen === 'keep'
+                  ? ('kept' as const)
+                  : found.deleting !== undefined && now - found.deleting < DELETE_CLAIM_MS
+                    ? ('deleting' as const)
+                    : null;
+        // Gone, kept already, or claimed by a Delete under way in another tab (never said kept:
+        // that Delete is trashing what was made).
+        const settledAs = answer(held);
+        if (settledAs || !held) return settledAs ?? 'gone';
         for (const uploadId of held.uploadIds) {
             if (!stillOn()) return 'signed-out';
             await deps.abortUpload(held.workspaceId, uploadId);
@@ -1755,7 +1808,8 @@ export async function keepInterrupted(
             if (!stillOn()) return 'signed-out';
             try {
                 if (await swapRow(deps, held, kept)) return 'kept';
-                break;
+                // Changed meanwhile (compared and written in one transaction): as it is now.
+                return answer(await readRow(deps.runs, row.id)) ?? 'not-recorded';
             } catch {
                 // Asked again.
             }
@@ -1763,6 +1817,12 @@ export async function keepInterrupted(
         return stillOn() ? 'not-recorded' : 'signed-out';
     });
 }
+
+/*
+ * How long a Delete's claim on a row holds off a Keep: a tab that died mid-Delete leaves its claim,
+ * and past this the row may be kept again.
+ */
+export const DELETE_CLAIM_MS = 10 * 60 * 1000;
 
 /* The row as the journal holds it now. */
 async function readRow(runs: RunJournal, id: string) {

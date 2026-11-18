@@ -342,7 +342,7 @@ function serverOf(options: { storeMs?: number; editor?: boolean; busy?: number; 
             publish(upload, upload.nodeId);
             return {
                 status: 'completed' as const,
-                node: { id: upload.nodeId, parentId: upload.parent } as NodeView,
+                node: { id: upload.nodeId, parentId: upload.parent, workspaceId: 'ws' } as NodeView,
             };
         },
         attach(id: string, input: { mode: string; keyEpoch?: number; node?: { id: string } }) {
@@ -374,7 +374,7 @@ function serverOf(options: { storeMs?: number; editor?: boolean; busy?: number; 
             publish(upload, nodeId);
             return {
                 status: 'completed' as const,
-                node: { id: nodeId, parentId: upload.parent } as NodeView,
+                node: { id: nodeId, parentId: upload.parent, workspaceId: 'ws' } as NodeView,
             };
         },
         abort(id: string) {

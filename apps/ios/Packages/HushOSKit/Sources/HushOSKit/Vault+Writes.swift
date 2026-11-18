@@ -833,6 +833,11 @@ extension Vault {
         try sendingIntoFamily(workspaceId)
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard let node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
+        // The reply must name the item written, in its workspace (Android's checkWritten): another is never adopted under
+        // this upload's key and name.
+        guard node.id == nodeId, node.workspaceId == workspaceId else {
+            throw DriveAPIError.server(502, "HushOS answered with a different item than the one written. Nothing was kept.")
+        }
         if replacing {
             // Another member renamed the file or put a newer version on it before this answer (a repeated completion): this
             // version landed, and their name record is theirs. Nothing is re-signed. An upload sealed before the landing was
@@ -856,6 +861,16 @@ extension Vault {
         // The file is on the server from here: a row this process won't keep now (its family let go of meanwhile) is an upload
         // that landed, never one that failed (for a move, its source is already deleted).
         if let knownKey {
+            // A tool's new version keeps the name record as it is: one another device changed while the version went up is
+            // the server's now, opened as it is served (its signature checked), never kept with the name this upload began from.
+            if given, keepName, let landing, node.metadataVersion != landing.metadataVersion {
+                do {
+                    _ = try await resolve(parentId)
+                    return try open(node, replacing: true)
+                } catch {
+                    throw UploadLanded()
+                }
+            }
             do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch { throw UploadLanded() }
         }
         // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
@@ -1012,7 +1027,7 @@ extension Vault {
             var unreleased: String?
             if let ids = begun.ids {
                 let fate = await api.abortUploadFate(uploadId: ids.uploadId, workspaceId: ids.workspaceId)
-                if fate == .unknown || fate == .finishing { unreleased = ids.uploadId }
+                if fate.unsettled { unreleased = ids.uploadId }
             }
             // A new file refused only because a key change reached its folder while it went up: sealed afresh.
             guard let replacing else { throw SaveRekeyed(unreleased: unreleased) }

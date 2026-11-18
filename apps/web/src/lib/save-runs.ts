@@ -1,11 +1,6 @@
 import { DriveApiError } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
-import {
-    createIndexedDbRunJournal,
-    createMemoryRunJournal,
-    type RunJournal,
-    type RunRow,
-} from '@hushos/drive/journal';
+import { createIndexedDbRunJournal, type RunJournal, type RunRow } from '@hushos/drive/journal';
 import {
     abandonRuns,
     lockRuns,
@@ -50,10 +45,18 @@ export {
     type VersionSaved,
 } from '@hushos/drive/save-runs';
 
+/*
+ * A browser that can't keep the run's record (no IndexedDB) saves nothing: what a run made must be
+ * named on disk before it is sent, so a closed tab's next open can offer to remove it. A memory
+ * journal would forget it with the tab (it stays for tests only, in packages/drive).
+ */
+export const NO_RECORD = 'This browser can’t keep a record of this save, so it wasn’t started.';
+const persistent = () => typeof indexedDB !== 'undefined';
+
 let runJournal: RunJournal | undefined;
 function runs() {
-    runJournal ??=
-        typeof indexedDB === 'undefined' ? createMemoryRunJournal() : createIndexedDbRunJournal();
+    if (!persistent()) throw new Error(NO_RECORD);
+    runJournal ??= createIndexedDbRunJournal();
     return runJournal;
 }
 
@@ -187,6 +190,8 @@ export async function startSaveRun(queryClient: QueryClient, plan: RunPlan) {
  * one the person already answered "delete" for that waits for a folder that may still land.
  */
 export function interruptedSaveRuns(queryClient: QueryClient) {
+    // Nothing kept here, so nothing was left behind.
+    if (!persistent()) return Promise.resolve([]);
     return interruptedRuns({
         ...deps(queryClient),
         runs: runs(),

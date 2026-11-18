@@ -446,6 +446,23 @@ final class FakeDrive: @unchecked Sendable {
         keys[id] = fresh
     }
 
+    /* Another device of the owner renames `id`: its name sealed one metadata version up under its key, signed by the owner. */
+    func renamedElsewhere(_ id: String, to name: String) throws {
+        guard let old = nodes[id], let key = keys[id] else { return }
+        let version = old.metadataVersion + 1
+        let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: version), nodeKey: key,
+                                      metadata: NodeMetadata(name: name, mime: "text/plain", size: nil, modified: nil, attributes: [:]))
+        var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                               parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: version,
+                               metadataEnvelope: base64urlEncode(bytes: sealed), currentVersion: old.currentVersion, trashedAt: nil,
+                               changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+        updated.metadataSigner = writer
+        updated.metadataSignature = base64urlEncode(bytes: try metadataSign(
+            signingSeed: identity.signingSeed, statement: MetadataStatement(workspaceId: workspace, nodeId: id, kind: old.isFolder ? .folder : .file, metadataVersion: version),
+            metadataEnvelope: sealed))
+        nodes[id] = updated
+    }
+
     /* `id`'s name as another device reads it: its key unwrapped from the envelopes the server holds, from the workspace key down. */
     func record(_ id: String) throws -> String {
         guard let node = nodes[id] else { throw DriveAPIError.notFound("No node \(id)") }
