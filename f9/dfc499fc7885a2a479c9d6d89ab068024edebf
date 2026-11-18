@@ -1,0 +1,47 @@
+apps/web/src/components/ui/command.tsx
+  s_566b8e0c4467a4::t_56946f5fae2306 18-19,21,26,163
+apps/web/src/components/ui/autocomplete.tsx
+  s_566b8e0c4467a4::t_6c554c45a9587f 74
+apps/web/src/components/ui/select.tsx
+  s_566b8e0c4467a4::t_b61f3198622fc3 106
+DESIGN.md
+  s_566b8e0c4467a4::t_48d14d76256dc2 304
+apps/web/src/styles.css
+  s_566b8e0c4467a4::t_09d3258030592e 554-565
+apps/web/src/components/ui/dropdown-menu.tsx
+  s_566b8e0c4467a4::t_50a4c3c70c40c2 91,116,165,207
+apps/web/src/lib/moved.ts
+  s_566b8e0c4467a4::t_a13dd89b8c00f3 1-52
+apps/web/src/lib/states.test.ts
+  s_566b8e0c4467a4::t_8e1e27c522ff4e 93-123,139-143
+apps/web/src/components/ui/context-menu.tsx
+  s_566b8e0c4467a4::t_015e65259401d3 97,122,151,184
+apps/web/src/routes/__root.tsx
+  s_566b8e0c4467a4::t_71565359ccf50c 41,209
+apps/web/src/components/brand.tsx
+  s_e48d45df00f4aa::t_d046b95e98bf19 78,82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f9dfc499fc7885a2a479c9d6d89ab068024edebf",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_e48d45df00f4aa": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "98526fbb-b7a1-4d1a-bc68-99b55e5ca1ec",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
