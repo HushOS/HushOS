@@ -109,6 +109,94 @@ class ArchiveBrowseTest {
         scope.cancel()
     }
 
+    /* The Save dialog's document as a file: made empty, or one already there that the person chose to replace. */
+    private class FileDestination(val file: File, private val known: Boolean = true) : com.hushos.app.ui.SaveDestination {
+        @Volatile var deleted = false
+        val hold = java.util.concurrent.CountDownLatch(1)
+        val writing = java.util.concurrent.CountDownLatch(1)
+        override fun size(): Long? = if (known && file.exists()) file.length() else null
+        override fun open(): java.io.OutputStream = object : java.io.FileOutputStream(file, false) {
+            // Both: FileOutputStream's write(ByteArray) doesn't go through write(ByteArray, Int, Int).
+            override fun write(b: ByteArray) = write(b, 0, b.size)
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                super.write(b, off, len)
+                writing.countDown()
+                hold.await(30, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        override fun delete() {
+            deleted = true
+            file.delete()
+        }
+    }
+
+    /* A zip of one 3 MiB stored entry: three pieces of a MiB each. */
+    private fun big(): com.hushos.core.LocalSource {
+        val bytes = java.io.ByteArrayOutputStream().also { out ->
+            java.util.zip.ZipOutputStream(out).use { zip ->
+                val data = ByteArray(3 shl 20) { (it * 31).toByte() }
+                val crc = java.util.zip.CRC32().apply { update(data) }
+                zip.putNextEntry(java.util.zip.ZipEntry("big.bin").apply { method = java.util.zip.ZipEntry.STORED; size = data.size.toLong(); compressedSize = data.size.toLong(); this.crc = crc.value })
+                zip.write(data)
+                zip.closeEntry()
+            }
+        }.toByteArray()
+        return object : com.hushos.core.LocalSource {
+            override fun size() = bytes.size.toULong()
+            override fun readAt(offset: ULong, length: ULong) = bytes.copyOfRange(offset.toInt(), (offset + length).toInt())
+        }
+    }
+
+    @Test fun aDownloadStoppedMidStreamLeavesNoFileBehind() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val browse = ArchiveBrowse(ArchiveSubject("b", "big.zip"), scope, open = { ArchiveSessions().openLocal(big()) })
+        withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
+        val entry = browse.archive!!.entries.single()
+        // The Save dialog made it: empty.
+        val made = FileDestination(File.createTempFile("save", ".bin"))
+        browse.startDownload(entry, made) {}
+        assertTrue(made.writing.await(30, java.util.concurrent.TimeUnit.SECONDS))
+        // Stopped while the first piece is being written.
+        browse.stop(browse.downloads.single())
+        made.hold.countDown()
+        withTimeout(10_000) { while (!made.deleted) kotlinx.coroutines.delay(20) }
+        kotlinx.coroutines.delay(300)
+        // Gone, and nothing written to it after the stop (the call thread may still be running).
+        assertFalse(made.file.exists())
+        browse.close()
+        scope.cancel()
+    }
+
+    @Test fun aReplacedFileStaysWhenNothingWasWrittenAndGoesWhenAPartWas() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })
+        withTimeout(10_000) { while (browse.tree == null) kotlinx.coroutines.delay(20) }
+        val locked = browse.archive!!.entries.first { it.lock != "none" }
+        // A file the person chose to replace, and a download refused before any piece (no password held).
+        val theirs = FileDestination(File.createTempFile("save", ".txt").apply { writeText("their own") }).apply { hold.countDown() }
+        browse.startDownload(locked, theirs) {}
+        withTimeout(10_000) { while (browse.downloads.isNotEmpty()) kotlinx.coroutines.delay(20) }
+        assertFalse(theirs.deleted)
+        assertEquals("their own", theirs.file.readText())
+        // A provider that doesn't say a size: unknown is never taken as made, so nothing is deleted.
+        val unknown = FileDestination(File.createTempFile("save", ".txt").apply { writeText("unknown") }, known = false).apply { hold.countDown() }
+        browse.discardIfMade(unknown)
+        assertFalse(unknown.deleted)
+        browse.close()
+        // A replaced file that a part was written to, then the download stopped: gone, never a part under its name.
+        val bigBrowse = ArchiveBrowse(ArchiveSubject("b", "big.zip"), scope, open = { ArchiveSessions().openLocal(big()) })
+        withTimeout(10_000) { while (bigBrowse.tree == null) kotlinx.coroutines.delay(20) }
+        val replaced = FileDestination(File.createTempFile("save", ".bin").apply { writeText("older and longer") })
+        bigBrowse.startDownload(bigBrowse.archive!!.entries.single(), replaced) {}
+        assertTrue(replaced.writing.await(30, java.util.concurrent.TimeUnit.SECONDS))
+        bigBrowse.stop(bigBrowse.downloads.single())
+        replaced.hold.countDown()
+        withTimeout(10_000) { while (!replaced.deleted) kotlinx.coroutines.delay(20) }
+        assertFalse(replaced.file.exists())
+        bigBrowse.close()
+        scope.cancel()
+    }
+
     @Test fun aDownloadRefusedForItsPasswordOpensTheItemToAskForIt() = runBlocking {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val browse = ArchiveBrowse(ArchiveSubject("a", "aes.zip"), scope, open = { ArchiveSessions().openLocal(kept("aes.zip")) })

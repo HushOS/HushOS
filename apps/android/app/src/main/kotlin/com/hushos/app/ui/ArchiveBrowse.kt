@@ -16,6 +16,7 @@ import com.hushos.core.EntrySink
 import com.hushos.core.FetchException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -172,29 +173,30 @@ class ArchiveBrowse(
     }
 
     /*
-     * Streams `entry` into the file the person picked (`uri`), nothing of it anywhere else. A
-     * download that fails or is stopped deletes what it made, the empty file included.
+     * Streams `entry` into the file the person picked (`destination`), nothing of it anywhere else.
+     * Opened ("wt": truncated) only at its first piece. A download that fails or is stopped deletes
+     * the file when the Save dialog made it (empty before it began) or when anything was written to
+     * it (a file it replaces is already gone by then, and a part of the entry is never left under
+     * that name); one refused before any piece leaves a replaced file as it was.
      */
-    fun startDownload(entry: ArchiveEntry, resolver: ContentResolver, uri: Uri, done: () -> Unit) {
-        if (closed || archive == null) { discardIfMade(resolver, uri); return }
+    fun startDownload(entry: ArchiveEntry, destination: SaveDestination, done: () -> Unit) {
+        if (closed || archive == null) { discardIfMade(destination); return }
         val record = EntryDownload(entry)
         downloads.add(record)
         record.job = scope.launch {
-            // Empty when the Save dialog made it for this download; a file the person chose to replace is not.
-            val made = withContext(Dispatchers.IO) { isEmpty(resolver, uri) }
-            val result = runCatching {
+            // Empty when the Save dialog made it for this download (unknown is never taken as made).
+            var made: Boolean? = null
+            val stream = SaveStream(destination)
+            var failure: Throwable? = null
+            try {
+                made = withContext(Dispatchers.IO) { destination.size() == 0L }
                 val main = archive ?: throw CancellationException("Closed.")
                 val session = main.sibling()
                 try {
-                withContext(Dispatchers.IO) {
-                    // Opened ("wt": truncated, so a longer file it replaces leaves no tail) only at the first
-                    // piece: a download refused before any (a wrong password) leaves a replaced file as it was.
-                    var out: java.io.OutputStream? = null
-                    try {
+                    withContext(Dispatchers.IO) {
                         session.download(entry.index, object : EntrySink {
                             override fun write(chunk: ByteArray) {
                                 try {
-                                    val stream = out ?: resolver.openOutputStream(uri, "wt")!!.also { out = it }
                                     stream.write(chunk)
                                 } catch (error: Exception) {
                                     // In HushOS's words, never the system's (a provider's message, a path).
@@ -204,23 +206,37 @@ class ArchiveBrowse(
                             }
                         })
                         // An empty entry writes nothing: its file is opened and emptied all the same.
-                        if (out == null) out = resolver.openOutputStream(uri, "wt")
-                    } finally {
-                        out?.close()
+                        stream.openEmpty()
                     }
-                }
                 } finally {
                     session.close()
                 }
+            } catch (error: Throwable) {
+                failure = error
+            } finally {
+                // Closed, then judged, in one step no cancel can skip (a stop, Back, a family let-go, a sign-out):
+                // a call thread still running writes nothing more, and what the download made goes.
+                withContext(NonCancellable + Dispatchers.IO) {
+                    val closing = stream.close()
+                    // A provider that fails as it commits failed the download, however much was written.
+                    if (failure == null && closing.error != null) {
+                        failure = FetchException.Failed(com.hushos.app.data.Problems.say(closing.error, com.hushos.app.data.ArchiveWords.NOT_SAVED))
+                    }
+                    // Nothing was written before `made` was known, so it can be asked now when a cancel came first.
+                    if (failure != null && (closing.wrote || (made ?: (destination.size() == 0L)))) destination.delete()
+                }
             }
-            result.exceptionOrNull()?.let { error ->
-                // Only a file this download made goes; one the person chose to replace stays (as it was, or as written).
-                if (made) withContext(Dispatchers.IO) { discard(resolver, uri) }
-                if (error is CancellationException) { downloads.remove(record); throw error }
-                downloadFailed(record, error)
-            } ?: run {
-                downloads.remove(record)
-                done()
+            val error = failure
+            when {
+                error == null -> {
+                    downloads.remove(record)
+                    done()
+                }
+                error is CancellationException -> {
+                    downloads.remove(record)
+                    throw error
+                }
+                else -> downloadFailed(record, error)
             }
         }
     }
@@ -247,21 +263,10 @@ class ArchiveBrowse(
         record.error.value = failed(error, entry = true)
     }
 
-    /* A picked file the download won't fill: gone, not left empty where the person put it. */
-    private fun discard(resolver: ContentResolver, uri: Uri) {
-        runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
+    /* A picked file no download will fill: deleted if the Save dialog made it (empty), left if it was there before or unknown. */
+    fun discardIfMade(destination: SaveDestination) {
+        if (destination.size() == 0L) destination.delete()
     }
-
-    /* A picked file nothing was written to: deleted if the Save dialog made it (empty), left if it was there before. */
-    fun discardIfMade(resolver: ContentResolver, uri: Uri) {
-        if (isEmpty(resolver, uri)) discard(resolver, uri)
-    }
-
-    private fun isEmpty(resolver: ContentResolver, uri: Uri): Boolean = runCatching {
-        resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { row ->
-            !row.moveToFirst() || row.isNull(0) || row.getLong(0) == 0L
-        } ?: true
-    }.getOrDefault(false)
 
     fun stop(record: EntryDownload) {
         record.job?.cancel()
@@ -296,4 +301,57 @@ class EntryDownload(val entry: ArchiveEntry) {
     val written = mutableStateOf(0L)
     val error = mutableStateOf<String?>(null)
     var job: Job? = null
+}
+
+/* Where a download is saved: the document the Save dialog picked. */
+interface SaveDestination {
+    /* Its size before anything is written: 0 for one the Save dialog made, null when the provider doesn't say. */
+    fun size(): Long?
+    /* Opened for writing from its start, truncated ("wt"). */
+    fun open(): java.io.OutputStream
+    fun delete()
+}
+
+class DocumentDestination(private val resolver: ContentResolver, private val uri: Uri) : SaveDestination {
+    override fun size(): Long? = runCatching {
+        resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { row ->
+            if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null
+        }
+    }.getOrNull()
+    override fun open(): java.io.OutputStream = resolver.openOutputStream(uri, "wt") ?: throw java.io.IOException("No stream.")
+    override fun delete() {
+        runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
+    }
+}
+
+/*
+ * A download's file, opened at its first piece, under one lock: written on the call's thread,
+ * closed on the coroutine's. Once closed it opens and writes nothing more, so a call thread still
+ * running after a cancel or the watchdog never truncates or writes the file again.
+ */
+private class SaveStream(private val destination: SaveDestination) {
+    private var out: java.io.OutputStream? = null
+    private var closed = false
+    private var wrote = false
+
+    @Synchronized fun write(chunk: ByteArray) {
+        if (closed) throw java.io.IOException("The download ended.")
+        val stream = out ?: destination.open().also { out = it }
+        wrote = true
+        stream.write(chunk)
+    }
+
+    @Synchronized fun openEmpty() {
+        if (!closed && out == null) out = destination.open()
+    }
+
+    /* Closes it for good: whether anything was written, and what closing it (the provider's commit) failed with. */
+    @Synchronized fun close(): Closed {
+        closed = true
+        val error = runCatching { out?.close() }.exceptionOrNull()
+        out = null
+        return Closed(wrote, error)
+    }
+
+    class Closed(val wrote: Boolean, val error: Throwable?)
 }

@@ -1563,6 +1563,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     fun openVersion(item: Opened, version: VersionListView? = null): OpenedVersion {
+        // A family's file decrypts only under the key its area ledger opened, never one a share mount left in this
+        // vault's cache (another vault may have proved the folder a family's since): refused first, as iOS's does.
+        val ws = item.node.workspaceId.lowercase()
+        if ((isFamilyWorkspace(ws) || familyEpochs.containsKey(ws)) && !nodes.viaLedger(ws, item.id)) throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
         val key = nodes.key(item) ?: throw ApiError(500, "Node not opened")
         val current = item.node.currentVersion
         val id = version?.id ?: current?.id ?: throw NotFound("This file has no content yet.")

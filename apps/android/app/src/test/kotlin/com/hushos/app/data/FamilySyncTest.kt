@@ -289,6 +289,7 @@ class FamilySyncTest {
         server.pinGrace()
         val root = phone.vault.mountShares().single().root!!
         val sessions = ArchiveSessions.shared
+        val shareKey = phone.vault.nodes.key(root)!!
         val archive = phone.vault.openArchive(root, sessions)
         val readme = archive.entries.first { it.path == "docs/readme.txt" }
         assertTrue(archive.preview(readme.index, 1024).decodeToString().contains("Read me."))
@@ -297,6 +298,10 @@ class FamilySyncTest {
         val refused = runCatching { archive.preview(readme.index, 1024) }.exceptionOrNull()
         assertTrue("read after the proof: $refused", refused is FamilyFailure)
         assertEquals(FamilyWords.OPEN_AGAIN, refused!!.message)
+        // A share's key still held for it (another vault of the session, as a share mount would leave it): never opened.
+        phone.vault.nodes.put(root, shareKey)
+        val again = runCatching { phone.vault.openArchive(root, sessions) }.exceptionOrNull()
+        assertTrue("opened under a share's key after the proof: $again", again is FamilyFailure)
     }
 
     /*

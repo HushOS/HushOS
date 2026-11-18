@@ -122,14 +122,19 @@ public enum ArchiveSessions {
      * not, their listing and password gone, and their screens are told. A call on one would refuse
      * anyway (its FamilyCopyGate); this is for the one nothing is asking of.
      */
-    static func closeFamily(_ workspaces: [String]) {
+    static func closeFamily(_ workspaces: [String], nodes: Set<String> = []) {
         let forgotten = Set(workspaces.map { $0.lowercased() })
+        let purged = Set(nodes.map { $0.lowercased() })
         // Its family's files, and any of the same folder opened another way (a share, a copy kept on
         // this phone): the vault dropped that folder's keys and copies, so none of them serves on.
         let closes = live.lock.withLock {
             live.letGo.formUnion(forgotten)
+            // The nodes its vault forgot too: a kept zip whose record predates its workspace's is found by its node,
+            // and one still opening is refused at its mark.
+            live.purged.formUnion(purged)
             let ids = Set(live.families.filter { forgotten.contains($0.value) }.map(\.key))
                 .union(live.shares.filter { forgotten.contains($0.value) }.map(\.key))
+                .union(live.nodes.filter { purged.contains($0.value) }.map(\.key))
             return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
                 live.families[id] = nil
                 live.shares[id] = nil
@@ -809,7 +814,9 @@ public enum ArchiveRow: Equatable, Sendable {
  * ArchiveFolders: each folder's parent and name in one array and one run of bytes, never an object
  * a folder, so a listing of millions of folders costs a few bytes each. A folder's rows (its
  * folders, then its files, each by name as Files sorts them) are made the first time they are
- * asked for and kept. Mac resource entries are left out.
+ * asked for, off the main actor (a folder of 100,000 files takes seconds to sort), and kept:
+ * `made(in:)` hands back the ones already made without waiting on a sort under way. Mac resource
+ * entries are left out.
  */
 public final class ArchiveTree: @unchecked Sendable {
     private let parents: [UInt32]
@@ -859,9 +866,7 @@ public final class ArchiveTree: @unchecked Sendable {
 
     /* The rows of folder `id` (0: the top), empty for one the list doesn't hold. */
     public func rows(in id: UInt32) -> [ArchiveRow] {
-        lock.lock()
-        defer { lock.unlock() }
-        if let rows = made[id] { return rows }
+        if let rows = made(in: id) { return rows }
         guard Int(id) < parents.count else { return [] }
         let byName: (String, String) -> Bool = { $0.localizedStandardCompare($1) == .orderedAscending }
         var inside: [(id: UInt32, name: String)] = []
@@ -869,8 +874,18 @@ public final class ArchiveTree: @unchecked Sendable {
         let folderRows: [ArchiveRow] = inside.sorted { byName($0.name, $1.name) }.map { .folder(id: $0.id, name: $0.name, count: Int(counts[Int($0.id)])) }
         let fileRows: [ArchiveRow] = files.filter { $0.folder == id }.sorted { byName($0.name, $1.name) }.map { .file($0) }
         let rows = folderRows + fileRows
+        lock.lock()
+        defer { lock.unlock() }
+        if let first = made[id] { return first }
         made[id] = rows
         return rows
+    }
+
+    /* Folder `id`'s rows when they are made already, else nil: never sorts. */
+    public func made(in id: UInt32) -> [ArchiveRow]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return made[id]
     }
 }
 
@@ -992,9 +1007,10 @@ public enum ArchiveText {
         var count = 0
         var size = 0
         // Line by line as the text is scanned, never every line made at once (8 MiB of newlines would be millions).
+        // A Windows line end, \r\n, is one Character to Swift, never equal to "\n": both end a line.
         var lineStart = text.startIndex
         while true {
-            let lineEnd = text[lineStart...].firstIndex(of: "\n") ?? text.endIndex
+            let lineEnd = text[lineStart...].firstIndex(where: { $0 == "\n" || $0 == "\r\n" }) ?? text.endIndex
             var rest = text[lineStart ..< lineEnd]
             repeat {
                 var take = rest.startIndex

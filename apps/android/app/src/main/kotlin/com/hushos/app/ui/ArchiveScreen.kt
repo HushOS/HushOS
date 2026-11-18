@@ -54,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.rememberCoroutineScope
@@ -130,8 +131,9 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         val entry = browse.waitingFor
         browse.waitingFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        if (entry == null) { browse.discardIfMade(context.contentResolver, uri); return@rememberLauncherForActivityResult }
-        browse.startDownload(entry, context.contentResolver, uri) { model.notify(ArchiveWords.DOWNLOADED) }
+        val destination = DocumentDestination(context.contentResolver, uri)
+        if (entry == null) { browse.discardIfMade(destination); return@rememberLauncherForActivityResult }
+        browse.startDownload(entry, destination) { model.notify(ArchiveWords.DOWNLOADED) }
     }
     fun pick(entry: ArchiveEntry) {
         browse.waitingFor = entry
@@ -189,7 +191,20 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
                                 onDownloadArchive = { sending = true },
                                 failed = browse::failed,
                             )
-                            else EntryList(tree.rows(path.lastOrNull() ?: 0), browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = browse::show, onDownload = ::download)
+                            else {
+                                // A folder's rows are sorted off the main thread, and shown only for the folder
+                                // still open: a sort that finishes after the person moved on is never shown.
+                                val folder = path.lastOrNull() ?: 0
+                                val listed by produceState<Listed?>(null, tree, folder) {
+                                    val rows = tree.made(folder) ?: withContext(Dispatchers.Default) { tree.rows(folder) }
+                                    value = Listed(tree, folder, rows)
+                                }
+                                val rows = tree.made(folder) ?: listed?.takeIf { it.tree === tree && it.folder == folder }?.rows
+                                if (rows == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                                    CircularProgressIndicator(color = alpine.primary, modifier = Modifier.padding(top = 48.dp))
+                                }
+                                else EntryList(rows, browse.unlocked, browse.hidden, onFolder = { browse.path = path + it }, onOpen = browse::show, onDownload = ::download)
+                            }
                         }
                         for (record in browse.downloads) DownloadBar(record) { browse.stop(record) }
                     }
@@ -645,3 +660,5 @@ private fun PasswordCard(archive: OpenArchive, name: String, index: UInt, note: 
     }
 }
 
+/* A folder's rows, with the tree and folder they were made for. */
+private class Listed(val tree: ArchiveTree, val folder: Int, val rows: List<ArchiveTree.Row>)

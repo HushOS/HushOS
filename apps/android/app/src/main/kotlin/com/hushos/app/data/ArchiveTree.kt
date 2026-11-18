@@ -10,7 +10,9 @@ import java.time.ZoneId
  * core's ArchiveFolders: each folder's parent and name in one array and one string, never an
  * object a folder, so a listing of millions of folders costs a few bytes each. A folder's rows
  * (its folders first, then its files, each by name, numbers in order: "2" before "10") are made
- * the first time they are asked for and kept. Mac resource entries are left out.
+ * the first time they are asked for, off the main thread (a folder of 100,000 files takes seconds
+ * to sort), and kept: `made` hands back the ones already made without waiting on a sort under way.
+ * Mac resource entries are left out.
  */
 class ArchiveTree(entries: List<ArchiveEntry>, folders: ArchiveFolders) {
     sealed interface Row {
@@ -38,22 +40,25 @@ class ArchiveTree(entries: List<ArchiveEntry>, folders: ArchiveFolders) {
         for (k in 1 until parents.size) counts[parents[k]]++
         for (file in files) counts[file.folder.toInt()]++
     }
-    private val made = HashMap<Int, List<Row>>()
+    private val kept = java.util.concurrent.ConcurrentHashMap<Int, List<Row>>()
 
     /* Folder `id`'s name ("" for the top). */
     fun name(id: Int): String = if (id <= 0 || id >= parents.size) "" else names.substring(starts[id], starts[id + 1] - 1)
 
     /* The rows of folder `id` (0: the top), empty for one the list doesn't hold. */
-    fun rows(id: Int): List<Row> = synchronized(made) {
-        made[id]?.let { return it }
+    fun rows(id: Int): List<Row> {
+        kept[id]?.let { return it }
         if (id < 0 || id >= parents.size) return emptyList()
         val byName = Comparator<String> { a, b -> numberAware(a, b, collator) }
         val inside = ArrayList<Row.Folder>()
         for (k in 1 until parents.size) if (parents[k] == id) inside.add(Row.Folder(k, name(k), counts[k]))
         val folderRows = inside.sortedWith(compareBy(byName) { it.name })
         val fileRows = files.filter { it.folder.toInt() == id }.sortedWith(compareBy(byName) { it.name }).map { Row.File(it.name, it) }
-        return (folderRows + fileRows).also { made[id] = it }
+        return kept.putIfAbsent(id, folderRows + fileRows) ?: kept.getValue(id)
     }
+
+    /* Folder `id`'s rows when they are made already, else null: never sorts. */
+    fun made(id: Int): List<Row>? = kept[id]
 
     private val collator = java.text.Collator.getInstance().apply { strength = java.text.Collator.SECONDARY }
 

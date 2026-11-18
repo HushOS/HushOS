@@ -287,7 +287,10 @@ extension Vault {
         TemporaryCopies.forgetShareWorkspaces(workspaces, session: copySession)
         evictedRows.formUnion(gone.union(kept))
         forgetParents(gone)
-        return gone
+        // A zip open from any of it (a family's file, a share's, a copy kept here, found by its node when its record
+        // predates its workspace's) closes now: a let-go here, the proof's own call otherwise (noteFamilyWorkspaces).
+        if lettingGo { ArchiveSessions.closeFamily(Array(workspaces), nodes: gone.union(kept)) }
+        return gone.union(kept)
     }
 
     /* Whether a workspace is a family folder (as far as this session knows). */

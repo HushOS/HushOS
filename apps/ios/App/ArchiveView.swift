@@ -33,6 +33,8 @@ struct ArchiveScreen: View {
     /* The key adopting a row makes: the task it starts finds that row open already. */
     @State private var adoptedKey: String?
     @State private var tree: ArchiveTree?
+    /* The rows last sorted off the main actor, with the tree and folder they were made for. */
+    @State private var listed: ArchiveListing?
     @State private var failure: String?
     @State private var attempt = 0
     /* The folders from the top to the one shown, by their numbers in the tree. */
@@ -95,8 +97,10 @@ struct ArchiveScreen: View {
                     ArchiveEntryPane(entry: opened, archive: archive, unlocked: $unlocked, doubted: $doubted, askPassword: passwordFor == opened.index,
                                      onDownload: { start(opened) })
                         .id(opened.index)
+                } else if let rows = tree.made(in: path.last ?? 0) ?? listed.flatMap({ $0.tree === tree && $0.folder == (path.last ?? 0) ? $0.rows : nil }) {
+                    list(rows, hidden: archive.hidden)
                 } else {
-                    list(tree.rows(in: path.last ?? 0), hidden: archive.hidden)
+                    ProgressView().tint(Alpine.primary).padding(.top, 48).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
                 ForEach(downloads) { downloadBar($0) }
             } else {
@@ -111,6 +115,16 @@ struct ArchiveScreen: View {
             }
         }
         .background(Alpine.ground.ignoresSafeArea())
+        // A folder's rows are sorted off the main actor, and shown only for the folder still open: a
+        // sort that finishes after the person moved on is never shown.
+        .task(id: ListingKey(tree: tree.map(ObjectIdentifier.init), folder: path.last ?? 0)) {
+            guard let tree else { return }
+            let folder = path.last ?? 0
+            if tree.made(in: folder) != nil { return }
+            let rows = await Task.detached(priority: .userInitiated) { tree.rows(in: folder) }.value
+            guard !Task.isCancelled, self.tree === tree, (path.last ?? 0) == folder else { return }
+            listed = ArchiveListing(tree: tree, folder: folder, rows: rows)
+        }
         .task(id: key) {
             // The row this archive opened, adopted by the viewer: open already, nothing to do again.
             if key == adoptedKey, archive != nil {
@@ -121,6 +135,7 @@ struct ArchiveScreen: View {
             archive?.close()
             archive = nil
             tree = nil
+            listed = nil
             path = []
             opened = nil
             unlocked = false
@@ -163,6 +178,7 @@ struct ArchiveScreen: View {
             for download in downloads { download.task?.cancel() }
             self.archive = nil
             tree = nil
+            listed = nil
             opened = nil
             path = []
             failure = FamilyWords.openAgain
@@ -298,20 +314,25 @@ struct ArchiveScreen: View {
             let scoped = folder.startAccessingSecurityScopedResource()
             defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
             var target: URL?
+            var unclosed: FileHandle?
             do {
                 // The name the core made safe: no bidi override, no NUL, no separator, at most 255 bytes. Created
                 // exclusively, so only a file this download made is ever written, or deleted when it fails.
                 let (file, handle) = try ArchiveSaveName.reserve(in: folder, name: entry.saveName)
                 target = file
-                defer { try? handle.close() }
+                unclosed = handle
                 try await archive.download(entry, into: ArchiveSink { chunk in
                     try handle.write(contentsOf: chunk)
                     // Its size only: the progress waiting on the main actor never keeps the plaintext alive.
                     let count = UInt64(chunk.count)
                     Task { @MainActor in progress.written += count }
                 })
+                // Closed as part of the save: a file that fails as it is written out failed the download.
+                unclosed = nil
+                try handle.close()
                 await MainActor.run { downloads.removeAll { $0 === progress } }
             } catch {
+                try? unclosed?.close()
                 if let target { try? FileManager.default.removeItem(at: target) }
                 await MainActor.run {
                     if Task.isCancelled { downloads.removeAll { $0 === progress } } else if (error as? ArchiveFailure)?.code == "wrong-password" {
@@ -699,4 +720,16 @@ private struct ArchivePasswordCard: View {
             busy = false
         }
     }
+}
+
+/* A folder's rows, with the tree and folder they were made for. */
+private struct ArchiveListing {
+    let tree: ArchiveTree
+    let folder: UInt32
+    let rows: [ArchiveRow]
+}
+
+private struct ListingKey: Equatable {
+    let tree: ObjectIdentifier?
+    let folder: UInt32
 }

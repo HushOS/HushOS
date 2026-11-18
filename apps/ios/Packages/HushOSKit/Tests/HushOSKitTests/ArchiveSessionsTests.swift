@@ -405,6 +405,17 @@ import Testing
             // One marked after the let-go is refused at its mark.
             let late = try await Self.open("aes.zip", registered: true)
             #expect(throws: ArchiveFailure.self) { try late.mark(workspace, family: false) }
+            // A kept zip whose record predates its workspace's: found by the node the vault forgot, and a later one refused.
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let copy = dir.appendingPathComponent("kept.zip")
+            try FileManager.default.copyItem(at: Self.fixtures.appendingPathComponent("aes.zip"), to: copy)
+            let kept = try await OpenArchive.openKept(copy, workspace: nil, node: "node-family-kept")
+            ArchiveSessions.closeFamily([UUID().uuidString], nodes: ["node-family-kept"])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!kept.serves)
+            await #expect(throws: ArchiveFailure.self) { _ = try await OpenArchive.openKept(copy, workspace: nil, node: "node-family-kept") }
         }
     }
 
@@ -614,6 +625,11 @@ import Testing
         #expect(pieces.count == 3)
         #expect(pieces.allSatisfy { $0.split(separator: "\n", omittingEmptySubsequences: false).count <= ArchiveText.lines })
         #expect(pieces.joined(separator: "\n") == String(decoding: many, as: UTF8.self))
+        // Windows line ends count as lines too: 450 of them make three pieces, not one cut by size alone.
+        let windows = Data((0 ..< 450).map { "line \($0)" }.joined(separator: "\r\n").utf8)
+        let crlf = ArchiveText.pieces(windows)
+        #expect(crlf.count == 3)
+        #expect(crlf.joined(separator: "\n") == String(decoding: many, as: UTF8.self))
         // One line of 100 KB, with no line end to cut at, is still cut, between characters.
         let long = Data(String(repeating: "é", count: 50_000).utf8)
         let cut = ArchiveText.pieces(long)
