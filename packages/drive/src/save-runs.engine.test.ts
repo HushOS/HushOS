@@ -745,6 +745,7 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
         exclusive: freeLock,
         isLive: async () => false,
         current: () => !state.dead && !state.signedOut,
+        account: 'me',
     };
     return {
         deps,

@@ -54,6 +54,7 @@ class SaveRunTest {
 
     /* The drive as a run's clean-up meets it: nodes live, in the Trash or deleted; uploads open or finished. */
     private class FakeWriter(var room: SaveRoom = SaveRoom.Own(1L shl 40)) : SaveRunWriter {
+        override var account: String? = "me"
         var refusal: String? = null
         var names = listOf<String>()
         var member = true
@@ -166,10 +167,16 @@ class SaveRunTest {
             if (replacing == null) live += nodeId
             return Opened(NodeView(nodeId, "ws", folder.id, "file", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, null, null, null, emptyMap()))
         }
-        override fun lookFolder(id: String, workspaceId: String): Int? {
+        /* There, but out of this person's reach (a share that ended): answered not found. */
+        val unreachable = HashSet<String>()
+        /* Folders found whose items can't be counted (in the Trash). */
+        val uncounted = HashSet<String>()
+        override fun lookFolder(id: String, workspaceId: String): FolderCount? {
             looking?.invoke()
             if (offline) throw Unreachable()
-            return if (id in live || id in trashed) items[id] ?: 0 else null
+            if (id in unreachable) return null
+            if (id in uncounted) return FolderCount.Uncounted
+            return if (id in live || id in trashed) FolderCount.Items(items[id] ?: 0) else null
         }
         override fun fresh(file: Opened, folder: Opened): Opened? {
             val look = fresh ?: return file
@@ -207,6 +214,7 @@ class SaveRunTest {
                     held -> SaveItemFate.HELD
                     denied -> SaveItemFate.DENIED
                     id in refuse -> SaveItemFate.REFUSED
+                    id in unreachable -> SaveItemFate.GONE
                     live.remove(id) -> { trashed += id; SaveItemFate.DONE }
                     id in trashed -> SaveItemFate.DONE
                     else -> SaveItemFate.GONE
@@ -482,11 +490,104 @@ class SaveRunTest {
     fun aRowWithNothingMadeIsNeverOfferedAndGoes() {
         val writer = FakeWriter()
         val rows = journal()
-        rows.put(SaveRunRow("versions", "ws", emptyList(), listOf("up-x"), 1L, "an-earlier-launch"))
-        rows.put(SaveRunRow("empty", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch"))
-        rows.put(SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("versions", "ws", emptyList(), listOf("up-x"), 1L, "an-earlier-launch", account = "me"))
+        rows.put(SaveRunRow("empty", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch", account = "me"))
+        rows.put(SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch", account = "me"))
         assertEquals(listOf("made"), SaveRuns.interrupted(rows, writer).map { it.id })
         assertEquals(listOf("made"), rows.list().map { it.id })
+    }
+
+    /* Not found, to someone who isn't a member, is gone only while every folder the run saved into is still found. */
+    @Test
+    fun notFoundToSomeoneNotAMemberIsGoneOnlyWhileEveryDestinationIsFound() {
+        // An editor of two of one owner's folders who lost only the result's: its file still there.
+        val writer = FakeWriter().apply { member = false; live += "node-a"; unreachable += "node-a"; unreachable += "dest" }
+        val rows = journal()
+        val row = SaveRunRow("r", "ws", listOf("node-a"), emptyList(), 1L, "an-earlier-launch", account = "me", destinations = listOf("dest"))
+        rows.put(row)
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(row, writer, rows))
+        assertEquals(row, rows.list().single())
+        assertTrue("node-a" in writer.live)
+        // No destinations named (an older row): not known to be reached either.
+        val unnamed = row.copy(id = "u", destinations = emptyList())
+        rows.put(unnamed)
+        assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(unnamed, writer, rows))
+        assertEquals(unnamed, rows.list().single { it.id == "u" })
+        // Every destination still found: the person reaches them, so "not found" is gone.
+        val reached = FakeWriter().apply { member = false; live += "dest" }
+        val again = journal()
+        again.put(row)
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(row, reached, again))
+        assertTrue(again.list().isEmpty())
+        // A member reaches all of the space: gone, without looking.
+        val member = FakeWriter()
+        val theirs = journal()
+        theirs.put(row.copy(destinations = emptyList()))
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(row.copy(destinations = emptyList()), member, theirs))
+        // A run's row names the folders it saves into.
+        val run = SaveRun.start(member, listOf(opened("f")), emptyList(), theirs)
+        assertEquals(listOf("f"), theirs.list().single { it.id == run.id }.destinations)
+        run.finish()
+    }
+
+    /* A waiting folder found in the Trash is never said to hold nothing. */
+    @Test
+    fun aWaitingFolderFoundInTheTrashIsNeverSaidToHoldNothing() {
+        val writer = FakeWriter().apply { trashed += "slow"; uncounted += "slow"; live += "full"; items["full"] = 2 }
+        val rows = journal()
+        rows.put(SaveRunRow("answered", "ws", listOf("slow", "full"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L),
+            chosenDelete = true, account = "me"))
+        SaveRuns.interrupted(rows, writer)
+        SaveRuns.quietlySettled()
+        val seen = rows.list().single()
+        assertEquals(2, seen.holds)
+        assertTrue(seen.uncounted)
+        assertFalse(seen.chosenDelete)
+        // Counted alone, a later look says so plainly.
+        writer.uncounted -= "slow"
+        writer.items["slow"] = 1
+        rows.put(seen.copy(chosenDelete = true))
+        SaveRuns.interrupted(rows, writer)
+        SaveRuns.quietlySettled()
+        assertEquals(3, rows.list().single().holds)
+        assertFalse(rows.list().single().uncounted)
+    }
+
+    /* Another account's row, or one naming none, is never offered, settled, kept, deleted or removed; nothing is sent for it. */
+    @Test
+    fun anotherAccountsRowIsNeverOfferedSettledKeptOrDeleted() {
+        val writer = FakeWriter().apply { live += "node-t"; open += "up-t" }
+        val rows = journal()
+        // A run's row names the account that made it.
+        val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
+        assertEquals("me", rows.list().single { it.id == run.id }.account)
+        run.finish()
+        val theirs = SaveRunRow("theirs", "ws", listOf("node-t"), listOf("up-t"), 1L, "an-earlier-launch", account = "them")
+        val nobodys = theirs.copy(id = "nobodys", account = null)
+        val finished = theirs.copy(id = "finished", done = true)
+        val nodeless = theirs.copy(id = "nodeless", nodeIds = emptyList())
+        val answered = theirs.copy(id = "answered", chosenDelete = true, uncertain = mapOf("node-t" to 1L))
+        val all = listOf(theirs, nobodys, finished, nodeless, answered)
+        for (row in all) rows.put(row)
+        assertTrue(SaveRuns.interrupted(rows, writer).isEmpty())
+        SaveRuns.quietlySettled()
+        // A Delete or a Keep handed one anyway (an older read): as if it weren't there.
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(theirs, writer, rows))
+        assertEquals(SaveCleanup.NOTHING, SaveRuns.cleanUp(nobodys, writer, rows))
+        assertEquals(SaveKeep.GONE, SaveRuns.keep(theirs, writer, rows))
+        // Nothing sent, nothing written.
+        assertTrue(writer.sent.isEmpty())
+        assertTrue(writer.aborted.isEmpty())
+        assertTrue("node-t" in writer.live)
+        assertEquals(all.map { it.id }.toSet(), rows.list().map { it.id }.toSet())
+        for (row in all) assertEquals(row, rows.list().single { it.id == row.id })
+        // The same row is that account's own when it is the one signed in.
+        writer.account = "them"
+        assertEquals(listOf("theirs"), SaveRuns.interrupted(rows, writer).map { it.id })
+        SaveRuns.quietlySettled()
+        // Nobody signed in: nothing starts.
+        writer.account = null
+        assertEquals(SaveRunStopped.Reason.SIGNED_OUT, assertThrows(SaveRunStopped::class.java) { SaveRun.start(writer, listOf(opened("f")), emptyList(), rows) }.reason)
     }
 
     @Test
@@ -495,7 +596,7 @@ class SaveRunTest {
         val rows = journal()
         val run = SaveRun.start(writer, listOf(opened("f")), emptyList(), rows)
         assertTrue(SaveRuns.interrupted(rows, writer).isEmpty())
-        val other = SaveRunRow("other", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch")
+        val other = SaveRunRow("other", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch", account = "me")
         rows.put(other)
         assertEquals(listOf("other"), SaveRuns.interrupted(rows, writer).map { it.id })
         writer.offline = true
@@ -548,8 +649,8 @@ class SaveRunTest {
     fun aWipeDuringAWriteLeavesNoJournalBehind() {
         val dir = Files.createTempDirectory("save-runs").toFile()
         val rows = SaveRunJournal(File(dir, SaveRunJournal.FILE))
-        rows.put(SaveRunRow("one", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch"))
-        rows.put(SaveRunRow("two", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("one", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", account = "me"))
+        rows.put(SaveRunRow("two", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch", account = "me"))
         var wiper: Thread? = null
         var wipedMidWrite = false
         rows.staged = {
@@ -559,7 +660,7 @@ class SaveRunTest {
             wiper!!.join(300)
             wipedMidWrite = !wiper!!.isAlive
         }
-        rows.put(SaveRunRow("one", "ws", listOf("node-1", "node-3"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow("one", "ws", listOf("node-1", "node-3"), emptyList(), 1L, "an-earlier-launch", account = "me"))
         wiper!!.join(5_000)
         assertFalse("the wipe deleted the journal while a write was under way", wipedMidWrite)
         assertFalse(File(dir, SaveRunJournal.FILE).exists())
@@ -715,9 +816,9 @@ class SaveRunTest {
         val session = SaveRunJournal.Epoch()
         val journals = listOf(SaveRunJournal(file, session), SaveRunJournal(file, session))
         val pool = Executors.newFixedThreadPool(8)
-        (0 until 200).map { n -> pool.submit { journals[n % 2].put(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l")) } }.forEach { it.get() }
+        (0 until 200).map { n -> pool.submit { journals[n % 2].put(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l", account = "me")) } }.forEach { it.get() }
         assertEquals(200, journals[0].list().size)
-        (0 until 100).map { n -> pool.submit { journals[n % 2].retire(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l")) } }.forEach { it.get() }
+        (0 until 100).map { n -> pool.submit { journals[n % 2].retire(SaveRunRow("run-$n", "ws", emptyList(), emptyList(), 1L, "l", account = "me")) } }.forEach { it.get() }
         assertEquals((100 until 200).map { "run-$it" }.toSet(), journals[1].list().map { it.id }.toSet())
         pool.shutdown()
     }
@@ -734,8 +835,8 @@ class SaveRunTest {
         run.finish()
         assertTrue(rows.list().single().done)
         rows.fault = null
-        rows.put(SaveRunRow(run.id, "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", done = true))
-        rows.put(SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch"))
+        rows.put(SaveRunRow(run.id, "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", done = true, account = "me"))
+        rows.put(SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch", account = "me"))
         assertEquals(listOf("other"), SaveRuns.interrupted(rows, writer).map { it.id })
         assertEquals(listOf("other"), rows.list().map { it.id })
         assertTrue("node-1" in writer.live)
@@ -865,7 +966,7 @@ class SaveRunTest {
             opener!!.join(300)
             openedMidWrite = !opener!!.isAlive
         }
-        writer.put(SaveRunRow("run", "ws", listOf("node"), emptyList(), 1L, "now"))
+        writer.put(SaveRunRow("run", "ws", listOf("node"), emptyList(), 1L, "now", account = "me"))
         opener!!.join(5_000)
         assertTrue(stagedThen)
         assertFalse("a journal opened mid-write cleared the staging file", openedMidWrite)
@@ -928,8 +1029,8 @@ class SaveRunTest {
         val answer = CountDownLatch(1)
         val writer = FakeWriter().apply { looking = { answer.await(5, TimeUnit.SECONDS) } }
         val rows = journal()
-        rows.put(SaveRunRow("asked", "ws", listOf("n"), emptyList(), 1L, "an-earlier-launch"))
-        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true))
+        rows.put(SaveRunRow("asked", "ws", listOf("n"), emptyList(), 1L, "an-earlier-launch", account = "me"))
+        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true, account = "me"))
         val began = System.nanoTime()
         assertEquals(listOf("asked"), SaveRuns.interrupted(rows, writer, now = 2L).map { it.id })
         assertTrue("interrupted waited for a look", System.nanoTime() - began < 1_000_000_000L)
@@ -976,7 +1077,7 @@ class SaveRunTest {
         var looks = 0
         val writer = FakeWriter().apply { live += "slow"; looking = { looks++ } }
         val rows = journal()
-        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true))
+        rows.put(SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true, account = "me"))
         SaveRuns.interrupted(rows, writer, now = 2L)
         SaveRuns.interrupted(rows, writer, now = 2L)
         SaveRuns.quietlySettled()
@@ -1013,7 +1114,7 @@ class SaveRunTest {
         val session = SaveRunJournal.Epoch()
         val rows = journal(session)
         val writer = FakeWriter().apply { live += "node-x"; afterTrash = { session.end() } }
-        val row = SaveRunRow("left", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        val row = SaveRunRow("left", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch", account = "me")
         rows.put(row)
         assertEquals(SaveCleanup.LEFT, SaveRuns.cleanUp(row, writer, rows))
         assertEquals(listOf("trash"), writer.sent.toList())
@@ -1024,7 +1125,7 @@ class SaveRunTest {
     @Test
     fun aKeepBetweenAQuietLookAndItsWriteIsNeverUndone() {
         val rows = journal()
-        val answered = SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true)
+        val answered = SaveRunRow("answered", "ws", listOf("slow"), emptyList(), 1L, "an-earlier-launch", uncertain = mapOf("slow" to 1L), chosenDelete = true, account = "me")
         rows.put(answered)
         // The look finds the folder (filled since); the person's Keep lands on the journal's next access after it, between any
         // read and the write that would follow it.
@@ -1048,7 +1149,7 @@ class SaveRunTest {
         val epoch = SaveRunJournal.Epoch()
         val first = SaveRunJournal(file, epoch)
         val second = SaveRunJournal(file, epoch)
-        val made = SaveRunRow("made", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch")
+        val made = SaveRunRow("made", "ws", listOf("node-x"), listOf("up-x"), 1L, "an-earlier-launch", account = "me")
         first.put(made)
         val writer = FakeWriter().apply { live += "node-x"; open += "up-x" }
         val stale = SaveRuns.interrupted(second, writer).single()
@@ -1065,7 +1166,7 @@ class SaveRunTest {
     @Test
     fun aKeepWhileADeleteIsUnderWayWaitsAndNeverSaysKeptOfWhatWent() {
         val rows = journal()
-        val made = SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        val made = SaveRunRow("made", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch", account = "me")
         rows.put(made)
         val trashing = CountDownLatch(1)
         val release = CountDownLatch(1)
@@ -1092,10 +1193,10 @@ class SaveRunTest {
     @Test
     fun aRefusedReplaceLeavesTheOldJournalIntact() {
         val rows = journal()
-        val kept = SaveRunRow("kept", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch")
+        val kept = SaveRunRow("kept", "ws", listOf("node-1"), emptyList(), 1L, "an-earlier-launch", account = "me")
         rows.put(kept)
         rows.replace = { _, _ -> throw java.io.IOException("rename refused") }
-        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch")) }
+        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-2"), emptyList(), 1L, "an-earlier-launch", account = "me")) }
         assertEquals(listOf(kept), SaveRunJournal(rows.file, SaveRunJournal.Epoch()).list())
         assertFalse(File(rows.file.parentFile, SaveRunJournal.STAGING).exists())
     }
@@ -1239,7 +1340,7 @@ class SaveRunTest {
         rows.fault = null
         run.finish()
         assertTrue(rows.list().isEmpty())
-        val other = SaveRunRow("other", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch")
+        val other = SaveRunRow("other", "ws", emptyList(), emptyList(), 1L, "an-earlier-launch", account = "me")
         rows.put(other)
         rows.fault = { throw java.io.IOException("full") }
         assertThrows(SaveRecordNotUpdated::class.java) { SaveRuns.keep(other, writer, rows) }
@@ -1445,7 +1546,7 @@ class SaveRunTest {
         assertThrows(InterruptedException::class.java) { SaveRuns.discard(listOf("node-x"), "ws", trashing, stillOn = { true }) }
         // Through a clean-up too: the interrupt reaches its caller.
         assertThrows(InterruptedException::class.java) {
-            SaveRuns.clean(SaveRunRow("r", "ws", emptyList(), listOf("up-x"), 1L, "l"), writer, journal(), emptySet(), null, null, stillOn = { true })
+            SaveRuns.clean(SaveRunRow("r", "ws", emptyList(), listOf("up-x"), 1L, "l", account = "me"), writer, journal(), emptySet(), null, null, stillOn = { true })
         }
     }
 
@@ -1456,7 +1557,7 @@ class SaveRunTest {
     @Test
     fun aSignOutCountsAVersionWhoseSentCompletionAbortedAsNotFoundAsMaybeSaved() {
         val writer = FakeWriter()
-        val row = SaveRunRow("r", "ws", emptyList(), listOf("up-gone", "up-aborted"), 1L, "l")
+        val row = SaveRunRow("r", "ws", emptyList(), listOf("up-gone", "up-aborted"), 1L, "l", account = "me")
         val both = setOf("up-gone", "up-aborted")
         val asked = mapOf("up-gone" to SaveAbortFate.GONE, "up-aborted" to SaveAbortFate.ABORTED)
         val cleaned = SaveRuns.clean(row, writer, journal(), both, both, emptySet(), asked, stillOn = { false })
@@ -1470,16 +1571,16 @@ class SaveRunTest {
     fun anUnreadableJournalIsNeverWrittenOver() {
         val file = Files.createTempDirectory("save-runs").resolve(SaveRunJournal.FILE).toFile()
         val rows = SaveRunJournal(file, SaveRunJournal.Epoch())
-        val other = SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch")
+        val other = SaveRunRow("other", "ws", listOf("node-x"), emptyList(), 1L, "an-earlier-launch", account = "me")
         rows.put(other)
         // Cut short (a write torn by something outside this app), or unreadable: not "no rows".
         val torn = file.readText().dropLast(5)
         file.writeText(torn)
         assertThrows(SaveJournalUnreadable::class.java) { rows.list() }
-        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-y"), emptyList(), 1L, "l")) }
+        assertThrows(SaveUnrecorded::class.java) { rows.put(SaveRunRow("next", "ws", listOf("node-y"), emptyList(), 1L, "l", account = "me")) }
         assertFalse(rows.retire(other))
         assertFalse(rows.swap(other, null))
-        rows.dropDone()
+        rows.dropDone("me")
         assertEquals(torn, file.readText())
         // A run refuses to start rather than publish what no row names.
         assertThrows(SaveRunStopped::class.java) { SaveRun.start(FakeWriter(), listOf(opened("f")), emptyList(), rows) }
@@ -1752,6 +1853,37 @@ class SaveResultTest {
     }
 
     /*
+     * A folder creation whose answer is lost and whose second send names nothing (a sign-out's 401; its own id taken, but the
+     * listing refused or not naming it) stays unanswered: the first send may still be made, never settled as not made.
+     */
+    @Test
+    fun aFolderCreationsRetryThatNamesNothingLeavesTheFirstSendUnanswered() {
+        val conflict = 409 to JSONObject().put("code", "conflict").put("message", "Taken.")
+        val cases = listOf(
+            (401 to JSONObject().put("message", "Sign in.")) to null,
+            conflict to (403 to JSONObject().put("code", "forbidden").put("message", "No.")),
+            conflict to (200 to null),
+        )
+        for ((second, listing) in cases) {
+            var dropped = false
+            server.dropReply = { method, path -> (method == "POST" && path == "drive/folders" && !dropped).also { if (it) dropped = true } }
+            var sends = 0
+            server.extraRoutes = { method, segments, _, _ ->
+                when {
+                    method == "POST" && segments == listOf("drive", "folders") -> if (++sends == 1) 200 to JSONObject() else second
+                    method == "GET" && segments.lastOrNull() == "children" && listing?.second != null -> listing.first to listing.second!!
+                    else -> null
+                }
+            }
+            val folder = JSONObject().put("id", "minted-folder").put("parentId", server.root)
+            assertThrows(Unreachable::class.java) { vault.api.createFolder(vault.workspaceId, folder) }
+            assertEquals(2, sends)
+        }
+        server.dropReply = null
+        server.extraRoutes = null
+    }
+
+    /*
      * A folder this device created is filed as it sent it: the reply's parent, key epochs and envelopes are ignored (only the
      * server's own fields, such as its change number, are taken), and a reply naming another folder is no answer.
      */
@@ -1909,6 +2041,25 @@ class SaveResultTest {
         assertEquals(1, minted)
     }
 
+    /* A run's new file is begun under the very row its destination was checked as, never one its id looks up again. */
+    @Test
+    fun aNewFileIsBegunUnderTheRowCheckedNeverOneItsIdLooksUpAgain() {
+        vault.listChildren(server.root)
+        val sent = server.requests.size
+        val real = vault.resolve(server.root)
+        val shared = Opened(real.node.copy(workspaceId = "0b6c0f4e-0000-4000-8000-00000000beef"), real.metadata)
+        var begun = 0
+        assertThrows(FamilyFailure::class.java) {
+            vault.uploadResult(byteArrayOf(1), "a.txt", null, shared.id, null, null, null, onBegun = { begun++ }, held = shared)
+        }
+        assertEquals(sent, server.requests.size)
+        assertEquals(0, begun)
+        // The row held as it was checked is the one written under.
+        val made = vault.uploadResult(byteArrayOf(1), "b.txt", null, real.id, null, null, null, onBegun = { begun++ }, held = real)
+        assertEquals(server.root, made.node.parentId)
+        assertEquals(1, begun)
+    }
+
     /* A family manager's pause answers 403 `held`: the save path reads it as held, never as lost access (DENIED). */
     @Test
     fun aHeldAnswerIsHeldNeverLostAccess() {
@@ -2039,6 +2190,26 @@ class SaveResultTest {
         assertEquals("renamed.txt", landed.name)
         assertEquals("renamed.txt", vault.resolve(id).name)
         assertEquals(server.node(id).metadataVersion.toULong(), landed.node.metadataVersion)
+    }
+
+    /* A folder's look asks for no next page after a sign-out: it ends unanswered, never counted from what it saw. */
+    @Test
+    fun aFolderLookAsksForNoPageAfterASignOut() {
+        val epoch = SaveRunJournal.Epoch()
+        val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
+        var pages = 0
+        server.extraRoutes = { method, segments, _, _ ->
+            if (method == "GET" && segments.lastOrNull() == "children") {
+                pages++
+                // Signed out while the first page was on its way; one more page follows it.
+                epoch.end()
+                200 to JSONObject().put("folder", server.node(server.root).json()).put("ancestors", org.json.JSONArray())
+                    .put("children", org.json.JSONArray()).put("nextCursor", if (pages == 1) "more" else JSONObject.NULL)
+            } else null
+        }
+        assertThrows(SessionEnded::class.java) { writer.lookFolder(server.root, vault.workspaceId) }
+        assertEquals(1, pages)
+        server.extraRoutes = null
     }
 
     /* A sign-out during the first of two trash batches sends no second; a purge or an abort sends nothing after it either. */

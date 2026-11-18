@@ -141,10 +141,23 @@ export interface UploadJournal {
  */
 export type RunRow = {
     id: string;
+    /*
+     * The account that made it (its unlocked user id). Another account's row, or one that names
+     * none, is never offered, settled or deleted: a tab that died before its sign-out's wipe may
+     * leave one for whoever signs in next. Left alone, never written; a sign-out's wipe removes it.
+     */
+    account?: string;
     workspaceId: string;
     nodeIds: string[];
     uploadIds: string[];
     at: number;
+    /*
+     * The folders the run saves into (its targets), where every one of its `nodeIds` is made.
+     * Someone who isn't a member of the space hears "not found" for an item they can no longer
+     * reach as well as for one that isn't there: only while each of these is still found is such
+     * an answer taken for gone.
+     */
+    destinations?: string[];
     /*
      * The run finished (or its results were kept, or cleaned up) but its row could not be
      * removed: never offered as interrupted, dropped by the next open.
@@ -168,6 +181,11 @@ export type RunRow = {
      */
     chosen?: 'delete' | 'keep';
     holds?: number;
+    /*
+     * One of those folders was found but its items couldn't be counted (it is in the Trash): it
+     * may hold more than `holds` says, so it is never offered as empty.
+     */
+    uncounted?: boolean;
 };
 
 export interface RunJournal {

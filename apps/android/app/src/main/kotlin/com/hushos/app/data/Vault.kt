@@ -2103,12 +2103,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun uploadResult(bytes: ByteArray, name: String, mime: String?, parentId: String, replacing: Opened?, startedFrom: String?,
                      copy: Prior?, thumbnail: ByteArray? = null, modified: Long = System.currentTimeMillis(),
-                     onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {}, progress: (Float) -> Unit = {}): Opened {
+                     onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {}, progress: (Float) -> Unit = {},
+                     held: Opened? = null): Opened {
         if (replacing != null && replacing.node.currentVersion?.id != startedFrom) throw SaveStale(replacing.node.currentVersion?.id)
         try {
             return writing {
                 uploadInside(Plain.InMemory(bytes, modified), name, mime, parentId, replacing, thumbnail, copy, emptyMap(), "", null, progress,
-                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, onCompleting = onCompleting, result = true)
+                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, onCompleting = onCompleting, result = true, held = held)
             }
         } catch (error: ApiError) {
             // Begin refused `stale`, or completion `conflict` (aborted there, its room released). A new file refused so was only
@@ -2150,9 +2151,13 @@ class Vault(internal val context: Context, val api: DriveApi) {
     private fun uploadInside(plain: Plain, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
                              attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit,
                              expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {},
-                             result: Boolean = false): Opened {
+                             result: Boolean = false, held: Opened? = null): Opened {
+        // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
+        // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
+        fun destination(): Opened = if (held != null) nodes.row(held.node.workspaceId, held.id) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+            else resolve(parentId)
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
-        val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
+        val ws = replacing?.node?.workspaceId ?: destination().node.workspaceId
         // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
         // one isn't offered.
         // A tool's result (`result`) goes into a family folder signed by its sources, as on the web and iOS.
@@ -2187,7 +2192,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
                 .put("expectedVersionId", expectedVersion ?: JSONObject.NULL)
             metadata = replacing.metadata
         } else {
-            val parent = resolve(parentId)
+            val parent = destination()
             if (parent.node.workspaceId != ws) throw ApiError(400, "Upload it within one drive.")
             if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
             val epoch = api.allocateEpoch(ws)

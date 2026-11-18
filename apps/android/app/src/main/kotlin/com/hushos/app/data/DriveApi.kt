@@ -500,14 +500,24 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return try {
             made()
         } catch (_: Unreachable) {
+            // The first send may still be made: only the second's answer naming this very folder settles it. Anything else
+            // (its own id taken but not listed, a 429, a key change starting, a 5xx, a sign-out, this app's own write gate, a
+            // listing that failed) says nothing of the first send: unanswered, as it was. An interrupt is thrown on.
             try {
                 made()
+            } catch (interrupted: InterruptedException) {
+                throw interrupted
             } catch (taken: ApiError) {
-                // Anything but its own id taken (a 429, a key change starting, a 5xx) says nothing of the first send, which
-                // may still be made: unanswered, as it was.
                 if (taken.status != 409 || taken.code != "conflict") throw Unreachable()
-                listed(folder.getString("parentId"), workspaceId, folder.getString("id")) ?: throw taken
-            } catch (_: NotFound) {
+                val found = try {
+                    listed(folder.getString("parentId"), workspaceId, folder.getString("id"))
+                } catch (interrupted: InterruptedException) {
+                    throw interrupted
+                } catch (_: Exception) {
+                    null
+                }
+                found ?: throw Unreachable()
+            } catch (_: Exception) {
                 throw Unreachable()
             }
         }

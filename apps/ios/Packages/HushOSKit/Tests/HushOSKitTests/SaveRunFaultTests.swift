@@ -244,7 +244,9 @@ struct FaultyDrive: SaveRunWriter {
     }
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened? { file }
     func listed(_ id: String, in folder: Opened) async throws -> Opened? { nil }
-    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? { try await call(.listing, { world.holds(id) }, refused: refuse) }
+    func lookFolder(_ id: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> FolderCount? {
+        try await call(.listing, { world.holds(id).map { FolderCount.items($0) } }, refused: refuse)
+    }
     func refreshFolder(_ folder: Opened) async throws -> Opened { folder }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {

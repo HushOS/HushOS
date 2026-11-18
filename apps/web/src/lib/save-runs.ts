@@ -10,10 +10,12 @@ import {
     roomOf,
     SignedOutError,
     startRun,
+    UNCOUNTED,
     type RunPlan,
     type SaveRunDeps,
 } from '@hushos/drive/save-runs';
 import type { QueryClient } from '@tanstack/react-query';
+import { authClient } from '@/lib/auth-client';
 import { deviceSession } from '@/lib/device-session';
 import {
     clientFor,
@@ -104,6 +106,8 @@ function deps(queryClient: QueryClient): SaveRunDeps {
     const from = { generation: deviceSession.generation() };
     // The session these deps were made in: nothing is sent or written for it once it ends.
     const stillOn = () => deviceSession.open() && deviceSession.generation() === from.generation;
+    // The account unlocked as these deps were made: written into every row, and only its rows recovered.
+    const account = authClient.store.getState().unlockedUserId;
     const storage = async () =>
         queryClient.getQueryData(storageQueryOptions.queryKey) ??
         (await storageNow(queryClient).catch(() => null));
@@ -111,6 +115,7 @@ function deps(queryClient: QueryClient): SaveRunDeps {
         transfers,
         events: onTransferEvent,
         runs: runs(),
+        account,
         refuseWrite,
         waitsForKeyChange,
         room: async (workspaceId) =>
@@ -163,8 +168,9 @@ function deps(queryClient: QueryClient): SaveRunDeps {
                 } while (after);
             } catch (error) {
                 if (error instanceof DriveApiError && error.status === 404) return null;
-                // In the Trash: there, and the person decides what goes.
-                if (error instanceof DriveApiError && error.code === 'trashed') return 0;
+                // In the Trash: there, and the person decides what goes. Its items can't be listed,
+                // so how many it holds isn't known (never taken for none).
+                if (error instanceof DriveApiError && error.code === 'trashed') return UNCOUNTED;
                 throw error;
             }
             return items;

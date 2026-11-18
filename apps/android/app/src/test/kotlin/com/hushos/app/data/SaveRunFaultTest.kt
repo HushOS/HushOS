@@ -152,6 +152,7 @@ class SaveRunFaultTest {
 
     /* The drive one process sees: its calls fail as planned; `healthy` is the next launch's working one. */
     class FaultyDrive(private val world: World, private val healthy: Boolean) : SaveRunWriter {
+        override val account: String? = "me"
         private fun <T> call(point: Point, effect: () -> T, refused: () -> T): T {
             val fault = if (healthy) null else world.fault(point)
             if (!healthy) world.act(fault)
@@ -195,7 +196,8 @@ class SaveRunFaultTest {
             return opened(call(Point.COMPLETE, { world.complete(uploadId) }, ::refuse), folder.id)
         }
         override fun fresh(file: Opened, folder: Opened): Opened? = file
-        override fun lookFolder(id: String, workspaceId: String): Int? = call(Point.LISTING, { world.holds(id) }, ::refuse)
+        override fun lookFolder(id: String, workspaceId: String): FolderCount? =
+            call(Point.LISTING, { world.holds(id)?.let { FolderCount.Items(it) } }, ::refuse)
         override fun refreshFolder(folder: Opened): Opened = folder
         override fun abortUpload(uploadId: String, workspaceId: String): SaveAbortFate =
             runCatching { call(Point.ABORT, { world.abort(uploadId) }, { SaveAbortFate.DENIED }) }.getOrDefault(SaveAbortFate.UNKNOWN)

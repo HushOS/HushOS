@@ -2094,6 +2094,45 @@ describe('produced results', () => {
         expect(h.server.attached).toEqual([]);
     });
 
+    test('a version whose file left its folder during a key change’s look or wait is stale, never sealed under the file as it was', async () => {
+        for (const leavesAt of [1, 2]) {
+            let looks = 0;
+            const h = harness({
+                serverVersion: () => 'v1',
+                // The file is refused for its key; the folder isn't. A key change the upload waits
+                // out only in the second case (the look after a wait), never past a second.
+                refuseWrite: (t) => (t.id === 'doc' ? 'Finishing a key change.' : null),
+                waitsForKeyChange: () => leavesAt === 2,
+                // A wait that goes on past a few looks is not this case: it gives up after a second.
+                keyChangePause: (_target, attempt) =>
+                    attempt > 3 ? new Promise<void>(() => {}) : Promise.resolve(),
+                keyChangeGiveUpMs: 1_000,
+                // The look before the seal (1), or the look after a wait (2), no longer lists it.
+                openNodes: async () => {
+                    looks += 1;
+                    return looks >= leavesAt
+                        ? { parent: node('root', null) }
+                        : { parent: node('root', null), replaces: fileAt('v1') };
+                },
+            });
+            const [id] = h.manager.enqueue([
+                {
+                    file: memory('doc.txt'),
+                    parent: node('root', null),
+                    replaces: fileAt('v1'),
+                    produced: { startedFrom: 'v1' },
+                },
+            ]);
+            await settle(5_000);
+            const item = h.item(id!);
+            expect(item.status).toBe('failed');
+            expect(item.errorCode).toBe('stale');
+            expect(item.stale?.currentVersionId).toBeNull();
+            expect(h.server.begins).toEqual([]);
+            expect(h.server.attached).toEqual([]);
+        }
+    });
+
     test('a version race whose abort gets no answer says its reservation wasn’t released', async () => {
         let current = 'v1';
         const h = harness({

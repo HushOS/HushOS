@@ -190,10 +190,22 @@ actor FakeWriter: SaveRunWriter {
     func set(items count: Int, in id: String) { items[id] = count }
     func set(looking: @escaping @Sendable () async -> Void) { self.looking = looking }
     func makeGone(_ id: String) { live.remove(id) }
-    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? {
+    /* There, but out of this person's reach (a share that ended): answered not found. And folders whose items can't be counted. */
+    var unreachable = Set<String>()
+    var uncounted = Set<String>()
+    func seed(live: [String] = [], trashed: [String] = [], unreachable: [String] = [], uncounted: [String] = []) {
+        self.live.formUnion(live)
+        self.trashed.formUnion(trashed)
+        self.unreachable.formUnion(unreachable)
+        self.uncounted.formUnion(uncounted)
+    }
+    func countAgain(_ id: String) { uncounted.remove(id) }
+    func lookFolder(_ id: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> FolderCount? {
         await looking?()
         if offline { throw DriveAPIError.transport("offline") }
-        return live.contains(id) || trashed.contains(id) ? items[id] ?? 0 : nil
+        if unreachable.contains(id) { return nil }
+        if uncounted.contains(id) { return .uncounted }
+        return live.contains(id) || trashed.contains(id) ? .items(items[id] ?? 0) : nil
     }
     func keyChangePause(_ workspaceId: String, attempt: Int) async throws {}
     func abortUpload(_ uploadId: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async -> DriveAPI.AbortFate {
@@ -221,7 +233,9 @@ actor FakeWriter: SaveRunWriter {
         if offline { throw DriveAPIError.transport("offline") }
         var fates: [String: SaveItemFate] = [:]
         for id in ids {
-            if held { fates[id] = .held } else if denied { fates[id] = .denied } else if refuse.contains(id) { fates[id] = .refused } else if live.remove(id) != nil {
+            if held { fates[id] = .held } else if denied { fates[id] = .denied } else if refuse.contains(id) { fates[id] = .refused } else if unreachable.contains(id) {
+                fates[id] = .gone
+            } else if live.remove(id) != nil {
                 trashed.insert(id)
                 fates[id] = .done
             } else { fates[id] = trashed.contains(id) ? .done : .gone }
@@ -452,6 +466,71 @@ let own = SaveSources.ownWriting
         #expect(cleaned.cleanup == .left)
         #expect(cleaned.uncertain == 1)
         #expect(await writer.sent.isEmpty)
+    }
+
+    /* Not found, to someone who isn't a member, is gone only while every folder the run saved into is still found. */
+    @Test func notFoundToSomeoneNotAMemberIsGoneOnlyWhileEveryDestinationIsFound() async throws {
+        // An editor of two of one owner's folders who lost only the result's: its file still there.
+        let writer = FakeWriter()
+        await writer.set(member: false)
+        await writer.seed(live: ["node-a"], unreachable: ["node-a", "dest"])
+        let rows = journal()
+        let row = SaveRunRow(id: "r", workspaceId: "ws", nodeIds: ["node-a"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                             destinations: ["dest"])
+        try rows.put(row)
+        #expect(await SaveRuns.cleanUp(row, writer: writer, journal: rows) == .left)
+        #expect(rows.list() == [row])
+        #expect(await writer.live.contains("node-a"))
+        // No destinations named (an older row): not known to be reached either.
+        var unnamed = row
+        unnamed.destinations = nil
+        let older = journal()
+        try older.put(unnamed)
+        #expect(await SaveRuns.cleanUp(unnamed, writer: writer, journal: older) == .left)
+        #expect(older.list() == [unnamed])
+        // Every destination still found: the person reaches them, so "not found" is gone.
+        let reached = FakeWriter()
+        await reached.set(member: false)
+        await reached.seed(live: ["dest"])
+        let again = journal()
+        try again.put(row)
+        #expect(await SaveRuns.cleanUp(row, writer: reached, journal: again) == .nothing)
+        #expect(again.list().isEmpty)
+        // A member reaches all of the space: gone, without looking.
+        let member = FakeWriter()
+        let theirs = journal()
+        try theirs.put(unnamed)
+        #expect(await SaveRuns.cleanUp(unnamed, writer: member, journal: theirs) == .nothing)
+        // A run's row names the folders it saves into.
+        let run = try await SaveRun.start(writer: member, targets: [opened("f")], results: [], journal: theirs)
+        #expect(theirs.list().first { $0.id == run.id }?.destinations == ["f"])
+        try await run.finish()
+    }
+
+    /* A waiting folder found in the Trash is never said to hold nothing. */
+    @Test func aWaitingFolderFoundInTheTrashIsNeverSaidToHoldNothing() async throws {
+        let writer = FakeWriter()
+        await writer.seed(live: ["full"], trashed: ["slow"], uncounted: ["slow"])
+        await writer.set(items: 2, in: "full")
+        let rows = journal()
+        try rows.put(SaveRunRow(id: "answered", workspaceId: "ws", nodeIds: ["slow", "full"], uploadIds: [], at: Date(), launch: "an-earlier-launch",
+                                uncertain: ["slow": Date(timeIntervalSince1970: 1)], chosen: "delete"))
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        await SaveRuns.quietlySettled()
+        let seen = try #require(rows.list().first)
+        #expect(seen.holds == 2)
+        #expect(seen.uncounted == true)
+        #expect(seen.chosen == nil)
+        // Counted alone, a later look says so plainly.
+        await writer.countAgain("slow")
+        await writer.set(items: 1, in: "slow")
+        var asked = seen
+        asked.chosen = "delete"
+        try rows.put(asked)
+        _ = await SaveRuns.interrupted(writer: writer, journal: rows)
+        await SaveRuns.quietlySettled()
+        #expect(rows.list().first?.holds == 3)
+        #expect(rows.list().first?.uncounted == nil)
     }
 
     /* A pause that kept only a version's reservation keeps the row but never says what was made is still there. */
@@ -2057,6 +2136,54 @@ extension OnFakeDrive {
             let made = try await vault.createFolder(under: b, name: "In", signing: .own, onMinted: { _ in minted.value += 1 })
             #expect(made.node.parentId == server.b)
             #expect(minted.value == 1)
+            server.intercept = nil
+        }
+
+        /* A run's new file is begun under the very row its destination was checked as, never one its id looks up again. */
+        @Test func aNewFileIsBegunUnderTheRowCheckedNeverOneItsIdLooksUpAgain() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let writes = Locked(0)
+            let begun = Locked(0)
+            server.intercept = { method, _, _ in
+                if method != "GET" { writes.value += 1 }
+                return nil
+            }
+            let shared = opened(server.b, workspace: "0b6c0f4e-0000-4000-8000-00000000beef")
+            await #expect(throws: IdCollision.self) {
+                _ = try await vault.uploadResult(Data([1]), name: "a.txt", mime: nil, in: shared.id, replacing: nil, startedFrom: nil,
+                                                 signing: (.own, .own), onBegun: { _ in begun.value += 1 }, held: shared.ref)
+            }
+            #expect(writes.value == 0)
+            #expect(begun.value == 0)
+            server.intercept = nil
+            // The row held as it was checked is the one written under.
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let made = try await vault.uploadResult(Data([1]), name: "b.txt", mime: nil, in: b.id, replacing: nil, startedFrom: nil,
+                                                    signing: (.own, .own), onBegun: { _ in begun.value += 1 }, held: b.ref)
+            #expect(made.node.parentId == server.b)
+            #expect(begun.value == 1)
+        }
+
+        /* A folder's look asks for no next page after a sign-out: it ends unanswered, never counted from what it saw. */
+        @Test func aFolderLookAsksForNoPageAfterASignOut() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let on = Locked(true)
+            let pages = Locked(0)
+            let root = try JSONSerialization.jsonObject(with: JSONEncoder().encode(server.nodes[server.root]!))
+            server.intercept = { method, parts, _ in
+                guard method == "GET", parts.last == "children" else { return nil }
+                pages.value += 1
+                // Signed out while the first page was on its way; one more page follows it.
+                on.value = false
+                return (200, ["folder": root, "ancestors": [Any](), "children": [Any](), "nextCursor": pages.value == 1 ? "more" : NSNull()])
+            }
+            await #expect(throws: CancellationError.self) {
+                _ = try await vault.lookFolder(server.root, in: server.workspace, while: { on.value })
+            }
+            #expect(pages.value == 1)
             server.intercept = nil
         }
 

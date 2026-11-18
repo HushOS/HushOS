@@ -118,6 +118,20 @@ public struct SaveRunRow: Codable, Equatable, Sendable {
     public var chosen: String?
     /* How many items the folders it names held when a later look found them: the row is offered again with it. */
     public var holds: Int?
+    /*
+     * The folders the run saves into (its targets), where every one of its nodes is made. Someone who isn't a member of the
+     * space hears "not found" for an item out of reach as for one not there: only while each of these is still found is such
+     * an answer taken for gone.
+     */
+    public var destinations: [String]?
+    /* One folder of `holds` was found but its items couldn't be counted (in the Trash): never offered as empty. */
+    public var uncounted: Bool?
+}
+
+/* What a look at a folder found: how many items it holds, or that it is there and its items can't be counted (in the Trash). */
+public enum FolderCount: Equatable, Sendable {
+    case items(Int)
+    case uncounted
 }
 
 /*
@@ -451,10 +465,11 @@ public protocol SaveRunWriter: Sendable {
     /* `file` as the server lists its folder now (its keys after a key change), or nil when it is no longer there. */
     func fresh(_ file: Opened, in folder: Opened) async throws -> Opened?
     /*
-     * How many items the folder `id` holds now, or nil when it isn't there; throws when there was no answer. Only looks:
-     * an answered "delete" waiting for a folder never deletes one found.
+     * How many items the folder `id` holds now (`.uncounted` when it is there but its items can't be listed: in the Trash),
+     * or nil when it isn't there; throws when there was no answer, or the session (`stillOn`, asked before every page)
+     * ended. Only looks: an answered "delete" waiting for a folder never deletes one found.
      */
-    func lookFolder(_ id: String, in workspaceId: String) async throws -> Int?
+    func lookFolder(_ id: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> FolderCount?
     /* `id` as the server lists it in `folder` now, or nil: a creation answered 409 for its own id. */
     func listed(_ id: String, in folder: Opened) async throws -> Opened?
     /* `folder` and the chain above it as the server holds them now (a family's checked again first), to seal afresh under. */
@@ -701,17 +716,26 @@ public enum SaveRuns {
             return
         }
         var holds: Int?
+        var uncounted = false
         for id in row.nodeIds {
-            let items: Int?
-            do { items = try await writer.lookFolder(id, in: row.workspaceId) } catch { return }
+            let found: FolderCount?
+            do { found = try await writer.lookFolder(id, in: row.workspaceId, while: { journal.stillOn }) } catch { return }
             guard journal.live else { return }
-            if let items { holds = (holds ?? 0) + items }
+            switch found {
+            case nil: break
+            // Found, its items not countable (in the Trash): never said to hold nothing.
+            case .uncounted?:
+                holds = holds ?? 0
+                uncounted = true
+            case .items(let count)?: holds = (holds ?? 0) + count
+            }
         }
         // Compared and written in one hold of the journal's lock (swap): a Keep in between is never undone.
         if let holds {
             var again = row
             again.chosen = nil
             again.holds = holds
+            again.uncounted = uncounted ? true : nil
             journal.swap(row, again)
             return
         }
@@ -762,6 +786,7 @@ public enum SaveRuns {
             answered.uncertain = (row.uncertain ?? [:]).filter { waitingOn.contains($0.key) }
             answered.chosen = "delete"
             answered.holds = nil
+            answered.uncounted = nil
             journal.swap(row, answered)
         }
         return cleaned.cleanup
@@ -896,7 +921,8 @@ public enum SaveRuns {
         }
         let notFound = SentIds()
         guard stillOn() else { return signedOutNow() }
-        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound, stillOn: stillOn, held: held)
+        let discarded = await discard(row.nodeIds, in: row.workspaceId, writer: writer, notFound: notFound, stillOn: stillOn, held: held,
+                                      published: published, destinations: row.destinations ?? [])
         removed = discarded == .deleted || discarded == .nothing
         guard stillOn() else { return signedOutNow() }
         // A folder whose creation got no answer, not found now: the server may still be making it. The row stays.
@@ -922,18 +948,28 @@ public enum SaveRuns {
     }
 
     static func discard(_ ids: [String], in workspaceId: String, writer: SaveRunWriter, notFound: SentIds? = nil,
-                        stillOn: @escaping @Sendable () -> Bool, held: HeldFlag? = nil) async -> SaveCleanup {
+                        stillOn: @escaping @Sendable () -> Bool, held: HeldFlag? = nil, published: Set<String>? = nil,
+                        destinations: [String] = []) async -> SaveCleanup {
         guard !ids.isEmpty else { return .nothing }
         do {
             guard stillOn() else { return .left }
-            let trashed = try await writer.trash(ids, in: workspaceId, while: stillOn)
-            notFound?.add(ids.filter { trashed[$0] == .gone })
-            let fates = ids.map { trashed[$0] ?? .refused }
+            var trashed = try await writer.trash(ids, in: workspaceId, while: stillOn)
             // A family manager's pause: nothing ended, the rest is left for after the hold.
-            if fates.contains(.held) {
+            if ids.contains(where: { trashed[$0] == .held }) {
                 held?.hold()
                 return .left
             }
+            // "Not found" is the server's answer for an item this person can no longer reach as well as for one that isn't
+            // there: an editor of two of one owner's folders who lost only the result's hears it for a file that still
+            // exists. Only a member of the space hears it as gone, or someone who still finds every folder the run saved
+            // into, or anyone for a node never sent to be published. Otherwise it is no answer: the row stays, nothing settled.
+            let ambiguous = ids.filter { trashed[$0] == .gone && (published?.contains($0) ?? true) }
+            if !ambiguous.isEmpty, stillOn(), await !reaches(writer, workspaceId, destinations: destinations, stillOn: stillOn) {
+                for id in ambiguous { trashed[id] = .refused }
+            }
+            guard stillOn() else { return .left }
+            notFound?.add(ids.filter { trashed[$0] == .gone })
+            let fates = ids.map { trashed[$0] ?? .refused }
             if fates.allSatisfy({ $0 == .denied }) { return .noAccess }
             if fates.contains(where: { $0 == .refused || $0 == .denied }) { return .left }
             let inTrash = ids.filter { trashed[$0] == .done }
@@ -952,6 +988,23 @@ public enum SaveRuns {
         } catch {
             return .left
         }
+    }
+
+    /*
+     * Whether this person still reaches what a run made: a member of the space, or someone who finds every folder it saved
+     * into now. No answer, or a sign-out meanwhile, is not reaching it.
+     */
+    private static func reaches(_ writer: SaveRunWriter, _ workspaceId: String, destinations: [String],
+                                stillOn: @escaping @Sendable () -> Bool) async -> Bool {
+        if await writer.mayPurge(workspaceId) == true { return true }
+        guard !destinations.isEmpty else { return false }
+        for id in destinations {
+            guard stillOn() else { return false }
+            let found: FolderCount?
+            do { found = try await writer.lookFolder(id, in: workspaceId, while: stillOn) } catch { return false }
+            guard found != nil else { return false }
+        }
+        return stillOn()
     }
 
     /*
@@ -1133,7 +1186,8 @@ final class RunState: @unchecked Sendable {
         lock.withLock {
             guard !abandonedHere else { return }
             var late = lateRow ?? (stopKeptRow ? row
-                : SaveRunRow(id: row.id, workspaceId: row.workspaceId, nodeIds: [], uploadIds: [], at: row.at, launch: row.launch))
+                : SaveRunRow(id: row.id, workspaceId: row.workspaceId, nodeIds: [], uploadIds: [], at: row.at, launch: row.launch,
+                             destinations: row.destinations))
             if !late.nodeIds.contains(nodeId) { late.nodeIds.append(nodeId) }
             lateRow = late
             try? journal.put(late)
@@ -1218,7 +1272,8 @@ public actor SaveRun {
         if let free, Int64(clamping: needed) > free {
             throw SaveRefused(reason: .noRoom, message: SaveRuns.noRoom, needed: needed, free: max(0, free))
         }
-        let row = SaveRunRow(id: UUID().uuidString.lowercased(), workspaceId: workspaceId, nodeIds: [], uploadIds: [], at: now(), launch: SaveRuns.launch)
+        let row = SaveRunRow(id: UUID().uuidString.lowercased(), workspaceId: workspaceId, nodeIds: [], uploadIds: [], at: now(), launch: SaveRuns.launch,
+                             destinations: targets.map(\.id))
         do {
             try journal.put(row)
         } catch {
@@ -1373,7 +1428,8 @@ public actor SaveRun {
             // Made while the run stopped: it goes the way the rest went, and if it cannot, a row names it (keepLate).
             let done = await stopping.value
             if !state.abandoned,
-               await SaveRuns.discard([made.id], in: state.snapshot.workspaceId, writer: writer, stillOn: { state.journal.stillOn }) == .left {
+               await SaveRuns.discard([made.id], in: state.snapshot.workspaceId, writer: writer, stillOn: { state.journal.stillOn },
+                                      destinations: state.snapshot.destinations ?? []) == .left {
                 state.keepLate(made.id, stopKeptRow: done.cleanup == .left)
             }
             throw done
@@ -1499,7 +1555,8 @@ public actor SaveRun {
                     if let stopping { done = await stopping.value } else { done = stopped! }
                     // Not after a sign-out: the session that could is ending, and nothing is deleted for it.
                     if tracked, !state.abandoned,
-                       await SaveRuns.discard([landed.id], in: state.snapshot.workspaceId, writer: writer, stillOn: { state.journal.stillOn }) == .left {
+                       await SaveRuns.discard([landed.id], in: state.snapshot.workspaceId, writer: writer, stillOn: { state.journal.stillOn },
+                                              destinations: state.snapshot.destinations ?? []) == .left {
                         state.keepLate(landed.id, stopKeptRow: done.cleanup == .left)
                     }
                     throw done
@@ -1709,27 +1766,31 @@ extension Vault: SaveRunWriter {
                              onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
         try heldExactly(folder)
         if let replacing { try heldExactly(replacing) }
+        // The folder checked, passed through to the key wrap and the begin: never resolved again by its id.
         return try await uploadResult(bytes, name: name, mime: mime, in: folder.id, replacing: replacing, startedFrom: startedFrom, thumbnail: thumbnail,
-                                      signing: signing, onBegun: onBegun, onCompleting: onCompleting)
+                                      signing: signing, onBegun: onBegun, onCompleting: onCompleting, held: folder.ref)
     }
 
     /* From the server itself, never the catalogue (which may not have heard of a key change or another device's save yet). */
-    public func lookFolder(_ id: String, in workspaceId: String) async throws -> Int? {
+    public func lookFolder(_ id: String, in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> FolderCount? {
         // The server's listing pages, counted as they come: nothing opened, remembered or cached here.
         do {
             var items = 0
             var after: String?
             repeat {
+                // Each page only while this session lasts: a sign-out stops the look, unanswered.
+                guard stillOn() else { throw CancellationError() }
                 let page = try await api.children(of: id, workspaceId: workspaceId, after: after)
                 items += page.children.count
                 after = page.nextCursor
             } while after != nil
-            return items
+            return .items(items)
         } catch DriveAPIError.notFound {
             return nil
         } catch DriveAPIError.trashed {
-            // In the Trash: there, and the person decides what goes.
-            return 0
+            // In the Trash: there, and the person decides what goes. Its items can't be listed, so how many it holds isn't
+            // known (never taken for none).
+            return .uncounted
         }
     }
 

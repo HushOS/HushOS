@@ -1026,6 +1026,9 @@ export function createTransferManager(options: TransferManagerOptions) {
             const fresh = await lookup().catch(() => null);
             if (u.generation !== generation) return null;
             if (fresh) {
+                // A produced version whose file left its folder while it waited is stale, never
+                // written under the file as it was before the wait.
+                if (u.produced && replaces && !fresh.replaces) throw new StaleVersionError(null);
                 parent = fresh.parent;
                 if (replaces && fresh.replaces) replaces = fresh.replaces;
             }
@@ -1231,6 +1234,9 @@ export function createTransferManager(options: TransferManagerOptions) {
                 // would still carry the key the server just refused.
                 const fresh = await openNodes(u.queued, { fresh: keyOnlyLooked });
                 if (u.generation !== generation) return;
+                // A produced version whose file is no longer in its folder (moved, trashed,
+                // deleted) is stale, as an attach finds it: never sealed under the file as it was.
+                if (u.produced && u.replaces && !fresh.replaces) throw new StaleVersionError(null);
                 // Looked at again for its keys, a replaced file must still be at the version this
                 // upload set out to replace: one someone else made meanwhile is never overwritten.
                 if (

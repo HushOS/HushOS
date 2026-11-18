@@ -720,12 +720,19 @@ extension Vault {
      */
     private func begin(source: PlainSource, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
                        signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false,
-                       moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false) async throws -> Begun {
+                       moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false, held: NodeRef? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
+        // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
+        // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
+        func destination() async throws -> Opened {
+            guard let held else { return try await resolve(parentId) }
+            guard let row = opened[held] else { throw IdCollision() }
+            return row
+        }
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
         let workspace: Target
-        if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await resolve(parentId).node.workspaceId) }
+        if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await destination().node.workspaceId) }
         let family = try familyTarget(workspace.workspaceId)
         if family {
             // Looked up afresh before a node or a content key is made: the folder (and the file replaced) as the server serves
@@ -777,7 +784,7 @@ extension Vault {
                 : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
                                attributes: replacing.metadata.attributes)
         } else {
-            let parent = try await resolve(parentId)
+            let parent = try await destination()
             // The folder's key as the ledger holds it, before anything is asked of the server: a key change that hasn't
             // reached the folder is a wait (KEY_CHANGE_PENDING), not an epoch allocated for nothing.
             if family { _ = try areaLedger.writableNodeKey(workspaceId: workspace.workspaceId, nodeId: parent.id) }
@@ -942,12 +949,12 @@ extension Vault {
         source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
         thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
         moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) throws -> Void = { _ in },
-        onCompleting: @Sendable (String) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void
+        onCompleting: @Sendable (String) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void, held: NodeRef? = nil
     ) async throws -> Opened {
         return try await writing {
             let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
                                         thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf,
-                                        expected: expected, keepName: keepName)
+                                        expected: expected, keepName: keepName, held: held)
             // A result's run writes these ids down first: if it can't, nothing is sent and the reservation goes.
             do {
                 try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
@@ -1035,7 +1042,7 @@ extension Vault {
         _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
         onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, onCompleting: @escaping @Sendable (String) throws -> Void = { _ in },
-        progress: @Sendable (Double) -> Void = { _ in }
+        progress: @Sendable (Double) -> Void = { _ in }, held: NodeRef? = nil
     ) async throws -> Opened {
         if let replacing, replacing.node.currentVersion?.id != startedFrom {
             throw SaveStale(currentVersionId: replacing.node.currentVersion?.id)
@@ -1045,7 +1052,8 @@ extension Vault {
             return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
                                     thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
                                     expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
-                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, onCompleting: onCompleting, progress: progress)
+                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, onCompleting: onCompleting, progress: progress,
+                                    held: held)
         } catch let landed as UploadLanded {
             // Completed on the server, though this process can't file its row now: a save that landed, answered with the
             // node the completion named and the record it was sealed with (Android's result path), never a failure that

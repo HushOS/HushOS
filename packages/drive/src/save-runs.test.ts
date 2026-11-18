@@ -42,6 +42,7 @@ import {
     heldNow,
     interruptedRuns,
     quietlySettled,
+    UNCOUNTED,
     keepInterrupted,
     lockRuns,
     resultEstimate,
@@ -461,6 +462,10 @@ function world(
         held: false,
         /* Items in a folder, for lookFolder. */
         items: new Map<string, number>(),
+        /* There, but out of this person's reach (a share that ended): answered not found. */
+        unreachable: new Set<string>(),
+        /* Folders found whose items can't be counted (in the Trash). */
+        uncounted: new Set<string>(),
     };
     let session = true;
     const madeFolders: { parent: string; name: string; signAs: string }[] = [];
@@ -528,6 +533,7 @@ function world(
                 if (server.held) fates.set(id, 'held');
                 else if (server.denied) fates.set(id, 'denied');
                 else if (server.refuse.has(id)) fates.set(id, 'refused');
+                else if (server.unreachable.has(id)) fates.set(id, 'gone');
                 else if (server.live.delete(id)) {
                     server.trash.add(id);
                     fates.set(id, 'done');
@@ -551,9 +557,12 @@ function world(
         findChild: async (_parent, id) => (server.live.has(id) ? folder(id) : null),
         lookFolder: async (_ws, id) => {
             if (server.offline) throw new Error('offline');
+            if (server.unreachable.has(id)) return null;
+            if (server.uncounted.has(id)) return UNCOUNTED;
             return server.live.has(id) || server.trash.has(id) ? (server.items.get(id) ?? 0) : null;
         },
         current: () => session,
+        account: 'me',
         ...locks,
     };
     /* The queue began an upload: the server holds it open, and the run's row learns of it. */
@@ -946,6 +955,7 @@ describe('a save run', () => {
         const offered = await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: w.runs,
             isLive: async () => false,
             abortUpload: w.deps.abortUpload,
@@ -1049,6 +1059,7 @@ describe('a save run', () => {
         const [left] = await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: w.runs,
             isLive: async () => false,
         });
@@ -1242,6 +1253,7 @@ describe('a save run', () => {
         const w = world();
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: [],
             uploadIds: ['up-v'],
@@ -1261,6 +1273,7 @@ describe('a save run', () => {
         const w = world();
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-gone',
             nodeIds: ['node-a'],
             uploadIds: ['up-a'],
@@ -1278,6 +1291,7 @@ describe('a save run', () => {
         w.server.open.add('up-b');
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-a'],
             uploadIds: ['up-b'],
@@ -1293,6 +1307,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: async () => false,
             }),
@@ -1307,6 +1322,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: async () => false,
             }),
@@ -1458,6 +1474,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: async () => false,
             }),
@@ -1465,6 +1482,7 @@ describe('a save run', () => {
         // Keep is retired the same way.
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-a'],
             uploadIds: [],
@@ -1476,6 +1494,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: async () => false,
             }),
@@ -1485,6 +1504,7 @@ describe('a save run', () => {
         await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: w.runs,
             isLive: async () => false,
         });
@@ -1547,7 +1567,14 @@ describe('a save run', () => {
 
     test('a row an owner wrote after this tab listed it is never removed for the older read', async () => {
         const w = world();
-        const empty: RunRow = { id: 'r', workspaceId: 'ws-own', nodeIds: [], uploadIds: [], at: 1 };
+        const empty: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: [],
+            at: 1,
+        };
         await w.runs.put(empty);
         const list = w.runs.list.bind(w.runs);
         let raced = false;
@@ -1834,6 +1861,7 @@ describe('a save run', () => {
         const [row] = await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: w.runs,
             isLive: async () => false,
         });
@@ -1884,6 +1912,7 @@ describe('a save run', () => {
         const [row] = await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: w.runs,
             isLive: async () => false,
         });
@@ -1948,6 +1977,7 @@ describe('a save run', () => {
         };
         await w.runs.put({
             id: 'asked',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['n'],
             uploadIds: [],
@@ -1955,6 +1985,7 @@ describe('a save run', () => {
         });
         await w.runs.put({
             id: 'answered',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['slow'],
             uploadIds: [],
@@ -2019,6 +2050,7 @@ describe('a save run', () => {
         w.deps.current = () => session;
         const answered: RunRow = {
             id: 'answered',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['slow'],
             uploadIds: [],
@@ -2129,6 +2161,7 @@ describe('a save run', () => {
         // A nodeless row (a stale version's reservation): settled quietly at the next open.
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: [],
             uploadIds: ['up-a'],
@@ -2193,6 +2226,7 @@ describe('a save run', () => {
         w.server.live.add('node-a');
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-a'],
             uploadIds: [],
@@ -2238,6 +2272,7 @@ describe('a save run', () => {
         w.deps.current = () => session;
         const row: RunRow = {
             id: 'kept',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-x'],
             uploadIds: ['up-1', 'up-2'],
@@ -2339,6 +2374,7 @@ describe('a save run', () => {
         w.deps.current = () => session;
         const row: RunRow = {
             id: 'left',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-x'],
             uploadIds: ['up-x'],
@@ -2364,12 +2400,136 @@ describe('a save run', () => {
         expect(w.server.purged.size).toBe(0);
     });
 
+    test('not found, to someone who isn’t a member, is gone only while every folder the run saved into is still found', async () => {
+        // An editor of two of one owner's folders who lost only the result's: its file still there.
+        const w = world({ member: false });
+        const row: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-share',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+            destinations: ['dest'],
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-a');
+        w.server.unreachable.add('node-a');
+        w.server.unreachable.add('dest');
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        // The only record of it kept, as it was; nothing removed.
+        expect(w.runs.rows.get('r')).toEqual(row);
+        expect(w.server.live.has('node-a')).toBe(true);
+        // No destinations named (an older row): not known to be reached either.
+        const unnamed: RunRow = { ...row, id: 'u', destinations: undefined };
+        await w.runs.put(unnamed);
+        expect(await cleanUpInterrupted(w.deps, unnamed)).toBe('left');
+        expect(w.runs.rows.get('u')).toEqual(unnamed);
+        // Every destination still found: the person reaches them, so "not found" is gone.
+        const v = world({ member: false });
+        await v.runs.put(row);
+        v.server.live.add('dest');
+        expect(await cleanUpInterrupted(v.deps, row)).toBe('nothing');
+        expect(v.runs.rows.has('r')).toBe(false);
+        // A member reaches all of the space: gone, without looking.
+        const m = world();
+        await m.runs.put({ ...row, destinations: undefined });
+        expect(await cleanUpInterrupted(m.deps, { ...row, destinations: undefined })).toBe(
+            'nothing',
+        );
+        // A run's row names the folders it saves into.
+        const run = await startRun(m.deps, { targets: [folder('f')], results: [] });
+        expect(m.runs.rows.get(run.id)?.destinations).toEqual(['f']);
+        await run.finish();
+    });
+
+    test('a waiting folder found in the Trash is never said to hold nothing', async () => {
+        const w = world();
+        const answered: RunRow = {
+            id: 'answered',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow', 'full'],
+            uploadIds: [],
+            at: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        };
+        await w.runs.put(answered);
+        w.server.trash.add('slow');
+        w.server.uncounted.add('slow');
+        w.server.live.add('full');
+        w.server.items.set('full', 2);
+        await interruptedRuns(w.deps);
+        await quietlySettled();
+        const again = w.runs.rows.get('answered');
+        expect(again).toMatchObject({ holds: 2, uncounted: true });
+        expect(again?.chosen).toBeUndefined();
+        // Counted alone, a later look says so plainly.
+        w.server.uncounted.delete('slow');
+        w.server.items.set('slow', 1);
+        await w.runs.put({ ...again!, chosen: 'delete' });
+        await interruptedRuns(w.deps);
+        await quietlySettled();
+        expect(w.runs.rows.get('answered')).toMatchObject({ holds: 3 });
+        expect(w.runs.rows.get('answered')?.uncounted).toBeUndefined();
+    });
+
+    test('another account’s row, or one naming none, is never offered, settled, kept, deleted or removed', async () => {
+        const w = world();
+        // A run's row names the account that made it.
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        expect(w.runs.rows.get(run.id)?.account).toBe('me');
+        await run.finish();
+        const theirs: RunRow = {
+            id: 'theirs',
+            account: 'them',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-t'],
+            uploadIds: ['up-t'],
+            at: 1,
+        };
+        const nobodys: RunRow = { ...theirs, id: 'nobodys', account: undefined };
+        const finished: RunRow = { ...theirs, id: 'finished', done: true };
+        const nodeless: RunRow = { ...theirs, id: 'nodeless', nodeIds: [] };
+        const answered: RunRow = { ...theirs, id: 'answered', chosen: 'delete' };
+        for (const row of [theirs, nobodys, finished, nodeless, answered]) await w.runs.put(row);
+        w.server.live.add('node-t');
+        w.server.open.add('up-t');
+        w.server.items.set('node-t', 3);
+        expect(await interruptedRuns(w.deps)).toEqual([]);
+        await quietlySettled();
+        // A Delete or a Keep handed one anyway (an older read): as if it weren't there.
+        expect(await cleanUpInterrupted(w.deps, theirs)).toBe('gone');
+        expect(await cleanUpInterrupted(w.deps, nobodys)).toBe('gone');
+        expect(await keepInterrupted(w.deps, theirs)).toBe('gone');
+        // Nothing sent, nothing written: every row as it was, the file still there, its upload open.
+        expect(w.server.live.has('node-t')).toBe(true);
+        expect(w.server.trash.size).toBe(0);
+        expect(w.server.aborted).toEqual([]);
+        expect(w.server.open.has('up-t')).toBe(true);
+        for (const row of [theirs, nobodys, finished, nodeless, answered])
+            expect(w.runs.rows.get(row.id)).toEqual(row);
+        // The same rows are that account's own when it signs in here.
+        const them = world();
+        await them.runs.put(theirs);
+        them.server.live.add('node-t');
+        expect(
+            (await interruptedRuns({ ...them.deps, account: 'them' })).map((row) => row.id),
+        ).toEqual(['theirs']);
+        // No account unlocked: nothing starts.
+        await expect(
+            startRun({ ...w.deps, account: null }, { targets: [folder('f')], results: [] }),
+        ).rejects.toBeInstanceOf(RunStopped);
+    });
+
     test('an interrupted clean-up that a sign-out overtakes writes nothing back for that account', async () => {
         const w = world();
         let session = true;
         w.deps.current = () => session;
         const row: RunRow = {
             id: 'left',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['slow', 'node-x'],
             uploadIds: [],
@@ -2642,6 +2802,7 @@ describe('a save run', () => {
         const v = world();
         const left: RunRow = {
             id: 'left',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-z'],
             uploadIds: [],
@@ -2687,6 +2848,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: async () => false,
             }),
@@ -2699,6 +2861,7 @@ describe('a save run', () => {
         // Keep, the same: not recorded is said, never "kept".
         const left: RunRow = {
             id: 'r',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: [],
             uploadIds: [],
@@ -2927,6 +3090,7 @@ describe('a save run', () => {
         const w = world();
         const left: RunRow = {
             id: 'run-closed',
+            account: 'me',
             workspaceId: 'ws-own',
             nodeIds: ['node-a'],
             uploadIds: ['up-b'],
@@ -2972,6 +3136,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: w.deps.isLive,
             }),
@@ -2986,6 +3151,7 @@ describe('a save run', () => {
             await interruptedRuns({
                 exclusive: freeLock,
                 current: () => true,
+                account: 'me',
                 runs: w.runs,
                 isLive: w.deps.isLive,
             }),

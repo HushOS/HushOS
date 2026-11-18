@@ -46,6 +46,7 @@ afterEach(() => vi.unstubAllGlobals());
 
 const answered: RunRow = {
     id: 'answered',
+    account: 'me',
     workspaceId: 'ws',
     nodeIds: ['slow'],
     uploadIds: [],
@@ -92,6 +93,7 @@ test('another tab’s Keep between this tab’s look and its write is never undo
         await keepInterrupted(
             {
                 current: () => true,
+                account: 'me',
                 runs: tabB,
                 abortUpload: async () => 'aborted',
                 exclusive: (_id, work) => work(),
@@ -102,6 +104,7 @@ test('another tab’s Keep between this tab’s look and its write is never undo
     await interruptedRuns({
         exclusive: freeLock,
         current: () => true,
+        account: 'me',
         runs: view,
         isLive: async () => false,
         lookFolder: async () => {
@@ -116,6 +119,7 @@ test('another tab’s Keep between this tab’s look and its write is never undo
         await interruptedRuns({
             exclusive: freeLock,
             current: () => true,
+            account: 'me',
             runs: tabB,
             isLive: async () => false,
         }),
@@ -133,6 +137,7 @@ test('a row changed by another tab is left as that tab wrote it', async () => {
     await interruptedRuns({
         exclusive: freeLock,
         current: () => true,
+        account: 'me',
         runs: view,
         isLive: async () => false,
         lookFolder: async () => {
@@ -150,6 +155,7 @@ function recoveryTab(runs: RunJournal, exclusive: SaveRunDeps['exclusive'], sent
     const deps = {
         runs,
         current: () => true,
+        account: 'me',
         exclusive,
         trash: async (_ws: string, ids: string[]) => {
             sent.push(`trash ${ids.join(',')}`);
@@ -171,6 +177,7 @@ function recoveryTab(runs: RunJournal, exclusive: SaveRunDeps['exclusive'], sent
 
 const offered: RunRow = {
     id: 'offered',
+    account: 'me',
     workspaceId: 'ws',
     nodeIds: ['made'],
     uploadIds: ['up'],
@@ -187,6 +194,7 @@ test('Delete from a snapshot read before another tab’s Keep sends nothing and 
     const [snapshotB] = await interruptedRuns({
         exclusive: freeLock,
         current: () => true,
+        account: 'me',
         runs: tabB.deps.runs,
         isLive: async () => false,
     });
@@ -232,6 +240,7 @@ test('a run whose lock a tab still holds (frozen, or live) is never offered, del
     expect(
         await interruptedRuns({
             current: () => true,
+            account: 'me',
             runs: tabA.deps.runs,
             isLive: locks.isLive,
             exclusive: locks.exclusive,
@@ -245,6 +254,7 @@ test('a run whose lock a tab still holds (frozen, or live) is never offered, del
     release();
     const [found] = await interruptedRuns({
         current: () => true,
+        account: 'me',
         runs: tabA.deps.runs,
         isLive: locks.isLive,
         exclusive: locks.exclusive,

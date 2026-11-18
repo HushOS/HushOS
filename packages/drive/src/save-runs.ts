@@ -443,6 +443,9 @@ export function trashFatesOf(results: readonly TrashBatchItem[]) {
     return fates;
 }
 
+/* A folder found whose items can't be counted (in the Trash): there, holding an unknown number. */
+export const UNCOUNTED = 'uncounted' as const;
+
 export type SaveRunDeps = {
     transfers: Pick<TransferManager, 'enqueue' | 'cancel'>;
     /* Every upload event (the app's fan-out of the transfer manager's onEvent). */
@@ -474,10 +477,11 @@ export type SaveRunDeps = {
      */
     lookFolderAgain?: (folder: DriveNode) => Promise<DriveNode>;
     /*
-     * How many items the folder `id` holds now, or null when it isn't there; throws when there was
-     * no answer. Only looks: an answered "delete" waiting for a folder never deletes one found.
+     * How many items the folder `id` holds now, `uncounted` when it is there but its items can't
+     * be listed (in the Trash), or null when it isn't there; throws when there was no answer. Only
+     * looks: an answered "delete" waiting for a folder never deletes one found.
      */
-    lookFolder?: (workspaceId: string, id: string) => Promise<number | null>;
+    lookFolder?: (workspaceId: string, id: string) => Promise<number | typeof UNCOUNTED | null>;
     /* Never throws: what the server said, or `unknown`. */
     abortUpload: (workspaceId: string, uploadId: string) => Promise<AbortFate>;
     /*
@@ -514,6 +518,11 @@ export type SaveRunDeps = {
      * written for it. Required: every request and journal write of a run or a recovery asks it.
      */
     current: () => boolean;
+    /*
+     * The account this session is (its unlocked user id), written into every row a run makes;
+     * null when none is unlocked, and then nothing is started or recovered.
+     */
+    account: string | null;
     newId?: () => string;
     now?: () => number;
     /* How a run waits between tries (a folder creation refused for a key change); tests don't. */
@@ -662,6 +671,8 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
     const current = () => deps.current();
     const signedOut = () => new RunStopped('signed-out', stoppedWords('signed-out'), 'nothing');
     if (!current()) throw signedOut();
+    const account = deps.account;
+    if (!account) throw signedOut();
     // A lock while it starts (lockRuns cannot reach a run not yet live): it never starts either.
     const unlockedSince = lockGeneration;
     const lockedNow = () =>
@@ -683,7 +694,15 @@ export async function startRun(deps: SaveRunDeps, plan: RunPlan): Promise<SaveRu
         if (!current()) throw signedOut();
         const lockedWhileHeld = lockedNow();
         if (lockedWhileHeld) throw lockedWhileHeld;
-        const row: RunRow = { id, workspaceId, nodeIds: [], uploadIds: [], at: now() };
+        const row: RunRow = {
+            id,
+            account,
+            workspaceId,
+            nodeIds: [],
+            uploadIds: [],
+            at: now(),
+            destinations: plan.targets.map((target) => target.id),
+        };
         await deps.runs.put(row);
         // Signed out while the row was written: it goes too (only this row, wherever it landed).
         if (!current()) {
@@ -1522,9 +1541,17 @@ async function cleanUp(
     }
     if (!stillOn()) return signedOutNow();
     const notFound = new Set<string>();
-    const discarded = await discard(deps, row.workspaceId, row.nodeIds, stillOn, notFound, () => {
-        held = true;
-    }).catch((): Cleanup => 'left');
+    const discarded = await discard(
+        deps,
+        row.workspaceId,
+        row.nodeIds,
+        stillOn,
+        notFound,
+        () => {
+            held = true;
+        },
+        { published: options.published, destinations: row.destinations },
+    ).catch((): Cleanup => 'left');
     removed = discarded === 'deleted' || discarded === 'nothing';
     // A folder whose creation went unanswered, not found now: the server may still make it.
     if (!stillOn()) return signedOutNow();
@@ -1616,18 +1643,20 @@ async function changeRow(
  * itself. Not after a sign-out.
  */
 function swapRow(
-    deps: Pick<SaveRunDeps, 'runs' | 'current'>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current' | 'account'>,
     expected: RunRow,
     next: RunRow | null,
 ) {
     return changeRow(deps.runs, expected.id, (current) =>
-        current && signedIn(deps) && stable(current) === stable(expected) ? next : undefined,
+        current && signedIn(deps) && ours(deps, current) && stable(current) === stable(expected)
+            ? next
+            : undefined,
     );
 }
 
 /* Published results to the Trash, then deleted forever where the person may; anything refused is `left`. */
 async function discard(
-    deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge'>,
+    deps: Pick<SaveRunDeps, 'trash' | 'purge' | 'mayPurge' | 'lookFolder'>,
     workspaceId: string,
     nodeIds: string[],
     /* Asked before every request: false (a sign-out) stops here, leaving the rest. */
@@ -1636,15 +1665,33 @@ async function discard(
     notFound?: Set<string>,
     /* Told when a family manager's pause refused it: the rest is left for after the hold. */
     onHeld: () => void = () => {},
+    reach: {
+        /* Nodes whose publication was sent; without it (an interrupted run), any may have been. */
+        published?: Set<string>;
+        /* The folders the nodes were made in (the run's targets); without them, reach is unknown. */
+        destinations?: string[];
+    } = {},
 ): Promise<Cleanup> {
     if (!nodeIds.length) return 'nothing';
     if (!stillOn()) return 'left';
     const trashed = await deps.trash(workspaceId, nodeIds);
-    const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
-    if (fates.some((fate) => fate === 'held')) {
+    if (nodeIds.some((id) => trashed.get(id) === 'held')) {
         onHeld();
         return 'left';
     }
+    // "Not found" is the server's answer for an item this person can no longer reach as well as
+    // for one that isn't there: an editor of two of one owner's folders who lost only the
+    // result's hears it for a file that still exists. Only a member of the space (who reaches all
+    // of it) hears it as gone, or someone who still finds every folder the run saved into, or
+    // anyone for a node never sent to be published. Otherwise it is no answer: the row stays, and
+    // nothing is settled.
+    const ambiguous = nodeIds.filter(
+        (id) => trashed.get(id) === 'gone' && (reach.published?.has(id) ?? true),
+    );
+    if (ambiguous.length && stillOn() && !(await reaches(deps, workspaceId, reach, stillOn)))
+        for (const id of ambiguous) trashed.set(id, 'refused');
+    if (!stillOn()) return 'left';
+    const fates = nodeIds.map((id) => trashed.get(id) ?? 'refused');
     for (const id of nodeIds) if (trashed.get(id) === 'gone') notFound?.add(id);
     if (fates.every((fate) => fate === 'denied')) return 'no-access';
     if (fates.some((fate) => fate === 'refused' || fate === 'denied')) return 'left';
@@ -1667,13 +1714,38 @@ async function discard(
 }
 
 /*
+ * Whether this person still reaches what a run made: a member of the space, or someone who finds
+ * every folder it saved into now. No answer, or a sign-out meanwhile, is not reaching it.
+ */
+async function reaches(
+    deps: Pick<SaveRunDeps, 'mayPurge' | 'lookFolder'>,
+    workspaceId: string,
+    reach: { destinations?: string[] },
+    stillOn: () => boolean,
+) {
+    try {
+        if ((await deps.mayPurge(workspaceId)) === true) return true;
+        const destinations = reach.destinations ?? [];
+        if (!destinations.length || !deps.lookFolder) return false;
+        for (const id of destinations) {
+            if (!stillOn()) return false;
+            if ((await deps.lookFolder(workspaceId, id)) === null) return false;
+        }
+        return stillOn();
+    } catch {
+        return false;
+    }
+}
+
+/*
  * Runs a closed tab (or a crash) left behind, for the next open to offer
  * "… was interrupted. Delete what was made?": rows of runs not running in
  * this page and whose lock no tab holds. Ids only; the app names the folder from its own
  * metadata.
  */
 export async function interruptedRuns(
-    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'current' | 'exclusive'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'isLive' | 'current' | 'exclusive' | 'account'> &
+        Partial<SaveRunDeps>,
 ) {
     const now = deps.now ?? (() => Date.now());
     const live = new Set([...liveRuns].map((run) => run.id));
@@ -1681,15 +1753,15 @@ export async function interruptedRuns(
     const left: RunRow[] = [];
     const quiet: RunRow[] = [];
     for (const listed of rows) {
-        // Live here: never taken for interrupted.
-        if (live.has(listed.id)) continue;
+        // Live here: never taken for interrupted. Another account's: never touched at all.
+        if (live.has(listed.id) || !ours(deps, listed)) continue;
         // Every decision under the run's own lock, from the row read again inside it: a run whose
         // lock a tab holds (live, or frozen with it) is passed over, and nothing read before the
         // lock is acted on (a row an owner wrote since is never removed for an older read).
         await deps
             .exclusive(listed.id, async () => {
                 const row = await readRow(deps.runs, listed.id);
-                if (!row) return;
+                if (!row || !ours(deps, row)) return;
                 // A finished run's row that couldn't be removed then (or a Keep's mark): dropped
                 // now, only as read here.
                 if (row.done) return void (await swapRow(deps, row, null).catch(() => {}));
@@ -1717,7 +1789,7 @@ export function quietlySettled() {
 }
 
 async function settleQuietly(
-    deps: Pick<SaveRunDeps, 'runs' | 'current' | 'exclusive'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current' | 'exclusive' | 'account'> & Partial<SaveRunDeps>,
     rows: RunRow[],
     now: () => number,
 ) {
@@ -1730,7 +1802,7 @@ async function settleQuietly(
                 if (row.chosen === 'delete') await lookAgain(deps, row, now());
                 else if (deps.abortUpload)
                     await settleUploads(
-                        deps as Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current'>,
+                        deps as Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current' | 'account'>,
                         row,
                     );
             });
@@ -1747,20 +1819,25 @@ async function settleQuietly(
  * and the row goes.
  */
 async function lookAgain(
-    deps: Pick<SaveRunDeps, 'runs' | 'current'> & Partial<SaveRunDeps>,
+    deps: Pick<SaveRunDeps, 'runs' | 'current' | 'account'> & Partial<SaveRunDeps>,
     row: RunRow,
     now: number,
 ) {
     if (!deps.lookFolder) return;
     let holds: number | null = null;
+    let uncounted = false;
     for (const id of row.nodeIds) {
         const items = await deps.lookFolder(row.workspaceId, id);
         if (!signedIn(deps)) return;
-        if (items !== null) holds = (holds ?? 0) + items;
+        if (items === null) continue;
+        holds ??= 0;
+        // Found, its items not countable (in the Trash): never said to hold nothing.
+        if (items === UNCOUNTED) uncounted = true;
+        else holds += items;
     }
     if (holds !== null) {
-        const { chosen: _answer, ...rest } = row;
-        await swapRow(deps, row, { ...rest, holds });
+        const { chosen: _answer, uncounted: _before, ...rest } = row;
+        await swapRow(deps, row, { ...rest, holds, ...(uncounted ? { uncounted } : {}) });
         return;
     }
     const settled = (row.uncertain ?? []).every((held) => now - held.at >= CREATION_SETTLE_MS);
@@ -1772,14 +1849,19 @@ function signedIn(deps: Pick<SaveRunDeps, 'current'>) {
     return deps.current();
 }
 
+/* Made by this session's account: only such a row is offered, settled, deleted or written. */
+function ours(deps: Pick<SaveRunDeps, 'account'>, row: RunRow) {
+    return deps.account !== null && row.account === deps.account;
+}
+
 /*
  * Before acting on a row read earlier, and again before writing it: still this session's, and the
  * row on disk still the one read (another open, or this one's clean-up, may have changed it).
  */
-async function stillSo(deps: Pick<SaveRunDeps, 'runs' | 'current'>, row: RunRow) {
+async function stillSo(deps: Pick<SaveRunDeps, 'runs' | 'current' | 'account'>, row: RunRow) {
     if (!signedIn(deps)) return false;
     const held = (await deps.runs.list()).find((each) => each.id === row.id);
-    return held !== undefined && signedIn(deps) && stable(held) === stable(row);
+    return held !== undefined && signedIn(deps) && ours(deps, held) && stable(held) === stable(row);
 }
 function stable(value: unknown): string {
     if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
@@ -1810,7 +1892,8 @@ export async function cleanUpInterrupted(
         // From the row as the journal holds it now: kept in another tab, or already gone, or
         // changed since this snapshot was read (the person decides again).
         const held = await readRow(deps.runs, row.id);
-        if (!held) return 'gone' as const;
+        // Another account's is not this person's to delete: as if it weren't there.
+        if (!held || !ours(deps, held)) return 'gone' as const;
         if (held.chosen === 'keep') return 'kept' as const;
         if (stable(held) !== stable(row)) return 'changed' as const;
         return cleanUpNow(deps, row);
@@ -1833,7 +1916,7 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
     // with the person's answer, and later opens only look for them (interruptedRuns).
     const waitingOn = result.onlyWaitingOn;
     if (result.cleanup === 'left' && waitingOn && current()) {
-        const { holds: _seen, ...rest } = row;
+        const { holds: _seen, uncounted: _unseen, ...rest } = row;
         await swapRow(deps, row, {
             ...rest,
             nodeIds: waitingOn,
@@ -1847,7 +1930,7 @@ async function cleanUpNow(deps: SaveRunDeps, row: RunRow) {
 
 /* A nodeless row's uploads aborted; it goes once none is left without an answer. */
 async function settleUploads(
-    deps: Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current'>,
+    deps: Pick<SaveRunDeps, 'runs' | 'abortUpload' | 'current' | 'account'>,
     row: RunRow,
 ) {
     const left: string[] = [];
@@ -1867,7 +1950,7 @@ async function settleUploads(
  * is kept, as asked.
  */
 export async function keepInterrupted(
-    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current' | 'exclusive'>,
+    deps: Pick<SaveRunDeps, 'abortUpload' | 'runs' | 'current' | 'exclusive' | 'account'>,
     row: RunRow,
 ): Promise<'kept' | 'not-recorded' | 'signed-out' | 'gone' | 'busy'> {
     // Under the run's own lock, or nothing (`busy`): the run is live, or another tab's Keep or
@@ -1878,7 +1961,7 @@ export async function keepInterrupted(
         if (!stillOn()) return 'signed-out' as const;
         // As the journal holds it now: a Delete another tab finished (gone), or a Keep already made.
         const held = await readRow(deps.runs, row.id);
-        if (!held) return 'gone' as const;
+        if (!held || !ours(deps, held)) return 'gone' as const;
         if (held.chosen === 'keep') return 'kept' as const;
         for (const uploadId of held.uploadIds) {
             if (!stillOn()) return 'signed-out' as const;
