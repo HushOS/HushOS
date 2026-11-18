@@ -133,7 +133,7 @@ final class BackgroundTransfers {
 
     /* Registers the background task that starts waiting transfers; before the app finishes launching. */
     static func registerTask() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: .main) { task in
             task.expirationHandler = { task.setTaskCompleted(success: false) }
             Task { @MainActor in
                 await BackgroundTransfers.shared.pump()

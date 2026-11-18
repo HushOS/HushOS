@@ -14,12 +14,16 @@ import com.hushos.app.BuildConfig
 import com.hushos.app.data.rethrowIfCancelled
 import com.hushos.app.data.Auth
 import com.hushos.app.data.familyEpoch
+import com.hushos.app.data.archiveScope
+import com.hushos.app.data.keptMayLeave
+import com.hushos.app.data.openKeptArchive
 import com.hushos.app.data.familyWordsSince
 import com.hushos.app.data.familyOf
 import com.hushos.app.data.isFamilyWorkspace
 import com.hushos.app.data.olderThan
 import com.hushos.app.data.catalogueAll
 import com.hushos.app.data.saveFromLink
+import com.hushos.app.data.openArchive
 import com.hushos.app.data.BillingSummary
 import com.hushos.app.data.StorageAllowance
 import com.hushos.app.data.NotAuthenticated
@@ -140,6 +144,8 @@ data class DriveState(
     val notice: Notice? = null,
     /* A Markdown file open in the app's own viewer (MarkdownViewer), over every screen. */
     val reading: Reading? = null,
+    /* A zip open as its list (ArchiveScreen), over every screen: never decrypted to a file, nor handed to another app. */
+    val archive: ArchiveSubject? = null,
     /* An alert's words: a title, what to do, and the raw detail for Details only. */
     val error: com.hushos.app.data.Problem? = null,
     val busy: Boolean = false,
@@ -630,6 +636,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         link = null
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
     }
 
@@ -963,6 +970,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         families.reset()
         trustJoins.clear()
         notices.clear()
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin)
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -994,6 +1002,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         link = null
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, signedOutNotice = true)
         // Ended because this phone was removed from the account: everything of the account goes too,
         // unless someone has signed in since (the generation moved), and a sign-in started after the
@@ -1045,6 +1054,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun clearError() = _state.update { it.copy(error = null) }
 
     override fun onCleared() {
+        archiveBrowse?.close()
         runCatching { connectivity.unregisterNetworkCallback(network) }
         super.onCleared()
     }
@@ -2256,6 +2266,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         trustJoins.clear()
         notices.clear()
         filesAppChanged()
+        endArchive()
         _state.value = DriveState(gate = Gate.SIGNED_OUT, origin = state.value.origin, accountDeleted = true)
     }
 
@@ -2492,6 +2503,102 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* A Markdown file, opened in HushOS's own viewer instead of whichever app claims text (openWith). */
     fun read(name: String, uri: Uri, mime: String?, node: String?, workspace: String?) = _state.update { it.copy(reading = Reading(name, uri, mime, node, workspace)) }
     fun closeReading() = _state.update { it.copy(reading = null) }
+
+    /* A zip opens as its list in the app (ArchiveScreen); false for anything else, which opens as before. */
+    fun showArchive(item: Opened): Boolean {
+        if (item.isFolder || !com.hushos.app.data.ArchiveTree.isZip(item.name, item.metadata.mime)) return false
+        // A family file as it is now (another member may have replaced it): read again before the
+        // session opens, and the screen then names and sends that row, never the stale one tapped.
+        return showArchive(ArchiveSubject.of(item)) { resolved ->
+            val current = currentOpened(item)
+            resolved(ArchiveSubject.of(current))
+            openArchive(current)
+        }
+    }
+
+    /*
+     * A zip kept on this phone, by its record alone ("On this phone"): opened from the kept copy, read
+     * by range into memory, offline included; never handed to another app.
+     */
+    fun showKeptArchive(entry: Offline.Entry): Boolean {
+        if (!com.hushos.app.data.ArchiveTree.isZip(entry.name, entry.mime)) return false
+        val file = Offline.file(context, entry)
+        return showArchive(ArchiveSubject(entry.id, entry.name, kept = file, workspace = entry.workspaceId)) {
+            // Its workspace and node from its record: a proof that the workspace is a family's (which purges the copy)
+            // closes it, and the screen drops what it showed.
+            // Refused against every revocation the session holds, then scoped to it, as a drive row's zip is: a forget or a
+            // proof the registry sees closes it, however late.
+            val vault = vault ?: throw kotlin.coroutines.cancellation.CancellationException("Signed out.")
+            vault.openKeptArchive(file, entry.workspaceId, entry.id)
+        }
+    }
+
+    private fun showArchive(subject: ArchiveSubject, open: suspend (resolved: (ArchiveSubject) -> Unit) -> com.hushos.app.data.OpenArchive): Boolean {
+        archiveBrowse?.close()
+        // Held here, not by the screen: a rotation keeps the session, its password, the folder and the downloads.
+        archiveBrowse = ArchiveBrowse(subject, viewModelScope, open, refused = ::archiveRefused)
+        _state.update { it.copy(archive = subject) }
+        return true
+    }
+    fun closeArchive() {
+        endArchive()
+        _state.update { it.copy(archive = null) }
+    }
+
+    /*
+     * A family's clear (FamiliesModel.clear): the archive open from one of `workspaces`, or from one
+     * of `nodes` (a kept copy has only its id), closes with the family's other plaintext.
+     */
+    override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
+        val subject = state.value.archive ?: return
+        // By its workspace when it has one; by its node only when it has none (a kept copy whose record predates its
+        // workspace's): another workspace's node that shares its id never closes it.
+        val workspace = subject.workspace
+        val reached = if (workspace != null) workspaces.any { it.equals(workspace, ignoreCase = true) }
+            else nodes.any { it.equals(subject.id, ignoreCase = true) }
+        if (reached) closeArchive()
+    }
+
+    /* Every path that ends a session ends the archive open in it: its sessions closed, its downloads stopped, nothing kept. */
+    private fun endArchive() {
+        archiveBrowse?.close()
+        archiveBrowse = null
+    }
+
+    /*
+     * The kept copy of an archive, to another app: what Send a copy does for a drive row. Only while it may still leave
+     * (Vault.keptMayLeave: its folder not proven a family's, let go of or purged since) and the copy is still there;
+     * refused in the family's words otherwise, nothing handed on.
+     */
+    fun sendKept(name: String, file: java.io.File, workspace: String?, node: String?) {
+        val vault = vault
+        if (vault == null || !vault.keptMayLeave(workspace, node) || !file.exists()) {
+            notify(com.hushos.app.data.FamilyWords.OPEN_AGAIN)
+            return
+        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.shared", file)
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("application/zip").putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            .addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        runCatching { context.startActivity(shareChooser(context, send, name).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)) }
+    }
+
+    /* The archive open now, for the screen; none once it is closed. */
+    var archiveBrowse: ArchiveBrowse? = null
+        private set
+
+    /*
+     * A 401 under an archive's reads: the session ends only if the one it was read under is still
+     * the one in use (a late answer after a sign-out and a sign-in ends nothing), as twoStep does.
+     */
+    fun archiveRefused(session: Shared.Session?) {
+        if (session == null || com.hushos.app.data.Auth.stillSignedIn(Shared.session(context), session)) sessionLost()
+    }
+
+    /* The archive's directory, read under this session's vault; the caller closes it when its screen goes. */
+    suspend fun openArchive(item: Opened): com.hushos.app.data.OpenArchive {
+        val vault = vault ?: throw kotlin.coroutines.cancellation.CancellationException("Signed out.")
+        return vault.openArchive(item)
+    }
 
     /* One notice on screen at a time, until-read ones never lost to the next (NoticeQueue). */
     private val notices = NoticeQueue { notice -> _state.update { it.copy(notice = notice) } }

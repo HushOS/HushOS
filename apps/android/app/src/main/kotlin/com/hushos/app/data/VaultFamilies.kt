@@ -121,7 +121,9 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
     // Under the lock a share mount, an open and a write's answer keep their rows under: proven and emptied at once, so
     // nothing kept by another way lands between the two.
     val gone = HashSet<String>()
-    synchronized(familyCopiesLock) {
+    val proven = HashSet<String>()
+    val purged = HashSet<String>()
+    val closing = synchronized(familyCopiesLock) {
         for (id in ids.map { it.lowercase() }) {
             if (id == own) continue
             // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never
@@ -129,10 +131,17 @@ internal fun Vault.noteFamilyWorkspaces(ids: List<String>, groupId: String) {
             if (familyAreas.put(id, groupId.lowercase()) == null) {
                 val held = nodes.forgetWorkspace(id)
                 gone.addAll(held)
-                familyPurged.addAll(purgeShareCopies(id, held))
+                val ids = purgeShareCopies(id, held)
+                familyPurged.addAll(ids)
+                purged.addAll(ids)
+                proven.add(id)
             }
         }
+        // A zip open from it by a share holds that share's content key: revoked in the same step as the proof (no
+        // piece is written after), and closed below, outside the lock, its downloads with it.
+        ArchiveSessions.shared.revoke(familyState, proven, nodes = purged)
     }
+    ArchiveSessions.shared.finish(closing)
     forgetParents(gone)
 }
 
@@ -400,17 +409,23 @@ internal fun Vault.forgetWorkspaces(ids: Collection<String>, words: String = Fam
     // Rows and keys dropped under it too, so an open that asked the ledger before this either lands first and is dropped
     // here, or finds the count moved and keeps nothing. Never this account's own drive, whatever a member list names.
     val gone = HashSet<String>()
-    synchronized(familyCopiesLock) {
+    // Never this account's own drive: its count never moves for a family's forget (an archive of it is held to that count).
+    val theirs = ids.filter { !it.equals(ownWorkspaceId, ignoreCase = true) }
+    val closing = synchronized(familyCopiesLock) {
         // An ended session's cleanup touches nothing: the copies there now may be the next session's.
         if (closed) return gone
-        for (id in ids) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
-        FamilyCopies.delete(context.cacheDir, context.filesDir, ids)
-        for (id in ids) if (!id.equals(ownWorkspaceId, ignoreCase = true)) {
+        for (id in theirs) familyEpochs.compute(id.lowercase()) { _, old -> ((old?.first ?: 0L) + 1) to words }
+        FamilyCopies.delete(context.cacheDir, context.filesDir, theirs)
+        for (id in theirs) {
             // The sealed thumbnails kept of what this session opened there go with the rows that named them.
             runCatching { mirror.dropThumbnails(nodes.rowsIn(id).mapNotNull { it.node.currentVersion?.id }) }
             gone.addAll(nodes.forgetWorkspace(id))
         }
+        // Its zips, idle ones included, revoked in the same step as the count (by node too: a kept zip known only by
+        // its node), and closed below, outside the lock: their keys don't wait for a next call to find the count moved.
+        ArchiveSessions.shared.revoke(familyState, theirs, nodes = gone)
     }
+    ArchiveSessions.shared.finish(closing, words)
     forgetParents(gone)
     return gone
 }
@@ -442,6 +457,40 @@ internal fun Vault.sweepFamilyCopies(keep: Set<String>) = synchronized(familyCop
         familyEpochs.putIfAbsent(workspace, 0L to FamilyWords.OPEN_AGAIN)
         folder.deleteRecursively()
     }
+}
+
+/*
+ * Whether a zip kept on this phone (`workspace`, or only its `node` for a record kept before its workspace was) still
+ * stands against every revocation this session holds, not only those since a tap: not while the session ended, nor once
+ * its folder was let go of (a forget moved its count, whether or not route 25 had proven it), nor, a folder proven a
+ * family's, unless it opened through that family's ledger (`viaFamily` and the ledger's own row). By workspace when the
+ * record has one; the node-only purge set only for a record without one. This account's own drive always stands. Under
+ * the lock forgets and proofs take, so never half-way through one.
+ */
+private fun Vault.keptStands(workspace: String?, node: String?, viaFamily: Boolean): Boolean = synchronized(familyCopiesLock) {
+    if (closed) return false
+    val id = node?.lowercase()
+    val ws = workspace?.lowercase()
+        ?: return id == null || (id !in familyState.archivePurged && familyPurged.none { it.equals(id, ignoreCase = true) })
+    if (ws == ownWorkspaceId?.lowercase()) return true
+    if (isFamilyWorkspace(ws)) return viaFamily && id != null && nodes.viaLedger(ws, id)
+    !familyEpochs.containsKey(ws)
+}
+
+/* Whether a kept zip may be opened (`Vault.openArchive`'s kept copy, a record's `openKeptArchive`). */
+fun Vault.keptAdmits(workspace: String?, node: String?, viaFamily: Boolean = false): Boolean = keptStands(workspace, node, viaFamily)
+
+/* Whether a zip kept by its record may be handed on (Send a copy), as iOS's ArchiveSessions.keptMayLeave: never a family folder's. */
+fun Vault.keptMayLeave(workspace: String?, node: String?): Boolean = keptStands(workspace, node, viaFamily = false)
+
+/*
+ * A zip kept on this phone by its offline record, opened from that copy: refused first against every revocation the
+ * session holds (`keptAdmits`), then held to its scope from here on.
+ */
+suspend fun Vault.openKeptArchive(file: java.io.File, workspace: String?, node: String?, sessions: ArchiveSessions = ArchiveSessions.shared): OpenArchive {
+    val scope = archiveScope(workspace, node)
+    if (!keptAdmits(workspace, node)) throw FamilyFailure(FamilyWords.OPEN_AGAIN)
+    return sessions.openLocal(FileLocalSource(file), scope = scope)
 }
 
 /* A family folder's invalidation count (0 until a forget): a download or a listing captures it before it begins. */

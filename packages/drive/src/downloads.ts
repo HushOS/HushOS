@@ -568,7 +568,15 @@ export function createDownloadManager(options: DownloadManagerOptions) {
     function openReader(
         node: DriveNode,
         cacheChunks = 4,
-        options: { tool?: boolean } = {},
+        /*
+         * `tool`: a tool's reader (the tail kept, its padding fetched beside it and always to the
+         * end, at most four times the object fetched). `uncapped` drops that last limit, for a
+         * reader a person drives one action at a time (an archive open in the viewer), whose
+         * reads have no end a tool's would. `onFetch` hears each chunk of the file about to be
+         * fetched and decrypted, with its plaintext size, and refuses it by throwing: a caller
+         * then charges what is fetched, not the bytes a read asked for (one byte can fetch 8 MiB).
+         */
+        options: { tool?: boolean; uncapped?: boolean; onFetch?: (bytes: number) => void } = {},
     ): FileReader {
         // Per chunk, the most fetched so far: a chunk fetched again after eviction counts once.
         const fetched = new Map<number, number>();
@@ -612,12 +620,30 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         let tail: Promise<Uint8Array> | null = null;
         let trailing: Promise<void> | null = null;
         let paddingFailed: unknown = null;
+        /* Settles when the reader closes: a drain waiting on a tool's padding is let go of then. */
+        let released!: () => void;
+        const closing = new Promise<void>((resolve) => (released = resolve));
+        /*
+         * The reads waiting now, each by what ends it: a close ends them (a chunk's RPC, a connection back,
+         * may never come). One per read, dropped as the read settles. Never a race against one promise
+         * shared by every read: each race adds a reaction to it, and JavaScriptCore keeps every winning
+         * result (the decrypted chunks) reachable through those reactions until the shared promise settles,
+         * so a long read on Safari held the whole file until the close.
+         */
+        const waiting = new Set<(error: Error) => void>();
         let fetches = 0;
         function fetchOne(index: number) {
-            if (options.tool && ++fetches > TOOL_FETCH_FACTOR * source.total)
+            if (options.tool && !options.uncapped && ++fetches > TOOL_FETCH_FACTOR * source.total)
                 return Promise.reject(
                     new Error('This file was read more times than a tool needs.'),
                 );
+            try {
+                options.onFetch?.(
+                    Math.max(0, Math.min(CHUNK_SIZE, source.plaintextSize - index * CHUNK_SIZE)),
+                );
+            } catch (error) {
+                return Promise.reject(error);
+            }
             return source.open().then(() => source.fetchChunk(index));
         }
         /* Every padding chunk asked for, one failing or not; the first failure fails every later read. */
@@ -667,9 +693,22 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (offset < 0 || end <= offset) return new Uint8Array(0);
                 const first = Math.floor(offset / CHUNK_SIZE);
                 const last = Math.floor((end - 1) / CHUNK_SIZE);
-                const pieces = await Promise.all(
-                    Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
-                );
+                // A close ends the wait at once: whoever holds what was read before (readAll's buffer) lets go now,
+                // not when a chunk that may never come (offline) comes.
+                let stop!: (error: Error) => void;
+                const stopped = new Promise<never>((_, reject) => (stop = reject));
+                waiting.add(stop);
+                let pieces: Uint8Array[];
+                try {
+                    pieces = await Promise.race([
+                        Promise.all(
+                            Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
+                        ),
+                        stopped,
+                    ]);
+                } finally {
+                    waiting.delete(stop);
+                }
                 const out = new Uint8Array(end - offset);
                 let written = 0;
                 for (let i = 0; i < pieces.length; i++) {
@@ -685,7 +724,10 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (closed) return;
                 if (options.tool) {
                     // Only a tail that was asked for brings its padding; one never asked for stays unasked.
-                    await trailing;
+                    // A close lets go of the wait: the padding goes on as ciphertext without the reader, so
+                    // whatever holds the file it read (a viewer closed while offline) never waits on it.
+                    await Promise.race([trailing, closing]);
+                    if (closed) return;
                     if (paddingFailed) throw paddingFailed;
                     return;
                 }
@@ -696,6 +738,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 // Plaintext and the key go first; a tool's padding, ciphertext only, is waited
                 // for after, so a lock while offline holds no decrypted bytes meanwhile.
                 closed = true;
+                released();
+                for (const stop of waiting) stop(new Error('The preview was closed.'));
+                waiting.clear();
                 cache.clear();
                 tail = null;
                 listeners.clear();

@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod account;
+mod archive;
 mod area_ledger;
 mod area_open;
 mod bytes;
@@ -51,6 +52,10 @@ mod tools;
 mod two_step;
 
 pub use account::*;
+pub use archive::{
+    zip_entries_max, zip_entry_asks_first, zip_entry_preview_limits, ArchiveEntry, ArchiveError,
+    ArchiveFolders, EntrySink, LocalSource, PreviewLimits, ZipArchiveSession,
+};
 pub use area_ledger::*;
 pub use area_open::*;
 pub use bytes::*;
@@ -92,6 +97,27 @@ pub use two_step::*;
 #[doc(hidden)]
 pub mod fuzzing {
     use serde_json::Value;
+
+    /// Each entry of a zip as its central directory records it, by index: its method (inside
+    /// AES, the real one) and its CRC. None when the archive doesn't list.
+    pub fn zip_records(bytes: &[u8]) -> Option<Vec<(u32, u16, u32)>> {
+        let zip = crate::archive::Zip::open(&bytes.to_vec()).ok()?;
+        let listing = zip.listing().ok()?;
+        Some(
+            listing
+                .entries
+                .iter()
+                .map(|entry| {
+                    let method = if entry.lock == crate::archive::Lock::Aes {
+                        entry.aes_method.unwrap_or(u16::MAX)
+                    } else {
+                        entry.method
+                    };
+                    (entry.index, method, entry.crc)
+                })
+                .collect(),
+        )
+    }
 
     /// The parts a statement's bytes hold, or none when the grammar refuses them.
     pub fn parse_statement(bytes: &[u8]) -> Option<Vec<Value>> {

@@ -2,7 +2,9 @@ import { ArrowDownIcon, ArrowUpIcon, CheckIcon, XIcon, type LucideIcon } from 'l
 import { cn } from 'cn';
 import {
     useCallback,
+    useContext,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
     useSyncExternalStore,
@@ -14,7 +16,7 @@ import {
     type RefObject,
 } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
-import { useHoldFirstPaint } from '@/components/drive/first-paint';
+import { FirstPaintContext, useHoldFirstPaint } from '@/components/drive/first-paint';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
@@ -62,6 +64,14 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
     /* Whether the arrows put the focus where it is, rather than a click. */
     const [keyed, setKeyed] = useState(false);
     const [marquee, setMarquee] = useState<Marquee | null>(null);
+    /* The row the arrows just moved to, to scroll to (and focus) once it is drawn. */
+    const reveal = useRef<{ id: string; takeKeys: boolean } | null>(null);
+    /*
+     * The row holding the page's real keyboard focus (its name, its thumbnail, its ⋯ button),
+     * whatever the selection says: a long list keeps it drawn, so a scroll never takes the
+     * focused element out of the page. Null once the focus leaves the list's rows.
+     */
+    const [holding, setHolding] = useState<string | null>(null);
 
     function select(id: string, event?: Modifiers) {
         const toggle = coarse || Boolean(event?.metaKey || event?.ctrlKey);
@@ -111,16 +121,28 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         const next = ids[Math.min(ids.length - 1, Math.max(0, index + delta))]!;
         select(next, extend ? { shiftKey: true } : undefined);
         setKeyed(true);
-        const item = root.current?.querySelector<HTMLElement>(`[data-node-id="${next}"]`);
-        item?.scrollIntoView({ block: 'nearest' });
         // The keys are on a row's name (Tab) or its thumbnail (a click, in Chromium): they move
         // along with the arrows to the next row's name, so one row has focus and Enter acts there.
-        if (
+        const takeKeys = Boolean(
             document.activeElement?.closest('[data-row-name], [data-row-thumb]') &&
-            root.current?.contains(document.activeElement)
-        )
-            item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
+            root.current?.contains(document.activeElement),
+        );
+        // A long list draws only what is near the screen, so the next row may not be drawn
+        // yet: it is once the focus is on it (the list keeps the focused row), and is
+        // scrolled to after that render.
+        reveal.current = { id: next, takeKeys };
     }
+    useLayoutEffect(() => {
+        const pending = reveal.current;
+        if (!pending) return;
+        reveal.current = null;
+        const item = root.current?.querySelector<HTMLElement>(
+            `[data-node-id="${CSS.escape(pending.id)}"]`,
+        );
+        item?.scrollIntoView({ block: 'nearest' });
+        if (pending.takeKeys)
+            item?.querySelector<HTMLElement>('[data-row-name]')?.focus({ preventScroll: true });
+    });
     /*
      * Whether an item wears the focus outline: always once the arrows moved there, as the
      * tint alone says selected, not here; after a click only on an item the click left
@@ -136,6 +158,11 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
      * WebKit focuses no button on a click, so there `keyed` alone marks the row.
      */
     useEffect(() => {
+        const rowOf = (target: EventTarget | null) => {
+            const row =
+                target instanceof Element ? target.closest<HTMLElement>('[data-node-id]') : null;
+            return row && root.current?.contains(row) ? (row.dataset.nodeId ?? null) : null;
+        };
         const follow = (event: FocusEvent) => {
             const name =
                 event.target instanceof Element ? event.target.closest('[data-row-name]') : null;
@@ -145,9 +172,21 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
                     : undefined;
             if (id) setFocused(id);
             setKeyed(false);
+            const holder = rowOf(event.target);
+            if (holder) setHolding(holder);
+        };
+        // Focus leaving the rows (for anything but another row, which focusin records) lets go,
+        // but not the window losing focus: back in it, the keys are on the same row.
+        const leave = (event: FocusEvent) => {
+            if (!document.hasFocus()) return;
+            if (rowOf(event.target) && !rowOf(event.relatedTarget)) setHolding(null);
         };
         document.addEventListener('focusin', follow);
-        return () => document.removeEventListener('focusin', follow);
+        document.addEventListener('focusout', leave);
+        return () => {
+            document.removeEventListener('focusin', follow);
+            document.removeEventListener('focusout', leave);
+        };
     }, [root]);
 
     const latest = useRef({ ids, selected, select });
@@ -315,6 +354,7 @@ export function useListSelection(ids: string[], root: RefObject<HTMLElement | nu
         selectAll,
         moveFocus,
         focusShown,
+        holding,
     };
 }
 
@@ -807,6 +847,49 @@ export const LIST_COLUMN = {
     changedAlone: 'hidden @min-[34rem]/list:table-cell',
     sizeAlone: 'hidden @min-[41rem]/list:table-cell',
 } as const;
+
+/*
+ * The same columns as LIST_COLUMN, for a list that draws only the rows near the screen,
+ * decided from the list's width here rather than by a CSS size container. In WebKit, a size
+ * container (`@container`) around rows with inline SVG marks that are drawn again as the list
+ * scrolls throws the scroll back, to where it was or to the top (Safari's engine 27.2, and
+ * Playwright's WebKit): a list that redraws on every scroll can't sit in one. The other lists
+ * never redraw on scroll and keep LIST_COLUMN. `alone`: no Who can open column (a family or
+ * shared folder), so Changed and Size keep their room longer. Each value is a class for the
+ * column's header and cells.
+ */
+export function useListColumns(element: HTMLElement | null, alone: boolean) {
+    const [rem, setRem] = useState<number | null>(null);
+    const measure = useCallback(() => {
+        const width = element?.getBoundingClientRect().width ?? 0;
+        // Hidden (the drive's first paint): keep what was known.
+        if (width <= 0) return;
+        const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        // Whole rem: the columns change at whole-rem widths, and a pixel's move is no news.
+        setRem(Math.floor(width / root));
+    }, [element]);
+    useLayoutEffect(() => {
+        if (!element) return;
+        // oxlint-disable-next-line react/set-state-in-effect -- the width is the DOM's, read after layout
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, [element, measure]);
+    // Again as the drive's first paint shows the page, before that frame is drawn.
+    const shown = useContext(FirstPaintContext) === null;
+    useLayoutEffect(() => {
+        // oxlint-disable-next-line react/set-state-in-effect -- the width is the DOM's, read after layout
+        if (shown) measure();
+    }, [shown, measure]);
+    // Until the list is measured, every column: the first frame of a desk-sized list.
+    const from = (min: number) => (rem === null || rem >= min ? '' : 'hidden');
+    return {
+        access: from(35),
+        changed: from(alone ? 34 : 45),
+        size: from(alone ? 41 : 52),
+    };
+}
 
 /*
  * Whether a list's column is hidden for room right now, read from its header

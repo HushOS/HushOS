@@ -8,8 +8,20 @@ import SwiftUI
  * Android's MarkdownViewer draws the same blocks.
  */
 struct MarkdownView: View {
-    let url: URL
+    /* A file the viewer fetched, or bytes held in memory (an archive's entry, never written to a file). */
+    private let url: URL?
+    private let data: Data?
     @State private var blocks: [MarkdownBlock]?
+
+    init(url: URL) {
+        self.url = url
+        data = nil
+    }
+
+    init(data: Data) {
+        url = nil
+        self.data = data
+    }
 
     var body: some View {
         ScrollView {
@@ -30,13 +42,13 @@ struct MarkdownView: View {
         }
         .background(Alpine.ground)
         .tint(Alpine.primary)
-        .task(id: url) {
-            let url = url
+        .task(id: url?.absoluteString ?? "data-\(data?.count ?? 0)") {
+            let url = url, held = data
             // The last file's words go at once: paging to the next shows it loading, never the last one under the new name.
             blocks = nil
             // Read and parsed off the main thread: a long file shouldn't hold up the viewer's bars.
             let parsed = await Task.detached(priority: .userInitiated) {
-                let data = (try? Data(contentsOf: url)) ?? Data()
+                let data = held ?? url.flatMap { try? Data(contentsOf: $0) } ?? Data()
                 return MarkdownDocument.parse(String(decoding: data, as: UTF8.self))
             }.value
             // Paged on while it parsed: a slower earlier file must not land over the one now shown.

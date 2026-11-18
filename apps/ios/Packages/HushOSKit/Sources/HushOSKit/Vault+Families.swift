@@ -237,7 +237,12 @@ extension Vault {
         // Newly proven a family folder: whatever this phone held of it came some other way (a share mount), never through
         // the family's ledger, and goes with its keys and its place in the parent index.
         let newly = family.filter { !familyWorkspaces.contains($0) }
-        if !newly.isEmpty { forgetWorkspaces(newly, lettingGo: false) }
+        if !newly.isEmpty {
+            let gone = forgetWorkspaces(newly, lettingGo: false)
+            // A zip a share opened from one holds that share's content key: closed now, its downloads with it, and so
+            // is one opened from a copy kept of it (found by its node when its record predates the workspace's).
+            ArchiveSessions.proveFamilies(newly, nodes: gone, session: copySession)
+        }
         familyWorkspaces.formUnion(family)
         for id in family { familyAreaGroup[id] = groupId.lowercased() }
     }
@@ -287,7 +292,10 @@ extension Vault {
         TemporaryCopies.forgetShareWorkspaces(workspaces, session: copySession)
         evictedRows.formUnion(gone.union(kept))
         forgetParents(gone)
-        return gone
+        // A zip open from any of it (a family's file, a share's, a copy kept here, found by its node when its record
+        // predates its workspace's) closes now: a let-go here, the proof's own call otherwise (noteFamilyWorkspaces).
+        if lettingGo { ArchiveSessions.closeFamily(Array(workspaces), nodes: gone.union(kept), session: copySession) }
+        return gone.union(kept)
     }
 
     /* Whether a workspace is a family folder (as far as this session knows). */

@@ -144,6 +144,10 @@ jobs:
                   fi
             # Not cached through Turborepo across runs: a package's test hash leaves out the
             # workspace packages it imports, so a cached pass would survive a change to them.
+            # bsdtar is one of the independent readers the archive fixtures are checked with
+            # (apps/web/src/lib/archives/fixtures.test.ts): it opens WinZip AES, which zipfile can't.
+            - name: bsdtar for the archive fixtures
+              run: command -v bsdtar || (sudo apt-get update -qq && sudo apt-get install -y -qq libarchive-tools)
             - name: Test
               run: bun run test
 

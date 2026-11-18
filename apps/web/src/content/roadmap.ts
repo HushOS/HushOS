@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-17';
+export const updated = '2026-11-18';
 
 export const sections: RoadmapSection[] = [
     {
@@ -296,7 +296,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Drive',
                 title: 'File tools',
-                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device.',
+                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device. Zip archives already open as a list you can browse, preview and download from, on the web, iPhone and Android.',
                 links: [
                     { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
                 ],

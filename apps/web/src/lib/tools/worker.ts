@@ -35,6 +35,8 @@ export class ToolError extends Error {
 export type RangeSource = {
     size: number;
     read: (offset: number, length: number) => Promise<Uint8Array>;
+    /* Stops reading (rangeSource): reads waiting fail, and later ones. */
+    close?: () => void;
 };
 
 export type ToolContext = {
@@ -53,7 +55,7 @@ type Scope = {
 };
 
 /* Reads across every source take turns, so the page's allowance is never exceeded. */
-function turns() {
+export function turns() {
     let reads = 0;
     let bytes = 0;
     const queue: { length: number; go: () => void }[] = [];
@@ -82,7 +84,12 @@ function turns() {
     };
 }
 
-function rangeSource(size: number, port: MessagePort, take: ReturnType<typeof turns>): RangeSource {
+/* A source read by range over `port`, its reads taking their `turns`: also what the archive viewer's worker reads through. */
+export function rangeSource(
+    size: number,
+    port: MessagePort,
+    take: ReturnType<typeof turns>,
+): RangeSource {
     let next = 0;
     const pending = new Map<
         number,
@@ -96,9 +103,21 @@ function rangeSource(size: number, port: MessagePort, take: ReturnType<typeof tu
         if (answer.type === 'data') waiter.resolve(new Uint8Array(answer.bytes));
         else waiter.reject(new Error(answer.message));
     };
+    let closed = false;
     return {
         size,
+        /* Stops reading: every read waiting fails, and any later one; the port is let go of. */
+        close() {
+            if (closed) return;
+            closed = true;
+            port.onmessage = null;
+            port.close();
+            for (const waiter of pending.values())
+                waiter.reject(new Error('The read was stopped.'));
+            pending.clear();
+        },
         read(offset, length) {
+            if (closed) return Promise.reject(new Error('The read was stopped.'));
             const end = Math.min(size, offset + length);
             if (offset < 0 || end <= offset) return Promise.resolve(new Uint8Array(0));
             if (end - offset > RANGE_READ_MAX)
@@ -107,6 +126,7 @@ function rangeSource(size: number, port: MessagePort, take: ReturnType<typeof tu
                 end - offset,
                 () =>
                     new Promise<Uint8Array>((resolve, reject) => {
+                        if (closed) return reject(new Error('The read was stopped.'));
                         const id = next++;
                         pending.set(id, { resolve, reject });
                         const request: RangeRequest = {

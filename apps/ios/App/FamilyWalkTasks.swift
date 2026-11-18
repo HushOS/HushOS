@@ -30,7 +30,7 @@ enum FamilyWalkTasks {
 
     /* Registers the task's handler; before the app finishes launching. */
     static func register() {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: nil) { task in
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: .main) { task in
             Task { @MainActor in handle(task) }
         }
     }

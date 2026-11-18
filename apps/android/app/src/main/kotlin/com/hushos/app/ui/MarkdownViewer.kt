@@ -124,7 +124,7 @@ fun MarkdownViewer(reading: Reading, close: () -> Unit, openElsewhere: () -> Uni
 }
 
 @Composable
-private fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
+internal fun MarkdownBlockView(block: MdBlock, muted: Boolean = false) {
     val alpine = Alpine.colors
     val type = MaterialTheme.typography
     // A quote's words are muted, all the way down.

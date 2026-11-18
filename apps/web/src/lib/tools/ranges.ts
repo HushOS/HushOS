@@ -14,6 +14,18 @@ export type RangeReader = Pick<FileReader, 'size' | 'read'> & {
     fresh?: boolean;
     /* Lets go of what the source holds (the download reader's chunks, its key in the crypto worker). */
     close?: () => void | Promise<void>;
+    /*
+     * A reader that fetches by chunk: `charge` hears each chunk about to be fetched and decrypted
+     * (its plaintext size) and refuses it by throwing. Its owner then counts what is fetched, not
+     * the bytes a read asked for: one byte read can fetch a whole chunk.
+     */
+    meter?: (charge: (bytes: number) => void) => void;
+    /*
+     * Another reader of the same bytes with a cache of its own: with `charge`, metered as above
+     * (a download's own reads); without, the viewer's plain reader (the page's own range reads,
+     * never the worker's). Its owner closes it.
+     */
+    fork?: (charge?: (bytes: number) => void) => RangeReader;
 };
 
 /*

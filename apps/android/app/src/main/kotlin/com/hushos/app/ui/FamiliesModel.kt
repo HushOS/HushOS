@@ -134,6 +134,8 @@ interface FamilyHost {
     fun lostSession()
     /* This account isn't in `groupId` any more: what the drive queued into its folders ends (TransferQueue.endFamily). */
     fun familyEnded(groupId: String) {}
+    /* A family's clear: the zip open from one of its workspaces or items closes, its downloads stopped (DriveViewModel). */
+    fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {}
     /* Whether the account is in a family now: the background walks (FamilyWalkWork) scheduled, or cancelled. */
     fun familyWork(inFamily: Boolean) {}
     /* A walk is due, or one stopped: the background work runs once soon, so it finishes with the app closed. */
@@ -1229,6 +1231,8 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
                 reading = st.reading?.takeUnless { r -> r.workspace in workspaces || r.node?.lowercase()?.let { it in items || it in ids } == true },
             )
         }
+        // The family's zip open in the viewer closes too: its listing and password go, its downloads stop.
+        model.closeArchiveIn(workspaces, items + ids)
         for (id in ids) problems[id] = problem
         // The sync's forget deleted the copies of the folders its records know; these are the ones this session saw.
         s.owner.forgetFamilyCopies(workspaces)

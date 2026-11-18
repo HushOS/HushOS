@@ -122,6 +122,9 @@ public struct AccountStore: Sendable {
         // own storage) go, and no run writes one again.
         SaveRuns.abandonAll()
         SaveRunJournal.endAccount()
+        // Every zip open in a viewer closes, its password wiped, and its reads stop. After the session's end, so a late
+        // let-go or proof of it (refused from here on) can't refill what the next session's zips are held to.
+        ArchiveSessions.closeAll()
         // Under the marks' lock, so a raise from before the sign-out can't write them back after.
         RollbackMarkStore(folder: root.appendingPathComponent("local/marks", isDirectory: true), floor: marksFloor).deleteAll()
         // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
