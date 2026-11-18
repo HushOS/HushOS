@@ -1,0 +1,73 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_570b130ca7cb04 1664
+apps/android/app/src/main/kotlin/com/hushos/app/data/DriveApi.kt
+  s_c60e24772e04af::t_5e91632ff112c5 12-22,643,665
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_05c4ccbd048dc2 328-329,722-724,1133-1134,1492-1494,1498,1527,1549,1554-1565
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunFaultTest.kt
+  s_c60e24772e04af::t_64119769ef4d0d 204
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_5e5059b0ecbab8 225,287-299,1709-1714,1718-1719,1722-1723,1732-1746,1815-1817
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_c31cdb43e9ed74 1279
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/DriveAPI.swift
+  s_c60e24772e04af::t_c8c6a191790051 154,370-376,401
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TrashBatch.swift
+  s_c60e24772e04af::t_2a671fb0c0eead 312
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c60e24772e04af::t_41ea47a000fd82 45-50
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_e41c5e53a3d272 849,862-863,876,879-881,889,1024-1029
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_c60e24772e04af::t_a599f8b141518a 349-350,451-462,664-670
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunFaultTests.swift
+  s_c60e24772e04af::t_6aae4c80e67064 262
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_3e3b29d3f59133 181-186,244,335-347,1404-1415,1845-1861,1880-1891,1917-1919
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TrashBatchRoutesTests.swift
+  s_c60e24772e04af::t_2f19824c6bb1b1 191-197
+apps/web/src/lib/save-runs.ts
+  s_c60e24772e04af::t_625950fa04ed31 20,135-142,182-188
+docs/file-tools-design.md
+  s_c60e24772e04af::t_e676dcb09478c1 299,303-304
+packages/drive/src/api.ts
+  s_c60e24772e04af::t_1a0ddcc2817587 323-331
+packages/drive/src/client.attributes.test.ts
+  s_c60e24772e04af::t_b8be9ecafbca19 324-351
+packages/drive/src/client.ts
+  s_c60e24772e04af::t_785f038a71a271 1133-1168
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_cc1c2d944503f4 832-868,1505-1507,1510,1518-1519,1533-1613,2173-2181,2889,2891-2892,2899
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_22719080f8b0f8 8,419-423,471-475,718-719,885-886,951,1083-1084,1095-1102,1121,1166-1167,1174,1208,1239-1246,1265-1268,1662-1684
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_0d571f54d4ba1b 374-390
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_90ea7990ec7325 21,474,2315-2323,2333,2540
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_25f68cbb49bd3b::t_adf7a6dde7aa1a 474-475,939-941,1337-1339,1460-1461,1827-1829,1884-1889,1892-1895
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "21e1e808606ab5e190aab83bffd8489fd4513e9c",
+  "prompts": {},
+  "sessions": {
+    "s_25f68cbb49bd3b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a1ecca-b856-7590-afd0-887ed5dcebde",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
