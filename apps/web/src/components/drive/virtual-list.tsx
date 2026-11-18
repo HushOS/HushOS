@@ -76,22 +76,36 @@ function followScroller(list: HTMLElement, onChange: (scroller: Scroller) => voi
 
 type ListVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
 
-/* What a person scrolls with: a wheel or trackpad, a finger, the keys, the scrollbar. */
-const SCROLL_INPUTS = ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'] as const;
+/*
+ * What a person scrolls with: a wheel or trackpad, a moving finger (a tap that only presses
+ * a button, Close details say, moves nothing), the keys, the scrollbar.
+ */
+const SCROLL_INPUTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+/* Where every key edits or chooses rather than scrolls. */
+const EDITS =
+    'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role=textbox], [role=combobox], [role=listbox], [role=slider], [role=spinbutton]';
+/* Where Space presses the control rather than scrolls. */
+const PRESSES =
+    'button, a[href], summary, [role=button], [role=link], [role=checkbox], [role=radio], [role=switch], [role=option], [role=menuitem], [role=tab]';
 
 /**
- * Whether an input can scroll: a wheel or a touch, a key that scrolls, or a press on the
- * scroller itself (its scrollbar). A click on a button or a shortcut key (I for Info) that
- * changes the layout under the list is not one.
+ * Whether a key scrolls: one that scrolls the page, pressed outside a field, and for Space
+ * not on a button or link either, where it presses it (Close details). The arrows on a row
+ * of the list move the keys and the scroll with them, so they count.
  */
-function scrolls(event: Event, scroller: Scroller) {
-    if (event instanceof KeyboardEvent) return SCROLL_KEYS.has(event.key);
-    if (event.type === 'pointerdown')
-        return scroller instanceof Window
-            ? event.target === document.documentElement
-            : event.target === scroller;
-    return true;
+function scrollsByKey(event: KeyboardEvent) {
+    if (!SCROLL_KEYS.has(event.key)) return false;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(EDITS)) return false;
+    return event.key !== ' ' || !target?.closest(PRESSES);
+}
+
+/* Whether a press is on the scroller itself, which is its scrollbar. */
+function onScrollbar(event: Event, scroller: Scroller) {
+    return scroller instanceof Window
+        ? event.target === document.documentElement
+        : event.target === scroller;
 }
 
 function observeOffset(
@@ -103,19 +117,38 @@ function observeOffset(
     let timer: number | undefined;
     /*
      * Whether the person is scrolling: scroll events within 150 ms of each other, begun within a
-     * second of their own input (a fling runs on past its last touch). A scroll the browser makes
-     * itself (pulling the scroll in as the list gets shorter, a jump by script) is not theirs,
-     * and nothing else that reports (the list resizing) ends one. The list keeps its hands off
-     * the scroll while they scroll (useKeepInPlace).
+     * second of their own input (a fling runs on past its last touch), and all the while they
+     * hold the scrollbar, moving or not. A scroll the browser makes itself (pulling the scroll
+     * in as the list gets shorter, a jump by script) is not theirs, and nothing else that
+     * reports (the list resizing) ends one. The list keeps its hands off the scroll while they
+     * scroll (useKeepInPlace).
      */
     let scrolling = false;
     let input = -Infinity;
+    let holding = false;
+    const report = () => cb(offsetOf(list, follow.current()), scrolling || holding);
     const onInput = (event: Event) => {
-        if (scrolls(event, follow.current())) input = performance.now();
+        if (event instanceof KeyboardEvent ? scrollsByKey(event) : event.type !== 'pointerdown')
+            input = performance.now();
+        else if (event.type === 'pointerdown' && onScrollbar(event, follow.current())) {
+            holding = true;
+            report();
+        }
     };
-    const report = () => cb(offsetOf(list, follow.current()), scrolling);
+    // Let go wherever the pointer is by then; a move with no button down catches a release
+    // the browser kept to itself.
+    const onRelease = (event: Event) => {
+        if (
+            !holding ||
+            (event instanceof PointerEvent && event.type === 'pointermove' && event.buttons !== 0)
+        )
+            return;
+        holding = false;
+        input = performance.now();
+        report();
+    };
     const onScroll = () => {
-        scrolling = scrolling || performance.now() - input < 1000;
+        scrolling = scrolling || holding || performance.now() - input < 1000;
         report();
         window.clearTimeout(timer);
         timer = window.setTimeout(() => {
@@ -141,6 +174,9 @@ function observeOffset(
     });
     let previous = follow.current();
     listen(previous);
+    const RELEASES = ['pointerup', 'pointercancel', 'pointermove'] as const;
+    for (const type of RELEASES)
+        window.addEventListener(type, onRelease, { passive: true, capture: true });
     // The list moves without a scroll as it is shown (the drive's first paint) or grows. When
     // something above it comes or goes, the next scroll reads the new place; the rows drawn
     // past each edge of the screen cover the difference until then.
@@ -150,6 +186,7 @@ function observeOffset(
     return () => {
         window.clearTimeout(timer);
         unlisten(previous);
+        for (const type of RELEASES) window.removeEventListener(type, onRelease, { capture: true });
         follow.stop();
         observer.disconnect();
     };
@@ -382,6 +419,8 @@ function useDrawnSize<T>(
  * drawn rows that follow each other, not from one row: WebKit snaps each table row to whole
  * pixels where it falls, so a single row reads 56 or 57 by its position, and a size that
  * changed with every scroll would have the list move the scroll with it. Kept to 1/64 px.
+ * Layout positions (offsetTop), not drawn ones: a row coming in is drawn 6px low for its
+ * first 0.3s (row-in in styles.css), and its settling resizes nothing to read again.
  */
 function rowHeight(body: HTMLElement) {
     const drawn = [...body.querySelectorAll<HTMLElement>('[data-node-id]')];
@@ -395,7 +434,7 @@ function rowHeight(body: HTMLElement) {
         start = end + 1;
     }
     const pitch = best
-        ? (best[1].getBoundingClientRect().top - best[0].getBoundingClientRect().top) / best[2]
+        ? (best[1].offsetTop - best[0].offsetTop) / best[2]
         : (drawn[0]?.getBoundingClientRect().height ?? 0);
     return pitch > 0 ? Math.round(pitch * 64) / 64 : null;
 }
