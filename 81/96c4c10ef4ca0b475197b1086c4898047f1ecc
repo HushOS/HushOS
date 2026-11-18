@@ -1,0 +1,21 @@
+apps/ios/App/BackgroundTransfers.swift
+  s_c60e24772e04af::t_12d0a4ee4cc44c 136
+apps/ios/App/FamilyWalkTasks.swift
+  s_c60e24772e04af::t_cd416653e8345a 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8196c4c10ef4ca0b475197b1086c4898047f1ecc",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
