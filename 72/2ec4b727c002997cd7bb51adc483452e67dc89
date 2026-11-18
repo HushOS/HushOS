@@ -1,0 +1,31 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_e4cdf37053c3bc 1664
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_9bf217340eb09d 1131-1161,1163-1168
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_0cca920a89c7e8 1293-1337
+docs/file-tools-design.md
+  s_c60e24772e04af::t_2ed053fd058105 299
+packages/drive/src/save-runs.journal.test.ts
+  s_c60e24772e04af::t_98d9898a7cbcc2 91,93-98
+packages/drive/src/save-runs.test.ts
+  s_c60e24772e04af::t_29e8dc51f54b70 2056-2128
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_e9d24b3c3efc97 1288-1292,1308-1309,1381-1391,1686-1695,1772-1775,1781-1796
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "722ec4b727c002997cd7bb51adc483452e67dc89",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
