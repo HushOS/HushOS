@@ -12,7 +12,7 @@ import { Phones, Shot } from '../../components/screenshot';
 
 Turn on two-step sign-in and your password alone no longer signs anyone in to your HushOS account. After the password, HushOS asks for one more thing that only you have: a passkey, a code from an authenticator app, or a yes from a device you already use.
 
-Turn it on under **Account → Two-step sign-in**. All three ways work on the web today. In the iPhone and Android apps, authenticator codes work from version 1.6 and, on hushos.com, passkeys from 1.7. Approving on another device arrives in the apps with version 1.8.
+Turn it on under **Account → Two-step sign-in**. All three ways work on the web today. In the iPhone and Android apps, authenticator codes work from version 1.6 and, on hushos.com, passkeys from 1.7. Approving on another device works in the apps from version 1.8.
 
 <Shot
     name="two-step-settings"
@@ -66,14 +66,14 @@ When another device is your default, or you choose it, the new screen asks your 
     />
 </div>
 
-Signing in on a phone works the same way: the app opens on your default and asks your other devices at once.
+From version 1.10 of the apps, signing in on a phone works the same way: the app opens on your default and asks your other devices at once.
 
 <Phones
     screen="two-step"
     alt="Signing in on a phone, asking another device: Choose Answer in HushOS on another device, or scan this with your phone, above a QR code"
     sizes="(min-width: 40rem) 18rem, 10rem"
     className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
-    phoneClassName="w-40 sm:w-72"
+    phoneClassName="w-32 min-[375px]:w-40 sm:w-72"
 />
 
 A device of yours that's already signed in with two-step sign-in shows the request, with what is being asked, the device asking and roughly where it is. Type the code from the new screen, press **Approve**, and the new device is signed in. The phone apps, from version 1.8, can scan the new screen instead.
@@ -87,14 +87,14 @@ A device of yours that's already signed in with two-step sign-in shows the reque
     className="mx-auto mt-6 block max-w-md"
 />
 
-On a phone, the request opens as a sheet, from the banner on Home or from Devices in Account.
+On a phone, the request opens as a sheet, from the banner on Home or from Devices in Account. From version 1.10 it looks like this:
 
 <Phones
     screen="approve"
     alt="Approve this sign-in? on a phone, from a new device calling itself Chrome on Windows near Lyon, Auvergne-Rhône-Alpes, France, with the code typed in"
     sizes="(min-width: 40rem) 18rem, 10rem"
     className="mt-6 flex items-end justify-center gap-4 sm:gap-6"
-    phoneClassName="w-40 sm:w-72"
+    phoneClassName="w-32 min-[375px]:w-40 sm:w-72"
 />
 
 The code ties the approval to the screen in front of you: a request goes through only when the code matches the one that screen is showing. If you didn't ask, **This wasn't me** ends the request and sends you a notice at once.

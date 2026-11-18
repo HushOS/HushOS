@@ -47,7 +47,7 @@ const TURN_ON_CODE_DOMAIN: &str = "hushos/two-step/device/turn-on/code/v1";
 const TURN_ON_STATEMENT_DOMAIN: &str = "hushos/two-step/device/turn-on";
 const QR_PREFIX: &str = "hushos-approve:";
 /// How many prompts a day an approving device shows for each class of request: ten for each
-/// class of sign-in (the server's own budgets), five for step-ups and for a later class.
+/// class of sign-in, five for step-ups and for a later class.
 fn prompts_a_day(class: &str) -> usize {
     match class {
         "unknown" | "known" => 10,

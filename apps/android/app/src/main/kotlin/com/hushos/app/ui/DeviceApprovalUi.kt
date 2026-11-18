@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -529,6 +531,34 @@ internal fun DeviceAskPanel(phase: AskPhase, inlineAgain: Boolean, enabled: Bool
     }
 }
 
+/*
+ * The asking device and where it is, as rows ("Calls itself", "Near"): the labels as wide as the widest of them, so the
+ * values line up at any font size, each value wrapping in the rest of the line. At the largest font sizes a label beside
+ * its value would leave the value, the thing to read before approving, no room: each label then sits over its value.
+ * TalkBack reads every row as one.
+ */
+@Composable
+internal fun ApprovalDetailRows(details: ApprovalDetails, modifier: Modifier = Modifier) {
+    val alpine = Alpine.colors
+    val style = MaterialTheme.typography.bodyMedium
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val stacked = density.fontScale >= 1.5f
+    val labels = with(density) { details.rows.maxOfOrNull { measurer.measure(it.label, style).size.width }?.toDp() ?: 0.dp }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(if (stacked) AlpineSpace.S2 else AlpineSpace.S1)) {
+        for (row in details.rows) {
+            val merged = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}
+            if (stacked) Column(merged) {
+                Text(row.label, style = style, color = alpine.inkMuted)
+                Text(row.value, style = style, color = alpine.ink)
+            } else Row(merged, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S6)) {
+                Text(row.label, style = style, color = alpine.inkMuted, modifier = Modifier.width(labels))
+                Text(row.value, style = style, color = alpine.ink, modifier = Modifier.weight(1f))
+            }
+        }
+    }
+}
+
 /* The asking side's panel: a quiet box the width of the form, its content centred in it. */
 @Composable
 private fun AskBox(modifier: Modifier = Modifier, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
@@ -959,12 +989,7 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
             // What is asked, then the device and where it is as rows, whole: never cut short.
             Text(answer.details.what, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3).semantics { heading() })
-            Column(Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
-                for (row in answer.details.rows) Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S6)) {
-                    Text(row.label, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.widthIn(min = 88.dp))
-                    Text(row.value, style = MaterialTheme.typography.bodyMedium, color = alpine.ink, modifier = Modifier.weight(1f))
-                }
-            }
+            ApprovalDetailRows(answer.details, Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4))
             answer.note?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3)) }
             when (answer.phase) {
                 // Turning the method on is never scanned or typed here: this is only where an open that got no answer is asked again.

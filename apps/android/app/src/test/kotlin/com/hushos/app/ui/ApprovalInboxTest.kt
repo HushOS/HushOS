@@ -150,6 +150,10 @@ class ApprovalInboxTest {
         val day = DeviceApprovals.addedDay("2025-09-03T12:00:00.000Z")
         assertTrue("$day", day!!.endsWith(" Sept 2025"))
         assertEquals("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added $day", other.inbox.answering!!.asks)
+        // The sheet shows it in parts: the device's own word is under Calls itself, never under Device.
+        val details = other.inbox.answering!!.details
+        assertEquals("Turn on Approve on another device", details.what)
+        assertEquals(listOf("Calls itself" to "“Maya’s Laptop”, added $day"), details.rows.map { it.label to it.value })
         other.inbox.dismiss()
     }
 

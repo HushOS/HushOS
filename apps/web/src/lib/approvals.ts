@@ -134,7 +134,7 @@ function withinBudget(listed: ApprovalPrompt[]) {
         localStorage.setItem(PROMPTS_KEY, JSON.stringify(allowed.record));
         unstored = null;
     } catch {
-        // Not stored: without this the sixth prompt of a day would be the first again.
+        // Not stored: without this the eleventh prompt of a day would be the first again.
         unstored = { userId, record: allowed.record };
     }
     const shown = new Set(allowed.shown);

@@ -66,7 +66,7 @@ import org.junit.Test
  *   The asking phone shows no code and no QR code and has none. Every other request is still
  *   signed only on its exact code, or after a scan of that very request, with no digest;
  * - a setup another session is already running is refused in the server's words;
- * - it shows at most five prompts a day for each class, whatever the server lists;
+ * - it shows at most ten prompts a day for each class of sign-in and five for changes, whatever the server lists;
  * - `twoStepMethods` names `device`, the settings ask for it, and the settings' row says what is true.
  *
  * The server here is a small one in memory that does what the real one does with each route, and

@@ -533,7 +533,7 @@ sealed class StepOutcome {
          * - the address's own limit (a 429 without the step's code): nothing about the step was looked at;
          * - `step-pending`: the approval had not landed where the answer went.
          * The same answer goes again for those. Dropping the approval there would send the person back to their
-         * other device for a new one, and spend one of the day's five requests on a hiccup. Any refusal the step
+         * other device for a new one, and spend one of the day's ten requests on a hiccup. Any refusal the step
          * itself gave ends it, and so does anything that failed on this phone: the other device is asked afresh.
          */
         fun keepsApproval(error: Throwable): Boolean = when (error) {

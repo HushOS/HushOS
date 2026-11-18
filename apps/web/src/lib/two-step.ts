@@ -129,7 +129,7 @@ export function methodsAfter(
  * - `offline`: no answer came back (the network, or a fault on our side);
  * - `busy`: too many requests from this address just now.
  * The same answer goes again for those. Dropping the approval there would send the person back
- * to their other device for a new one, and spend one of the day's five requests on a hiccup.
+ * to their other device for a new one, and spend one of the day's ten requests on a hiccup.
  */
 const APPROVAL_KEPT = new Set(['pending', 'offline', 'busy']);
 export function afterRefusal(draft: StepDraft, reason: string): StepDraft {

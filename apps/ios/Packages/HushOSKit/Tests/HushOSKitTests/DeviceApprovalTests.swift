@@ -842,7 +842,12 @@ private func wrong(_ code: String) -> String {
         server.selfNamed = true
         server.addedAt = "2026-11-14T12:00:00.000Z"
         _ = server.asked(purpose: DeviceEnrolment.purpose)
-        #expect(try await answering(server).flow.asks.hasPrefix("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 1"))
+        let flow = try await answering(server).flow
+        #expect(flow.asks.hasPrefix("Turn on Approve on another device on a device calling itself “Maya’s Laptop”, added 1"))
+        // The sheet shows it in parts: the device's own word is under Calls itself, never under Device.
+        #expect(flow.details.what == "Turn on Approve on another device")
+        #expect(flow.details.rows.map(\.label) == ["Calls itself"])
+        #expect(flow.details.rows.first?.value.hasPrefix("“Maya’s Laptop”, added 1") == true)
     }
 
     @Test func aRequestThatNamedThisPhoneSaysSoUnderItsTitle() async throws {

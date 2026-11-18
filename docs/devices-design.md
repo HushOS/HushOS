@@ -107,12 +107,12 @@ The new device commits to its keys before it sees the approver's key, and reveal
 
 **What the code stops.** A person approving by reflex has to type what is on the new screen, so a stranger's sign-in attempt, or a prompt a hostile server invents, is not approved by a tap ("push fatigue"). The code covers both devices' keys as each device saw them, and neither side's keys could be chosen after the other side's were known. If the server swaps a key between them, the two codes differ except by chance, and nothing is approved. That is what makes the key transfer at the second level safe from the server, on the apps; on the web the server serves the code that does the check (`docs/groups-threat-model.md` 5).
 
-**Requests** last ten minutes, one at a time per account, and at most ten a day (`docs/two-step-design.md` 12 has the budgets by class).
+**Requests** last ten minutes, one at a time per account. Sign-ins without a device proof have ten a day for the account; a device signing back in, and a step-up, have budgets of their own (`docs/two-step-design.md` 12).
 
 - A new request replaces an open one only while no device has opened it. Once a device has opened a request, a new one is refused (409 `busy`) until it ends. A device whose request was replaced says so: "Another sign-in replaced this request."
-- Each approving device keeps its own count, and shows at most five prompts a day for its account, whatever the server sends.
+- Each approving device keeps its own count, and shows at most ten prompts a day for each class of sign-in and five for step-ups, whatever the server sends.
 - The location is deleted when the request ends.
-- **Residual:** someone with the password can still spend the account's five requests and stop the person adding a device for a day.
+- **Residual:** someone with the password can still spend the account's ten requests and stop the person adding a device for a day.
 
 ### With no other device
 
@@ -358,7 +358,7 @@ Each fails on a defect a person or an attacker would notice (see AGENTS.md):
     - an approval signed by a revoked or unapproved device is refused.
 - **Requests:**
     - a new request does not replace one that a device has opened, and the replaced device says so;
-    - an approving device shows no more than five prompts a day, whatever the server sends;
+    - an approving device shows no more than ten prompts a day for each class of sign-in and five for step-ups, whatever the server sends;
     - "This wasn't me" ends the request and sends a security notice.
 - **Keys need a device:**
     - after turning it on, no route serves a password envelope and none exists, and a password change, phrase reset, master-key rotation or conversion that carries one is refused;

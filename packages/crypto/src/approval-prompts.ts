@@ -6,8 +6,7 @@
 /*
  * The approving device's own limit on prompts (docs/two-step-design.md 12), for each class of
  * request, whatever the server sends, so requests from sign-ins it does not know can never use
- * up the room for the owner's own: ten a day for each class of sign-in (the server's own
- * budgets), five for step-ups and for a class from a later release. `record` is what the device
+ * up the room for the owner's own: ten a day for each class of sign-in, five for step-ups and for a class from a later release. `record` is what the device
  * kept from before (null at first); the answer says which of `requests` to show and what to
  * keep. A request shown once stays shown; one past its class's limit is not, that day.
  */
@@ -31,10 +30,15 @@ export function approvalPromptsAllowed(
             : {};
     const shown: string[] = [];
     for (const request of requests) {
-        const ids = (seen[request.class] ??= []);
+        // Own keys only: a class named like an Object method is a class like any other.
+        const ids = Object.hasOwn(seen, request.class)
+            ? seen[request.class]!
+            : (seen[request.class] = []);
         if (!ids.includes(request.id)) {
-            if (ids.length >= (APPROVAL_PROMPTS_A_DAY[request.class] ?? OTHER_PROMPTS_A_DAY))
-                continue;
+            const most = Object.hasOwn(APPROVAL_PROMPTS_A_DAY, request.class)
+                ? APPROVAL_PROMPTS_A_DAY[request.class]!
+                : OTHER_PROMPTS_A_DAY;
+            if (ids.length >= most) continue;
             ids.push(request.id);
         }
         shown.push(request.id);

@@ -204,6 +204,45 @@ private struct AskBox<Content: View>: View {
     }
 }
 
+/*
+ * The asking device and where it is, as rows ("Calls itself", "Near"): labels in a column, each value beside its label
+ * and wrapping in the rest of the line. At the accessibility sizes a label beside its value would leave the value, the
+ * thing to read before approving, no room: each label then sits over its value. VoiceOver reads every row as one line.
+ */
+struct ApprovalDetailRows: View {
+    let details: ApprovalDetails
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: Alpine.Space.s2) {
+                    ForEach(details.rows, id: \.label) { row in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(row.label).foregroundStyle(Alpine.inkMuted)
+                            Text(row.value).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            } else {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Alpine.Space.s6, verticalSpacing: Alpine.Space.s1) {
+                    ForEach(details.rows, id: \.label) { row in
+                        GridRow {
+                            Text(row.label).foregroundStyle(Alpine.inkMuted).fixedSize()
+                            Text(row.value).foregroundStyle(Alpine.ink)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+        .font(Theme.Text.callout)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(details.rows.map { "\($0.label): \($0.value)" }.joined(separator: ". "))
+    }
+}
+
 /* The other device approved: said in the asking panel, and on the sign-in screen while that approval's answer is still to be sent again. */
 struct ApprovedLine: View {
     var body: some View {
@@ -423,19 +462,7 @@ struct ApprovalSheet: View {
                     VStack(alignment: .leading, spacing: Alpine.Space.s3) {
                         Text(flow.details.what).font(Theme.Text.title).foregroundStyle(Alpine.ink)
                             .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
-                        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Alpine.Space.s6, verticalSpacing: Alpine.Space.s1) {
-                            ForEach(flow.details.rows, id: \.label) { row in
-                                // The labels keep their width; the values take the rest of the line and wrap there.
-                                GridRow {
-                                    Text(row.label).foregroundStyle(Alpine.inkMuted).fixedSize()
-                                    Text(row.value).foregroundStyle(Alpine.ink)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                .accessibilityElement(children: .combine)
-                            }
-                        }
-                        .font(Theme.Text.callout)
+                        ApprovalDetailRows(details: flow.details)
                         // The asking device named this one: no other device was shown the request.
                         if let chosen = flow.chosenLine {
                             Text(chosen).font(Theme.Text.callout).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)

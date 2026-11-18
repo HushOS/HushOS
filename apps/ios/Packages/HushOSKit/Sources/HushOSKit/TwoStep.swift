@@ -336,7 +336,7 @@ public enum StepOutcome: Sendable, Equatable {
      *   read as lost);
      * - the address's own 429: too many requests from here just now.
      * The same answer goes again for those. Dropping the approval there would send the person back
-     * to their other device for a new one, and spend one of the day's five requests on a hiccup.
+     * to their other device for a new one, and spend one of the day's ten requests on a hiccup.
      * A refusal the step itself gave ends it: that approval is not offered to the step again.
      */
     public static func keepsApproval(after error: Error) -> Bool {

@@ -1719,6 +1719,8 @@ pub struct ApprovalDetails {
 /// assert_eq!(approval_details("login".into(), None, true, None, Some("Lyon".into())).rows, vec![row("Device", "New, unnamed"), row("Where", "Lyon")]);
 /// assert_eq!(approval_details("login".into(), None, false, Some("2 Nov".into()), Some("near Lyon\u{202e}".into())).rows, vec![row("Device", "Unnamed, added 2 Nov")]);
 /// assert_eq!(approval_details("later".into(), Some("Pixel 9".into()), false, None, None).what, "A change to your account");
+/// assert_eq!(approval_details("login".into(), None, true, None, Some("NEAR\u{a0}Lyon".into())).rows[1], row("Near", "Lyon"));
+/// assert_eq!(approval_details("login".into(), None, true, None, Some("Innsbruck, Austria".into())).rows[1], row("Where", "Innsbruck, Austria"));
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn approval_details(
@@ -1738,10 +1740,15 @@ pub fn approval_details(
         (Some(name), None) => row("Calls itself", format!("“{name}”, new")),
     };
     let place = asked_place(location).map(|place| {
+        // The word, then any space (a no-break space too, as the web's `\s` takes it), then the place.
         let after = |word: &str| {
-            place.get(..word.len()).filter(|start| start.eq_ignore_ascii_case(word)).map(|_| place[word.len()..].trim())
+            let rest = place
+                .get(..word.len())
+                .filter(|start| start.eq_ignore_ascii_case(word))
+                .map(|_| &place[word.len()..])?;
+            rest.starts_with(char::is_whitespace).then(|| rest.trim())
         };
-        match (after("near "), after("in ")) {
+        match (after("near"), after("in")) {
             (Some(rest), _) if !rest.is_empty() => row("Near", rest.to_string()),
             (_, Some(rest)) if !rest.is_empty() => row("In", rest.to_string()),
             _ => row("Where", place.clone()),
