@@ -90,6 +90,26 @@ describe('reading the worker’s listing', () => {
     });
 });
 
+describe('what the worker names and dates', () => {
+    it('makes an entry’s save name safe again on the page, never taking the worker’s word', () => {
+        const listing = readListing(
+            message([entry({ saveName: 'invoice\u202Etxt.exe', name: 'invoice.exe' })]),
+            1000,
+        )!;
+        // The override that would make "…exe" read as "…txt" never reaches the browser's save.
+        expect(listing.entries[0]!.saveName).toBe('invoice_txt.exe');
+        expect(readListing(message([entry({ saveName: 'CON' })]), 1000)!.entries[0]!.saveName).toBe(
+            '_CON',
+        );
+    });
+
+    it('refuses a time a Date can’t hold, which would throw where the entry is shown', () => {
+        expect(readListing(message([entry({ mtime: 8.64e15 })]), 1000)).not.toBeNull();
+        expect(readListing(message([entry({ mtime: 8.64e15 + 1 })]), 1000)).toBeNull();
+        expect(readListing(message([entry({ mtime: -9e15 })]), 1000)).toBeNull();
+    });
+});
+
 describe('a lock or sign-out', () => {
     it('terminates the archive’s worker, and the password with it, and refuses every later call', async () => {
         const { openArchive } = await import('./session');

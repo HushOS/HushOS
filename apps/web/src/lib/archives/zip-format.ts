@@ -440,6 +440,26 @@ function descriptorLength(fields: Map<number, Uint8Array>) {
     return fields.has(0x0001) ? 20 : 12;
 }
 
+/*
+ * Whether the descriptor starting with `head` (up to 16 bytes, from the end of the entry's data)
+ * carries its optional signature. The signature's 4 bytes can also be a CRC: when the bytes read
+ * unsigned hold the entry's CRC and packed size and read signed don't, it has none.
+ */
+export function descriptorSigned(head: Uint8Array, entry: ZipEntry, wide: boolean) {
+    const data = view(head);
+    const u32 = (at: number) => (head.length >= at + 4 ? data.getUint32(at, true) : -1);
+    // A wide size read as it is, never refused here (only compared): past 2^53 it simply doesn't match.
+    const wideAt = (at: number) =>
+        head.length >= at + 8
+            ? data.getUint32(at, true) + data.getUint32(at + 4, true) * 2 ** 32
+            : -1;
+    const size = (at: number) => (wide ? wideAt(at) : u32(at));
+    if (u32(0) !== SIG_DESCRIPTOR) return false;
+    const signed = u32(4) === entry.crc && size(8) === entry.packed;
+    const unsigned = u32(0) === entry.crc && size(4) === entry.packed;
+    return signed || !unsigned;
+}
+
 /* The local header's data descriptor length without a signature: 12, or 20 with ZIP64 sizes. */
 export function localDescriptorLength(header: Uint8Array) {
     const data = view(header);
@@ -811,8 +831,10 @@ export function listEntries(entries: ZipEntry[]): { listed: Listed[]; folders: F
                 made[i] = 0;
                 if (flat[i]) continue;
                 const last = level + 1 === depth[i];
+                // Only what is under a top folder __MACOSX: a plain file of that name is anyone's file.
                 if (
                     level === 0 &&
+                    !(last && !entry.directory) &&
                     sameName(entry.path, nameAt[i]!, nameEnd[i]!, '__MACOSX', 0, 8)
                 ) {
                     // Mac resource entries: hidden, in no folder, and no folder made for them (named

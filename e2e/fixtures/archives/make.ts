@@ -1375,6 +1375,81 @@ function descriptorOverlapFixture() {
     ]);
 }
 
+/*
+ * `data` with 4 bytes appended so its CRC-32 is `target`. The CRC is affine in the appended bits,
+ * so the 4 bytes solve 32 linear equations over GF(2).
+ */
+function forceCrc(data: Uint8Array, target: number) {
+    const tail = (bytes: number) =>
+        crc32(
+            concat([
+                data,
+                Uint8Array.of(
+                    bytes & 0xff,
+                    (bytes >>> 8) & 0xff,
+                    (bytes >>> 16) & 0xff,
+                    bytes >>> 24,
+                ),
+            ]),
+        );
+    const base = tail(0);
+    // Each appended bit's effect on the CRC, then elimination for the bits that make `target`.
+    const rows = Array.from({ length: 32 }, (_, bit) => ({
+        effect: (tail(2 ** bit) ^ base) >>> 0,
+        bits: (2 ** bit) >>> 0,
+    }));
+    let want = (target ^ base) >>> 0;
+    let chosen = 0;
+    for (let bit = 31; bit >= 0; bit--) {
+        const mask = (2 ** bit) >>> 0;
+        const pivot = rows.findIndex((row) => (row.effect & mask) !== 0);
+        if (pivot < 0) continue;
+        const [row] = rows.splice(pivot, 1);
+        for (const other of rows)
+            if ((other.effect & mask) !== 0) {
+                other.effect = (other.effect ^ row!.effect) >>> 0;
+                other.bits = (other.bits ^ row!.bits) >>> 0;
+            }
+        if ((want & mask) !== 0) {
+            want = (want ^ row!.effect) >>> 0;
+            chosen = (chosen ^ row!.bits) >>> 0;
+        }
+    }
+    const out = concat([
+        data,
+        Uint8Array.of(chosen & 0xff, (chosen >>> 8) & 0xff, (chosen >>> 16) & 0xff, chosen >>> 24),
+    ]);
+    if (crc32(out) !== target >>> 0) throw new Error('The CRC could not be forced.');
+    return out;
+}
+
+/*
+ * A data descriptor without its signature, whose CRC is the signature's own bytes (0x08074b50),
+ * and the next entry right after it: read as signed it would need 4 bytes more and overlap the
+ * next entry; its CRC and size say it has no signature, and it fits.
+ */
+function descriptorCrcFixture() {
+    return writeZip([
+        {
+            name: 'crc-is-signature.txt',
+            data: forceCrc(utf8('Its CRC is the descriptor signature: '), 0x08074b50),
+            method: 0,
+            descriptor: true,
+            descriptorSignature: false,
+        },
+        { name: 'next.txt', data: text('Right after it.') },
+    ]);
+}
+
+/* A plain file named __MACOSX at the top: anyone's file, shown; what is under a folder of that name stays hidden. */
+function macosxNameFixture() {
+    return writeZip([
+        { name: '__MACOSX', data: utf8('a file, not the resource folder\n'), method: 0 },
+        { name: 'note.txt', data: utf8('note\n') },
+        { name: '__MACOSX/._note.txt', data: utf8('resource fork\n') },
+    ]);
+}
+
 /* The first of "wrong 0", "wrong 1", … whose decrypted check byte is `unprovenFixture`'s. */
 export const UNPROVEN_PASSWORD = (() => {
     const check = (crc32(UNPROVEN_DATA()) >>> 24) & 0xff;
@@ -1708,6 +1783,8 @@ export const FIXTURES: Fixture[] = [
     { name: 'non-ascii-password.zip', large: false, build: nonAsciiPasswordFixture },
     { name: 'descriptors.zip', large: false, build: descriptorsFixture },
     { name: 'descriptor-overlap.zip', large: false, build: descriptorOverlapFixture },
+    { name: 'descriptor-crc.zip', large: false, build: descriptorCrcFixture },
+    { name: 'macosx-name.zip', large: false, build: macosxNameFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },

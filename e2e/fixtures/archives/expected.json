@@ -1238,6 +1238,46 @@
                     "download": "ok"
                 }
             ]
+        },
+        "descriptor-crc.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "crc-is-signature.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                },
+                {
+                    "path": "next.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "macosx-name.zip": {
+            "listing": "ok",
+            "hidden": 1,
+            "entries": [
+                {
+                    "path": "__MACOSX",
+                    "check": "ok",
+                    "download": "ok",
+                    "stored": true
+                },
+                {
+                    "path": "note.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "__MACOSX/._note.txt",
+                    "check": "ok",
+                    "download": "ok",
+                    "hidden": true
+                }
+            ]
         }
     }
 }

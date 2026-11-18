@@ -106,6 +106,9 @@ async function serviceWorkerSink(file: { name: string; size: number | null }) {
             cleanup();
         },
         async abort() {
+            // A write still waiting on its acknowledgement ends here: aborted, it never comes.
+            cancelled = true;
+            acknowledged?.();
             channel.port1.postMessage({ type: 'abort' });
             cleanup();
         },

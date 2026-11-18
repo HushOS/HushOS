@@ -386,6 +386,11 @@ function evict(versionId: string, entry: RememberedPreview) {
     if (entry.kind === 'image' || entry.kind === 'media') URL.revokeObjectURL(entry.url);
 }
 
+/* The remembered previews whose version ids `match`: what one closed archive session opened. */
+export function forgetPreviewsWhere(match: (versionId: string) => boolean) {
+    for (const [id, entry] of remembered) if (match(id)) evict(id, entry);
+}
+
 export function forgetPreviews() {
     for (const [id, entry] of remembered) evict(id, entry);
     for (const url of held) URL.revokeObjectURL(url);

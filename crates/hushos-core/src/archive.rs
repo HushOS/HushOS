@@ -171,6 +171,11 @@ pub(crate) trait RangeRead: Send + Sync {
     fn size(&self) -> u64;
     /// Up to `length` bytes from `offset`, fewer only at the end.
     fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>>;
+    /// The decoder over these bytes got on: the call's watchdog starts over (a long preview or a
+    /// password's probe is work, not a stall). Fails once the call has ended.
+    fn progress(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 impl RangeRead for Vec<u8> {
@@ -189,6 +194,9 @@ struct VersionSource(Arc<VersionReader>);
 impl RangeRead for VersionSource {
     fn size(&self) -> u64 {
         self.0.size()
+    }
+    fn progress(&self) -> Result<()> {
+        Ok(self.0.progress()?)
     }
     fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
         // The reader hands back at most 64 MiB at once; the directory cap is the same.
@@ -677,17 +685,36 @@ fn data_start(source: &dyn RangeRead, entry: &Entry) -> Result<u64> {
     let start = check_local_header(entry, &header)?;
     if entry.flags & 8 != 0 {
         let after = start + entry.packed;
-        let head = source.read_at(after, 4)?;
-        let signed = head.len() == 4 && u32_at(&head, 0) == SIG_DESCRIPTOR as u64;
         let name_length = u16_at(&header, 26) as usize;
         let extra_length = u16_at(&header, 28) as usize;
         let at = LOCAL_LENGTH + name_length;
-        let fields = extra_fields(&header[at..at + extra_length]);
-        if signed && after + descriptor_length(&fields) + 4 > entry.bound {
+        let width = descriptor_length(&extra_fields(&header[at..at + extra_length]));
+        let head = source.read_at(after, 16.min(entry.bound - after))?;
+        if descriptor_signed(&head, entry, width == 20) && after + width + 4 > entry.bound {
             return refused(Refusal::Overlap);
         }
     }
     Ok(start)
+}
+
+/// Whether the descriptor starting with `head` (up to 16 bytes, from the end of the entry's data)
+/// carries its optional signature. The signature's 4 bytes can also be a CRC: when the bytes read
+/// unsigned hold the entry's CRC and packed size and read signed don't, it has none (as the web).
+fn descriptor_signed(head: &[u8], entry: &Entry, wide: bool) -> bool {
+    let word = |at: usize| (head.len() >= at + 4).then(|| u32_at(head, at));
+    let size = |at: usize| {
+        if wide {
+            (head.len() >= at + 8).then(|| u64::from_le_bytes(head[at..at + 8].try_into().unwrap()))
+        } else {
+            word(at)
+        }
+    };
+    if word(0) != Some(SIG_DESCRIPTOR as u64) {
+        return false;
+    }
+    let signed = word(4) == Some(entry.crc as u64) && size(8) == Some(entry.packed);
+    let unsigned = word(0) == Some(entry.crc as u64) && size(4) == Some(entry.packed);
+    signed || !unsigned
 }
 
 fn local_header_read(entry: &Entry) -> u64 {
@@ -974,7 +1001,8 @@ pub(crate) fn list_entries(entries: &mut [Entry]) -> Result<(Vec<ArchiveEntry>, 
             let part = &path[start..end];
             let parent = node[i];
             let last = level + 1 == depth[i] as usize;
-            if level == 0 && part == "__MACOSX" {
+            // Only what is under a top folder __MACOSX: a plain file of that name is anyone's file.
+            if level == 0 && part == "__MACOSX" && !(last && !list[i].directory) {
                 // Mac resource entries: hidden, and no folder made for them.
                 hidden[i] = true;
                 children.entry((0, part)).or_insert(0);
@@ -1469,9 +1497,14 @@ enum Inflater {
 }
 
 impl Inflater {
-    /// Feeds `input` whole, handing every piece produced to `out`.
-    fn feed(&mut self, input: &[u8], out: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        let mut buffer = Zeroizing::new(vec![0u8; 64 * 1024]);
+    /// Feeds `input` whole, handing every piece produced to `out`, through `buffer` (the decoder's
+    /// own, made once per entry: a stored entry's input goes straight through, and needs none).
+    fn feed(
+        &mut self,
+        input: &[u8],
+        buffer: &mut [u8],
+        out: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
         match self {
             Inflater::Stored => out(input),
             Inflater::Deflate(inflate, ended) => {
@@ -1479,7 +1512,7 @@ impl Inflater {
                 while !*ended {
                     let (before_in, before_out) = (inflate.total_in(), inflate.total_out());
                     let status = inflate
-                        .decompress(&input[at..], &mut buffer, flate2::FlushDecompress::None)
+                        .decompress(&input[at..], buffer, flate2::FlushDecompress::None)
                         .map_err(|_| ArchiveError::from(Refusal::Damaged))?;
                     let consumed = (inflate.total_in() - before_in) as usize;
                     let produced = (inflate.total_out() - before_out) as usize;
@@ -1503,7 +1536,7 @@ impl Inflater {
             Inflater::Deflate64(inflate) => {
                 let mut at = 0;
                 while !inflate.finished() {
-                    let result = inflate.inflate(&input[at..], &mut buffer);
+                    let result = inflate.inflate(&input[at..], buffer);
                     if result.data_error {
                         return refused(Refusal::Damaged);
                     }
@@ -1524,15 +1557,14 @@ impl Inflater {
     }
 
     /// The input is all in: whatever the inflater still holds, then whether its stream ended.
-    fn finish(&mut self, out: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
-        let mut buffer = Zeroizing::new(vec![0u8; 64 * 1024]);
+    fn finish(&mut self, buffer: &mut [u8], out: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
         match self {
             Inflater::Stored => Ok(()),
             Inflater::Deflate(inflate, ended) => {
                 while !*ended {
                     let before = inflate.total_out();
                     let status = inflate
-                        .decompress(&[], &mut buffer, flate2::FlushDecompress::Finish)
+                        .decompress(&[], buffer, flate2::FlushDecompress::Finish)
                         .map_err(|_| ArchiveError::from(Refusal::Damaged))?;
                     let produced = (inflate.total_out() - before) as usize;
                     if produced > 0 {
@@ -1548,7 +1580,7 @@ impl Inflater {
             }
             Inflater::Deflate64(inflate) => {
                 while !inflate.finished() {
-                    let result = inflate.inflate(&[], &mut buffer);
+                    let result = inflate.inflate(&[], buffer);
                     if result.data_error {
                         return refused(Refusal::Damaged);
                     }
@@ -1764,6 +1796,12 @@ impl Zip {
             9 => Inflater::Deflate64(deflate64::InflaterManaged::new().into()),
             _ => return refused(Refusal::Method),
         };
+        // The decoder's output buffer, once per entry and wiped with it; a stored entry needs none.
+        let mut buffer = Zeroizing::new(if matches!(inflater, Inflater::Stored) {
+            Vec::new()
+        } else {
+            vec![0u8; 64 * 1024]
+        });
         let checks_crc = match entry.lock {
             Lock::Aes => entry.aes_version == 1,
             _ => true,
@@ -1795,12 +1833,14 @@ impl Zip {
                 let length = piece.len();
                 cipher.decrypt(piece);
                 reached.set(at + (fed + length) as u64 - start);
-                inflater.feed(piece, &mut emit)?;
+                inflater.feed(piece, &mut buffer, &mut emit)?;
                 fed += length;
+                // Each piece decoded is work: a long preview or probe isn't the watchdog's stall.
+                source.progress()?;
             }
             at += bytes.len() as u64;
         }
-        inflater.finish(&mut emit)?;
+        inflater.finish(&mut buffer, &mut emit)?;
         if let Cipher::Aes(aes) = cipher {
             let code = source.read_at(data_end, 10)?;
             if !aes.verify(&code) {
@@ -2049,6 +2089,9 @@ struct LocalRead {
 impl RangeRead for LocalRead {
     fn size(&self) -> u64 {
         self.source.size()
+    }
+    fn progress(&self) -> Result<()> {
+        Ok(self.control.progress()?)
     }
     fn read_at(&self, offset: u64, length: u64) -> Result<Vec<u8>> {
         self.control.check()?;

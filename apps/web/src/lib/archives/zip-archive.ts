@@ -13,8 +13,8 @@ import {
 } from '@zip.js/zip.js/lib/zip-core-native.js';
 import {
     checkLocalHeader,
+    descriptorSigned,
     localDescriptorLength,
-    SIG_DESCRIPTOR,
     findDirectory,
     hiddenCount,
     InflateCounter,
@@ -326,11 +326,9 @@ export class ZipArchive {
         // hold the whole of it to the entry's bound, as the core does.
         if ((entry.flags & 8) !== 0) {
             const after = start + entry.packed;
-            const head = await source.read(after, 4);
-            const signed =
-                head.length === 4 &&
-                new DataView(head.buffer, head.byteOffset, 4).getUint32(0, true) === SIG_DESCRIPTOR;
-            if (signed && after + localDescriptorLength(header) + 4 > entry.bound)
+            const width = localDescriptorLength(header);
+            const head = await source.read(after, Math.min(16, entry.bound - after));
+            if (descriptorSigned(head, entry, width === 20) && after + width + 4 > entry.bound)
                 throw new ZipError('overlap');
         }
         return start;

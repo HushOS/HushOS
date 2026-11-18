@@ -100,8 +100,13 @@ function startDownload(data, port) {
                 pulled();
             }
         } else if (msg.type === 'abort') {
+            // A chunk held for a pull that will never come goes, and the page's write waiting on it
+            // is settled: aborted, never acknowledged.
+            held = null;
+            wanting = null;
             controller.error(new Error('Download aborted.'));
             downloads.delete(id);
+            port.postMessage({ type: 'cancelled' });
         }
     };
     downloads.set(id, { stream, headers });

@@ -5,7 +5,7 @@ import { TOOL_FAILED, TOOL_WATCHDOG_MS } from '@/lib/tools/protocol';
 import { readAllowance, serveRanges, type RangeReader } from '@/lib/tools/ranges';
 import { createWatchdog, type Watchdog } from '@/lib/tools/watchdog';
 import { CHUNK_BYTES, type FromArchive, type ToArchive, type WireEntry } from './protocol';
-import { ZIP_LIMITS } from './zip-format';
+import { saveName as safeSaveName, ZIP_LIMITS } from './zip-format';
 import { entryRefusalWords, refusalWords } from './words';
 
 /*
@@ -108,13 +108,20 @@ export function readListing(value: unknown, archiveSize: number): Listing | null
         seen.add(index);
         if (typeof path !== 'string' || !whole(folder, folders.parents.length - 1)) return null;
         if (typeof name !== 'string' || name.length === 0) return null;
-        const saveName: unknown = item.saveName;
-        if (typeof saveName !== 'string' || saveName.length === 0 || saveName.length > 255)
-            return null;
+        const sent: unknown = item.saveName;
+        if (typeof sent !== 'string' || sent.length === 0 || sent.length > 255) return null;
+        // Made safe again here, never taken on the worker's word: what the browser saves the
+        // download as (no bidi override, separator or device name, at most 255 bytes).
+        const saveName = safeSaveName(sent);
         text += path.length + name.length + saveName.length;
         if (text > MAX_TEXT) return null;
         if (!whole(size) || !whole(packed, archiveSize) || !whole(dos, 0xffffffff)) return null;
-        if (mtime !== null && (typeof mtime !== 'number' || !Number.isFinite(mtime))) return null;
+        // Within what a Date holds (±8.64e15 ms): one past it would throw where the entry is shown.
+        if (
+            mtime !== null &&
+            (typeof mtime !== 'number' || !Number.isFinite(mtime) || Math.abs(mtime) > 8.64e15)
+        )
+            return null;
         if (typeof lock !== 'string' || !LOCKS.has(lock)) return null;
         if (typeof support !== 'string' || !SUPPORTS.has(support)) return null;
         const flag = (name: string) => item[name] === true;

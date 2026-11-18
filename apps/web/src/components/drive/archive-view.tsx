@@ -24,6 +24,7 @@ import {
     archiveWorker,
     entryLimit,
     entryNode,
+    forgetEntryPreviews,
     entryWhen,
     preloadArchiveWorker,
 } from '@/lib/archives/open';
@@ -142,6 +143,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
             active = false;
             leaving.abort();
             current?.close();
+            // What it showed of its locked entries goes with it.
+            if (current) forgetEntryPreviews(current.tag);
             setSession(null);
             setListing(null);
             setFailure(null);

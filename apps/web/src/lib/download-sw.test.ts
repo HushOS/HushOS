@@ -78,4 +78,32 @@ describe('a download through the service worker', () => {
         expect((await reader.read()).done).toBe(true);
         channel.port1.close();
     });
+
+    it('settles a held chunk on an abort before the browser pulled it, and drops it', async () => {
+        const handlers = loadWorker();
+        const channel = new MessageChannel();
+        const answers: { type: string; url?: string }[] = [];
+        channel.port1.onmessage = (event) => answers.push(event.data);
+        handlers.get('message')!({
+            data: { type: 'start', id: 'd2', filename: 'part.bin', size: 1 },
+            ports: [channel.port2],
+        });
+        const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
+        await tick();
+        const url = answers.find((answer) => answer.type === 'ready')!.url!;
+        let response: Response | null = null;
+        handlers.get('fetch')!({
+            request: new Request(url),
+            respondWith: (answer: Response) => (response = answer),
+        });
+        // A chunk held for a pull, then the page aborts before the browser read anything.
+        channel.port1.postMessage({ type: 'chunk', chunk: Uint8Array.of(9).buffer });
+        await tick();
+        channel.port1.postMessage({ type: 'abort' });
+        await tick();
+        // The page's waiting write hears it (never an acknowledgement), and the stream ends in error.
+        expect(answers.map((answer) => answer.type)).toEqual(['ready', 'cancelled']);
+        await expect(response!.body!.getReader().read()).rejects.toThrow('Download aborted.');
+        channel.port1.close();
+    });
 });

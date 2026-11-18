@@ -541,6 +541,15 @@ impl VersionReader {
         lock(&self.control).clone()
     }
 
+    /// The work over this reader got on (an archive's decoder took a piece): its run's watchdog
+    /// starts over. Fails once that run has ended.
+    pub(crate) fn progress(&self) -> CoreResult<()> {
+        match self.control() {
+            Some(control) => control.progress(),
+            None => Ok(()),
+        }
+    }
+
     /* Its chunks and its key go: the run ended (or the session closed). Reads fail from here on. */
     pub(crate) fn wipe(&self) {
         self.forget();

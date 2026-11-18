@@ -1072,3 +1072,59 @@ fn a_download_waits_on_a_slow_sink_past_the_watchdog_and_a_cancel_still_ends_it(
         }
     }
 }
+
+/* A preview that reads for minutes but gets on all the while: each piece decoded is progress, never the watchdog's stall. */
+#[test]
+fn a_long_preview_that_gets_on_is_never_the_watchdogs_stall() {
+    struct Manual(std::sync::atomic::AtomicU64);
+    impl crate::tools::ToolClock for Manual {
+        fn now_millis(&self) -> u64 {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+    /* Each read takes a second on the clock, and the app's poll asks the watchdog. */
+    struct Slow {
+        bytes: Vec<u8>,
+        clock: Arc<Manual>,
+        control: Mutex<Option<Arc<RunControl>>>,
+        fired: Mutex<bool>,
+    }
+    impl LocalSource for Slow {
+        fn size(&self) -> u64 {
+            self.bytes.len() as u64
+        }
+        fn read_at(&self, offset: u64, length: u64) -> std::result::Result<Vec<u8>, FetchError> {
+            self.clock.0.fetch_add(1_500, std::sync::atomic::Ordering::SeqCst);
+            if let Some(control) = self.control.lock().unwrap().clone() {
+                *self.fired.lock().unwrap() |= control.check_watchdog();
+            }
+            let start = (offset as usize).min(self.bytes.len());
+            Ok(self.bytes[start..(start + length as usize).min(self.bytes.len())].to_vec())
+        }
+    }
+    // A 4 MiB stored entry: 64 reads of 64 KiB, a minute and a half on the clock, twice the watchdog.
+    let data: Vec<u8> = (0..4u64 << 20).map(|i| (i * 7919 % 251) as u8).collect();
+    let zip = write_zip(
+        &[Spec {
+            packed: data.clone(),
+            size: data.len() as u64,
+            crc: crc32fast::hash(&data),
+            ..stored("big.bin")
+        }],
+        false,
+    );
+    let clock = Arc::new(Manual(std::sync::atomic::AtomicU64::new(0)));
+    let source = Arc::new(Slow {
+        bytes: zip,
+        clock: clock.clone(),
+        control: Mutex::new(None),
+        fired: Mutex::new(false),
+    });
+    let session =
+        ZipArchiveSession::open_local(source.clone(), RunControl::new(30_000, Some(clock.clone()))).unwrap();
+    let control = RunControl::new(30_000, Some(clock.clone()));
+    *source.control.lock().unwrap() = Some(control.clone());
+    let bytes = session.preview(0, 8 << 20, control).unwrap();
+    assert_eq!(bytes, data);
+    assert!(!*source.fired.lock().unwrap(), "the watchdog fired on a preview that got on");
+}

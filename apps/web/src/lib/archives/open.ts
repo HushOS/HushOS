@@ -5,6 +5,7 @@ import {
     openReader,
     PREVIEW_LIMITS,
     readAll,
+    forgetPreviewsWhere,
     recallPreview,
     rememberPreview,
     type PreviewKind,
@@ -182,6 +183,15 @@ export function entryWhen(entry: Pick<ArchiveEntry, 'dos' | 'mtime'>) {
  * only in the session that proved that password, never from a later one where another entry's
  * password was typed (each entry may have its own).
  */
+/*
+ * A closed archive session's remembered previews of locked entries: gone with it, never kept in
+ * memory until a lock (they are only ever shown again in that session).
+ */
+export function forgetEntryPreviews(session: string) {
+    const own = `@${session}`;
+    forgetPreviewsWhere((versionId) => versionId.endsWith(own));
+}
+
 export function entryNode(archive: DriveNode, entry: ArchiveEntry, session: string): DriveNode {
     const name = entry.name;
     const version = archive.currentVersion!;

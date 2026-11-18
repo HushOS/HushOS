@@ -4,7 +4,7 @@ import type { DriveNode } from '@hushos/drive/client';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_DIR } from '../../../../../e2e/fixtures/archives/make';
 import { recallPreview, rememberPreview } from '@/lib/previews';
-import { entryNode } from './open';
+import { entryNode, forgetEntryPreviews } from './open';
 import type { ArchiveEntry } from './session';
 import { ZipArchive } from './zip-archive';
 
@@ -51,6 +51,16 @@ describe('a remembered entry preview', () => {
         expect(entryNode(archive, second!, 'session-b').id).not.toBe(
             entryNode(archive, second!, 'session-a').id,
         );
+        // Session A closes: what it showed of its locked entries is let go of at once, not kept until a lock.
+        const kept = entryNode(archive, second!, 'session-c');
+        rememberPreview(kept.currentVersion!.id, {
+            kind: 'text',
+            data: new Uint8Array(4),
+            bytes: 4,
+        } as never);
+        forgetEntryPreviews('session-a');
+        expect(recallPreview(seen.currentVersion!.id)).toBeNull();
+        expect(recallPreview(kept.currentVersion!.id)).not.toBeNull();
         // A plain entry needs no password: its preview is the same in every session.
         const [plain] = (await entries('basic.zip')).filter(
             (entry) => entry.lock === 'none' && !entry.directory,
