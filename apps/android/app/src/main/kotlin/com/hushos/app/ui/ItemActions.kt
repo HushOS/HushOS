@@ -116,6 +116,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hushos.app.data.Offline
+import com.hushos.app.data.EditRights
 import com.hushos.app.data.Opened
 import com.hushos.app.data.savedLineOf
 import com.hushos.app.data.VersionListView
@@ -147,17 +148,9 @@ fun editsAsText(item: Opened) = com.hushos.app.data.TextEditing.opens(item) && (
 enum class Owner { ME, EDIT, VIEW }
 
 /* The share an item of someone else's drive came through: the mount whose root is the item or a folder above it. */
-fun receivedVia(model: DriveViewModel, state: DriveState, item: Opened): Vault.ShareMount? {
-    val mounts = state.shares.orEmpty().filter { it.root != null }
-    var cursor: Opened? = item
-    var steps = 0
-    while (cursor != null && steps++ < 256) {
-        mounts.firstOrNull { it.root?.id == cursor?.id }?.let { return it }
-        // A parent is in its child's workspace: looked up there, never by id alone.
-        cursor = cursor.node.parentId?.let { model.itemIn(cursor!!.node.workspaceId, it) }
-    }
-    return null
-}
+fun receivedVia(model: DriveViewModel, state: DriveState, item: Opened): Vault.ShareMount? =
+    // A parent is in its child's workspace: looked up there, never by id alone.
+    EditRights.nearestMount(item, state.shares.orEmpty(), root = { it.root }) { it.node.parentId?.let { id -> model.itemIn(it.node.workspaceId, id) } }
 
 fun ownerOf(model: DriveViewModel, state: DriveState, item: Opened): Owner {
     // A family folder's item is never this account's own: changed as the family's while its folder may be written here.

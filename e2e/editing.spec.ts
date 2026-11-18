@@ -5,6 +5,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
     addContact,
     grip,
+    hydrated,
     newContext,
     newFolder,
     openFolder,
@@ -49,6 +50,35 @@ async function retype(p: Page, text: string) {
     await editor(p).click();
     await p.keyboard.press('ControlOrMeta+a');
     await p.keyboard.insertText(text);
+    // Taken in by the editor (its document, not only the page), before the test goes on.
+    await expect(editor(p)).toContainText(text);
+}
+
+/* Holds every folder listing back for `ms` while armed: a slow server between a click and its answer. */
+async function slowListings(p: Page, ms: number) {
+    await p.route('**/nodes/*/children*', async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        await route.continue().catch(() => {});
+    });
+    return () => p.unroute('**/nodes/*/children*');
+}
+
+/* How many earlier versions a file has, from its Versions dialog. */
+async function earlierVersions(p: Page, name: string) {
+    await row(p, name)
+        .locator('button')
+        .first()
+        .click({ ...grip, button: 'right' });
+    await p.getByRole('menuitem', { name: 'Versions' }).click();
+    await expect(dialog(p)).toContainText(`Versions of “${name}”`);
+    // Counted once the list has come.
+    await expect(dialog(p).getByText('Current version', { exact: true })).toBeVisible({
+        timeout: 60_000,
+    });
+    const count = await dialog(p).getByRole('button', { name: 'Download earlier version' }).count();
+    await p.keyboard.press('Escape');
+    await expect(p.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    return count;
 }
 
 async function close(p: Page) {
@@ -134,21 +164,7 @@ test('a save is a new version that changes only the edited bytes', async () => {
 });
 
 test('Ctrl or Cmd+S with nothing changed saves nothing', async () => {
-    const earlier = async () => {
-        await row(page, 'config.json')
-            .locator('button')
-            .first()
-            .click({ ...grip, button: 'right' });
-        await page.getByRole('menuitem', { name: 'Versions' }).click();
-        await expect(dialog(page)).toContainText('Versions of “config.json”');
-        const count = await dialog(page)
-            .getByRole('button', { name: 'Download earlier version' })
-            .count();
-        await page.keyboard.press('Escape');
-        await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
-        return count;
-    };
-    const before = await earlier();
+    const before = await earlierVersions(page, 'config.json');
     await openEditor(page, 'config.json');
     await editor(page).click();
     // Twice: the second press is the editor's too, never the browser's Save Page.
@@ -159,7 +175,7 @@ test('Ctrl or Cmd+S with nothing changed saves nothing', async () => {
     // Still the editor: the browser's Save Page never opened over it.
     await expect(editor(page)).toBeVisible();
     await close(page);
-    expect(await earlier()).toBe(before);
+    expect(await earlierVersions(page, 'config.json')).toBe(before);
 });
 
 test('Back that drops the viewer’s address closes an editor with nothing unsaved', async () => {
@@ -218,9 +234,30 @@ test('broken JSON gets a warning beside Save, and still saves', async () => {
     await expect(
         dialog(page).getByRole('status').filter({ hasText: 'This JSON doesn’t parse at line 4.' }),
     ).toBeVisible();
+    // On a phone's width the warning moves under the header and is still read out.
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(
+        dialog(page).getByRole('status').filter({ hasText: 'This JSON doesn’t parse at line 4.' }),
+    ).toBeVisible();
+    await page.setViewportSize(size);
     await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
     await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
     await close(page);
+    expect((await downloaded(page, 'config.json')).toString()).toBe('{\n  "a": 1\n}\n}');
+});
+
+test('a save whose editor was closed and discarded while it looked up the folder saves nothing', async () => {
+    await openEditor(page, 'config.json');
+    await retype(page, '{"discarded": true}');
+    const restore = await slowListings(page, 4_000);
+    await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    // Long enough for the held listing to answer and anything still on its way to have landed.
+    await page.waitForTimeout(8_000);
+    await restore();
     expect((await downloaded(page, 'config.json')).toString()).toBe('{\n  "a": 1\n}\n}');
 });
 
@@ -243,11 +280,16 @@ test('leaving with changes asks first', async () => {
 });
 
 test('leaving for a page outside the app asks first too', async () => {
-    await page.goto('/pricing');
-    await page.getByRole('link', { name: 'Go to Drive' }).first().click();
+    await page.goto('/security');
+    // Into the app inside this page (once it has hydrated), so Back is the app's own move.
+    const into = page.getByRole('link', { name: 'Go to Drive' }).first();
+    await hydrated(into);
+    await into.click();
     await expect(row(page, 'notes.txt')).toBeVisible({ timeout: 60_000 });
     await openEditor(page, 'notes.txt');
     await retype(page, 'not kept either');
+    // The editor has taken the change (Save is on) before anything leaves.
+    await expect(dialog(page).getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
     // Back past the folder to the public page, in one step.
     await page.evaluate(() => window.history.go(-2));
     const ask = page.getByRole('alertdialog');
@@ -257,7 +299,7 @@ test('leaving for a page outside the app asks first too', async () => {
     await expect(page).toHaveURL(/\/app\/drive/);
     await page.evaluate(() => window.history.go(-2));
     await ask.getByRole('button', { name: 'Discard changes' }).click();
-    await expect(page).toHaveURL(/\/pricing/);
+    await expect(page).toHaveURL(/\/security/);
     await page.goto('/app/drive');
     await expect(row(page, 'notes.txt')).toBeVisible({ timeout: 60_000 });
 });
@@ -330,8 +372,15 @@ test.describe('when someone else saved first', () => {
         // Cancelled: back to the three choices, nothing discarded.
         await expect(choices.getByRole('button', { name: 'Save on top' })).toBeVisible();
         await choices.getByRole('button', { name: 'Open theirs' }).click();
+        const restore = await slowListings(page, 3_000);
         await confirm.getByRole('button', { name: 'Discard changes' }).click();
+        // While their version is looked up: nothing can be typed or saved into the text on its way out.
+        await expect(editor(page)).toHaveAttribute('contenteditable', 'false');
+        await expect(
+            dialog(page).getByRole('button', { name: 'Save', exact: true }),
+        ).toBeDisabled();
         await expect(editor(page)).toContainText('theirs to open', { timeout: 60_000 });
+        await restore();
         await expect(editor(page)).not.toContainText('mine, discarded');
         await close(page);
         expect((await downloaded(page, 'notes.txt')).toString()).toBe('theirs to open');
@@ -417,8 +466,30 @@ test('a viewer gets no Edit; an editor of the share edits', async ({ browser }) 
     await expect(dialog(guest).getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
     await close(guest);
 
+    // A file inside the folder shared to edit, shared on its own to the same person to view: its own grant wins.
+    await openFolder(page, 'Editing');
+    await page
+        .locator('input[type=file]')
+        .first()
+        .setInputFiles([write('Locked.txt', 'Locked text')]);
+    await expect(row(page, 'Locked.txt')).toBeVisible({ timeout: 60_000 });
+    await row(page, 'Locked.txt').locator('button').first().click(grip);
+    await page.getByRole('button', { name: 'Share', exact: true }).click();
+    await shareWith(page, /Ines Okafor/);
+    await expect(page.getByText(/shared with Ines Okafor/)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    await page.locator('[data-crumb-id]').first().click();
+
     await guest.goto('/app/shared');
+    await expect(guest.locator('[data-shared="Locked.txt"]')).toBeVisible({ timeout: 60_000 });
     await guest.locator('[data-shared="Editing"]').getByRole('link', { name: 'Editing' }).click();
+    await row(guest, 'Locked.txt').getByRole('link', { name: 'Locked.txt', exact: true }).click();
+    await expect(dialog(guest).locator('.rt-code')).toContainText('Locked text', {
+        timeout: 60_000,
+    });
+    await expect(dialog(guest).getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+    await close(guest);
     await openEditor(guest, 'Editing.txt');
     await retype(guest, 'edited by the editor');
     await guest.keyboard.press('ControlOrMeta+s');

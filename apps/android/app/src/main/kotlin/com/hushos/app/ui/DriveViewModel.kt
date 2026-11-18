@@ -371,6 +371,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // A new session starts with no families drawn: whatever the last one fetched, or has in flight, is dropped, and
         // no download of the last vault writes again.
         endFamilyCleanups()
+        // The editor open under the last session goes with it: its text dropped, nothing of it saved under this one.
+        endTextEdit()
+        _state.update { it.copy(editing = null) }
         vault?.close()
         vault?.areaLedger?.clear()
         families.reset()
@@ -2574,7 +2577,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* Edit: a text file this person may change opens in the editor, read afresh from the server. */
     fun edit(item: Opened) {
         textEdit?.end()
-        textEdit = TextEdit(item, context, viewModelScope, vault = { vault }, saved = { parent -> parent?.let { refresh(it) } }).also { it.load() }
+        // Bound to the vault it opens under: a save never runs under a vault a later sign-in made.
+        val opening = vault ?: return
+        textEdit = TextEdit(item, context, viewModelScope, opening, current = { vault }, saved = { parent -> parent?.let { refresh(it) } }).also { it.load() }
         _state.update { it.copy(editing = item.id) }
     }
 

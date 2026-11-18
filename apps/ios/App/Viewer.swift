@@ -165,7 +165,8 @@ struct FileViewer: View {
             // viewer does after its sniff. The editor reads and checks it again for itself.
             if let url, version == nil, !TextEditing.opens(current), ItemKind.of(current) == nil, (current.size ?? 0) <= TextEditing.limit {
                 let key = sniffKey(current)
-                let text = await Task.detached { (try? Data(contentsOf: url)).map(TextEditing.readsAsText) ?? false }.value
+                // Read no further than the editor would take, whatever size the row says (or doesn't).
+                let text = await Task.detached { TextEditing.readsAsText(fileAt: url) }.value
                 if text, sniffKey(current) == key { readAsText = key }
             }
         }
@@ -179,7 +180,12 @@ struct FileViewer: View {
             if let id { seenListed = id }
         }
         .onChange(of: removed) { _, gone in
-            if gone { dismiss() }
+            // An editor with the person's text stays over a file someone moved or deleted (Save as a copy keeps it);
+            // a family's removal takes everything with it.
+            if gone, editing == nil || familyGone { dismiss() }
+        }
+        .onChange(of: editing == nil) { _, closed in
+            if closed, removed { dismiss() }
         }
     }
 
@@ -210,9 +216,17 @@ struct FileViewer: View {
      * listing older than the file, paged to) says nothing, nor does a folder whose listing was merely
      * let go of (a rotation's failure clears them), nor a family whose state isn't known yet.
      */
-    private var removed: Bool {
+    private var removed: Bool { movedAway || familyGone }
+
+    /* Moved or deleted by someone (its folder's listing no longer shows it): the editor, if open, keeps its text. */
+    private var movedAway: Bool {
         guard version == nil else { return false }
-        if seenListed == current.id, store.folders[current.node.parentId ?? ""] != nil, listedHere == nil { return true }
+        return seenListed == current.id && store.folders[current.node.parentId ?? ""] != nil && listedHere == nil
+    }
+
+    /* Its family removed, forked or refused: nothing of it stays on screen, an editor's text included. */
+    private var familyGone: Bool {
+        guard version == nil else { return false }
         guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
               let state = store.familyStates[groupId] else { return false }
         switch state {

@@ -26,6 +26,17 @@ public enum TextEditing {
      * offered Edit as the web's viewer offers it after its sniff. Text the editor can't keep exactly
      * still opens, read-only, with its note; binary and other encodings don't.
      */
+    /*
+     * The same for a file on this phone, read no further than the editor would take (limit + 1 bytes):
+     * a file of unknown size is never read whole to find out.
+     */
+    public static func readsAsText(fileAt url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? handle.close() }
+        guard let bytes = try? handle.read(upToCount: Int(limit) + 1), UInt64(bytes.count) <= limit else { return false }
+        return readsAsText(bytes)
+    }
+
     public static func readsAsText(_ bytes: Data) -> Bool {
         switch textReadOnly(bytes: bytes) {
         case nil, .lineEndings, .byteOrderMark: true
@@ -105,6 +116,44 @@ public enum TextEditing {
         }
         return (listing.folder, row)
     }
+}
+
+/*
+ * One text editor's session (Editing 1a): the vault it opened under and which opened text is on
+ * screen. Every save, copy and Open theirs takes a token before its first wait and asks it right
+ * before a run starts and before anything it found reaches the screen: the editor closed, another
+ * session (a sign-out and in, another account), or Open theirs since, and the work publishes nothing.
+ */
+@MainActor public final class EditSession<Owner: AnyObject> {
+    public struct Token: @unchecked Sendable {
+        /* The vault the work runs under: the one the editor opened with. */
+        public let owner: Owner
+        fileprivate let opening: Int
+    }
+
+    private var owner: Owner?
+    private var opening = 0
+    public private(set) var closed = false
+
+    public init() {}
+
+    /* A token for work beginning now under `current` (the store's vault); nil once closed or under another one. */
+    public func take(_ current: Owner) -> Token? {
+        if owner == nil { owner = current }
+        guard !closed, let owner, owner === current else { return nil }
+        return Token(owner: owner, opening: opening)
+    }
+
+    /* Whether work begun with `token` may go on: not closed, the same vault, the same opened text, its task not cancelled. */
+    public func live(_ token: Token, current: Owner) -> Bool {
+        !closed && !Task.isCancelled && owner === token.owner && token.owner === current && opening == token.opening
+    }
+
+    /* Another text opened (Open theirs): earlier work publishes nothing over it. */
+    public func reopened() { opening += 1 }
+
+    /* The editor closed, or its session ended: nothing of it goes on. */
+    public func close() { closed = true }
 }
 
 /* What a save did: a new version, or someone else's version is current (nil: the file is gone). */

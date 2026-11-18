@@ -4,6 +4,7 @@ import { EditorState } from '@codemirror/state';
 import { describe, expect, test } from 'vitest';
 import type { DriveNode } from '@hushos/drive/client';
 import {
+    editableThroughShares,
     editableFile,
     editableKind,
     encodeText,
@@ -156,5 +157,38 @@ describe('a file the viewer read as text', () => {
         expect(editableFile(file('report.pdf', 'application/pdf'), true)).toBe(false);
         expect(editableFile(file('photo.png', null), true)).toBe(false);
         expect(editableFile(file('clip.mp4', null), true)).toBe(false);
+    });
+});
+
+describe('editing in someone else’s folder', () => {
+    const chain = [
+        { id: 'doc', workspaceId: 'w' },
+        { id: 'inner', workspaceId: 'w' },
+        { id: 'top', workspaceId: 'w' },
+    ];
+    const grant = (nodeId: string, role: 'viewer' | 'editor', workspaceId = 'w') => ({
+        workspaceId,
+        nodeId,
+        role,
+    });
+
+    test('the nearest grant decides, as the server’s does', () => {
+        expect(editableThroughShares(chain, [grant('top', 'editor')])).toBe(true);
+        // A viewer's grant on the file itself, inside a folder shared to edit: not editable.
+        expect(editableThroughShares(chain, [grant('top', 'editor'), grant('doc', 'viewer')])).toBe(
+            false,
+        );
+        expect(
+            editableThroughShares(chain, [grant('top', 'editor'), grant('inner', 'viewer')]),
+        ).toBe(false);
+        expect(
+            editableThroughShares(chain, [grant('top', 'viewer'), grant('inner', 'editor')]),
+        ).toBe(true);
+    });
+
+    test('a file shared on its own is never edited, and grants match by workspace too', () => {
+        expect(editableThroughShares(chain, [grant('doc', 'editor')])).toBe(false);
+        expect(editableThroughShares(chain, [grant('top', 'editor', 'other')])).toBe(false);
+        expect(editableThroughShares(chain, [])).toBe(false);
     });
 });

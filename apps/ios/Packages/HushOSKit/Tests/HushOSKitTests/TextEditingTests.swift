@@ -341,3 +341,48 @@ actor PlannedBox {
     var results: [[PlannedResult]] = []
     func add(_ more: [PlannedResult]) { results.append(more) }
 }
+
+/* An editor's session: work taken under it stops publishing once it closes, another session begins, or another text opens. */
+@MainActor @Suite struct EditSessionTests {
+    final class Owner {}
+
+    @Test func workGoesOnOnlyInTheSessionItBeganIn() {
+        let first = Owner()
+        let session = EditSession<Owner>()
+        let token = session.take(first)!
+        #expect(token.owner === first)
+        #expect(session.live(token, current: first))
+        // Another sign-in replaced the vault: nothing begun before goes on, and nothing new begins under it.
+        let second = Owner()
+        #expect(!session.live(token, current: second))
+        #expect(session.take(second) == nil)
+    }
+
+    @Test func openTheirsAndClosingEndEarlierWork() {
+        let owner = Owner()
+        let session = EditSession<Owner>()
+        let before = session.take(owner)!
+        session.reopened()
+        #expect(!session.live(before, current: owner))
+        let after = session.take(owner)!
+        #expect(session.live(after, current: owner))
+        session.close()
+        #expect(!session.live(after, current: owner))
+        #expect(session.take(owner) == nil)
+    }
+}
+
+@Suite struct TextSniffTests {
+    @Test func aFileIsReadNoFurtherThanTheEditorTakes() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("sniff-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let small = dir.appendingPathComponent("README")
+        try Data("Read me\n".utf8).write(to: small)
+        #expect(TextEditing.readsAsText(fileAt: small))
+        // Text past the limit, of a size no row said: not offered, and never read whole.
+        let large = dir.appendingPathComponent("BIG")
+        try Data(repeating: UInt8(ascii: "a"), count: Int(TextEditing.limit) + 2).write(to: large)
+        #expect(!TextEditing.readsAsText(fileAt: large))
+    }
+}

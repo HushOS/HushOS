@@ -41,6 +41,8 @@ struct TextEditorScreen: View {
     @State private var loadFrom: Opened?
     /* The save on its way, cancelled when the screen goes or the session changes. */
     @State private var work: Task<Void, Never>?
+    /* This editor's session: the vault it opened under and the opened text; every path checks it (EditSession). */
+    @State private var session = EditSession<Vault>()
 
     private struct StaleVersion: Identifiable, Equatable {
         let currentVersionId: String?
@@ -62,12 +64,14 @@ struct TextEditorScreen: View {
         .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
         // Another session (a sign-out and in, another account): this text was the last one's.
         .onChange(of: ObjectIdentifier(store.vault)) { _, _ in
+            session.close()
             work?.cancel()
             editor.drop()
             dismiss()
         }
         .onDisappear {
             // A save still on its way belongs to this screen's session: it stops with it.
+            session.close()
             work?.cancel()
             editor.drop()
         }
@@ -164,10 +168,14 @@ struct TextEditorScreen: View {
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
     private func load() async {
         let from = loadFrom ?? item
+        // Read under the vault this editor opened with, and shown only while its session lasts.
+        guard let token = session.take(store.vault) else { return }
+        let vault = token.owner
         do {
             // The row in the file's own folder and workspace, and its bytes read for that row's version in that
             // workspace (never a kept copy of whatever version, never another drive's row of the same id).
-            let (_, listed) = try await store.vault.editTarget(from)
+            let (_, listed) = try await vault.editTarget(from)
+            guard session.live(token, current: store.vault) else { return }
             guard let file = listed else {
                 phase = .failed
                 return
@@ -176,8 +184,8 @@ struct TextEditorScreen: View {
                 phase = .readOnly(.tooLarge, nil)
                 return
             }
-            let data = try await store.vault.editBytes(file, limit: TextEditing.limit)
-            try Task.checkCancellation()
+            let data = try await vault.editBytes(file, limit: TextEditing.limit)
+            guard session.live(token, current: store.vault) else { return }
             target = file
             startedFrom = file.node.currentVersion?.id
             edited = false
@@ -189,7 +197,7 @@ struct TextEditorScreen: View {
                 phase = .readOnly(reason, text)
             }
         } catch where !ErrorWords.isCancellation(error) {
-            phase = .failed
+            if session.live(token, current: store.vault) { phase = .failed }
         } catch {}
     }
 
@@ -198,19 +206,17 @@ struct TextEditorScreen: View {
         work = Task { await job() }
     }
 
-    /*
-     * Whether a save begun under `vault` may still go on: its task not cancelled (the screen gone) and
-     * the store's session still that vault's. Asked before the run starts and before the screen changes.
-     */
-    private func stillOn(_ vault: Vault) -> Bool {
-        !Task.isCancelled && ObjectIdentifier(store.vault) == ObjectIdentifier(vault)
+    /* Whether work begun with `token` may still go on (EditSession.live): asked before a run starts and before the screen changes. */
+    private func stillOn(_ token: EditSession<Vault>.Token) -> Bool {
+        session.live(token, current: store.vault)
     }
 
     /* Save, and Save on top (`onTopOf`: the version current now). */
     private func save(onTopOf: String? = nil) async {
         guard phase == .editing, !saving, let file = target else { return }
-        // The session it starts in: the vault and its journal, never a replacement's.
-        let vault = store.vault
+        // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
+        guard let token = session.take(store.vault) else { return }
+        let vault = token.owner
         let text = editor.text
         saving = true
         failure = nil
@@ -218,14 +224,14 @@ struct TextEditorScreen: View {
         defer { saving = false }
         do {
             let (folder, listed) = try await vault.editTarget(file)
-            guard stillOn(vault) else { return }
+            guard stillOn(token) else { return }
             guard let listed else {
                 stale = StaleVersion(currentVersionId: nil)
                 return
             }
             let saved = try await TextSave.version(text, of: listed, in: folder, startedFrom: onTopOf ?? startedFrom,
-                                                   start: TextSave.runs(vault), stillOn: { @MainActor in stillOn(vault) })
-            guard stillOn(vault) else { return }
+                                                   start: TextSave.runs(vault), stillOn: { @MainActor in stillOn(token) })
+            guard stillOn(token) else { return }
             switch saved {
             case .stale(let current):
                 stale = StaleVersion(currentVersionId: current)
@@ -241,14 +247,14 @@ struct TextEditorScreen: View {
                 if let parent = landed.node.parentId { await store.refresh(folder: parent) }
             }
         } catch {
-            guard stillOn(vault) else { return }
+            guard stillOn(token) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
     }
 
     private func saveCopy() async {
-        guard let file = target else { return }
-        let vault = store.vault
+        guard let file = target, let token = session.take(store.vault) else { return }
+        let vault = token.owner
         let text = editor.text
         saving = true
         failure = nil
@@ -256,10 +262,10 @@ struct TextEditorScreen: View {
         do {
             let (folder, _) = try await vault.editTarget(file)
             let sources = try await vault.copySources(of: file)
-            guard stillOn(vault) else { return }
+            guard stillOn(token) else { return }
             let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
-                                               stillOn: { @MainActor in stillOn(vault) })
-            guard stillOn(vault) else { return }
+                                               stillOn: { @MainActor in stillOn(token) })
+            guard stillOn(token) else { return }
             // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
             // stays theirs.
             target = made.file
@@ -268,13 +274,16 @@ struct TextEditorScreen: View {
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
         } catch {
-            guard stillOn(vault) else { return }
+            guard stillOn(token) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
     }
 
     private func openTheirs() async {
         guard let file = target else { return }
+        // Another text opens: nothing begun on this one publishes over it.
+        session.reopened()
+        work?.cancel()
         editor.drop()
         edited = false
         status = nil

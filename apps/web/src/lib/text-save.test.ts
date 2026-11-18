@@ -9,7 +9,7 @@ import {
 } from '@hushos/drive/save-runs';
 import { describe, expect, test } from 'vitest';
 import { encodeText } from '@/lib/text-edit';
-import { editTargetOf, saveCopy, saveVersion } from '@/lib/text-save';
+import { editTargetOf, saveCopy, saveVersion, SessionEnded } from '@/lib/text-save';
 
 /*
  * The editor's save and its stale choices, over a stand-in for the save path
@@ -236,7 +236,7 @@ describe('ending the run', () => {
         const saved = await saveVersion(
             b.start,
             { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
-            noPause,
+            { pause: noPause },
         );
         expect(saved.status).toBe('saved');
         expect(b.files.get(id)!.versions).toHaveLength(2);
@@ -250,7 +250,7 @@ describe('ending the run', () => {
         const saved = await saveVersion(
             b.start,
             { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
-            noPause,
+            { pause: noPause },
         );
         expect(saved).toEqual({ status: 'saved', versionId: b.current(id) });
         expect(b.files.get(id)!.versions).toHaveLength(2);
@@ -311,4 +311,23 @@ test('a save names the version it published, not the one its reply row shows by 
         text: 'x',
     });
     expect(saved).toEqual({ status: 'saved', versionId: 'v-mine' });
+});
+
+test('a save whose editor session ended before its run starts uploads nothing', async () => {
+    const b = bench();
+    const id = b.add('notes.txt', 'a');
+    const file = b.asNode(id);
+    await expect(
+        saveVersion(
+            b.start,
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'b' },
+            { stillOn: () => false },
+        ),
+    ).rejects.toBeInstanceOf(SessionEnded);
+    await expect(
+        saveCopy(b.start, { file, folder: b.folder, text: 'b' }, { stillOn: () => false }),
+    ).rejects.toBeInstanceOf(SessionEnded);
+    expect(b.plans).toHaveLength(0);
+    expect(b.files.get(id)!.versions).toHaveLength(1);
+    expect(b.files.size).toBe(1);
 });

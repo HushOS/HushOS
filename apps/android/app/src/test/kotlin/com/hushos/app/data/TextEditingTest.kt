@@ -285,4 +285,40 @@ class TextEditingTest {
         assertTrue(EditRights.mayEdit("MINE", "mine", null))
         assertTrue(!EditRights.mayEdit("theirs", "mine", null))
     }
+
+    /* Work taken under an editor's session stops publishing once it closes, a sign-in replaces its vault, or another text opens. */
+    @Test fun workGoesOnOnlyInTheSessionItBeganIn() {
+        val first = Any()
+        var current: Any? = first
+        val session = EditSession(first) { current }
+        val token = session.take()!!
+        assertTrue(session.live(token))
+        // A sign-in replaced the vault: nothing begun before goes on, and nothing new begins.
+        current = Any()
+        assertTrue(!session.live(token))
+        assertEquals(null, session.take())
+        current = first
+        session.reopened()
+        assertTrue(!session.live(token))
+        val after = session.take()!!
+        assertTrue(session.live(after))
+        session.close()
+        assertTrue(!session.live(after))
+        assertEquals(null, session.take())
+    }
+
+    @Test fun theShareAnItemCameThroughIsMatchedByWorkspaceAndId() {
+        fun node(id: String, ws: String, parent: String?) =
+            Opened(NodeView(id, ws, parent, "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(id, null, null, null, emptyMap()))
+        val doc = node("doc", "theirs", "inner")
+        val inner = node("inner", "theirs", "top")
+        val top = node("top", "theirs", null)
+        val tree = mapOf("inner" to inner, "top" to top)
+        val parent = { item: Opened -> item.node.parentId?.let { tree[it] } }
+        // A mount of another workspace whose root has the folder's id is not the share it came through.
+        val twin = node("inner", "elsewhere", null)
+        assertEquals(top, EditRights.nearestMount(doc, listOf(twin, top), root = { it }, parent = parent))
+        assertEquals(inner, EditRights.nearestMount(doc, listOf(top, inner), root = { it }, parent = parent))
+        assertEquals(null, EditRights.nearestMount(doc, listOf(twin), root = { it }, parent = parent))
+    }
 }

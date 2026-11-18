@@ -44,6 +44,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
+import com.hushos.app.data.EditSession
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SaveRunJournal
 import com.hushos.app.data.SaveRuns
@@ -96,8 +97,11 @@ object EditorWords {
  * one (`end`), its text emptied. Nothing is kept on the phone (drafts are Editing 1c), and the decrypted copy it reads goes
  * as soon as it is read.
  */
-class TextEdit(val item: Opened, private val context: Context, private val scope: CoroutineScope, private val vault: () -> Vault?,
-               private val saved: (parentId: String?) -> Unit) {
+class TextEdit(val item: Opened, private val context: Context, private val scope: CoroutineScope, opening: Vault,
+               current: () -> Vault?, private val saved: (parentId: String?) -> Unit) {
+    /* This editor's session: the vault it opened under and the opened text; every path checks it (EditSession). */
+    private val session = EditSession(opening, current)
+
     sealed interface Phase {
         data object Loading : Phase
         data object Failed : Phase
@@ -120,7 +124,6 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var stale by mutableStateOf<Stale?>(null)
     private var work: Job? = null
     private var reading: RunControl? = null
-    @Volatile private var ended = false
 
     private fun writer(vault: Vault) = VaultSaveWriter(vault, storage = { Auth.storage(context) })
     private fun start(vault: Vault) = TextSave.runs(writer(vault), SaveRunJournal.of(context))
@@ -137,8 +140,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         reading?.cancel()
         val control = RunControl(toolWatchdogMillis(), null)
         reading = control
+        val token = session.take() ?: return
+        val vault = token.owner
         work = scope.launch {
-            val vault = vault() ?: return@launch
             val opened = withContext(Dispatchers.IO) {
                 runCatching {
                     // The row in the file's own folder and workspace, and its bytes read for that row's version, in memory:
@@ -148,7 +152,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     file to TextEditing.open(TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control))
                 }.getOrNull()
             }
-            if (ended) return@launch
+            if (!session.live(token)) return@launch
             if (opened == null) {
                 phase = Phase.Failed
                 return@launch
@@ -167,13 +171,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     }
 
     /* Save, and Save on top (`onTopOf`: the version current now). */
-    /* Whether a save begun under `vault` may go on: this session not ended, and the model's vault still that one. */
-    private fun stillOn(vault: Vault) = !ended && vault() === vault
-
     fun save(onTopOf: String? = null) {
         if (phase != Phase.Editing || saving) return
-        // The session it starts in: the vault and its journal, never a replacement's.
-        val vault = vault() ?: return
+        // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
+        val token = session.take() ?: return
+        val vault = token.owner
         val text = buffer.toString()
         val file = target
         saving = true
@@ -186,11 +188,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val (folder, listed) = writer.editTarget(file)
                     if (listed == null) TextSaved.Stale(null)
                     else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
-                        stillOn = { stillOn(vault) })
+                        stillOn = { session.live(token) })
                 }
             }
+            if (!session.live(token)) return@launch
             saving = false
-            if (!stillOn(vault)) return@launch
             result.onSuccess { done ->
                 when (done) {
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
@@ -210,7 +212,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     }
 
     fun saveCopy() {
-        val vault = vault() ?: return
+        val token = session.take() ?: return
+        val vault = token.owner
         val text = buffer.toString()
         val file = target
         saving = true
@@ -221,11 +224,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file)
                     TextSave.copy(text, file, folder, writer.copySources(file), TextSave.runs(writer, SaveRunJournal.of(context)),
-                        stillOn = { stillOn(vault) })
+                        stillOn = { session.live(token) })
                 }
             }
+            if (!session.live(token)) return@launch
             saving = false
-            if (!stillOn(vault)) return@launch
             result.onSuccess { made ->
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs.
@@ -240,6 +243,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 
     /* Their version, read in place of this text (after the person confirmed). */
     fun openTheirs() {
+        // Another text opens: nothing begun on this one publishes over it.
+        session.reopened()
         stale = null
         status = null
         failure = null
@@ -250,7 +255,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 
     /* Closed, signed out or another session: the text goes with it, and nothing more lands here. */
     fun end() {
-        ended = true
+        session.close()
         work?.cancel()
         reading?.cancel()
         buffer.clear()

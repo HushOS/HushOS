@@ -6,6 +6,7 @@ import {
     useAccessIndex,
     type Access,
 } from '@/components/drive/access';
+import { editableThroughShares } from '@/lib/text-edit';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { FolderColourDialog } from '@/components/drive/folder-colour-dialog';
@@ -1863,8 +1864,20 @@ export function FolderView({ folderId }: { folderId: string }) {
                 onChange={(node) => showPreview(node, node !== null)}
                 onDownload={(node) => download([node])}
                 onShare={!area && folder?.workspaceId === workspaceId ? setSharing : undefined}
-                // An owner, an editor of the share, or a family folder this device may write.
-                editable={() => writable && (!shared || sharedBy?.role === 'editor')}
+                // An owner, a family folder this device may write, or in someone else's folder the
+                // grant nearest the file (its own, then each folder up) when that is an editor's.
+                editable={(node) =>
+                    writable &&
+                    (!shared ||
+                        editableThroughShares(
+                            [node, ...[...crumbs].reverse()],
+                            (mounts.data ?? []).map((mount) => ({
+                                workspaceId: mount.workspaceId,
+                                nodeId: mount.node.id,
+                                role: mount.role,
+                            })),
+                        ))
+                }
                 access={
                     shared || area
                         ? undefined

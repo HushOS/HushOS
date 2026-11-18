@@ -177,10 +177,53 @@ object TextSave {
  * its own can't be saved: its folder can't be listed).
  */
 object EditRights {
+    /*
+     * The share an item came through: the mount whose root is the item or the nearest folder above it, matched by workspace
+     * and id (another workspace's node with the same id is never the share's root). `parent`: an item's parent in its own
+     * workspace, or null.
+     */
+    fun <M> nearestMount(item: Opened, mounts: List<M>, root: (M) -> Opened?, parent: (Opened) -> Opened?): M? {
+        var cursor: Opened? = item
+        var steps = 0
+        while (cursor != null && steps++ < 256) {
+            val at = cursor
+            mounts.firstOrNull { mount ->
+                root(mount)?.let { it.id == at.id && it.node.workspaceId.equals(at.node.workspaceId, ignoreCase = true) } == true
+            }?.let { return it }
+            cursor = parent(at)
+        }
+        return null
+    }
+
     /* `covering`: the mount the item came through, as its role and whether its root is the item itself; null when none. */
     fun mayEdit(itemWorkspace: String, ownWorkspace: String?, covering: Pair<String, Boolean>?): Boolean {
         if (ownWorkspace != null && ownWorkspace.equals(itemWorkspace, ignoreCase = true)) return true
         val (role, rootIsItem) = covering ?: return false
         return role == "editor" && !rootIsItem
     }
+}
+
+/*
+ * One text editor's session (Editing 1a): the vault it opened under and which opened text is on screen. Every save, copy
+ * and Open theirs takes a token before its first wait and asks it right before a run starts and before anything it found
+ * reaches the screen: the editor closed, another session (a sign-in replacing the vault), or Open theirs since, and the
+ * work publishes nothing.
+ */
+class EditSession<T : Any>(val owner: T, private val current: () -> T?) {
+    class Token<T>(val owner: T, internal val opening: Int)
+
+    @Volatile private var opening = 0
+    @Volatile var closed = false
+        private set
+
+    /* A token for work beginning now; null once closed or under another vault. */
+    fun take(): Token<T>? = if (!closed && current() === owner) Token(owner, opening) else null
+
+    /* Whether work begun with `token` may go on: not closed, still this session's vault, the same opened text. */
+    fun live(token: Token<T>): Boolean = !closed && current() === owner && token.owner === owner && token.opening == opening
+
+    /* Another text opened (Open theirs): earlier work publishes nothing over it. */
+    fun reopened() { opening += 1 }
+
+    fun close() { closed = true }
 }

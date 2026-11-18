@@ -120,3 +120,27 @@ export function editableFile(node: DriveNode, sniffed = false) {
     if (editableKind(node.name, node.metadata?.mime)) return true;
     return sniffed && previewKindOf(node.name, node.metadata?.mime) === 'none';
 }
+
+/* A share this person received: where it is (its workspace and node) and what it lets them do. */
+export type Grant = { workspaceId: string; nodeId: string; role: 'viewer' | 'editor' };
+
+/*
+ * Whether this person may change a file in someone else's folder: as the server decides it
+ * (packages/db accessFor), the grant nearest the file wins, the file's own first, then each folder
+ * up. A viewer's grant there wins over an editor's further up (two grants on one node: the viewer's).
+ * A grant on the file itself never lets it be edited: its folder can't be listed, and a save needs it.
+ * `chain`: the file, then its folders up to the top, nearest first; matched by workspace and id.
+ */
+export function editableThroughShares(
+    chain: readonly { id: string; workspaceId: string }[],
+    grants: readonly Grant[],
+) {
+    for (const [index, node] of chain.entries()) {
+        const here = grants.filter(
+            (grant) => grant.nodeId === node.id && grant.workspaceId === node.workspaceId,
+        );
+        if (!here.length) continue;
+        return index > 0 && here.every((grant) => grant.role === 'editor');
+    }
+    return false;
+}

@@ -24,6 +24,21 @@ import { encodeText } from '@/lib/text-edit';
 
 export type StartRun = (plan: RunPlan) => Promise<SaveRun>;
 
+/*
+ * `stillOn`: whether the editor session this save began in is still the one on screen (not closed,
+ * not discarded, the same account session), asked last thing before the run starts; `pause`: the
+ * wait between tries to retire the run's record.
+ */
+export type SaveOptions = { stillOn?: () => boolean; pause?: (ms: number) => Promise<void> };
+
+/* The save's session ended before its run started: nothing was uploaded. */
+export class SessionEnded extends Error {
+    constructor() {
+        super('This editor was closed before the save started.');
+        this.name = 'SessionEnded';
+    }
+}
+
 export type TextSaved =
     /*
      * `versionId`: the version this save published, by the upload's own id; null when the save
@@ -67,9 +82,10 @@ export function editTargetOf(listing: FolderListing, file: DriveNode) {
 export async function saveVersion(
     start: StartRun,
     edit: { file: DriveNode; folder: DriveNode; startedFrom: string | null; text: string },
-    pause?: (ms: number) => Promise<void>,
+    { stillOn = () => true, pause }: SaveOptions = {},
 ): Promise<TextSaved> {
     const bytes = encodeText(edit.text);
+    if (!stillOn()) throw new SessionEnded();
     const run = await start({
         targets: [edit.file],
         results: [{ size: bytes.byteLength, thumbnail: false }],
@@ -98,9 +114,10 @@ export type TextCopy = { node: NodeView | null; versionId: string | null };
 export async function saveCopy(
     start: StartRun,
     edit: { file: DriveNode; folder: DriveNode; text: string },
-    pause?: (ms: number) => Promise<void>,
+    { stillOn = () => true, pause }: SaveOptions = {},
 ): Promise<TextCopy> {
     const bytes = encodeText(edit.text);
+    if (!stillOn()) throw new SessionEnded();
     const run = await start({
         targets: [edit.folder],
         results: [{ size: bytes.byteLength, thumbnail: false }],
