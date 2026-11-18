@@ -30,22 +30,21 @@ export async function rowsOf(listing: Listing, id: number): Promise<Row[]> {
     if (known) return known;
     const { parents } = listing.folders;
     let work = 0;
-    const step = async () => {
-        if (++work % SLICE === 0) await pause();
-    };
+    // Counted synchronously; a pause only at a slice's end (an await per item was millions of microtasks).
+    const due = () => ++work % SLICE === 0;
     const counts = new Map<number, number>();
     for (let k = 1; k < parents.length; k++) {
         if (parents[k] === id) counts.set(k, 0);
-        await step();
+        if (due()) await pause();
     }
     for (let k = 1; k < parents.length; k++) {
         const count = counts.get(parents[k]!);
         if (count !== undefined) counts.set(parents[k]!, count + 1);
-        await step();
+        if (due()) await pause();
     }
     const files: Row[] = [];
     for (const entry of listing.entries) {
-        await step();
+        if (due()) await pause();
         if (entry.hidden || entry.directory) continue;
         if (entry.folder === id) files.push({ kind: 'file', name: entry.name, entry });
         const count = counts.get(entry.folder);

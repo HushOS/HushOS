@@ -569,6 +569,28 @@ describe('a large stored entry played by range', () => {
     });
 });
 
+describe('a large stored entry’s span after the session ends', () => {
+    it('serves nothing once a lock or sign-out ends the session, whatever the renderer still holds', async () => {
+        const { openArchive } = await import('./session');
+        const { main, CHUNK } = engine();
+        const worker = driven();
+        const session = openArchive(main, () => worker.fake as unknown as Worker);
+        const video = big(0, 12 * CHUNK);
+        worker.send({ type: 'listing', ...message([video]) });
+        await session.listing;
+        const previewing = session.preview(video as ArchiveEntry, 64 * 1024 * 1024);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const asked = worker.asked.find((message) => message.type === 'preview')!;
+        worker.send({ type: 'span', id: asked.id, offset: 4096, size: video.size });
+        const { reader } = await previewing;
+        expect((await reader.read(0, 1024)).byteLength).toBe(1024);
+        // The session ends (a lock): the renderer hasn't closed its reader, and it serves nothing more.
+        session.close();
+        await expect(reader.read(0, 1024)).rejects.toThrow();
+        await reader.close();
+    });
+});
+
 describe('what the worker hands the page', () => {
     it('keeps the folders in an array of their own, never the worker’s larger buffer', () => {
         const parents = new Uint32Array(new ArrayBuffer(32 * 1024 * 1024), 0, 1);

@@ -73,6 +73,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     // The folders from the top to the one shown, by id.
     const [path, setPath] = useState<number[]>([]);
     const [opened, setOpened] = useState<ArchiveEntry | null>(null);
+    const openedNow = useRef(opened);
+    openedNow.current = opened;
     const [unlocked, setUnlocked] = useState(false);
     // The held password, which only its quick check had passed, was let go of: the cards say it may be wrong.
     const [doubted, setDoubted] = useState(false);
@@ -80,6 +82,9 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     const [asking, setAsking] = useState<ArchiveEntry | null>(null);
     // An entry whose password is asked for so it can be downloaded.
     const [askFor, setAskFor] = useState<ArchiveEntry | null>(null);
+    // What is pending now, for an answer that comes after a render (a password typed for a download).
+    const waitingNow = useRef(askFor);
+    waitingNow.current = askFor;
     const versionId = node.currentVersion?.id ?? node.id;
 
     useEffect(() => {
@@ -303,6 +308,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     onDownload={() => download(opened)}
                     downloadAfterPassword={askFor === opened}
                     onDownloadNow={() => {
+                        // Only the download still waiting, for the entry still open.
+                        if (waitingNow.current !== opened || openedNow.current !== opened) return;
                         setAskFor(null);
                         downloadNow(opened);
                     }}
@@ -744,6 +751,15 @@ function PasswordCard({
     // The field takes focus when the card shows: opening a locked item is asking to type its password.
     const field = useRef<HTMLInputElement>(null);
     useEffect(() => field.current?.focus({ preventScroll: true }), []);
+    // Gone (another entry opened, the viewer left): a try still under way acts for nothing when it answers.
+    // Set on every mount, not only first: StrictMode mounts, unmounts and mounts again.
+    const shown = useRef(false);
+    useEffect(() => {
+        shown.current = true;
+        return () => {
+            shown.current = false;
+        };
+    }, []);
     async function submit(event: FormEvent) {
         event.preventDefault();
         if (!password || busy) return;
@@ -751,12 +767,15 @@ function PasswordCard({
         setWrong(false);
         setError(null);
         try {
-            if (await session.unlock(password, entry)) onUnlocked();
+            const opens = await session.unlock(password, entry);
+            if (!shown.current) return;
+            if (opens) onUnlocked();
             else setWrong(true);
         } catch (cause) {
-            setError(cause instanceof Error ? cause.message : viewerWords.broken);
+            if (shown.current)
+                setError(cause instanceof Error ? cause.message : viewerWords.broken);
         } finally {
-            setBusy(false);
+            if (shown.current) setBusy(false);
         }
     }
     return (

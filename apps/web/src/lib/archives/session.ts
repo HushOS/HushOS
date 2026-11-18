@@ -576,8 +576,22 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 // Read by the page's viewer, not the worker: a reader of its own, never charged to
                 // the worker's allowance, so playing and seeking a large entry again and again works.
                 const viewer = reader.fork?.();
+                const span = spanReader(viewer ?? reader, answer.offset, answer.size, !!viewer);
+                // Closed with the session (a lock, a sign-out, the worker failing): no decrypted range is
+                // served after it, whatever the renderer still holds. Out of the session once the renderer closes it.
+                const closeSpan = () => {
+                    if (!forks.delete(closeSpan)) return;
+                    void span.close?.();
+                };
+                forks.add(closeSpan);
                 return {
-                    reader: spanReader(viewer ?? reader, answer.offset, answer.size, !!viewer),
+                    reader: {
+                        ...span,
+                        close: async () => {
+                            forks.delete(closeSpan);
+                            await span.close?.();
+                        },
+                    },
                     checked: false,
                 };
             }
