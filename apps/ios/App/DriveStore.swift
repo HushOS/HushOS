@@ -13,7 +13,26 @@ import UniformTypeIdentifiers
 @MainActor
 final class DriveStore {
     private(set) var vault: Vault
-    var folders: [String: [Opened]] = [:]
+    var folders: [String: [Opened]] = [:] {
+        // Any change lets go of every sorted copy: a closed folder's decrypted rows are not kept.
+        didSet { sorted.removeAll() }
+    }
+    /* Each folder's rows as last sorted, with the order they were sorted in; emptied whenever `folders` changes. */
+    @ObservationIgnored private var sorted: [String: (key: SortKey, ascending: Bool, items: [Opened])] = [:]
+
+    /*
+     * A folder's rows in a list's order, or nil before it is listed. Sorted once per change of the
+     * rows or the order: a folder screen reads its rows several times each time it draws, and
+     * sorting a few thousand names by the locale's rules takes tens of milliseconds every time.
+     */
+    func sortedChildren(of folderId: String, by key: SortKey, ascending: Bool) -> [Opened]? {
+        // Read through the observed property, so a screen showing these rows follows their changes.
+        guard let rows = folders[folderId] else { return nil }
+        if let held = sorted[folderId], held.key == key, held.ascending == ascending { return held.items }
+        let items = key.sort(rows, ascending: ascending)
+        sorted[folderId] = (key, ascending, items)
+        return items
+    }
     /* Bumped whenever the offline list changes, so views showing it refresh. */
     var offlineVersion = 0
     /* Bumped when the catalogue changes what lists show. */

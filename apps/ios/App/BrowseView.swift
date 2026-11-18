@@ -147,7 +147,8 @@ struct FolderView: View {
         if !needle.isEmpty {
             items = store.items(under: folderId).filter { $0.name.localizedCaseInsensitiveContains(needle) }.sorted(by: Opened.byName)
         } else {
-            items = sortKey.sort(store.folders[folderId] ?? [], ascending: sortAscending)
+            // Sorted in the store once per change; this is read several times a draw.
+            items = store.sortedChildren(of: folderId, by: sortKey, ascending: sortAscending) ?? []
         }
         if let tagFilter { items = items.filter { store.tags.nodes(with: tagFilter).contains($0.id) } }
         return items
