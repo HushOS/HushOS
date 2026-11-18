@@ -9,6 +9,7 @@ import {
     test,
     type Browser,
     type BrowserContextOptions,
+    type BrowserType,
     type Locator,
     type Page,
 } from '@playwright/test';
@@ -257,6 +258,21 @@ export async function newLink(page: Page, password?: string) {
 
 export function newContext(browser: Browser, options: BrowserContextOptions = {}) {
     return browser.newContext({
+        ...options,
+        extraHTTPHeaders: { ...options.extraHTTPHeaders, 'x-forwarded-for': clientAddress() },
+    });
+}
+
+/*
+ * A context on a profile directory of its own (`dir`), which a test can read on disk afterwards:
+ * where the browser pages a large Blob out to, for one. The same client address rule as newContext.
+ */
+export function newPersistentContext(
+    type: BrowserType,
+    dir: string,
+    options: Parameters<BrowserType['launchPersistentContext']>[1] = {},
+) {
+    return type.launchPersistentContext(dir, {
         ...options,
         extraHTTPHeaders: { ...options.extraHTTPHeaders, 'x-forwarded-for': clientAddress() },
     });

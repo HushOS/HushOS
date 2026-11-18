@@ -623,6 +623,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         /* Settles when the reader closes: a drain waiting on a tool's padding is let go of then. */
         let released!: () => void;
         const closing = new Promise<void>((resolve) => (released = resolve));
+        /* Rejects when the reader closes: a read waiting on a chunk (its RPC, a connection back) ends then. */
+        const closedRead = closing.then(() => Promise.reject(new Error('The preview was closed.')));
+        closedRead.catch(() => {});
         let fetches = 0;
         function fetchOne(index: number) {
             if (options.tool && !options.uncapped && ++fetches > TOOL_FETCH_FACTOR * source.total)
@@ -685,9 +688,14 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (offset < 0 || end <= offset) return new Uint8Array(0);
                 const first = Math.floor(offset / CHUNK_SIZE);
                 const last = Math.floor((end - 1) / CHUNK_SIZE);
-                const pieces = await Promise.all(
-                    Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
-                );
+                // A close ends the wait at once: whoever holds what was read before (readAll's buffer) lets go now,
+                // not when a chunk that may never come (offline) comes.
+                const pieces = await Promise.race([
+                    Promise.all(
+                        Array.from({ length: last - first + 1 }, (_, i) => chunk(first + i)),
+                    ),
+                    closedRead,
+                ]);
                 const out = new Uint8Array(end - offset);
                 let written = 0;
                 for (let i = 0; i < pieces.length; i++) {

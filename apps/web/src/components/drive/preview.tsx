@@ -491,9 +491,20 @@ export function PreviewBody({
     const [recalled] = useState(() =>
         node.currentVersion ? recallPreview(node.currentVersion.id) : null,
     );
-    // Asked for the whole of a text remembered in part: read it again.
+    // Asked for the whole of a text remembered in part: read it again. And one this kind can't show
+    // (the file renamed since: a zip's bytes, now a .png) is read afresh, never waited on.
+    const usable =
+        recalled?.kind === 'image'
+            ? kind === 'image'
+            : recalled?.kind === 'text'
+              ? kind === 'text' || kind === 'markdown' || sniff
+              : recalled?.kind === 'document'
+                ? kind === 'pdf' || kind === 'office'
+                : recalled?.kind === 'media'
+                  ? kind === 'video' || kind === 'audio'
+                  : false;
     const remembered =
-        textWhole && recalled?.kind === 'text' && recalled.truncated ? null : recalled;
+        !usable || (textWhole && recalled?.kind === 'text' && recalled.truncated) ? null : recalled;
     const { reader, error } = useReader(
         node,
         (kind !== 'none' || sniff) && kind !== 'archive' && !held && remembered === null,

@@ -334,6 +334,8 @@ export type RememberedPreview =
     | { kind: 'text'; text: string; truncated: boolean; bytes: number }
     | { kind: 'image'; url: string; bytes: number }
     | { kind: 'document'; data: Uint8Array; bytes: number }
+    /* A small zip's bytes for its worker: apart from documents, so a file renamed from .zip never shows them as one. */
+    | { kind: 'archive'; data: Uint8Array; bytes: number }
     | { kind: 'media'; url: string; bytes: number };
 
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;

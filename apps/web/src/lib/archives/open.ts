@@ -41,7 +41,7 @@ export function preloadArchiveWorker() {
 
 /*
  * The archive's bytes for its worker. Up to 16 MiB it is read whole, padding and all, and
- * remembered like a PDF, so its reads look like a download; larger, the download engine's
+ * remembered (as an archive's, never a document's), so its reads look like a download; larger, the download engine's
  * reader fetches and decrypts the 8 MiB chunks each range covers. `signal` (the viewer closed)
  * stops a whole read at once: its reader is closed, so no further chunk is fetched or decrypted,
  * and nothing is remembered.
@@ -52,7 +52,7 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
     const versionId = node.currentVersion?.id ?? null;
     if (size <= PREVIEW_LIMITS.document) {
         const remembered = versionId ? recallPreview(versionId) : null;
-        if (remembered?.kind === 'document') return memoryReader(remembered.data);
+        if (remembered?.kind === 'archive') return memoryReader(remembered.data);
         // A tool's reader, read whole: closing it lets go of its plaintext and key at once, while the
         // padding after the file, once its last chunk was asked for, is still fetched to the end as
         // ciphertext only (the store never sees reading stop where the file ends). So a close while
@@ -64,7 +64,7 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
             const { bytes } = await readAll(reader, PREVIEW_LIMITS.document);
             signal?.throwIfAborted();
             if (versionId)
-                rememberPreview(versionId, { kind: 'document', data: bytes, bytes: bytes.length });
+                rememberPreview(versionId, { kind: 'archive', data: bytes, bytes: bytes.length });
             return memoryReader(bytes);
         } finally {
             signal?.removeEventListener('abort', stop);

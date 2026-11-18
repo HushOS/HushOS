@@ -37,6 +37,7 @@ import {
     type Listing,
 } from '@/lib/archives/session';
 import { archiveWords } from '@/lib/archives/words';
+import { madeRows, rowsOf, type Row } from '@/lib/archives/rows';
 import { asksFirst } from '@/lib/archives/zip-format';
 import { previewKind } from '@/lib/previews';
 
@@ -51,44 +52,6 @@ import { previewKind } from '@/lib/previews';
 /* The archive view and its worker, fetched after unlock with every other viewer. */
 export function preloadArchive() {
     preloadArchiveWorker();
-}
-
-const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
-
-type Row =
-    | { kind: 'folder'; id: number; name: string; count: number }
-    | { kind: 'file'; name: string; entry: ArchiveEntry };
-
-/*
- * Folder `id`'s rows: its folders, then its files, each by name, numbers in order. Read from the
- * listing's folder array as they are asked for, so nothing the size of every path is ever built:
- * one pass over the folders finds the children, a second counts what each holds.
- */
-function rowsOf(listing: Listing, id: number): Row[] {
-    const { parents } = listing.folders;
-    const counts = new Map<number, number>();
-    for (let k = 1; k < parents.length; k++) if (parents[k] === id) counts.set(k, 0);
-    for (let k = 1; k < parents.length; k++) {
-        const count = counts.get(parents[k]!);
-        if (count !== undefined) counts.set(parents[k]!, count + 1);
-    }
-    const files: Row[] = [];
-    for (const entry of listing.entries) {
-        if (entry.hidden || entry.directory) continue;
-        if (entry.folder === id) files.push({ kind: 'file', name: entry.name, entry });
-        const count = counts.get(entry.folder);
-        if (count !== undefined) counts.set(entry.folder, count + 1);
-    }
-    const folders = [...counts]
-        .map(([k, count]): Row => ({
-            kind: 'folder',
-            id: k,
-            name: folderName(listing.folders, k),
-            count,
-        }))
-        .sort((a, b) => byName.compare(a.name, b.name));
-    files.sort((a, b) => byName.compare(a.name, b.name));
-    return [...folders, ...files];
 }
 
 /* One download: its own, by `id`, so the same entry downloaded twice is two downloads, each stopped on its own. */
@@ -163,7 +126,24 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
         const ol = trail.current;
         if (ol) ol.scrollLeft = ol.scrollWidth;
     }, [path, opened]);
-    const rows = useMemo(() => (listing ? rowsOf(listing, shown) : []), [listing, shown]);
+    // A folder's rows are made off the render path (rowsOf) and kept; shown only for the folder still open.
+    const [listed, setListed] = useState<{ listing: Listing; id: number; rows: Row[] } | null>(
+        null,
+    );
+    useEffect(() => {
+        if (!listing || madeRows(listing, shown)) return;
+        let current = true;
+        void rowsOf(listing, shown).then((made) => {
+            if (current) setListed({ listing, id: shown, rows: made });
+        });
+        return () => {
+            current = false;
+        };
+    }, [listing, shown]);
+    const rows = listing
+        ? (madeRows(listing, shown) ??
+          (listed?.listing === listing && listed.id === shown ? listed.rows : null))
+        : [];
 
     function startDownload(entry: ArchiveEntry) {
         if (!session) return;
@@ -328,6 +308,8 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     }}
                     onDownloadArchive={onDownload}
                 />
+            ) : rows === null ? (
+                <Opening />
             ) : (
                 <EntryList
                     rows={rows}

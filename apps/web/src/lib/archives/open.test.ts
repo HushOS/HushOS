@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 /*
  * The first read of a small archive: closing the viewer while it is read whole stops the read
- * there, the reader closed and no later chunk asked for, and nothing is remembered; closing it
- * while the padding after the file is fetched lets that fetch finish first.
+ * there, the reader closed and no later chunk asked for, and nothing is remembered; a read
+ * waiting on a chunk ends at the close, and so does a wait on the padding after the file.
  */
 
 const reads: number[] = [];
@@ -33,18 +33,24 @@ vi.mock('@/lib/previews', () => ({
         return { bytes: out, truncated: false };
     },
 }));
-// The download engine's tool reader: its padding is fetched to the end as ciphertext whether or not
-// it is closed; a drain on a closed reader returns at once, holding nothing.
+// The download engine's tool reader: a close ends a read waiting on its chunk; its padding is fetched
+// to the end as ciphertext whether or not it is closed, and a drain is let go of at the close.
 vi.mock('@/lib/downloads', () => ({
     downloads: {
         openReader: () => {
             let isClosed = false;
+            let ended: (error: Error) => void = () => {};
+            const closing = new Promise<never>((_, reject) => (ended = reject));
+            closing.catch(() => {});
             return {
                 size,
                 read: async (offset: number, length: number) => {
                     if (isClosed) throw new Error('The preview was closed.');
                     reads.push(offset);
-                    await new Promise<void>((resolve) => (release = resolve));
+                    await Promise.race([
+                        new Promise<void>((resolve) => (release = resolve)),
+                        closing,
+                    ]);
                     return new Uint8Array(length);
                 },
                 drain: async () => {
@@ -56,6 +62,7 @@ vi.mock('@/lib/downloads', () => ({
                 close: async () => {
                     isClosed = true;
                     closed++;
+                    ended(new Error('The preview was closed.'));
                     // A drain waiting on the padding is let go of: the padding goes on without the reader.
                     drained();
                 },
@@ -86,6 +93,31 @@ describe('reading a small archive whole', () => {
         // The second 8 MiB chunk was never asked for, and the bytes read so far were let go.
         expect(reads).toEqual([0]);
         expect(rememberPreview).not.toHaveBeenCalled();
+    });
+
+    it('lets go of the first chunk at once when the viewer closes while the second never comes', async () => {
+        const { archiveReader } = await import('./open');
+        reads.length = 0;
+        closed = 0;
+        size = 12 << 20;
+        const node = {
+            id: 'n',
+            kind: 'file',
+            name: 'a.zip',
+            content: { plaintextSize: 12 << 20 },
+            metadata: { size: 12 << 20 },
+            currentVersion: { id: 'u' },
+        } as unknown as DriveNode;
+        const leaving = new AbortController();
+        const reading = archiveReader(node, leaving.signal);
+        await vi.waitFor(() => expect(reads).toEqual([0]));
+        release();
+        // The second 8 MiB is asked for and never comes (offline).
+        await vi.waitFor(() => expect(reads).toEqual([0, 8 << 20]));
+        leaving.abort();
+        expect(closed).toBe(1);
+        // The read ends without the second chunk ever arriving: nothing holds the first one waiting.
+        await expect(reading).rejects.toThrow();
     });
 
     it('lets go of the plaintext at once when the viewer closes while the padding is fetched', async () => {

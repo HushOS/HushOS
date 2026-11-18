@@ -784,6 +784,30 @@ describe('download manager', () => {
         expect((await later).byteLength).toBe(1);
     });
 
+    test('a close ends a read waiting on a chunk that never comes', async () => {
+        // Two chunks; the second never arrives (offline, a worker that doesn't answer).
+        const size = CHUNK + 100;
+        const h = harness({
+            decide: (_object, index) => (index === 1 ? new Promise(() => {}) : null),
+        });
+        const reader = h.manager.openReader(file('nv', size), 1, { tool: true, uncapped: true });
+        const head = reader.read(0, CHUNK);
+        await settle(100);
+        expect((await head).byteLength).toBe(CHUNK);
+        let outcome: unknown = 'waiting';
+        const tail = reader.read(CHUNK, 100).then(
+            () => 'read',
+            (error: unknown) => error,
+        );
+        void tail.then((value) => (outcome = value));
+        await settle(1_000);
+        expect(outcome).toBe('waiting');
+        // Closed: the read waiting on the second chunk ends now, so nothing holds the first one waiting on it.
+        void reader.close();
+        await settle(0);
+        expect(outcome).toBeInstanceOf(Error);
+    });
+
     test('a close lets go of a drain waiting on a tool’s padding, which is still fetched to the end', async () => {
         const size = 512 * 1024 * 1024 - 100;
         const sealed = { 'o-hd': { plaintextSize: size, thumbnailBytes: 1000 } };

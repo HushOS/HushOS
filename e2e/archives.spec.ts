@@ -1,11 +1,11 @@
-import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { inflateRawSync } from 'node:zlib';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { S3Client } from 'bun';
-import { expect, test, type Page, type Request } from '@playwright/test';
+import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 import { CANARY, FIXTURE_DIR, PASSWORD, writeFixture, writeZip } from './fixtures/archives/make';
-import { grip, newPage, registerAccount, sha256 } from './helpers';
+import { grip, newPersistentContext, registerAccount, sha256 } from './helpers';
 
 /*
  * Browsing zip archives in the viewer (docs/file-tools-design.md, section 7 (a)): a zip opens as
@@ -17,15 +17,19 @@ import { grip, newPage, registerAccount, sha256 } from './helpers';
  * DecompressionStream hands back a write's whole output at once, which once broke the session);
  * three 8 MiB stored entries of a 24 MiB archive (read by range, not whole) download side by
  * side, each through a reader of its own, byte for byte.
- * After all of it, the fixtures' canary is in no stored object, and not in IndexedDB, Cache
- * Storage or the origin private file system. It sits in deflated entries, where only inflating
- * makes it, and in a stored one, whose archive bytes hold it as they are.
+ * A 48 MiB entry of the canary is downloaded and stopped part way. After all of it, the fixtures'
+ * canary is in no stored object, not in IndexedDB, Cache Storage or the origin private file
+ * system, and not in the browser's profile directory on disk (a persistent profile, where a
+ * paged-out Blob would land; downloads are kept apart from it). It sits in deflated entries,
+ * where only inflating makes it, and in stored ones, whose archive bytes hold it as they are.
  */
 
 test.describe.configure({ mode: 'serial' });
 
 let page: Page;
-let large: string;
+let context: BrowserContext | undefined;
+let large: string | undefined;
+let profile: string | undefined;
 const started = Date.now();
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 const row = (p: Page, name: string) =>
@@ -44,6 +48,22 @@ function sideBySide(dir: string) {
         writeZip(SIDE.map((data, n) => ({ name: `part-${n}.bin`, data, method: 0 }))),
     );
     return path;
+}
+
+/* One 48 MiB stored entry of the canary, line after line: read by range, long enough to stop part way. */
+function canary48(dir: string) {
+    const path = join(dir, 'canary-48m.zip');
+    const line = new TextEncoder().encode(`${CANARY}\n`);
+    const data = new Uint8Array(48 * 1024 * 1024);
+    for (let at = 0; at + line.length <= data.length; at += line.length) data.set(line, at);
+    writeFileSync(path, writeZip([{ name: 'canary.txt', data, method: 0 }]));
+    return path;
+}
+
+/* A directory this file made in the system's temporary one, and only such: removed whatever is in it. */
+function removeMade(dir: string | undefined) {
+    if (!dir || dirname(dir) !== tmpdir() || !basename(dir).startsWith('hushos-archives-')) return;
+    rmSync(dir, { recursive: true, force: true });
 }
 
 /* Five 8 MiB stored entries, 40 MiB on disk: more than the listing may fetch, so it can only list by range. */
@@ -71,23 +91,37 @@ async function close(p: Page) {
     await expect(dialog(p)).toHaveCount(0);
 }
 
-test.beforeAll(async ({ browser }) => {
+test.beforeAll(async ({ playwright, browserName, launchOptions }) => {
     test.setTimeout(300_000);
-    page = await newPage(browser);
+    const dir = mkdtempSync(join(tmpdir(), 'hushos-archives-e2e-'));
+    large = dir;
+    // A profile of its own on disk, scanned for the canary at the end; downloads land apart from it.
+    profile = mkdtempSync(join(tmpdir(), 'hushos-archives-profile-'));
+    const use = test.info().project.use;
+    context = await newPersistentContext(playwright[browserName], profile, {
+        ...launchOptions,
+        baseURL: use.baseURL,
+        viewport: use.viewport,
+        userAgent: use.userAgent,
+        deviceScaleFactor: use.deviceScaleFactor,
+        acceptDownloads: true,
+        downloadsPath: join(dir, 'downloads'),
+    });
+    page = context.pages()[0] ?? (await context.newPage());
     await registerAccount(page);
-    large = mkdtempSync(join(tmpdir(), 'hushos-archives-e2e-'));
     const files = [
         join(FIXTURE_DIR, 'basic.zip'),
         join(FIXTURE_DIR, 'aes.zip'),
         join(FIXTURE_DIR, 'deep.zip'),
-        writeFixture('zip64-5g.zip', large),
-        writeFixture('directory-65m.zip', large),
-        writeFixture('compressible.zip', large),
-        sideBySide(large),
-        range40(large),
+        writeFixture('zip64-5g.zip', dir),
+        writeFixture('directory-65m.zip', dir),
+        writeFixture('compressible.zip', dir),
+        sideBySide(dir),
+        range40(dir),
+        canary48(dir),
     ];
     await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(8, { timeout: 240_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 240_000 });
     for (const name of [
         'basic.zip',
         'aes.zip',
@@ -97,8 +131,11 @@ test.beforeAll(async ({ browser }) => {
     ])
         await expect(row(page, name)).toBeVisible();
 });
+// The generated fixtures (over 100 MiB) and the profile go, a setup that stopped part way included.
 test.afterAll(async () => {
-    await page.close();
+    await context?.close();
+    removeMade(large);
+    removeMade(profile);
 });
 
 test('a zip opens as its list, a folder inside opens, a text entry previews and an entry downloads byte for byte', async () => {
@@ -196,7 +233,7 @@ test('a central directory of 65 MiB is refused with its message', async () => {
 
 test('a 20 MiB compressible entry downloads whole, byte for byte', async () => {
     // What it inflates to, from the fixture's own bytes: its one entry's raw deflate stream.
-    const zip = readFileSync(join(large, 'compressible.zip'));
+    const zip = readFileSync(join(large!, 'compressible.zip'));
     const start = 30 + zip.readUInt16LE(26) + zip.readUInt16LE(28);
     const expected = inflateRawSync(zip.subarray(start, start + zip.readUInt32LE(18)));
     await open(page, 'compressible.zip');
@@ -248,7 +285,47 @@ test('a name of 32,768 parts lists flat and opens; one of 256 parts lists as fol
     await close(page);
 });
 
-test('the canary is in no stored object, and not in IndexedDB, Cache Storage or the private file system', async () => {
+test('a download of the canary stopped part way is let go of', async () => {
+    await open(page, 'canary-48m.zip');
+    // Stopped from inside the page the moment its bar shows some of it written and not all: from
+    // outside, a fast engine (WebKit) finishes 48 MiB between seeing the bar and clicking.
+    const stopped = page.evaluate(
+        () =>
+            new Promise<string>((resolve, reject) => {
+                const look = () => {
+                    const bars = document.querySelectorAll('[data-slot=dialog-content] li');
+                    for (const bar of bars) {
+                        const text = bar.textContent ?? '';
+                        const stop = bar.querySelector<HTMLButtonElement>(
+                            'button[aria-label="Stop"]',
+                        );
+                        if (!stop || !/(^|\D)[1-9]\d?%$/.test(text)) continue;
+                        observer.disconnect();
+                        clearTimeout(timer);
+                        stop.click();
+                        resolve(text);
+                        return;
+                    }
+                };
+                const observer = new MutationObserver(look);
+                observer.observe(document.body, {
+                    subtree: true,
+                    childList: true,
+                    characterData: true,
+                });
+                const timer = setTimeout(() => {
+                    observer.disconnect();
+                    reject(new Error('The download never showed part of it written.'));
+                }, 60_000);
+            }),
+    );
+    await items(page).getByRole('button', { name: 'Download canary.txt' }).click();
+    expect(await stopped).toMatch(/[1-9]\d?%$/);
+    await expect(dialog(page).getByRole('button', { name: 'Stop' })).toHaveCount(0);
+    await close(page);
+});
+
+test('the canary is in no stored object, and not in IndexedDB, Cache Storage, the private file system or the profile on disk', async () => {
     const found = await page.evaluate(async (canary) => {
         const hits: string[] = [];
         const text = (value: unknown): string => {
@@ -352,4 +429,28 @@ test('the canary is in no stored object, and not in IndexedDB, Cache Storage or 
     }
     // The four archives at least, and every one of them ciphertext.
     expect(checked).toBeGreaterThanOrEqual(4);
+
+    // The browser's own files on disk, after the download stopped part way: a Blob paged out, a cache,
+    // a database the page never named. The downloads the tests kept are elsewhere (downloadsPath).
+    const hits: string[] = [];
+    const scan = (dir: string) => {
+        let names: string[] = [];
+        try {
+            names = readdirSync(dir);
+        } catch {
+            return;
+        }
+        for (const name of names) {
+            const path = join(dir, name);
+            try {
+                const info = lstatSync(path);
+                if (info.isDirectory()) scan(path);
+                else if (info.isFile() && readFileSync(path).includes(CANARY)) hits.push(path);
+            } catch {
+                // Gone meanwhile (the browser's own temporary files): nothing to read.
+            }
+        }
+    };
+    scan(profile!);
+    expect(hits).toEqual([]);
 });
