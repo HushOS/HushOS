@@ -148,7 +148,9 @@ class ArchiveBrowse(
             try {
                 opened = open { now -> if (!closed) subject = now }
                 if (closed) return@launch
-                val built = build(opened.entries, opened.takeFolders())
+                // Read across the FFI off the main thread too: up to 100,000 entries are made into objects.
+                val (entries, folders) = withContext(Dispatchers.IO) { opened.entries to opened.takeFolders() }
+                val built = build(entries, folders)
                 // The archive before its tree: whoever sees the tree may already use the archive. A proof or a
                 // forget that closes it from here takes the list and the item shown off the screen at once.
                 opened.onFamilyClosed = { words -> scope.launch { familyClosed(opened, words) } }
@@ -174,20 +176,26 @@ class ArchiveBrowse(
      * download that fails or is stopped deletes what it made, the empty file included.
      */
     fun startDownload(entry: ArchiveEntry, resolver: ContentResolver, uri: Uri, done: () -> Unit) {
-        if (closed || archive == null) { discard(resolver, uri); return }
+        if (closed || archive == null) { discardIfMade(resolver, uri); return }
         val record = EntryDownload(entry)
         downloads.add(record)
         record.job = scope.launch {
+            // Empty when the Save dialog made it for this download; a file the person chose to replace is not.
+            val made = withContext(Dispatchers.IO) { isEmpty(resolver, uri) }
             val result = runCatching {
                 val main = archive ?: throw CancellationException("Closed.")
                 val session = main.sibling()
                 try {
                 withContext(Dispatchers.IO) {
-                    resolver.openOutputStream(uri, "w")!!.use { out ->
+                    // Opened ("wt": truncated, so a longer file it replaces leaves no tail) only at the first
+                    // piece: a download refused before any (a wrong password) leaves a replaced file as it was.
+                    var out: java.io.OutputStream? = null
+                    try {
                         session.download(entry.index, object : EntrySink {
                             override fun write(chunk: ByteArray) {
                                 try {
-                                    out.write(chunk)
+                                    val stream = out ?: resolver.openOutputStream(uri, "wt")!!.also { out = it }
+                                    stream.write(chunk)
                                 } catch (error: Exception) {
                                     // In HushOS's words, never the system's (a provider's message, a path).
                                     throw FetchException.Failed(com.hushos.app.data.Problems.say(error, com.hushos.app.data.ArchiveWords.NOT_SAVED))
@@ -195,6 +203,10 @@ class ArchiveBrowse(
                                 record.written.value += chunk.size
                             }
                         })
+                        // An empty entry writes nothing: its file is opened and emptied all the same.
+                        if (out == null) out = resolver.openOutputStream(uri, "wt")
+                    } finally {
+                        out?.close()
                     }
                 }
                 } finally {
@@ -202,7 +214,8 @@ class ArchiveBrowse(
                 }
             }
             result.exceptionOrNull()?.let { error ->
-                discard(resolver, uri)
+                // Only a file this download made goes; one the person chose to replace stays (as it was, or as written).
+                if (made) withContext(Dispatchers.IO) { discard(resolver, uri) }
                 if (error is CancellationException) { downloads.remove(record); throw error }
                 downloadFailed(record, error)
             } ?: run {
@@ -235,9 +248,20 @@ class ArchiveBrowse(
     }
 
     /* A picked file the download won't fill: gone, not left empty where the person put it. */
-    fun discard(resolver: ContentResolver, uri: Uri) {
+    private fun discard(resolver: ContentResolver, uri: Uri) {
         runCatching { android.provider.DocumentsContract.deleteDocument(resolver, uri) }
     }
+
+    /* A picked file nothing was written to: deleted if the Save dialog made it (empty), left if it was there before. */
+    fun discardIfMade(resolver: ContentResolver, uri: Uri) {
+        if (isEmpty(resolver, uri)) discard(resolver, uri)
+    }
+
+    private fun isEmpty(resolver: ContentResolver, uri: Uri): Boolean = runCatching {
+        resolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { row ->
+            !row.moveToFirst() || row.isNull(0) || row.getLong(0) == 0L
+        } ?: true
+    }.getOrDefault(false)
 
     fun stop(record: EntryDownload) {
         record.job?.cancel()

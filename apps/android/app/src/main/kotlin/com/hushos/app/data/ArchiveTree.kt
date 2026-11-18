@@ -60,26 +60,39 @@ class ArchiveTree(entries: List<ArchiveEntry>, folders: ArchiveFolders) {
     companion object {
         /*
          * Runs of digits compare as numbers, the rest by the collator, as the web's
-         * Intl.Collator({ numeric: true }) does. Scanned in place: no pattern or list per comparison.
+         * Intl.Collator({ numeric: true }) does. A total order, so a sort never finds it broken: a
+         * name is a sequence of runs, each a number (Unicode decimal digits, full-width ones too,
+         * by their values) or not (by the collator), and where one name has a number and the other
+         * doesn't, the number comes first, whatever the collator would make of a ² or a ①.
+         * Scanned in place: no pattern or list per comparison.
          */
         fun numberAware(a: String, b: String, collator: java.text.Collator): Int {
             var i = 0
             var j = 0
             while (i < a.length && j < b.length) {
-                val digitsA = a[i].isDigit()
-                val digitsB = b[j].isDigit()
+                val digitsA = Character.isDigit(a[i])
+                val digitsB = Character.isDigit(b[j])
                 var endA = i
-                while (endA < a.length && a[endA].isDigit() == digitsA) endA++
+                while (endA < a.length && Character.isDigit(a[endA]) == digitsA) endA++
                 var endB = j
-                while (endB < b.length && b[endB].isDigit() == digitsB) endB++
-                val result = if (digitsA && digitsB) {
-                    var x = i
-                    while (x < endA - 1 && a[x] == '0') x++
-                    var y = j
-                    while (y < endB - 1 && b[y] == '0') y++
-                    val lengths = (endA - x).compareTo(endB - y)
-                    if (lengths != 0) lengths else a.substring(x, endA).compareTo(b.substring(y, endB))
-                } else collator.compare(a.substring(i, endA), b.substring(j, endB))
+                while (endB < b.length && Character.isDigit(b[endB]) == digitsB) endB++
+                val result = when {
+                    digitsA && digitsB -> {
+                        var x = i
+                        while (x < endA - 1 && Character.digit(a[x], 10) == 0) x++
+                        var y = j
+                        while (y < endB - 1 && Character.digit(b[y], 10) == 0) y++
+                        val lengths = (endA - x).compareTo(endB - y)
+                        if (lengths != 0) lengths else {
+                            var order = 0
+                            while (order == 0 && x < endA) order = Character.digit(a[x++], 10).compareTo(Character.digit(b[y++], 10))
+                            order
+                        }
+                    }
+                    digitsA -> -1
+                    digitsB -> 1
+                    else -> collator.compare(a.substring(i, endA), b.substring(j, endB))
+                }
                 if (result != 0) return result
                 i = endA
                 j = endB

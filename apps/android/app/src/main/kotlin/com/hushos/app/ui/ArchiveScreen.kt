@@ -130,7 +130,7 @@ fun ArchiveScreen(model: DriveViewModel, browse: ArchiveBrowse, close: () -> Uni
         val entry = browse.waitingFor
         browse.waitingFor = null
         if (uri == null) return@rememberLauncherForActivityResult
-        if (entry == null) { browse.discard(context.contentResolver, uri); return@rememberLauncherForActivityResult }
+        if (entry == null) { browse.discardIfMade(context.contentResolver, uri); return@rememberLauncherForActivityResult }
         browse.startDownload(entry, context.contentResolver, uri) { model.notify(ArchiveWords.DOWNLOADED) }
     }
     fun pick(entry: ArchiveEntry) {
@@ -563,14 +563,32 @@ internal class PdfDocumentHolder private constructor(private val renderer: PdfRe
 
     companion object {
         @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
-        fun open(bytes: ByteArray): PdfDocumentHolder? = runCatching {
-            val fd = Os.memfd_create("archive-entry", 0)
-            FileOutputStream(fd).let { out -> out.write(bytes); out.flush() }
-            Os.lseek(fd, 0, OsConstants.SEEK_SET)
-            val parcel = ParcelFileDescriptor.dup(fd)
-            Os.close(fd)
-            PdfDocumentHolder(PdfRenderer(parcel))
-        }.getOrNull()
+        fun open(bytes: ByteArray): PdfDocumentHolder? {
+            // Each descriptor owned until it is handed on: the memfd closed whatever happens, its dup closed if the
+            // renderer never takes it, the renderer closed if the holder never does.
+            val fd = runCatching { Os.memfd_create("archive-entry", 0) }.getOrNull() ?: return null
+            val parcel = try {
+                FileOutputStream(fd).let { out -> out.write(bytes); out.flush() }
+                Os.lseek(fd, 0, OsConstants.SEEK_SET)
+                ParcelFileDescriptor.dup(fd)
+            } catch (_: Exception) {
+                return null
+            } finally {
+                runCatching { Os.close(fd) }
+            }
+            val renderer = try {
+                PdfRenderer(parcel)
+            } catch (_: Exception) {
+                runCatching { parcel.close() }
+                return null
+            }
+            return try {
+                PdfDocumentHolder(renderer)
+            } catch (_: Exception) {
+                runCatching { renderer.close() }
+                null
+            }
+        }
     }
 }
 

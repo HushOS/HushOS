@@ -345,7 +345,12 @@ class OpenArchive internal constructor(
                 outcome.complete(Result.failure(CancellationException("Cancelled.")))
                 Unit
             }
-            calls.add(end)
+            // Added under the lock close() takes: either close sees it and ends it, or the archive closed first and
+            // nothing starts (no thread, and during the open no session to close yet).
+            synchronized(life) {
+                if (closed) throw CancellationException("Closed.")
+                calls.add(end)
+            }
             val thread = Thread(null, {
                 var result: Result<T>? = null
                 current.set(control)

@@ -159,4 +159,21 @@ class ArchiveTreeTest {
         val sorted = listOf("a10", "a2", "a02b", "a2b", "b", "a", "10", "9").sortedWith { x, y -> ArchiveTree.numberAware(x, y, collator) }
         assertEquals(listOf("9", "10", "a", "a2", "a02b", "a2b", "a10", "b"), sorted)
     }
+
+    @Test fun superscriptAndFullWidthDigitsNeverBreakTheSort() {
+        val collator = java.text.Collator.getInstance(java.util.Locale.US).apply { strength = java.text.Collator.SECONDARY }
+        val order = Comparator<String> { x, y -> ArchiveTree.numberAware(x, y, collator) }
+        // "9" < "10" as numbers, while a collator weighs ² and ① as 2 and 1: the order that broke TimSort.
+        val names = listOf("9", "10", "²", "³", "①", "１１", "１", "2", "a²", "a10", "a９", "x", "½", "0", "00", "٣")
+        // Transitive on every triple, so no sort can find it broken.
+        for (a in names) for (b in names) for (c in names) {
+            if (order.compare(a, b) <= 0 && order.compare(b, c) <= 0) assertTrue("$a ≤ $b ≤ $c", order.compare(a, c) <= 0)
+            assertEquals("$a against $b", -Integer.signum(order.compare(b, a)), Integer.signum(order.compare(a, b)))
+        }
+        // A folder of many such names sorts (TimSort throws on a comparator that isn't, from 32 names up).
+        val many = (0 until 200).map { k -> listOf("$k", "²$k", "①$k", "１$k", "a$k", "a²")[k % 6] + (k / 6) }
+        java.util.Collections.sort(ArrayList(many), order)
+        // Full-width digits are numbers too: "１１" is eleven, after "10".
+        assertEquals(listOf("9", "10", "１１"), listOf("１１", "10", "9").sortedWith(order))
+    }
 }

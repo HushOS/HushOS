@@ -306,7 +306,9 @@ struct ArchiveScreen: View {
                 defer { try? handle.close() }
                 try await archive.download(entry, into: ArchiveSink { chunk in
                     try handle.write(contentsOf: chunk)
-                    Task { @MainActor in progress.written += UInt64(chunk.count) }
+                    // Its size only: the progress waiting on the main actor never keeps the plaintext alive.
+                    let count = UInt64(chunk.count)
+                    Task { @MainActor in progress.written += count }
                 })
                 await MainActor.run { downloads.removeAll { $0 === progress } }
             } catch {

@@ -50,6 +50,10 @@ public enum ArchiveSessions {
         var nodes: [UUID: String] = [:]
         /* Workspaces proven family folders this session (route 25): nothing opened another way serves from them. */
         var proven: Set<String> = []
+        /* Nodes those proofs purged (kept copies among them): a zip of one, however late it registers, never serves. */
+        var purged: Set<String> = []
+        /* Family folders let go of this session (a refusal, a fork, not a member): nothing opened from one serves. */
+        var letGo: Set<String> = []
     }
 
     /* Posted on the main queue when a family's archive is closed because its family was let go of: `archive` is its `identity`. */
@@ -68,8 +72,11 @@ public enum ArchiveSessions {
      */
     static func mark(archive id: UUID, share workspace: String?, node: String? = nil) -> Bool {
         let key = workspace?.lowercased()
+        let copy = node?.lowercased()
         return live.lock.withLock {
-            if let key, live.proven.contains(key) { return false }
+            // A proof (or a family's let-go) that came while it opened (its directory read before this mark) is seen here.
+            if let key, live.proven.contains(key) || live.letGo.contains(key) { return false }
+            if let copy, live.purged.contains(copy) { return false }
             guard live.archives[id] != nil else { return true }
             if let key { live.shares[id] = key }
             if let node { live.nodes[id] = node.lowercased() }
@@ -79,7 +86,8 @@ public enum ArchiveSessions {
 
     /* Whether `workspace` has been proven a family folder this session. */
     static func provenFamily(_ workspace: String) -> Bool {
-        live.lock.withLock { live.proven.contains(workspace.lowercased()) }
+        let key = workspace.lowercased()
+        return live.lock.withLock { live.proven.contains(key) || live.letGo.contains(key) }
     }
 
     /*
@@ -93,6 +101,7 @@ public enum ArchiveSessions {
         let gone = Set(nodes.map { $0.lowercased() })
         let closes = live.lock.withLock {
             live.proven.formUnion(proven)
+            live.purged.formUnion(gone)
             // By workspace, or (a kept copy recorded before its workspace was) by the node the proof purged.
             let ids = Set(live.shares.filter { proven.contains($0.value) }.map(\.key))
                 .union(live.nodes.filter { gone.contains($0.value) }.map(\.key))
@@ -115,14 +124,16 @@ public enum ArchiveSessions {
      */
     static func closeFamily(_ workspaces: [String]) {
         let forgotten = Set(workspaces.map { $0.lowercased() })
-        close(familiesWhere: { forgotten.contains($0) })
-    }
-
-    private static func close(familiesWhere goes: (String) -> Bool) {
+        // Its family's files, and any of the same folder opened another way (a share, a copy kept on
+        // this phone): the vault dropped that folder's keys and copies, so none of them serves on.
         let closes = live.lock.withLock {
-            let ids = live.families.filter { goes($0.value) }.map(\.key)
+            live.letGo.formUnion(forgotten)
+            let ids = Set(live.families.filter { forgotten.contains($0.value) }.map(\.key))
+                .union(live.shares.filter { forgotten.contains($0.value) }.map(\.key))
             return ids.compactMap { id -> (UUID, @Sendable () -> Void)? in
                 live.families[id] = nil
+                live.shares[id] = nil
+                live.nodes[id] = nil
                 return live.archives.removeValue(forKey: id).map { (id, $0) }
             }
         }
@@ -185,7 +196,11 @@ public enum ArchiveSessions {
         let (closes, controls) = live.lock.withLock {
             live.generations[account, default: 0] &+= 1
             // The next session proves its own family folders.
-            if account.isEmpty { live.proven = [] }
+            if account.isEmpty {
+                live.proven = []
+                live.purged = []
+                live.letGo = []
+            }
             let mine = { (id: UUID) in live.accounts[id, default: ""] == account }
             return (live.archives.filter { mine($0.key) }.map(\.value), live.calls.filter { mine($0.key) }.map(\.value))
         }
@@ -976,8 +991,11 @@ public enum ArchiveText {
         var current = ""
         var count = 0
         var size = 0
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            var rest = Substring(line)
+        // Line by line as the text is scanned, never every line made at once (8 MiB of newlines would be millions).
+        var lineStart = text.startIndex
+        while true {
+            let lineEnd = text[lineStart...].firstIndex(of: "\n") ?? text.endIndex
+            var rest = text[lineStart ..< lineEnd]
             repeat {
                 var take = rest.startIndex
                 var used = 0
@@ -1009,6 +1027,8 @@ public enum ArchiveText {
                 count += 1
                 size += part.utf8.count + 1
             } while !rest.isEmpty
+            if lineEnd == text.endIndex { break }
+            lineStart = text.index(after: lineEnd)
         }
         if !current.isEmpty || out.isEmpty { out.append(current) }
         return out

@@ -389,6 +389,25 @@ import Testing
         }
     }
 
+    @Test func aShareOrKeptZipOfAFamilyFolderLetGoOfClosesWithIt() async throws {
+        // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
+        try await ArchiveSessions.$account.withValue(UUID().uuidString) {
+            let workspace = UUID().uuidString.lowercased()
+            // Opened by a share of what is (or was) a family's folder, not through its ledger.
+            let shared = try await Self.open("aes.zip", registered: true)
+            try shared.mark(workspace, family: false)
+            #expect(try await shared.unlock("correct horse battery"))
+            // The sync lets the family go (a refusal, a fork, not a member): its folder's keys and copies go, and so does this.
+            TemporaryCopies.forgetFamily([workspace])
+            ArchiveSessions.closeQueue.sync {}
+            #expect(!shared.unlocked)
+            #expect(!shared.serves)
+            // One marked after the let-go is refused at its mark.
+            let late = try await Self.open("aes.zip", registered: true)
+            #expect(throws: ArchiveFailure.self) { try late.mark(workspace, family: false) }
+        }
+    }
+
     @Test func aKeptZipClosesWhenItsWorkspaceIsProvenAFamilysOrItsCopyIsPurged() async throws {
         // A sign-out of its own: another suite's, running beside it, never closes these archives mid-test.
         try await ArchiveSessions.$account.withValue(UUID().uuidString) {
@@ -411,6 +430,9 @@ import Testing
             ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-older"])
             ArchiveSessions.closeQueue.sync {}
             #expect(!older.serves)
+            // A purge that comes while such a copy is still being read (before its mark): the mark sees it and refuses.
+            ArchiveSessions.proveFamilies([UUID().uuidString], nodes: ["node-late"])
+            await #expect(throws: ArchiveFailure.self) { _ = try await OpenArchive.openKept(copy, workspace: nil, node: "node-late") }
         }
     }
 
