@@ -18,7 +18,7 @@ import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
 import { newId as mintScopedId, type IdKind } from '@hushos/crypto/ids';
 import type { DriveApi, NodeView, PartUrl } from './api';
 import type { DriveErrorCode } from './protocol';
-import { DriveApiError } from './api';
+import { DriveApiError, heldCode } from './api';
 import type { DriveNode, Rpc } from './client';
 import { holdFolder } from './walk-holds';
 import type {
@@ -471,7 +471,7 @@ const pendingKeyChange = () => new DriveApiError(KEY_CHANGE_PENDING, 'rotating',
 function abortSettled(failure: unknown) {
     if (!(failure instanceof DriveApiError)) return false;
     // A family manager's pause refused it: nothing ended, and the reservation stays.
-    if (failure.status === 403 && failure.code === 'held') return false;
+    if (failure.status === 403 && heldCode(failure.code, failure.message)) return false;
     // A session the server no longer knows (401) says nothing of the upload: not settled.
     if ([403, 404].includes(failure.status)) return true;
     return (
@@ -2312,7 +2312,15 @@ export function createTransferManager(options: TransferManagerOptions) {
         await startOver(u);
     }
 
-    async function cancel(id: string) {
+    function cancel(id: string) {
+        return cancelOne(id, false);
+    }
+    /*
+     * `releasing`: this tab's own sign-out (forgetAll), its release phase while the session still
+     * holds: every reservation is let go before the session ends on the server, as releaseAll does
+     * for the other tabs. An ordinary cancel sends no abort once its session ended.
+     */
+    async function cancelOne(id: string, releasing: boolean) {
         const u = uploads.get(id);
         if (!u || u.item.status === 'done' || u.item.status === 'cancelled') return;
         u.generation++;
@@ -2322,7 +2330,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         await rpc('driveUploadCancel', { objectId: u.objectId }).catch(() => {});
         await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});
         // Asked after the worker's cancel: a sign-out meanwhile sends nothing for that session.
-        if (u.uploadId && sessionStill(u))
+        if (u.uploadId && (releasing || sessionStill(u)))
             await api.abortUpload(workspaceOf(u), u.uploadId).catch(() => {});
         await journalForget(u);
         u.inFlight.clear();
@@ -2529,7 +2537,7 @@ export function createTransferManager(options: TransferManagerOptions) {
         try {
             // Every upload at once, and not forever: an offline sign-out must still finish.
             await Promise.race([
-                Promise.allSettled(order.slice().map((id) => cancel(id))),
+                Promise.allSettled(order.slice().map((id) => cancelOne(id, true))),
                 new Promise((resolve) => setTimeout(resolve, FORGET_TIMEOUT_MS)),
             ]);
             for (const u of uploads.values()) u.generation++;

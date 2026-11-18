@@ -321,6 +321,34 @@ describe('a folder’s colour', () => {
     });
 });
 
+describe('a folder this client created', () => {
+    /* Fails if any of the reply's own place, key epoch or envelopes is taken over what was sent. */
+    test('is built from what was sent, never from the reply, and a reply naming another is no answer', async () => {
+        const { client, dest, api } = await opened();
+        api.createFolders = (async (_ws: string, specs: { id: string }[]) => ({
+            nodes: [
+                {
+                    ...node(specs[0]!.id, 'someone-elses-folder'),
+                    keyEpoch: 99,
+                    parentKeyEpoch: 42,
+                    keyEnvelope: 'theirs',
+                    changeSeq: 7,
+                },
+            ],
+        })) as unknown as DriveApi['createFolders'];
+        const [made] = await client.createFolderPath(dest, ['Out']);
+        expect(made!.parentId).toBe(dest.id);
+        expect(made!.keyEpoch).toBe(10);
+        expect(made!.parentKeyEpoch).toBe(dest.keyEpoch);
+        api.createFolders = (async () => ({
+            nodes: [node('another-folder', dest.id)],
+        })) as unknown as DriveApi['createFolders'];
+        await expect(client.createFolderPath(dest, ['Again'])).rejects.toThrow(
+            /different item than the one written/,
+        );
+    });
+});
+
 describe('a new folder’s id', () => {
     /* A save run records a folder before its creation goes out; fails if the hook runs after the send, or a throw still sends. */
     test('is heard before its creation is sent, and a throw from the hearer sends nothing', async () => {

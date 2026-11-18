@@ -259,7 +259,7 @@ struct FaultyDrive: SaveRunWriter {
         guard stillOn() else { return Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) }
         return try await call(.purge, { world.purge(ids) }, refused: { Dictionary(uniqueKeysWithValues: ids.map { ($0, .refused) }) })
     }
-    func mayPurge(_ workspaceId: String) async -> Bool { true }
+    func mayPurge(_ workspaceId: String) async -> Bool? { true }
 }
 
 /* The run a fault's act reaches (a cancel), set once it starts. */

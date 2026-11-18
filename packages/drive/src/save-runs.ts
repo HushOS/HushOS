@@ -5,7 +5,7 @@ import {
     paddedLength,
 } from '@hushos/crypto/drive';
 import type { SignatureForm } from '@hushos/crypto/signatures';
-import { DriveApiError, type NodeView, type TrashBatchItem } from './api';
+import { DriveApiError, heldCode, type NodeView, type TrashBatchItem } from './api';
 import type { DriveNode } from './client';
 import type { RunJournal, RunRow, UploadSignatures } from './journal';
 import {
@@ -416,7 +416,11 @@ export function deniedWhole(error: unknown) {
 
 /* A family manager paused this person's changes for now: refused until the hold lifts, nothing ended. */
 export function heldNow(error: unknown) {
-    return error instanceof DriveApiError && error.status === 403 && error.code === 'held';
+    return (
+        error instanceof DriveApiError &&
+        error.status === 403 &&
+        heldCode(error.code, error.message)
+    );
 }
 
 /*
@@ -464,6 +468,11 @@ export type SaveRunDeps = {
     ) => Promise<DriveNode>;
     /* `id` as listed in `parent` now (asked fresh), or null: a creation answered 409 for its own id. */
     findChild?: (parent: DriveNode, id: string) => Promise<DriveNode | null>;
+    /*
+     * `folder` as the server lists it now (its key epoch after a key change), asked fresh before a
+     * refused creation is sent again: never the copy the run began with.
+     */
+    lookFolderAgain?: (folder: DriveNode) => Promise<DriveNode>;
     /*
      * How many items the folder `id` holds now, or null when it isn't there; throws when there was
      * no answer. Only looks: an answered "delete" waiting for a folder never deletes one found.
@@ -706,6 +715,8 @@ type Pending = {
      * to file, and never a deletion target.
      */
     nodeId: string | null;
+    /* Whether it took one of the run's planned thumbnails: given back if it ends stale, never published. */
+    thumbnail: boolean;
     resolve: (value: unknown) => void;
     reject: (error: unknown) => void;
 };
@@ -728,12 +739,6 @@ function createRun(
      * that landed: only these may still be there after a clean-up that couldn't remove them.
      */
     const mayBePublished = new Set<string>();
-    /*
-     * After a stop: folders made too late to go with it that then couldn't be removed, in one
-     * row (the stop's, when it kept one), each write after the last.
-     */
-    let late: RunRow | null = null;
-    let lateWriting = Promise.resolve();
     /*
      * Folder creations sent and not yet answered: a stop waits for each to settle before its
      * clean-up asks the server, so a folder the server creates after the clean-up looked (and
@@ -877,6 +882,8 @@ function createRun(
                     if (event.item.stale.released === false) {
                         if (output.uploadId) completing.delete(output.uploadId);
                     } else forgetUpload(output);
+                    // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
+                    if (output.thumbnail) thumbnails += 1;
                     output.resolve({
                         status: 'stale',
                         currentVersionId: event.item.stale?.currentVersionId ?? null,
@@ -941,6 +948,7 @@ function createRun(
             tracked: kind === 'file' && !madeFolders.has(parent.id),
             uploadId: null,
             nodeId: extra.replaces?.id ?? null,
+            thumbnail: Boolean(file.thumbnail),
             resolve: () => {},
             reject: () => {},
         };
@@ -1072,6 +1080,8 @@ function createRun(
             // the other (a lost answer included), then the clean-up looks.
             await Promise.allSettled(open.map((id) => deps.transfers.cancel(id)));
             await Promise.allSettled(creating);
+            // A clean-up that throws (it shouldn't) leaves the row for the next open, and the run's
+            // lock is let go all the same (finally, below).
             const result = await cleanUp(deps, row, open, {
                 seal: () => {
                     sealed = true;
@@ -1082,7 +1092,14 @@ function createRun(
                 published: mayBePublished,
                 mayExist,
                 current,
-            });
+            }).catch(() => ({
+                cleanup: 'left' as const,
+                keptVersions: 0,
+                uncertainVersions: 0,
+                remains: 'left' as const,
+                waiting: false,
+                onlyWaitingOn: null,
+            }));
             keptVersions += result.keptVersions;
             const done = new RunStopped(
                 reason,
@@ -1100,9 +1117,8 @@ function createRun(
             stopped = done;
             for (const output of pending.values()) output.reject(done);
             pending.clear();
-            end();
             return done;
-        })();
+        })().finally(end);
         return stopping;
     }
     /*
@@ -1113,19 +1129,6 @@ function createRun(
         if (error instanceof RunStopped) throw error;
         if (stopping) throw await stopping;
         throw await stop('failed', undefined, error instanceof Error ? error.message : undefined);
-    }
-    /* A late folder that couldn't be removed joins the late row (keepLate on the phones). */
-    function keepLate(nodeId: string, stopKeptRow: boolean) {
-        if (!current()) return lateWriting;
-        late ??= stopKeptRow
-            ? { ...row, nodeIds: [...row.nodeIds], uploadIds: [...row.uploadIds] }
-            : { ...row, nodeIds: [], uploadIds: [] };
-        if (!late.nodeIds.includes(nodeId)) late.nodeIds.push(nodeId);
-        const snapshot = { ...late, nodeIds: [...late.nodeIds] };
-        lateWriting = lateWriting
-            .then(() => (current() ? deps.runs.put(snapshot) : undefined))
-            .catch(() => {});
-        return lateWriting;
     }
     function end() {
         unsubscribe();
@@ -1160,13 +1163,15 @@ function createRun(
             let sentId: string | null = null;
             let mintedId: string | null = null;
             const began = now();
+            // The folder created into: after a key change's refusal, as the server lists it now.
+            let parentNow = into;
             for (let rotations = 1; ; rotations++) {
                 // Waited for by a stop only once its creation is sent: a folder still waiting out a
                 // key change (untilWritable) never holds a cancel up.
                 let sent: Promise<unknown> | null = null;
                 sentId = null;
                 mintedId = null;
-                const making = deps.makeFolder(into, given, signAs, async (id) => {
+                const making = deps.makeFolder(parentNow, given, signAs, async (id) => {
                     // Its id on disk before its creation is sent, or the creation is not sent.
                     if (stopping || !current()) throw new Error('This save run is stopping.');
                     if (recordIt) {
@@ -1200,7 +1205,7 @@ function createRun(
                     // (the browser sent it again by itself). There, it is the folder asked for.
                     const found =
                         mintedId && ownIdTaken(error)
-                            ? await deps.findChild?.(into, mintedId).catch(() => null)
+                            ? await deps.findChild?.(parentNow, mintedId).catch(() => null)
                             : null;
                     if (found) {
                         mayExist.delete(found.id);
@@ -1231,6 +1236,14 @@ function createRun(
                             FOLDER_ROTATION_PAUSE_MS * Math.min(rotations, 12),
                         );
                         await open();
+                        // Listed afresh, and only this folder in the run's workspace is taken: a
+                        // re-listing naming another is no answer, and nothing is made there.
+                        if (deps.lookFolderAgain) {
+                            const fresh = await deps.lookFolderAgain(parentNow);
+                            if (fresh.id !== into.id || fresh.workspaceId !== row.workspaceId)
+                                throw new Error(DESTINATION_CHANGED);
+                            parentNow = fresh;
+                        }
                         continue;
                     }
                     throw error;
@@ -1249,18 +1262,10 @@ function createRun(
             return failed(error);
         }
         if (!current() && !stopping) run.abandon();
-        if (stopping) {
-            const done = await stopping;
-            // Signed out meanwhile: nothing is asked of the server or written for that account.
-            if (abandoned) throw done;
-            // Made while the run stopped: it goes the way the rest of the run went, and if it
-            // cannot, a row names it for the next open (keepLate).
-            const fate = await discard(deps, row.workspaceId, [made.id], current).catch(
-                (): Cleanup => 'left',
-            );
-            if (fate === 'left') await keepLate(made.id, done.cleanup === 'left');
-            throw done;
-        }
+        // Made while the run stopped: the stop waited for its creation (its id in the row, or its
+        // folder's), so its clean-up, under the run's lock, already went the way the rest went.
+        // Nothing more is done for it here, after that lock was let go.
+        if (stopping) throw await stopping;
         madeFolders.add(made.id);
         claimed.set(made.id, Promise.resolve(new Set()));
         return made;
@@ -1654,21 +1659,29 @@ export async function interruptedRuns(
     const rows = await deps.runs.list();
     const left: RunRow[] = [];
     const quiet: RunRow[] = [];
-    for (const row of rows) {
-        // A finished run whose row couldn't be removed: never offered, dropped now.
-        if (row.done) {
-            await deps.runs.remove(row.id).catch(() => {});
-            continue;
-        }
-        // Live here, or its lock held by another tab (a frozen one included): never taken for interrupted.
-        if (live.has(row.id) || (await deps.isLive(row.id))) continue;
-        // Nothing made to ask about: one with no uploads either goes; one with reservations to let
-        // go (a finished run's stale version, or a version run that ended mid-upload) and one
-        // already answered "delete" that waits for a folder are settled quietly, never offered.
-        if (!row.nodeIds.length && !row.uploadIds.length)
-            await retire(deps.runs, row, () => signedIn(deps));
-        else if (!row.nodeIds.length || row.chosen === 'delete') quiet.push(row);
-        else left.push(row);
+    for (const listed of rows) {
+        // Live here: never taken for interrupted.
+        if (live.has(listed.id)) continue;
+        // Every decision under the run's own lock, from the row read again inside it: a run whose
+        // lock a tab holds (live, or frozen with it) is passed over, and nothing read before the
+        // lock is acted on (a row an owner wrote since is never removed for an older read).
+        await deps
+            .exclusive(listed.id, async () => {
+                const row = await readRow(deps.runs, listed.id);
+                if (!row) return;
+                // A finished run's row that couldn't be removed then (or a Keep's mark): dropped
+                // now, only as read here.
+                if (row.done) return void (await swapRow(deps, row, null).catch(() => {}));
+                // Nothing made to ask about: one with no uploads either goes; one with
+                // reservations to let go (a finished run's stale version, or a version run that
+                // ended mid-upload) and one already answered "delete" that waits for a folder are
+                // settled quietly, never offered.
+                if (!row.nodeIds.length && !row.uploadIds.length)
+                    return void (await swapRow(deps, row, null).catch(() => {}));
+                if (!row.nodeIds.length || row.chosen === 'delete') quiet.push(row);
+                else left.push(row);
+            })
+            .catch(() => {});
     }
     // In the background: the rows to offer come back now, never after the network.
     // Each start chained after the last, so two opens' rows are never settled at once.

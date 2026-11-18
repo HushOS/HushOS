@@ -1130,20 +1130,43 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
             }),
         );
         await options.onMinted?.(specs.map((spec) => spec.id));
-        const created = await api.createFolders(
-            ws,
-            specs.map((spec, index) => ({
-                id: spec.id,
-                idSeed: spec.seed,
-                parentId: index === 0 ? parent.id : specs[index - 1]!.id,
-                parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
-                keyEpoch: spec.keyEpoch,
-                keyEnvelope: nodes[index]!.keyEnvelope,
-                metadataEnvelope: nodes[index]!.metadataEnvelope,
-                metadataSignature: nodes[index]!.metadataSignature,
-            })),
+        const sent = specs.map((spec, index) => ({
+            id: spec.id,
+            idSeed: spec.seed,
+            parentId: index === 0 ? parent.id : specs[index - 1]!.id,
+            parentKeyEpoch: index === 0 ? parent.keyEpoch : specs[index - 1]!.keyEpoch,
+            keyEpoch: spec.keyEpoch,
+            keyEnvelope: nodes[index]!.keyEnvelope,
+            metadataEnvelope: nodes[index]!.metadataEnvelope,
+            metadataSignature: nodes[index]!.metadataSignature,
+        }));
+        const created = await api.createFolders(ws, sent);
+        // Built from what was sent (its place, key epochs, envelopes and signature): the reply gives
+        // only what the server assigns (its change number, times, the signer it recorded). A reply
+        // naming another folder, or none, is no answer: nothing is filed under its key.
+        return decorate(
+            sent.map((folder) => {
+                const served = created.nodes.find((node) => node.id === folder.id);
+                if (!served || served.workspaceId !== ws)
+                    throw new Error(
+                        'HushOS answered with a different item than the one written. Nothing was kept.',
+                    );
+                const { idSeed: _seed, ...own } = folder;
+                return {
+                    ...served,
+                    ...own,
+                    workspaceId: ws,
+                    kind: 'folder' as const,
+                    prevKeyEnvelope: null,
+                    prevKeyEpoch: null,
+                    prevParentKeyEpoch: null,
+                    metadataVersion: 1,
+                    currentVersion: null,
+                    trashedAt: null,
+                    envelopeSuite: DRIVE_ENVELOPE_SUITE,
+                } satisfies NodeView;
+            }),
         );
-        return decorate(created.nodes);
     }
 
     /*

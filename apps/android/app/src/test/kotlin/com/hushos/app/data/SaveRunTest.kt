@@ -222,7 +222,7 @@ class SaveRunTest {
                 else -> SaveItemFate.GONE
             }
         }
-        override fun mayPurge(workspaceId: String) = member.also { sent += "may-purge" }
+        override fun mayPurge(workspaceId: String): Boolean? = member.also { sent += "may-purge" }
     }
 
     @Test
@@ -282,6 +282,19 @@ class SaveRunTest {
         assertEquals(Prior(Integrity.SAVED_FROM_LINK, Integrity.SAVED_FROM_LINK), copies[2])
         assertEquals(null, copies[3])
         assertThrows(Exception::class.java) { run.file(byteArrayOf(1), "e", null, SaveSources.From(emptyList())) }
+    }
+
+    /* A stale version gives back its thumbnail's room: Save on top or Save as a copy may carry the same thumbnail. */
+    @Test
+    fun aStaleVersionGivesBackItsThumbnailsRoom() {
+        val writer = FakeWriter().apply { answers.add { throw SaveStale("v-theirs") } }
+        val doc = opened("doc", parent = "f", version = "v1")
+        val run = SaveRun.start(writer, listOf(doc), listOf(PlannedResult.Known(1uL, true)), journal())
+        val thumb = byteArrayOf(9, 9)
+        assertEquals(VersionSaved.Stale("v-theirs"), run.version(byteArrayOf(1), doc, opened("f"), "v1", own, thumbnail = thumb))
+        // Save on top, with the same thumbnail, within the one planned.
+        run.version(byteArrayOf(1), doc, opened("f"), "v-theirs", own, thumbnail = thumb)
+        assertEquals(2, writer.uploads.size)
     }
 
     @Test
@@ -1693,19 +1706,41 @@ class SaveResultTest {
         val other = server.file(server.root, "other.txt", "second".toByteArray())
         vault.listChildren(server.root)
         server.extraRoutes = { method, segments, _, _ ->
-            if (method == "POST" && segments.lastOrNull() == "trash-batch") 501 to JSONObject().put("code", "unsupported").put("message", "Not here.")
-            else null
+            when {
+                method == "POST" && segments.lastOrNull() == "trash-batch" -> 501 to JSONObject().put("code", "unsupported").put("message", "Not here.")
+                method == "POST" && segments.lastOrNull() == "trash" && segments.getOrNull(2)?.startsWith("nope") == true ->
+                    404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
+                else -> null
+            }
         }
         val epoch = SaveRunJournal.Epoch()
         val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
+        // Every item not found, one by one: out of reach, as the batch's 404 says, never "nothing was there".
+        assertEquals(setOf(SaveItemFate.DENIED), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
         val fates = writer.trash(listOf(id), vault.workspaceId)
         assertEquals(SaveItemFate.DONE, fates[id])
-        assertEquals(1, server.requests.count { it.endsWith("/trash-batch") })
+        val batches = server.requests.count { it.endsWith("/trash-batch") }
+        assertEquals(2, batches)
         assertEquals(1, server.requests.count { it.endsWith("/nodes/$id/trash") })
         // Signed out: nothing more is sent, one item or another.
         epoch.end()
         assertEquals(SaveItemFate.REFUSED, writer.trash(listOf(other), vault.workspaceId)[other])
         assertTrue(server.requests.none { it.endsWith("/nodes/$other/trash") })
+        server.extraRoutes = null
+    }
+
+    /*
+     * Whether a clean-up may delete forever: true for the own Drive; not known (null, the row kept) for a workspace that is
+     * neither the own nor a family this device knows nor a share the server lists; never false before that is confirmed.
+     */
+    @Test
+    fun mayDeleteForeverIsUnknownUntilConfirmed() {
+        val writer = VaultSaveWriter(vault) { throw IllegalStateException("not asked") }
+        assertEquals(true, writer.mayPurge(vault.workspaceId))
+        assertEquals(null, writer.mayPurge("0b6c0f4e-0000-4000-8000-00000000beef"))
+        // No answer about shares: not known either, never false.
+        server.extraRoutes = { method, segments, _, _ -> if (method == "GET" && segments.lastOrNull() == "shares") 503 to JSONObject() else null }
+        assertEquals(null, writer.mayPurge("0b6c0f4e-0000-4000-8000-00000000beef"))
         server.extraRoutes = null
     }
 
@@ -1777,6 +1812,9 @@ class SaveResultTest {
         assertEquals(SaveAbortFate.HELD, vault.api.abortUploadFate("up-x", vault.workspaceId))
         // The reservations ledger keeps it too: nothing ended, asked again after the hold (never taken for gone).
         assertEquals(Reservations.Abort.PENDING, vault.api.abortUpload("up-x", vault.workspaceId))
+        // A server before the code says a pause only in words, under `forbidden`: still held.
+        assertTrue(ApiError(403, ApiError.LEGACY_HELD, "forbidden").held)
+        assertFalse(ApiError(403, "Not allowed.", "forbidden").held)
         server.extraRoutes = null
     }
 

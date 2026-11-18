@@ -9,7 +9,17 @@ import java.net.URLEncoder
 
 class NotAuthenticated : Exception("Sign in to HushOS to see your files.")
 /* `data`: the structured part of the server's refusal (its `data`), e.g. a completion's `conflicted` and `currentVersionId`. */
-open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message)
+open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message) {
+    /*
+     * A family manager's pause: 403 `held`, or, from a server before the code, 403 with these words (as the legacy abort
+     * answers are read by their words).
+     */
+    val held: Boolean get() = status == 403 && (code == "held" || message == LEGACY_HELD)
+
+    companion object {
+        const val LEGACY_HELD = "A group manager has paused changes to this folder."
+    }
+}
 
 /*
  * A family upload's completion refused because a key change reached the file or its folder while the parts went up
@@ -630,7 +640,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
             error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> SaveAbortFate.FINISHED
             error.status == 409 && error.data?.has("upload") != true && error.message == STILL_FINISHING -> SaveAbortFate.FINISHING
             // A family manager paused changes: nothing ended, the abort is asked again after the hold.
-            error.status == 403 && error.code == "held" -> SaveAbortFate.HELD
+            error.held -> SaveAbortFate.HELD
             // A 401 (thrown as NotAuthenticated, UNKNOWN below) says nothing of the upload: asked again.
             error.status == 403 -> SaveAbortFate.DENIED
             error.status == 404 -> SaveAbortFate.GONE
@@ -652,7 +662,7 @@ class DriveApi(val session: Shared.Session) : RootApi {
             // A server from before `data.upload` says so only in words.
             error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
             // A family manager's pause refused it: nothing ended, and the reservation stays (asked again later).
-            error.status == 403 && error.code == "held" -> Reservations.Abort.PENDING
+            error.held -> Reservations.Abort.PENDING
             error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
             else -> Reservations.Abort.PENDING
         }

@@ -846,7 +846,7 @@ extension Vault {
             // Another member renamed the file or put a newer version on it before this answer (a repeated completion): this
             // version landed, and their name record is theirs. Nothing is re-signed. An upload sealed before the landing was
             // kept (an older record) has nothing to check against and is re-signed as before.
-            if let landing, !landing.holds(node) { throw UploadLanded() }
+            if let landing, !landing.holds(node) { throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil)) }
             // The version is live from here: whatever refuses the name record now (a key change, a newer rename, no answer)
             // leaves an upload that landed, with its name to repair, never one to fail, abort or seal again.
             do {
@@ -859,7 +859,8 @@ extension Vault {
                 if let familyName { prior = familyName.prior } else { prior = try await priorMetadata(of: node, family: false) }
                 return try await resignLanded(node, nodeKey: nodeKey, prior: prior, final: final)
             } catch {
-                throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id))
+                throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id),
+                                   landed: Opened(node: node, metadata: final, nodeKey: nil))
             }
         }
         // The file is on the server from here: a row this process won't keep now (its family let go of meanwhile) is an upload
@@ -872,10 +873,12 @@ extension Vault {
                     _ = try await resolve(parentId)
                     return try open(node, replacing: true)
                 } catch {
-                    throw UploadLanded()
+                    throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
                 }
             }
-            do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch { throw UploadLanded() }
+            do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch {
+                throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
+            }
         }
         // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
         // either way: a row that doesn't open here now is not an upload to fail, retry or abort.
@@ -883,7 +886,7 @@ extension Vault {
             _ = try await resolve(parentId)
             return try open(node)
         } catch {
-            throw UploadLanded()
+            throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
         }
     }
 
@@ -1018,6 +1021,12 @@ extension Vault {
                                     thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
                                     expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
                                     onBegun: { ids in begun.ids = ids; try onBegun(ids) }, onCompleting: onCompleting, progress: progress)
+        } catch let landed as UploadLanded {
+            // Completed on the server, though this process can't file its row now: a save that landed, answered with the
+            // node the completion named and the record it was sealed with (Android's result path), never a failure that
+            // would remove it.
+            guard let item = landed.landed else { throw landed }
+            return item
         } catch {
             let raced: Bool
             switch error {

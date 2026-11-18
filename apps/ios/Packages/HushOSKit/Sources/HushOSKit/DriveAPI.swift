@@ -151,7 +151,7 @@ public final class DriveAPI: Sendable {
             if status == 409, body?["code"] as? String == "conflict", (body?["data"] as? [String: Any])?["conflicted"] as? Bool == true {
                 throw DriveAPIError.conflicted(message ?? "This file changed while it was uploading.")
             }
-            if status == 403, body?["code"] as? String == "held" { throw DriveAPIError.held(message ?? "A group manager has paused changes to this folder.") }
+            if status == 403, DriveAPI.held(code: body?["code"] as? String, message: message) { throw DriveAPIError.held(message ?? DriveAPI.legacyHeld) }
             if status == 403, body?["code"] is String { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? DriveAPIError.noReply)
@@ -367,6 +367,13 @@ public final class DriveAPI: Sendable {
      * person's any more), or unknown (no answer).
      */
     /* `held`: a family manager paused changes (403 `held`): nothing ended, asked again after the hold. */
+    /*
+     * A family manager's pause: 403 `held`, or, from a server before the code, 403 `forbidden` with these words (as the
+     * legacy abort answers are read by their words).
+     */
+    static let legacyHeld = "A group manager has paused changes to this folder."
+    static func held(code: String?, message: String?) -> Bool { code == "held" || message == legacyHeld }
+
     public enum AbortFate: Sendable, Equatable {
         case aborted, gone, finished, finishing, denied, held, unknown
 
@@ -391,7 +398,7 @@ public final class DriveAPI: Sendable {
         case 401: return .unknown
         case 403:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-            return body?["code"] as? String == "held" ? .held : .denied
+            return DriveAPI.held(code: body?["code"] as? String, message: body?["message"] as? String) ? .held : .denied
         case 409:
             let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             if let upload = (body?["data"] as? [String: Any])?["upload"] as? String {

@@ -17,6 +17,7 @@ import { deviceSession } from '@/lib/device-session';
 import {
     clientFor,
     folderQueryOptions,
+    sharedQueryOptions,
     groupOfSpace,
     nextName,
     refuseWrite,
@@ -131,6 +132,14 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             );
             return made!;
         },
+        // A refused creation's folder, as the server lists it now (a key change moved its epoch).
+        lookFolderAgain: async (folder) =>
+            (
+                await queryClient.fetchQuery({
+                    ...folderQueryOptions(folder.id, folder.workspaceId),
+                    staleTime: 0,
+                })
+            ).folder,
         // Answered 409 for its own id: the folder as the server lists it now, if it is there.
         findChild: async (parent, id) =>
             (
@@ -170,7 +179,13 @@ function deps(queryClient: QueryClient): SaveRunDeps {
             const figures = await storage();
             if (!figures) return null;
             if (workspaceId === figures.workspaceId) return true;
-            return figures.pool ? null : false;
+            // Another person's share this account edits: never deleted forever here.
+            const shares = await queryClient.fetchQuery(sharedQueryOptions).catch(() => null);
+            if (!shares) return null;
+            if (shares.some((mount) => mount.workspaceId === workspaceId)) return false;
+            // Neither: a family folder whose family isn't registered in this tab yet (pooled or not,
+            // billing or not). Not known, so the row stays until it is.
+            return null;
         },
         hold,
         isLive,

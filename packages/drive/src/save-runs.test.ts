@@ -829,6 +829,43 @@ describe('a save run', () => {
         await run.cancel();
     });
 
+    test('a stale version gives back its thumbnail’s room: Save on top or Save as a copy may carry the same thumbnail', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, {
+            targets: [doc],
+            results: [{ size: 3, thumbnail: true }],
+        });
+        const thumb = new Uint8Array([1, 2]);
+        const first = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            thumbnail: thumb,
+            ...own,
+        });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        w.failWith(w.ids()[0]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: true },
+        });
+        expect(await first).toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        // Save on top: the same thumbnail again, within the one planned.
+        const again = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v-theirs',
+            bytes: bytes(),
+            thumbnail: thumb,
+            ...own,
+        });
+        await tick();
+        expect(w.queued.size).toBe(2);
+        void again.catch(() => {});
+        await run.cancel();
+    });
+
     test('a new version’s bytes stay the caller’s: a stale outcome leaves them whole for Save on top or Save as a copy', async () => {
         const w = world();
         const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
@@ -1465,8 +1502,12 @@ describe('a save run', () => {
         w.land(w.ids()[0]!, 'node-a', 'up-a');
         await saved;
         let tries = 0;
+        const epochs: number[] = [];
+        // The folder as the server lists it now: one key epoch on after each refusal.
+        w.deps.lookFolderAgain = async (asked) => ({ ...asked, keyEpoch: asked.keyEpoch + 1 });
         w.deps.makeFolder = async (parent, _name, _signAs, minted) => {
             tries += 1;
+            epochs.push(parent.keyEpoch);
             await minted(`try-${tries}`);
             if (tries < 3) throw new DriveApiError('Finishing a key change.', 'rotating', 409);
             w.server.live.add(`try-${tries}`);
@@ -1474,6 +1515,8 @@ describe('a save run', () => {
         };
         const made = await run.folder('Out', own);
         expect(made.id).toBe('try-3');
+        // Each try under the folder as listed afresh, never the copy the run began with.
+        expect(epochs).toEqual([1, 2, 3]);
         expect(w.runs.rows.get(run.id)?.nodeIds).toEqual(['node-a', 'try-3']);
         expect(w.server.purged.size).toBe(0);
         // Any other refusal, or an answer that never came, is never sent again.
@@ -1485,6 +1528,87 @@ describe('a save run', () => {
         const before = tries;
         await expect(run.folder('Again', own)).rejects.toMatchObject({ reason: 'failed' });
         expect(tries).toBe(before + 1);
+    });
+
+    test('a rotation retry whose fresh listing names another folder makes nothing there', async () => {
+        const w = world();
+        w.deps.pause = async () => {};
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.lookFolderAgain = async () => folder('elsewhere');
+        let tries = 0;
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            tries += 1;
+            await minted(`try-${tries}`);
+            throw new DriveApiError('Finishing a key change.', 'rotating', 409);
+        };
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'failed' });
+        expect(tries).toBe(1);
+    });
+
+    test('a row an owner wrote after this tab listed it is never removed for the older read', async () => {
+        const w = world();
+        const empty: RunRow = { id: 'r', workspaceId: 'ws-own', nodeIds: [], uploadIds: [], at: 1 };
+        await w.runs.put(empty);
+        const list = w.runs.list.bind(w.runs);
+        let raced = false;
+        // Listed empty; then, before this tab acts, the run's owner writes what it made.
+        w.runs.list = async () => {
+            const rows = await list();
+            if (!raced) {
+                raced = true;
+                await w.runs.put({ ...empty, nodeIds: ['node-a'] });
+            }
+            return rows;
+        };
+        const offered = await interruptedRuns(w.deps);
+        expect(offered.map((row) => row.nodeIds)).toEqual([['node-a']]);
+        expect(w.runs.rows.get('r')?.nodeIds).toEqual(['node-a']);
+    });
+
+    test('a folder that lands while the run stops is cleaned up once, by the stop, before its lock is let go', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let finishMaking: (made: DriveNode) => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('late-folder');
+            return new Promise<DriveNode>((resolve) => (finishMaking = resolve));
+        };
+        const trashed: string[] = [];
+        const trash = w.deps.trash;
+        w.deps.trash = async (ws, ids) => {
+            trashed.push(...ids);
+            return trash(ws, ids);
+        };
+        const making = run.folder('Archive', own);
+        await tick();
+        const cancelling = run.cancel();
+        await tick();
+        w.server.refuse.add('late-folder');
+        w.server.live.add('late-folder');
+        finishMaking(folder('late-folder'));
+        await expect(making).rejects.toBeInstanceOf(RunStopped);
+        await cancelling;
+        await tick();
+        // Only the stop's own clean-up, under the lock; nothing after it let the lock go.
+        expect(trashed).toEqual(['late-folder']);
+        expect(w.locks.held.size).toBe(0);
+    });
+
+    test('a stop whose clean-up throws still lets the run’s lock go, and leaves the row for later', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        w.deps.abortUpload = async () => {
+            throw new Error('unexpected');
+        };
+        const stopped = await run.cancel();
+        await saved.catch(() => {});
+        expect(stopped.cleanup).toBe('left');
+        expect(w.locks.held.size).toBe(0);
+        expect(w.runs.rows.has(run.id)).toBe(true);
     });
 
     test('a lock while a run starts (its room asked, its lock taken, its row written) stops it before it is live', async () => {
@@ -2046,6 +2170,15 @@ describe('a save run', () => {
         expect(heldNow(held)).toBe(true);
         expect(deniedWhole(held)).toBe(false);
         expect(abortFateOf(held)).toBe('held');
+        // A server before the code says a pause only in words, under `forbidden`: still held.
+        const legacy = new DriveApiError(
+            'A group manager has paused changes to this folder.',
+            'forbidden',
+            403,
+        );
+        expect(heldNow(legacy)).toBe(true);
+        expect(abortFateOf(legacy)).toBe('held');
+        expect(deniedWhole(legacy)).toBe(false);
         expect(deniedWhole(new DriveApiError('No.', 'forbidden', 403))).toBe(true);
     });
 
@@ -2753,20 +2886,17 @@ describe('a save run', () => {
         w.server.open.add('up-b');
         await w.runs.put(left);
         const live = await startRun(w.deps, { targets: [folder('f')], results: [] });
-        // Another tab's run, held there: not this tab's to clean up.
+        // Another tab's run, its lock held there: not this tab's to clean up.
         await w.runs.put({ ...left, id: 'run-other-tab' });
-        const found = await interruptedRuns({
-            exclusive: freeLock,
-            current: () => true,
-            runs: w.runs,
-            isLive: async (id) => id === 'run-other-tab',
-        });
+        const release = await w.locks.hold('run-other-tab');
+        const found = await interruptedRuns(w.deps);
         expect(found.map((row) => row.id)).toEqual(['run-closed']);
         expect(await cleanUpInterrupted(w.deps, found[0]!)).toBe('deleted');
         expect(w.server.aborted).toEqual(['up-b']);
         expect(w.server.purged).toEqual(new Set(['node-a']));
         expect([...w.runs.rows.keys()].sort()).toEqual([live.id, 'run-other-tab'].sort());
         await live.cancel();
+        release();
     });
 
     test('its row is written only once its lock is held, and the lock is held for as long as the run runs', async () => {

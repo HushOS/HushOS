@@ -190,6 +190,13 @@ import Testing
             if case DriveAPIError.held = error { return true }
             return false
         }
+        // A server before the code says a pause only in words, under `forbidden`: still held.
+        #expect {
+            try reply(403, #"{"message":"A group manager has paused changes to this folder.","code":"forbidden"}"#)
+        } throws: { error in
+            if case DriveAPIError.held = error { return true }
+            return false
+        }
         #expect {
             try reply(403, #"{"message":"Expired."}"#)
         } throws: { error in

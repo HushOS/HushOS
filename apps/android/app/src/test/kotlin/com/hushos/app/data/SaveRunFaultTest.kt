@@ -201,7 +201,7 @@ class SaveRunFaultTest {
             runCatching { call(Point.ABORT, { world.abort(uploadId) }, { SaveAbortFate.DENIED }) }.getOrDefault(SaveAbortFate.UNKNOWN)
         override fun trash(ids: List<String>, workspaceId: String) = call(Point.TRASH, { world.trash(ids) }, { ids.associateWith { SaveItemFate.REFUSED } })
         override fun purge(ids: List<String>, workspaceId: String) = call(Point.PURGE, { world.purge(ids) }, { ids.associateWith { SaveItemFate.REFUSED } })
-        override fun mayPurge(workspaceId: String) = true
+        override fun mayPurge(workspaceId: String): Boolean? = true
     }
 
     private val own = SaveSources.OwnWriting

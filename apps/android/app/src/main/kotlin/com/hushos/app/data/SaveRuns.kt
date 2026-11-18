@@ -325,7 +325,8 @@ interface SaveRunWriter {
     fun trash(ids: List<String>, workspaceId: String): Map<String, SaveItemFate>
     fun purge(ids: List<String>, workspaceId: String): Map<String, SaveItemFate>
     /* Whether the server lets this person delete forever there: a member (their own Drive, a family's folder). */
-    fun mayPurge(workspaceId: String): Boolean
+    /* Null when that isn't known (no answer, or a family folder whose family hasn't synced yet): the row is kept, asked again. */
+    fun mayPurge(workspaceId: String): Boolean?
 }
 
 /* What a clean-up did; LEFT when it couldn't finish (the row stays), NO_ACCESS when the space is no longer the person's (the row goes). */
@@ -718,7 +719,9 @@ object SaveRuns {
             val inTrash = ids.filter { trashed[it] == SaveItemFate.DONE }
             if (inTrash.isEmpty()) return SaveCleanup.NOTHING
             if (!stillOn()) return SaveCleanup.LEFT
-            if (!writer.mayPurge(workspaceId)) return SaveCleanup.TRASHED
+            // Not known yet whether it may be deleted forever: in the Trash for now, and the row kept.
+            val mayPurge = writer.mayPurge(workspaceId) ?: return SaveCleanup.LEFT
+            if (!mayPurge) return SaveCleanup.TRASHED
             if (!stillOn()) return SaveCleanup.LEFT
             val purged = writer.purge(inTrash, workspaceId)
             if (inTrash.any { purged[it] == SaveItemFate.HELD }) { onHeld(); return SaveCleanup.LEFT }
@@ -1127,6 +1130,8 @@ class SaveRun private constructor(
         try {
             VersionSaved.Saved(upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false))
         } catch (stale: SaveStale) {
+            // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
+            if (thumb != null) synchronized(lock) { thumbnails++ }
             VersionSaved.Stale(stale.currentVersionId)
         }
     }
@@ -1484,10 +1489,13 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
                 // A server without the batch route: one request an item, the session asked before each (as the Trash
                 // screen falls back), still inside this write's family gate.
                 for (id in batch) fates[id] = trashOne(id, workspaceId)
+                // Every item not found (404s, one by one): the space is out of reach, as the batch's 404 says, never
+                // "nothing was there".
+                if (batch.all { fates[it] == SaveItemFate.GONE }) batch.forEach { fates[it] = SaveItemFate.DENIED }
                 continue
             } catch (error: Exception) {
                 // A family manager's pause is not lost access: kept for after the hold.
-                if (error is ApiError && error.status == 403 && error.code == "held") { batch.forEach { fates[it] = SaveItemFate.HELD }; continue }
+                if (error is ApiError && error.held) { batch.forEach { fates[it] = SaveItemFate.HELD }; continue }
                 if (error is NotFound || (error is ApiError && error.status == 403)) { batch.forEach { fates[it] = SaveItemFate.DENIED }; continue }
                 throw error
             }
@@ -1516,7 +1524,7 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         } catch (error: ApiError) {
             when {
                 error.status == 409 && error.code == "trashed" -> SaveItemFate.DONE
-                error.status == 403 && error.code == "held" -> SaveItemFate.HELD
+                error.held -> SaveItemFate.HELD
                 error.status == 403 -> SaveItemFate.DENIED
                 error.status == 0 || error.status >= 500 -> throw error
                 else -> SaveItemFate.REFUSED
@@ -1538,13 +1546,23 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         } catch (error: NotFound) {
             SaveItemFate.GONE
         } catch (error: ApiError) {
-            if (error.status == 403 && error.code == "held") SaveItemFate.HELD
+            if (error.held) SaveItemFate.HELD
             else if (error.status == 403) SaveItemFate.DENIED else if (error.status == 0 || error.status >= 500) throw error else SaveItemFate.REFUSED
         }
     }
 
-    override fun mayPurge(workspaceId: String): Boolean =
-        workspaceId.equals(vault.workspaceId, ignoreCase = true) || vault.isFamilyWorkspace(workspaceId)
+    /*
+     * True for a member (the own Drive, a family folder); false only for one confirmed not to be (a share this account
+     * edits, as the server lists it); null when it isn't known (no answer, or a family folder whose family this device hasn't
+     * synced yet), so a clean-up keeps its row rather than retire it after only a trash.
+     */
+    override fun mayPurge(workspaceId: String): Boolean? {
+        if (vault.isFamilyWorkspace(workspaceId)) return true
+        val own = SaveRuns.orUnknown { vault.workspaceId } ?: return null
+        if (workspaceId.equals(own, ignoreCase = true)) return true
+        val shares = SaveRuns.orUnknown { vault.api.sharedWithMe() } ?: return null
+        return if (shares.any { it.workspaceId.equals(workspaceId, ignoreCase = true) }) false else null
+    }
 
     companion object {
         const val MAX_TRASH_BATCH = 200

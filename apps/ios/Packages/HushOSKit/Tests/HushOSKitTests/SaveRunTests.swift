@@ -178,7 +178,12 @@ actor FakeWriter: SaveRunWriter {
         if let freshFile { return freshFile }
         return file
     }
-    func listed(_ id: String, in folder: Opened) async throws -> Opened? { live.contains(id) ? opened(id, parent: folder.id) : nil }
+    /* The workspace a 409's look names its row in (another one: not the folder minted here). */
+    var listedWorkspace = "ws"
+    func set(listedWorkspace: String) { self.listedWorkspace = listedWorkspace }
+    func listed(_ id: String, in folder: Opened) async throws -> Opened? {
+        live.contains(id) ? opened(id, parent: folder.id, workspace: listedWorkspace) : nil
+    }
     /* Items in a folder, for lookFolder; and a hook that runs before each look. */
     var items: [String: Int] = [:]
     var looking: (@Sendable () async -> Void)?
@@ -236,7 +241,7 @@ actor FakeWriter: SaveRunWriter {
         }
         return fates
     }
-    func mayPurge(_ workspaceId: String) async -> Bool {
+    func mayPurge(_ workspaceId: String) async -> Bool? {
         sent.append("may-purge")
         return member
     }
@@ -325,6 +330,19 @@ let own = SaveSources.ownWriting
         #expect(signed[2].metadata == .copy(.savedFromLink) && signed[2].version == .copy(.savedFromLink))
         #expect(signed[3].metadata == .own && signed[3].version == .own)
         await #expect(throws: (any Error).self) { _ = try await run.file(Data([1]), name: "e", mime: nil, sources: .from([])) }
+    }
+
+    /* A stale version gives back its thumbnail's room: Save on top or Save as a copy may carry the same thumbnail. */
+    @Test func aStaleVersionGivesBackItsThumbnailsRoom() async throws {
+        let writer = FakeWriter()
+        await writer.answer { _ in throw SaveStale(currentVersionId: "v-theirs") }
+        let doc = opened("doc", parent: "f", version: "v1")
+        let run = try await SaveRun.start(writer: writer, targets: [doc], results: [.known(size: 1, thumbnail: true)], journal: journal())
+        let thumb = Data([9, 9])
+        #expect(try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v1", sources: own, thumbnail: thumb) == .stale(currentVersionId: "v-theirs"))
+        // Save on top, with the same thumbnail, within the one planned.
+        _ = try await run.version(Data([1]), of: doc, in: opened("f"), startedFrom: "v-theirs", sources: own, thumbnail: thumb)
+        #expect(await writer.uploads.count == 2)
     }
 
     @Test func aVersionSomeoneElseBeatIsStaleAndTheRunGoesOn() async throws {
@@ -1383,6 +1401,18 @@ let own = SaveSources.ownWriting
         #expect(rows.list().isEmpty)
     }
 
+    /* A 409 for its own id found as another workspace's row is not the folder minted here: never answered with it. */
+    @Test func aCreationAnswered409FoundInAnotherWorkspaceIsNotTheFolderMinted() async throws {
+        let writer = FakeWriter()
+        let rows = journal()
+        let run = try await SaveRun.start(writer: writer, targets: [opened("f")], results: [], journal: rows)
+        await writer.set(refuseCreation: .server(409, "An item with this id already exists."))
+        await writer.set(making: { await writer.makeLive("made-Out") })
+        await writer.set(listedWorkspace: "ws-other")
+        let stopped = await #expect(throws: SaveRunStopped.self) { _ = try await run.folder("Out", sources: own) }
+        #expect(stopped?.reason == .failed)
+    }
+
     /* A key change's pause cut short (the task cancelled) stops the run and removes what it made, as any failure does. */
     @Test func aPauseCutShortStopsTheRunAndCleansUp() async throws {
         let writer = FakeWriter()
@@ -1813,6 +1843,23 @@ extension OnFakeDrive {
         }
 
         /*
+         * A tool's result the server completed, though this device can't open its row now: saved, answered with the node the
+         * completion named, never a failure that would remove it.
+         */
+        @Test func aResultThatLandedButCannotBeFiledHereIsSaved() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            server.landedSuite = 2
+            let landed = try await vault.uploadResult(Data([1, 2]), name: "out.txt", mime: nil, in: b.id, replacing: nil, startedFrom: nil,
+                                                      signing: (.own, .own))
+            server.landedSuite = nil
+            // It landed on the server, and the save is answered with it, never failed (which would remove it).
+            #expect(server.nodes[landed.id] != nil)
+            #expect(server.nodes[landed.id]?.trashedAt == nil)
+        }
+
+        /*
          * A tool's new version of a file another device renamed while it went up: the name is theirs, as the server serves
          * it, never the one the upload began from (and nothing is signed again). Fails if the old name is kept for the newer record.
          */
@@ -1828,6 +1875,18 @@ extension OnFakeDrive {
             #expect(landed.name == "renamed.txt")
             #expect(landed.node.metadataVersion == g.node.metadataVersion + 1)
             #expect(try await vault.resolve(server.g).name == "renamed.txt")
+        }
+
+        /* Whether a clean-up may delete forever: true for the own Drive; not known (nil, the row kept) until confirmed otherwise. */
+        @Test func mayDeleteForeverIsUnknownUntilConfirmed() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            #expect(await vault.mayPurge(server.workspace) == true)
+            server.intercept = { method, parts, _ in method == "GET" && parts.last == "shares" ? (200, ["shares": [Any]()]) : nil }
+            #expect(await vault.mayPurge("0b6c0f4e-0000-4000-8000-00000000beef") == nil)
+            server.intercept = { method, parts, _ in method == "GET" && parts.last == "shares" ? (503, ["message": "Down."]) : nil }
+            #expect(await vault.mayPurge("0b6c0f4e-0000-4000-8000-00000000beef") == nil)
+            server.intercept = nil
         }
 
         /* On a server without the batch route, a clean-up's trash goes one request an item, the session asked before each. */
@@ -1855,6 +1914,9 @@ extension OnFakeDrive {
             #expect(fates["never-there"] == .gone)
             #expect(batches.value == 1)
             #expect(trashed.value == [server.a])
+            // Every item not found, one by one: out of reach, as the batch's 404 says, never "nothing was there".
+            let missing = try await vault.trash(["never-1", "never-2"], in: server.workspace, while: { true })
+            #expect(Set(missing.values) == [.denied])
             // Signed out after the first item went: the rest unsent (asked for the batch, then before each item).
             let asked = Locked(0)
             let rest = try await vault.trash([server.b, server.f], in: server.workspace, while: {

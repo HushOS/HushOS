@@ -471,7 +471,8 @@ public protocol SaveRunWriter: Sendable {
     func trash(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate]
     func purge(_ ids: [String], in workspaceId: String, while stillOn: @escaping @Sendable () -> Bool) async throws -> [String: SaveItemFate]
     /* Whether the server lets this person delete forever there: a member (their own Drive, a family's folder). */
-    func mayPurge(_ workspaceId: String) async -> Bool
+    /* Nil when that isn't known (no answer, or a family folder whose family hasn't synced yet): the row is kept, asked again later. */
+    func mayPurge(_ workspaceId: String) async -> Bool?
 }
 
 /*
@@ -935,7 +936,9 @@ public enum SaveRuns {
             let inTrash = ids.filter { trashed[$0] == .done }
             if inTrash.isEmpty { return .nothing }
             guard stillOn() else { return .left }
-            guard await writer.mayPurge(workspaceId) else { return .trashed }
+            // Not known yet whether it may be deleted forever: in the Trash for now, and the row kept.
+            guard let mayPurge = await writer.mayPurge(workspaceId) else { return .left }
+            guard mayPurge else { return .trashed }
             guard stillOn() else { return .left }
             let purged = try await writer.purge(inTrash, in: workspaceId, while: stillOn)
             if inTrash.contains(where: { purged[$0] == .held }) {
@@ -1331,7 +1334,9 @@ public actor SaveRun {
                 } catch {
                     // Answered 409 for its own id: an earlier send of the same request made it (URLSession sent it again
                     // by itself). There, it is the folder asked for.
-                    if let id = sent.id, SaveRuns.ownIdTaken(error), let found = try? await writer.listed(id, in: parentNow) {
+                    // Only the folder minted here, in the run's workspace (its NodeRef), is taken for it.
+                    if let id = sent.id, SaveRuns.ownIdTaken(error), let found = try? await writer.listed(id, in: parentNow),
+                       found.ref == NodeRef(workspaceId: state.snapshot.workspaceId, nodeId: id) {
                         state.answered(id)
                         state.creationEnded(id, mayExist: false)
                         made = found
@@ -1452,6 +1457,8 @@ public actor SaveRun {
             return .saved(try await upload(bytes, name: file.name, mime: mime ?? file.metadata.mime, in: folder, replacing: file,
                                            startedFrom: startedFrom, thumbnail: thumb, signing: signing, tracked: false))
         } catch let stale as SaveStale {
+            // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
+            if thumb != nil { thumbnails += 1 }
             return .stale(currentVersionId: stale.currentVersionId)
         }
     }
@@ -1817,6 +1824,9 @@ extension Vault: SaveRunWriter {
                         fates[id] = .refused
                     }
                 }
+                // Every item not found (404s, one by one): the space is out of reach, as the batch's 404 says, never
+                // "nothing was there".
+                if batch.allSatisfy({ fates[$0] == .gone }) { for id in batch { fates[id] = .denied } }
                 continue
             } catch DriveAPIError.held {
                 // A family manager's pause is not lost access: kept for after the hold.
@@ -1871,9 +1881,17 @@ extension Vault: SaveRunWriter {
         return fates
     }
 
-    public func mayPurge(_ workspaceId: String) async -> Bool {
+    /*
+     * True for a member (the own Drive, a family folder); false only for one confirmed not to be (a share this account
+     * edits, as the server lists it); nil when it isn't known (no answer, or a family folder whose family this device
+     * hasn't synced yet), so a clean-up keeps its row rather than retire it after only a trash.
+     */
+    public func mayPurge(_ workspaceId: String) async -> Bool? {
         let id = workspaceId.lowercased()
         if isFamilyWorkspace(id) { return true }
-        return (try? await loadWorkspace().workspaceId.lowercased()) == id
+        guard let own = try? await loadWorkspace().workspaceId.lowercased() else { return nil }
+        if own == id { return true }
+        guard let shares = try? await api.sharedWithMe() else { return nil }
+        return shares.contains { $0.workspaceId.lowercased() == id } ? false : nil
     }
 }

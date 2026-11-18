@@ -371,6 +371,23 @@ describe('transfer manager', () => {
         expect(h.server.aborted).toEqual([]);
     });
 
+    test('this tab’s own sign-out (session shut first, then forgetAll) still lets every reservation go (review probe)', async () => {
+        let open = true;
+        let generation = 1;
+        const h = harness({ session: { open: () => open, generation: () => generation } });
+        h.manager.enqueue([{ file: fakeFile(4 * CHUNK), parent: node('root', null) }], {
+            generation: 1,
+        });
+        await settle(120);
+        expect(h.server.begins).toHaveLength(1);
+        // apps/web/src/lib/sign-out.ts: deviceSession.signedOut() first, then transfers.forgetAll().
+        open = false;
+        generation = 2;
+        await h.manager.forgetAll();
+        await settle(200);
+        expect(h.server.aborted).toHaveLength(1);
+    });
+
     test('a batch takes its key epochs in one range, one round trip for the lot', async () => {
         const h = harness();
         const ids = h.manager.enqueue([

@@ -346,6 +346,8 @@ final class FakeDrive: @unchecked Sendable {
     var beforeComplete: (() -> Void)?
     /* A completion refused only because a key change re-keyed the file meanwhile (its version unchanged). */
     var rekeyAtComplete = false
+    /* A new file's completion filed under this envelope suite (one the device can't open), when set. */
+    var landedSuite: Int?
     /* What aborts answer, in order, before the usual answer (a test's upload still finishing). */
     var abortReplies: [(Int, Any)] = []
     /*
@@ -444,6 +446,18 @@ final class FakeDrive: @unchecked Sendable {
         nodes[id] = updated
         previousKeys[id, default: [:]][old.keyEpoch] = key
         keys[id] = fresh
+    }
+
+    /* `id`'s record replaced one metadata version up by one nobody can open (a torn write elsewhere, say). */
+    func unreadableRecord(_ id: String) {
+        guard let old = nodes[id] else { return }
+        var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                               parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion + 1,
+                               metadataEnvelope: "AAAA", currentVersion: old.currentVersion, trashedAt: nil,
+                               changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+        updated.metadataSigner = old.metadataSigner
+        updated.metadataSignature = old.metadataSignature
+        nodes[id] = updated
     }
 
     /* Another device of the owner renames `id`: its name sealed one metadata version up under its key, signed by the owner. */
@@ -647,7 +661,13 @@ final class FakeDrive: @unchecked Sendable {
                 nodes[nodeId] = updated
                 return (200, ["status": "ready", "node": try json(updated)])
             }
-            return (200, ["status": "ready", "node": try json(store(wire, id: nodeId, kind: "file", version: version))])
+            var landed = store(wire, id: nodeId, kind: "file", version: version)
+            if let landedSuite {
+                // Filed under an envelope suite this device can't open: it landed, but no row of it opens here.
+                landed.envelopeSuite = landedSuite
+                nodes[nodeId] = landed
+            }
+            return (200, ["status": "ready", "node": try json(landed)])
         default:
             return nil
         }
