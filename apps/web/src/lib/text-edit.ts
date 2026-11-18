@@ -110,11 +110,13 @@ export function editableKind(name: string, mime: string | null | undefined) {
     return kind === 'text' || kind === 'markdown';
 }
 
-/* A file the editor opens, by kind: its current version, never an earlier one. */
-export function editableFile(node: DriveNode) {
-    return (
-        node.kind === 'file' &&
-        node.currentVersion !== null &&
-        editableKind(node.name, node.metadata?.mime)
-    );
+/*
+ * A file the editor opens: its current version, never an earlier one, by kind, or (`sniffed`) a
+ * file of no known kind the viewer found to be text by reading it (an extensionless README). The
+ * bytes still decide after that (readOnlyReason).
+ */
+export function editableFile(node: DriveNode, sniffed = false) {
+    if (node.kind !== 'file' || node.currentVersion === null) return false;
+    if (editableKind(node.name, node.metadata?.mime)) return true;
+    return sniffed && previewKindOf(node.name, node.metadata?.mime) === 'none';
 }

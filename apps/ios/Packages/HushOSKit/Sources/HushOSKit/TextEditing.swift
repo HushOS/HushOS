@@ -21,6 +21,18 @@ public enum TextEditing {
         !item.isFolder && item.node.currentVersion != nil && opens(name: item.name, mime: item.metadata.mime)
     }
 
+    /*
+     * A file of no kind the editor knows by name whose bytes read as text (an extensionless README):
+     * offered Edit as the web's viewer offers it after its sniff. Text the editor can't keep exactly
+     * still opens, read-only, with its note; binary and other encodings don't.
+     */
+    public static func readsAsText(_ bytes: Data) -> Bool {
+        switch textReadOnly(bytes: bytes) {
+        case nil, .lineEndings, .byteOrderMark: true
+        default: false
+        }
+    }
+
     /* What each read-only reason says, in the web's words. */
     public static func words(_ reason: TextReadOnly) -> String {
         switch reason {
@@ -56,18 +68,50 @@ public enum TextEditing {
     /*
      * A line break typed or pasted into the system's text view, as the editor keeps it: CRLF and a
      * lone CR become LF, as CodeMirror does on the web, so a file the editor wrote never holds a
-     * carriage return (which would make it read-only next time).
+     * carriage return (which would make it read-only next time). Looked for as a byte: Swift takes
+     * "\r\n" for one Character, so a Character search for "\r" never finds it there.
      */
     public static func lineFeeds(_ inserted: String) -> String {
-        guard inserted.contains("\r") else { return inserted }
+        guard hasCarriageReturn(inserted) else { return inserted }
         return inserted.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    }
+
+    public static func hasCarriageReturn(_ text: String) -> Bool { text.utf8.contains(13) }
+
+    /* Why a listing can't stand for the file's folder: it answered for another folder or another workspace. */
+    public struct WrongFolder: Error, Equatable, WordedError {
+        public init() {}
+        public var errorDescription: String? { "HushOS answered with a different folder than this file’s. Nothing was saved." }
+    }
+
+    /*
+     * The file's folder and the file in a listing asked for by the file's own folder and workspace,
+     * or WrongFolder when the listing answers for another: a save never goes into a folder the editor
+     * didn't open the file from. The file is the row with its id in that same workspace and folder,
+     * or nil when it is no longer there.
+     */
+    public static func target(in listing: Listing, for file: Opened) throws -> (folder: NodeView, file: NodeView?) {
+        let workspace = file.node.workspaceId.lowercased()
+        guard let parent = file.node.parentId, listing.folder.id == parent, listing.folder.isFolder,
+              listing.folder.workspaceId.lowercased() == workspace else { throw WrongFolder() }
+        let row = listing.children.first {
+            $0.id == file.id && $0.workspaceId.lowercased() == workspace && $0.parentId == parent && !$0.isFolder
+        }
+        return (listing.folder, row)
     }
 }
 
-/* What a save did: a new version (its id, when the reply names one), or someone else's version is current (nil: the file is gone). */
+/* What a save did: a new version, or someone else's version is current (nil: the file is gone). */
 public enum TextSaved: Equatable, Sendable {
-    case saved(Opened)
+    /* `versionId`: the version this save published, as minted; nil when not known (the next save then asks the stale question). */
+    case saved(Opened, versionId: String?)
     case stale(currentVersionId: String?)
+}
+
+/* A copy saved: the new file, and its version as minted (nil when not known). */
+public struct TextCopy: Equatable, Sendable {
+    public let file: Opened
+    public let versionId: String?
 }
 
 /*
@@ -83,45 +127,109 @@ public enum TextSave {
     }
 
     /*
-     * Save, and Save on top: a new version of `file` holding `text`, unless the file moved on from
-     * `startedFrom` (Save on top passes the version that is current now). Planned as its UTF-8 bytes
-     * with no thumbnail, signed as the person's own writing.
+     * Ends a run whose result is in: its row goes. A row this phone wouldn't update is asked again
+     * (never the upload); past the tries the run is cancelled, which keeps what landed and lets the
+     * run go, its row settled at the next open. Never throws: what was saved stays saved.
      */
-    public static func version(_ text: String, of file: Opened, in folder: Opened, startedFrom: String?, start: Start) async throws -> TextSaved {
+    @discardableResult
+    public static func end(_ run: SaveRun, tries: Int = 3, pause: @Sendable (Int) async -> Void = { try? await Task.sleep(for: .milliseconds(250 * $0)) }) async -> Bool {
+        for attempt in 1 ... tries {
+            do {
+                try await run.finish()
+                return true
+            } catch {
+                if attempt < tries { await pause(attempt) }
+            }
+        }
+        _ = await run.cancel()
+        return false
+    }
+
+    /*
+     * Save, and Save on top: a new version of `file` holding `text`, unless the file moved on from
+     * `startedFrom` (Save on top passes the version current now). Planned as its UTF-8 bytes with no
+     * thumbnail, signed as the person's own writing.
+     */
+    public static func version(_ text: String, of file: Opened, in folder: Opened, startedFrom: String?, start: Start,
+                               pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextSaved {
         let bytes = TextEditing.encode(text)
         let run = try await start([file], [.known(size: UInt64(bytes.count), thumbnail: false)])
         let saved = try await run.version(bytes, of: file, in: folder, startedFrom: startedFrom, sources: .ownWriting, mime: file.metadata.mime)
-        // Its only result is in, saved or not: the row goes. One this phone couldn't update stays for the next open,
-        // which finds nothing to delete.
-        try? await run.finish()
+        if let pause { await end(run, pause: pause) } else { await end(run) }
         switch saved {
-        case .saved(let landed): return .saved(landed)
+        case .saved(let landed, let versionId): return .saved(landed, versionId: versionId)
         case .stale(let current): return .stale(currentVersionId: current)
         }
     }
 
     /* Save as a copy: a new file beside `file` under the next free name, signed as `file` is (`sources`). */
-    public static func copy(_ text: String, of file: Opened, in folder: Opened, sources: SaveSources, start: Start) async throws -> Opened {
+    public static func copy(_ text: String, of file: Opened, in folder: Opened, sources: SaveSources, start: Start,
+                            pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextCopy {
         let bytes = TextEditing.encode(text)
         let run = try await start([folder], [.known(size: UInt64(bytes.count), thumbnail: false)])
-        let made = try await run.file(bytes, name: file.name, mime: file.metadata.mime, sources: sources, in: folder)
-        try? await run.finish()
-        return made
+        let minted = MintedVersion()
+        let made = try await run.file(bytes, name: file.name, mime: file.metadata.mime, sources: sources, in: folder, minted: minted)
+        if let pause { await end(run, pause: pause) } else { await end(run) }
+        return TextCopy(file: made, versionId: minted.id)
+    }
+}
+
+/*
+ * Who may edit an item seen through shares: the mount covering it, the nearest one up its own
+ * workspace's folders (not the widest role anywhere in the workspace). A file shared on its own (the
+ * mount is the file itself) isn't edited: its folder can't be listed, and a save needs it.
+ */
+public enum EditRights {
+    /*
+     * `roots`: the mounts in the item's workspace, by root id, with their roles. `parent`: an item's
+     * parent within that same workspace, or nil when not known. True only for an editor's mount that
+     * is a folder above the item.
+     */
+    public static func mayEditShared(itemId: String, roots: [String: String], parent: (String) -> String?) -> Bool {
+        var cursor: String? = itemId
+        var steps = 0
+        while let id = cursor, steps < 256 {
+            if let role = roots[id] { return role == "editor" && id != itemId }
+            cursor = parent(id)
+            steps += 1
+        }
+        return false
     }
 }
 
 extension Vault {
     /*
-     * The file's folder and the file as the server lists them now, in the file's own workspace
-     * (never the own drive's row of the same id): what a save writes into, and the version that is
-     * current. The file is nil when it is no longer in its folder.
+     * The file's folder and the file as the server lists them now, in the file's own workspace and
+     * folder (TextEditing.target refuses a listing that answers for another): what a save writes into,
+     * and the version that is current. The file is nil when it is no longer in its folder.
      */
     public func editTarget(_ file: Opened) async throws -> (folder: Opened, file: Opened?) {
         guard let parent = file.node.parentId else { throw DriveAPIError.notFound("This file isn’t in a folder.") }
         let listing = try await listChildren(of: parent, in: file.node.workspaceId)
-        let folder = try open(listing.folder, replacing: true)
-        let row = listing.children.first { $0.id == file.id }
-        return (folder, try row.map { try open($0, replacing: true) })
+        let (folder, row) = try TextEditing.target(in: listing, for: file)
+        return (try open(folder, replacing: true), try row.map { try open($0, replacing: true) })
+    }
+
+    /*
+     * The bytes of `file`'s version, the one its row names, read in its own workspace (its key by its
+     * ref) into memory: never a copy on disk, never a kept copy of whatever version that happens to be,
+     * at most `limit` + 1 bytes. A sign-out (the task cancelled) stops the read.
+     */
+    public func editBytes(_ file: Opened, limit: UInt64) async throws -> Data {
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        defer { control.finish() }
+        let reader = try await toolReader(file, control: control)
+        let length = min(reader.size(), limit + 1)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Data, Error>) in
+                // On a thread of its own: the core's reads wait on the network (StoreSource), never on the cooperative pool.
+                let thread = Thread { done.resume(with: Result { try reader.readAt(offset: 0, length: length) }) }
+                thread.stackSize = 8 << 20
+                thread.start()
+            }
+        } onCancel: {
+            control.cancel()
+        }
     }
 
     /*

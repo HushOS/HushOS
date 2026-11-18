@@ -15,6 +15,8 @@ struct TextEditorScreen: View {
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let item: Opened
+    /* A save landed a new version of the file the viewer shows: the viewer shows it from now on. */
+    var onSaved: (Opened) -> Void = { _ in }
 
     private enum Phase: Equatable {
         case loading
@@ -156,14 +158,18 @@ struct TextEditorScreen: View {
     private func load() async {
         let from = loadFrom ?? item
         do {
+            // The row in the file's own folder and workspace, and its bytes read for that row's version in that
+            // workspace (never a kept copy of whatever version, never another drive's row of the same id).
             let (_, listed) = try await store.vault.editTarget(from)
-            let file = listed ?? from
+            guard let file = listed else {
+                phase = .failed
+                return
+            }
             if let size = file.size, size > TextEditing.limit {
                 phase = .readOnly(.tooLarge, nil)
                 return
             }
-            let url = try await store.fetch(file)
-            let data = try Data(contentsOf: url)
+            let data = try await store.vault.editBytes(file, limit: TextEditing.limit)
             try Task.checkCancellation()
             target = file
             startedFrom = file.node.currentVersion?.id
@@ -199,9 +205,12 @@ struct TextEditorScreen: View {
             switch saved {
             case .stale(let current):
                 stale = StaleVersion(currentVersionId: current)
-            case .saved(let landed):
+            case .saved(let landed, let versionId):
                 target = landed
-                startedFrom = landed.node.currentVersion?.id
+                // The version this save published, never the reply row's (which may already be someone else's):
+                // unknown, the next save asks the stale question.
+                startedFrom = versionId
+                onSaved(landed)
                 // Typed while it saved: still changed.
                 edited = editor.text != text
                 status = EditorWords.saved
@@ -222,11 +231,12 @@ struct TextEditorScreen: View {
             let (folder, _) = try await store.vault.editTarget(file)
             let sources = try await store.vault.copySources(of: file)
             let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(store.vault))
-            // From here on the editor writes the copy; the file someone else saved stays theirs.
-            target = made
-            startedFrom = made.node.currentVersion?.id
+            // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
+            // stays theirs.
+            target = made.file
+            startedFrom = made.versionId
             edited = editor.text != text
-            status = EditorWords.savedCopy(made.name)
+            status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
         } catch {
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
@@ -308,7 +318,7 @@ struct PlainTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
 
     func makeUIView(context: Context) -> UITextView {
-        let view = UITextView(usingTextLayoutManager: true)
+        let view = EditorTextView(usingTextLayoutManager: true)
         view.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .regular))
         view.adjustsFontForContentSizeCategory = true
         view.textColor = UIColor(Alpine.ink)
@@ -347,7 +357,7 @@ struct PlainTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) { onChange() }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
-            guard text.contains("\r") else { return true }
+            guard TextEditing.hasCarriageReturn(text) else { return true }
             // Put in as LF, as CodeMirror does: the file never gains a carriage return from the phone.
             guard let start = textView.position(from: textView.beginningOfDocument, offset: range.location),
                   let end = textView.position(from: start, offset: range.length),
@@ -355,5 +365,22 @@ struct PlainTextView: UIViewRepresentable {
             textView.replace(replaced, withText: TextEditing.lineFeeds(text))
             return false
         }
+    }
+}
+
+/*
+ * Copy and Cut put the text on this phone's pasteboard only, gone in two minutes, as every copy the app
+ * makes is (not Universal Clipboard, not every app that reads the board later).
+ */
+final class EditorTextView: UITextView {
+    override func copy(_ sender: Any?) {
+        guard let range = selectedTextRange, let text = text(in: range), !text.isEmpty else { return }
+        UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
+    }
+
+    override func cut(_ sender: Any?) {
+        guard isEditable, let range = selectedTextRange, !range.isEmpty else { return }
+        copy(sender)
+        replace(range, withText: "")
     }
 }

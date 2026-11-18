@@ -1,9 +1,15 @@
 import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
-import { SaveRefused, type RunPlan, type SaveRun } from '@hushos/drive/save-runs';
+import {
+    RecordNotUpdated,
+    RunStopped,
+    SaveRefused,
+    type RunPlan,
+    type SaveRun,
+} from '@hushos/drive/save-runs';
 import { describe, expect, test } from 'vitest';
 import { encodeText } from '@/lib/text-edit';
-import { saveCopy, saveVersion } from '@/lib/text-save';
+import { editTargetOf, saveCopy, saveVersion } from '@/lib/text-save';
 
 /*
  * The editor's save and its stale choices, over a stand-in for the save path
@@ -16,7 +22,9 @@ import { saveCopy, saveVersion } from '@/lib/text-save';
 
 type Stored = { id: string; name: string; versions: { id: string; bytes: number[] }[] };
 
-function bench(room = Infinity) {
+function bench(room = Infinity, finishFailures = 0) {
+    const ends = { finishes: 0, cancels: 0 };
+    let failing = finishFailures;
     const files = new Map<string, Stored>();
     const plans: RunPlan[] = [];
     const sources: unknown[] = [];
@@ -70,10 +78,16 @@ function bench(room = Infinity) {
                 if (current(stored.id) !== result.startedFrom)
                     return { status: 'stale', currentVersionId: current(stored.id) };
                 stored.versions.push({ id: `v${++ids}`, bytes: flat(result.bytes) });
-                return { status: 'saved', node: view(stored.id) };
+                return { status: 'saved', node: view(stored.id), versionId: current(stored.id) };
             },
-            finish: async () => {},
-            cancel: () => Promise.reject(new Error('not asked')),
+            finish: async () => {
+                ends.finishes += 1;
+                if (failing-- > 0) throw new RecordNotUpdated();
+            },
+            cancel: async () => {
+                ends.cancels += 1;
+                return new RunStopped('cancelled', 'Cancelled.', 'nothing', 1);
+            },
             waiting: () => 0,
         };
     };
@@ -84,7 +98,7 @@ function bench(room = Infinity) {
     };
     const text = (id: string, at = -1) =>
         new TextDecoder().decode(Uint8Array.from(files.get(id)!.versions.at(at)!.bytes));
-    return { files, plans, sources, folder, add, asNode, start, theirs, text, current };
+    return { files, plans, sources, ends, folder, add, asNode, start, theirs, text, current };
 }
 
 describe('saving an edit', () => {
@@ -211,4 +225,91 @@ describe('when someone else saved first', () => {
         });
         expect(saved).toEqual({ status: 'stale', currentVersionId: null });
     });
+});
+
+describe('ending the run', () => {
+    const noPause = () => Promise.resolve();
+
+    test('a record this device wouldn’t update is asked again, never the upload', async () => {
+        const b = bench(Infinity, 2);
+        const id = b.add('notes.txt', 'a');
+        const file = b.asNode(id);
+        const saved = await saveVersion(
+            b.start,
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
+            noPause,
+        );
+        expect(saved.status).toBe('saved');
+        expect(b.files.get(id)!.versions).toHaveLength(2);
+        expect(b.ends).toEqual({ finishes: 3, cancels: 0 });
+    });
+
+    test('a run that never finishes is let go of, and what it saved is still said saved', async () => {
+        const b = bench(Infinity, 99);
+        const id = b.add('notes.txt', 'a');
+        const file = b.asNode(id);
+        const saved = await saveVersion(
+            b.start,
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
+            noPause,
+        );
+        expect(saved).toEqual({ status: 'saved', versionId: b.current(id) });
+        expect(b.files.get(id)!.versions).toHaveLength(2);
+        expect(b.ends.cancels).toBe(1);
+    });
+});
+
+describe('where a save goes', () => {
+    const file = {
+        id: 'doc',
+        kind: 'file',
+        workspaceId: 'w',
+        parentId: 'folder',
+        currentVersion: { id: 'v1' },
+    } as unknown as DriveNode;
+    const folder = { id: 'folder', kind: 'folder', workspaceId: 'w' } as DriveNode;
+
+    test('the file’s own folder and the file in it', () => {
+        expect(editTargetOf({ folder, children: [file] }, file)).toEqual({ folder, file });
+    });
+
+    test('a listing answering for another folder or workspace is refused', () => {
+        const elsewhere = { ...folder, id: 'other' } as DriveNode;
+        expect(() => editTargetOf({ folder: elsewhere, children: [file] }, file)).toThrow();
+        const otherDrive = { ...folder, workspaceId: 'x' } as DriveNode;
+        expect(() => editTargetOf({ folder: otherDrive, children: [file] }, file)).toThrow();
+    });
+
+    test('a row with the file’s id from another workspace or folder is not the file', () => {
+        const twin = { ...file, workspaceId: 'x' } as DriveNode;
+        const moved = { ...file, parentId: 'other' } as DriveNode;
+        expect(editTargetOf({ folder, children: [twin, moved] }, file).file).toBeNull();
+    });
+});
+
+test('a save names the version it published, not the one its reply row shows by then', async () => {
+    const file = {
+        id: 'doc',
+        kind: 'file',
+        name: 'notes.txt',
+        workspaceId: 'w',
+        parentId: 'folder',
+        metadata: { mime: null },
+        currentVersion: { id: 'v1' },
+    } as unknown as DriveNode;
+    const run = {
+        version: async () => ({
+            status: 'saved' as const,
+            node: { id: 'doc', currentVersion: { id: 'v-theirs-after' } } as NodeView,
+            versionId: 'v-mine',
+        }),
+        finish: async () => {},
+    } as unknown as SaveRun;
+    const saved = await saveVersion(async () => run, {
+        file,
+        folder: { id: 'folder', kind: 'folder', workspaceId: 'w' } as DriveNode,
+        startedFrom: 'v1',
+        text: 'x',
+    });
+    expect(saved).toEqual({ status: 'saved', versionId: 'v-mine' });
 });

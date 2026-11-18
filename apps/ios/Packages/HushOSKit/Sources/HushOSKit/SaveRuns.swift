@@ -526,8 +526,23 @@ public struct SaveRunStopped: Error, Equatable, WordedError {
 }
 
 public enum VersionSaved: Sendable, Equatable {
-    case saved(Opened)
+    /*
+     * `versionId`: the version this save published, as minted at begin; nil when that isn't known. Never the
+     * reply row's current version, which a completion answered from a listing may show newer.
+     */
+    case saved(Opened, versionId: String?)
     case stale(currentVersionId: String?)
+}
+
+/* The version an upload published, handed out of the run's upload (set once it landed). */
+public final class MintedVersion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: String?
+    public init() {}
+    public var id: String? {
+        get { lock.withLock { held } }
+        set { lock.withLock { held = newValue } }
+    }
 }
 
 public enum SaveRuns {
@@ -1487,7 +1502,8 @@ public actor SaveRun {
     }
 
     /* A new file under the next free name in its folder; never replaces anything. */
-    public func file(_ bytes: Data, name: String, mime: String?, sources: SaveSources, thumbnail: Data? = nil, in folder: Opened? = nil) async throws -> Opened {
+    public func file(_ bytes: Data, name: String, mime: String?, sources: SaveSources, thumbnail: Data? = nil, in folder: Opened? = nil,
+                     minted: MintedVersion? = nil) async throws -> Opened {
         // On its way from its first line: finish refuses until it returns (a result still being prepared never meets a
         // finished run, and no later failure of it removes what finish said was saved).
         inFlight += 1
@@ -1501,7 +1517,7 @@ public actor SaveRun {
         do { given = try await claim(name, in: into) } catch { throw await failed(error) }
         try await open()
         return try await upload(bytes, name: given, mime: mime, in: into, replacing: nil, startedFrom: nil, thumbnail: thumb,
-                                signing: signing, tracked: !madeFolders.contains(into.id))
+                                signing: signing, tracked: !madeFolders.contains(into.id), minted: minted)
     }
 
     /* A new version of `file` (in `folder`), unless someone else saved since the work started from `startedFrom`. */
@@ -1515,8 +1531,10 @@ public actor SaveRun {
         let signing = try SaveRuns.signing(sources)
         let thumb = try takeThumbnail(thumbnail)
         do {
-            return .saved(try await upload(bytes, name: file.name, mime: mime ?? file.metadata.mime, in: folder, replacing: file,
-                                           startedFrom: startedFrom, thumbnail: thumb, signing: signing, tracked: false))
+            let minted = MintedVersion()
+            let landed = try await upload(bytes, name: file.name, mime: mime ?? file.metadata.mime, in: folder, replacing: file,
+                                          startedFrom: startedFrom, thumbnail: thumb, signing: signing, tracked: false, minted: minted)
+            return .saved(landed, versionId: minted.id)
         } catch let stale as SaveStale {
             // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
             if thumb != nil { thumbnails += 1 }
@@ -1525,7 +1543,8 @@ public actor SaveRun {
     }
 
     private func upload(_ bytes: Data, name: String, mime: String?, in folder: Opened, replacing given: Opened?, startedFrom: String?,
-                        thumbnail: Data?, signing: (metadata: Signing, version: Signing), tracked: Bool) async throws -> Opened {
+                        thumbnail: Data?, signing: (metadata: Signing, version: Signing), tracked: Bool,
+                        minted: MintedVersion? = nil) async throws -> Opened {
         // On its way as its file() or version() call.
         var replacing = given
         var folderNow = folder
@@ -1565,6 +1584,7 @@ public actor SaveRun {
                 }
                 // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
                 if !recorded { throw await stop(.failed, SaveRuns.unrecorded) }
+                minted?.id = begun.ids?.versionId
                 return landed
             } catch let stale as SaveStale {
                 if let id = stale.unreleased { state.keepUnreleased(id) } else { try? state.settled(begun.ids, landed: nil, tracked: false) }

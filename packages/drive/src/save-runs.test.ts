@@ -575,6 +575,13 @@ function world(
             nodeId,
         });
     }
+    /* Published with the node and version id the queue reports (a lost answer: no node). */
+    function landAs(id: string, item: Pick<UploadItem, 'node' | 'versionId'>) {
+        const held = queued.get(id)!;
+        held.item.status = 'done';
+        Object.assign(held.item, item);
+        emit({ type: 'done', item: held.item });
+    }
     function land(id: string, nodeId: string, uploadId?: string) {
         const held = queued.get(id)!;
         if (uploadId) {
@@ -610,6 +617,7 @@ function world(
         server,
         madeFolders,
         begin,
+        landAs,
         land,
         failWith,
         lock,
@@ -836,6 +844,26 @@ describe('a save run', () => {
         expect(parts[0]!.buffer).not.toBe(parts[1]!.buffer);
         expect(parts[0]!.buffer).not.toBe(whole.buffer);
         await run.cancel();
+    });
+
+    test('a saved version names the version it published, never what its file shows by then', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        w.begin(id!, 'up-v', 'doc');
+        // The completion's answer was lost: published, with no node to read a version from.
+        w.landAs(id!, { node: null, versionId: 'v-mine' });
+        expect(await saved).toEqual({ status: 'saved', node: null, versionId: 'v-mine' });
+        await run.finish();
     });
 
     test('a stale version gives back its thumbnail’s room: Save on top or Save as a copy may carry the same thumbnail', async () => {

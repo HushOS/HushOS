@@ -79,8 +79,10 @@ test.beforeAll(async ({ browser }) => {
             write('marked.md', Uint8Array.from([0xef, 0xbb, 0xbf, ...Buffer.from('# Title\n')])),
             write('latin.txt', Uint8Array.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
             write('config.json', '{\n  "a": 1\n}\n'),
+            // No extension and no type: the viewer reads it to find it is text.
+            write('README', 'Read me first\n'),
         ]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(5, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
@@ -104,6 +106,42 @@ test('a save is a new version that changes only the edited bytes', async () => {
     expect([...(await downloaded(page, 'notes.txt'))]).toEqual([
         ...Buffer.from('Grüße ✓\nline two\nno final newline'),
     ]);
+});
+
+test('Ctrl or Cmd+S with nothing changed saves nothing', async () => {
+    const earlier = async () => {
+        await row(page, 'config.json')
+            .locator('button')
+            .first()
+            .click({ ...grip, button: 'right' });
+        await page.getByRole('menuitem', { name: 'Versions' }).click();
+        await expect(dialog(page)).toContainText('Versions of “config.json”');
+        const count = await dialog(page)
+            .getByRole('button', { name: 'Download earlier version' })
+            .count();
+        await page.keyboard.press('Escape');
+        await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+        return count;
+    };
+    const before = await earlier();
+    await openEditor(page, 'config.json');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+s');
+    await page.waitForTimeout(1_500);
+    await expect(dialog(page).getByText('Saved', { exact: true })).toHaveCount(0);
+    // Still the editor: the browser's Save Page never opened over it.
+    await expect(editor(page)).toBeVisible();
+    await close(page);
+    expect(await earlier()).toBe(before);
+});
+
+test('a file the viewer found to be text by reading it offers Edit', async () => {
+    await row(page, 'README').getByRole('link', { name: 'README', exact: true }).click();
+    await expect(dialog(page)).toContainText('Read me first', { timeout: 60_000 });
+    await dialog(page).getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(editor(page)).toContainText('Read me first', { timeout: 60_000 });
+    await expect(editor(page)).toHaveAttribute('contenteditable', 'true');
+    await close(page);
 });
 
 test('files the editor can’t keep exactly open read-only with a note', async () => {
@@ -152,6 +190,26 @@ test('leaving with changes asks first', async () => {
     expect((await downloaded(page, 'notes.txt')).toString()).toBe(
         'Grüße ✓\nline two\nno final newline',
     );
+});
+
+test('leaving for a page outside the app asks first too', async () => {
+    await page.goto('/pricing');
+    await page.getByRole('link', { name: 'Go to Drive' }).first().click();
+    await expect(row(page, 'notes.txt')).toBeVisible({ timeout: 60_000 });
+    await openEditor(page, 'notes.txt');
+    await retype(page, 'not kept either');
+    // Back past the folder to the public page, in one step.
+    await page.evaluate(() => window.history.go(-2));
+    const ask = page.getByRole('alertdialog');
+    await expect(ask).toContainText('Discard your changes?');
+    await ask.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(editor(page)).toContainText('not kept either');
+    await expect(page).toHaveURL(/\/app\/drive/);
+    await page.evaluate(() => window.history.go(-2));
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page).toHaveURL(/\/pricing/);
+    await page.goto('/app/drive');
+    await expect(row(page, 'notes.txt')).toBeVisible({ timeout: 60_000 });
 });
 
 test.describe('when someone else saved first', () => {

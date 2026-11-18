@@ -34,6 +34,13 @@ describe('the structured-text check', () => {
         expect(await parseFailure('xml', '<a>\n  <b>\n</a>\n')).not.toBeNull();
     });
 
+    test('valid XML with its own <parsererror> element is not taken for broken', async () => {
+        expect(
+            await parseFailure('xml', '<log><parsererror>none</parsererror></log>\n'),
+        ).toBeNull();
+        expect(await parseFailure('xml', '<a xmlns="urn:x"><parsererror/></a>\n')).toBeNull();
+    });
+
     test('the words and the languages checked', () => {
         expect(parseWarning('yaml', 14)).toBe('This YAML doesn’t parse at line 14.');
         expect(parseWarning('json', null)).toBe('This JSON doesn’t parse.');

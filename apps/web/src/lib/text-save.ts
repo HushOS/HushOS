@@ -25,14 +25,73 @@ import { encodeText } from '@/lib/text-edit';
 export type StartRun = (plan: RunPlan) => Promise<SaveRun>;
 
 export type TextSaved =
+    /*
+     * `versionId`: the version this save published, by the upload's own id; null when the save
+     * path couldn't say, and then the next save asks the stale question rather than assume.
+     */
     | { status: 'saved'; versionId: string | null }
     /* Someone else's version is current (null: the file is gone from its folder). */
     | { status: 'stale'; currentVersionId: string | null };
+
+/* A save's folder and file as the editor asks for them: the folder's listing, as the app reads it. */
+export type FolderListing = { folder: DriveNode; children: DriveNode[] };
+
+/*
+ * The file's folder and the file itself in a listing asked for by the file's own folder and
+ * workspace, or a throw when the listing answers for another folder: a save never goes into a
+ * folder the editor didn't open the file from. The file is the row with its id in that same
+ * workspace and folder, or null when it is no longer there.
+ */
+export function editTargetOf(listing: FolderListing, file: DriveNode) {
+    const folder = listing.folder;
+    if (
+        folder.id !== file.parentId ||
+        folder.workspaceId !== file.workspaceId ||
+        folder.kind !== 'folder'
+    )
+        throw new Error(
+            'HushOS answered with a different folder than this file’s. Nothing was saved.',
+        );
+    const listed =
+        listing.children.find(
+            (child) =>
+                child.id === file.id &&
+                child.workspaceId === file.workspaceId &&
+                child.parentId === folder.id &&
+                child.kind === 'file',
+        ) ?? null;
+    return { folder, file: listed };
+}
+
+/* Tries before a run whose record this device wouldn't update is let go of (its result is kept). */
+const FINISH_TRIES = 3;
+const FINISH_PAUSE_MS = 250;
+
+/*
+ * Ends a run whose result is in: its record goes, its lock and its listener with it. A record this
+ * device wouldn't update is asked again (never the upload); past the tries the run is cancelled,
+ * which keeps a version that landed and lets everything else go, and its row is settled at the next
+ * open. Never throws: what was saved stays saved.
+ */
+export async function endRun(run: SaveRun, pause = (ms: number) => sleep(ms)) {
+    for (let attempt = 1; attempt <= FINISH_TRIES; attempt++) {
+        try {
+            await run.finish();
+            return true;
+        } catch {
+            if (attempt < FINISH_TRIES) await pause(FINISH_PAUSE_MS * attempt);
+        }
+    }
+    await run.cancel().catch(() => {});
+    return false;
+}
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /* A new version of `file` holding `text`, unless the file moved on from `startedFrom`. */
 export async function saveVersion(
     start: StartRun,
     edit: { file: DriveNode; folder: DriveNode; startedFrom: string | null; text: string },
+    pause?: (ms: number) => Promise<void>,
 ): Promise<TextSaved> {
     const bytes = encodeText(edit.text);
     const run = await start({
@@ -47,17 +106,16 @@ export async function saveVersion(
         sources: OWN_WRITING,
         mime: edit.file.metadata?.mime ?? null,
     });
-    // The run's record goes once its only result is in, saved or not. A record this device couldn't
-    // update stays for the next open, which finds nothing to delete: what was saved is kept.
-    await run.finish().catch(() => {});
+    await endRun(run, pause);
     if (saved.status === 'stale') return saved;
-    return { status: 'saved', versionId: saved.node?.currentVersion?.id ?? null };
+    return { status: 'saved', versionId: saved.versionId };
 }
 
 /* A new file beside `file` in `folder`, under the next free name, holding `text`. */
 export async function saveCopy(
     start: StartRun,
     edit: { file: DriveNode; folder: DriveNode; text: string },
+    pause?: (ms: number) => Promise<void>,
 ): Promise<NodeView | null> {
     const bytes = encodeText(edit.text);
     const run = await start({
@@ -71,6 +129,6 @@ export async function saveCopy(
         sources: [{ node: edit.file, source: 'drive' }],
         into: edit.folder,
     });
-    await run.finish().catch(() => {});
+    await endRun(run, pause);
     return made;
 }

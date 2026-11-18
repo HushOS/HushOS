@@ -378,7 +378,11 @@ class SaveRunStopped(val reason: Reason, message: String, val cleanup: SaveClean
 }
 
 sealed class VersionSaved {
-    data class Saved(val item: Opened) : VersionSaved()
+    /*
+     * `versionId`: the version this save published, as minted at begin; null when that isn't known. Never the reply row's
+     * current version, which a completion answered from a listing may show newer.
+     */
+    data class Saved(val item: Opened, val versionId: String? = null) : VersionSaved()
     data class Stale(val currentVersionId: String?) : VersionSaved()
 }
 
@@ -1179,7 +1183,8 @@ class SaveRun private constructor(
     }
 
     /* A new file under the next free name in its folder; never replaces anything. */
-    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null): Opened = onItsWay {
+    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null,
+             minted: java.util.concurrent.atomic.AtomicReference<String?>? = null): Opened = onItsWay {
         val into = folder ?: first
         inRun(into)
         open()
@@ -1188,7 +1193,7 @@ class SaveRun private constructor(
         val given = try { claim(name, into) } catch (error: Exception) { throw failed(error) }
         open()
         val tracked = synchronized(lock) { into.id !in madeFolders }
-        upload(bytes, given, mime, into, null, null, copy, thumb, tracked)
+        upload(bytes, given, mime, into, null, null, copy, thumb, tracked, minted)
     }
 
     /* A new version of `file` (in `folder`), unless someone else saved since the work started from `startedFrom`. */
@@ -1199,7 +1204,9 @@ class SaveRun private constructor(
         val copy = SaveRuns.signing(sources)
         val thumb = takeThumbnail(thumbnail)
         try {
-            VersionSaved.Saved(upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false))
+            val minted = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val landed = upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false, minted = minted)
+            VersionSaved.Saved(landed, minted.get())
         } catch (stale: SaveStale) {
             // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
             if (thumb != null) synchronized(lock) { thumbnails++ }
@@ -1208,7 +1215,7 @@ class SaveRun private constructor(
     }
 
     private fun upload(bytes: ByteArray, name: String, mime: String?, folder: Opened, given: Opened?, startedFrom: String?, copy: Prior?,
-                       thumbnail: ByteArray?, tracked: Boolean): Opened {
+                       thumbnail: ByteArray?, tracked: Boolean, minted: java.util.concurrent.atomic.AtomicReference<String?>? = null): Opened {
         // On its way as its file() or version() call (onItsWay).
         var replacing = given
         var folderNow = folder
@@ -1240,6 +1247,7 @@ class SaveRun private constructor(
                 }
                 // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
                 if (!recorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
+                minted?.set(started?.versionId)
                 return landed
             } catch (stale: SaveStale) {
                 runCatching { settled(started, null, false) }
@@ -1524,12 +1532,14 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         var found: Opened? = null
         do {
             val page = vault.api.children(parent, file.node.workspaceId, after)
+            // Held to the file's own folder and workspace (TextEditing.target): a listing answering for another is refused.
+            val (folderRow, row) = TextEditing.target(page.folder, page.children, file)
             if (folder == null) {
                 // The chain above first, so the folder opens under its parent's key as served now.
                 for (above in page.ancestors) runCatching { openServed(above) }
-                folder = openServed(page.folder)
+                folder = openServed(folderRow)
             }
-            page.children.firstOrNull { it.id == file.id }?.let { found = openServed(it) }
+            row?.let { found = openServed(it) }
             after = if (found == null) page.nextCursor else null
         } while (after != null)
         return folder!! to found

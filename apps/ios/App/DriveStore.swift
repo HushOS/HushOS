@@ -647,6 +647,29 @@ final class DriveStore {
         return roles.contains("editor") ? .editor : .viewer
     }
 
+    /*
+     * Whether this person may change `item`'s content here (the text editor): their own, a family folder's
+     * while this phone may write it, or a share's through the mount that covers it (the nearest one up the
+     * item's own folders, never the widest role in the workspace) when that mount is an editor's folder.
+     * A file shared on its own is never edited: its folder can't be listed, and a save needs it.
+     */
+    func mayEdit(_ item: Opened) -> Bool {
+        if isFamily(item) { return familyWritable(item) }
+        if isOwn(item) { return true }
+        let workspace = item.node.workspaceId.lowercased()
+        var roots: [String: String] = [:]
+        for mount in mounts where mount.share.workspaceId.lowercased() == workspace {
+            guard let root = mount.root else { continue }
+            // The widest of two mounts of the same folder.
+            if roots[root.id] != "editor" { roots[root.id] = mount.share.role }
+        }
+        return EditRights.mayEditShared(itemId: item.id, roots: roots) { id in
+            let row = id == item.id ? item : self.known(id)
+            guard let row, row.node.workspaceId.lowercased() == workspace else { return nil }
+            return row.node.parentId
+        }
+    }
+
     func refreshMounts() async {
         do {
             mounts = try await vault.mountShares()

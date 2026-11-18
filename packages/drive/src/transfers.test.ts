@@ -460,11 +460,16 @@ describe('journal and restore', () => {
         const { id, second } = await interrupted();
         // The complete request got through after the page went: the server holds it finished.
         second.server.uploads.get('up-1')!.status = 'completed';
+        const minted = [...second.journal.entries.values()][0]!.versionId;
         await second.manager.restore('ws');
         const result = await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'movie.mp4'));
         expect(result).toEqual({ ok: true, resumed: true });
         await settle(500);
         expect(second.item(id).status).toBe('done');
+        // No node came back, but the version it published is still named, by the id it was minted with.
+        expect(second.item(id).node).toBeNull();
+        expect(minted).toBeTruthy();
+        expect(second.item(id).versionId).toBe(minted);
         expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(0);
         expect(second.server.aborted).toEqual([]);
         expect(second.server.uploads.size).toBe(1);

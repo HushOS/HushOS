@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { EditorState } from '@codemirror/state';
 import { describe, expect, test } from 'vitest';
+import type { DriveNode } from '@hushos/drive/client';
 import {
+    editableFile,
     editableKind,
     encodeText,
     openText,
@@ -137,5 +139,22 @@ describe('read-only files', () => {
         const crlf = openText(encodeText('a\r\nb'));
         expect(crlf).toMatchObject({ editable: false, reason: 'line-endings', text: 'a\r\nb' });
         expect(openText(Uint8Array.from([0x61, 0x00]))).toMatchObject({ text: null });
+    });
+});
+
+describe('a file the viewer read as text', () => {
+    const file = (name: string, mime: string | null) =>
+        ({ kind: 'file', name, metadata: { mime }, currentVersion: { id: 'v1' } }) as DriveNode;
+
+    test('an extensionless file of no known type is editable once the viewer found it text', () => {
+        const readme = file('README', 'application/octet-stream');
+        expect(editableFile(readme)).toBe(false);
+        expect(editableFile(readme, true)).toBe(true);
+    });
+
+    test('a sniff never makes a file of another kind editable', () => {
+        expect(editableFile(file('report.pdf', 'application/pdf'), true)).toBe(false);
+        expect(editableFile(file('photo.png', null), true)).toBe(false);
+        expect(editableFile(file('clip.mp4', null), true)).toBe(false);
     });
 });

@@ -42,6 +42,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { unlockedNow } from '@/lib/auth-view';
+import { deviceSession } from '@/lib/device-session';
 import { driveError, folderQueryOptions, invalidateFolders, nodeSize } from '@/lib/drive';
 import { editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
 import { holdPageWhile } from '@/lib/leave-guard';
@@ -49,7 +50,7 @@ import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
 import { parseFailure, parseWarning, structuredKind } from '@/lib/text-parse';
-import { saveCopy, saveVersion, type StartRun } from '@/lib/text-save';
+import { editTargetOf, saveCopy, saveVersion, type StartRun } from '@/lib/text-save';
 
 /*
  * The text editor (docs/editing-design.md section 1; Editing 1a): CodeMirror over the
@@ -79,7 +80,7 @@ export const editorWords = {
     saving: 'Saving',
     saved: 'Saved',
     savedCopy: (name: string) => `Saved as “${name}”`,
-    savedCopyUnnamed: 'Saved as a copy',
+    savedCopyEnded: 'Saved as a copy. Open it from its folder to keep editing.',
     failed: 'This file couldn’t be opened for editing.',
     tryAgain: 'Try again',
     staleTitle: 'This file changed',
@@ -214,13 +215,21 @@ function baseExtensions(): Extension[] {
     ];
 }
 
-/* The file's folder as listed now: the save path looks the file up there again before sealing. */
-function folderOf(queryClient: QueryClient, file: DriveNode) {
-    return queryClient.fetchQuery({
+/*
+ * The file's folder and the file as the server lists them now, asked for in the file's own folder
+ * and workspace and held to them (editTargetOf): the save path looks the file up there again
+ * before sealing, and a listing answering for another folder is refused.
+ */
+async function targetOf(queryClient: QueryClient, file: DriveNode) {
+    const listing = await queryClient.fetchQuery({
         ...folderQueryOptions(file.parentId!, file.workspaceId),
         staleTime: 0,
     });
+    return { ...editTargetOf(listing, file), children: listing.children };
 }
+
+/* Lock or sign-out: no account unlocked here, or this browser's session ending. Nothing waits on changes then. */
+const sessionEnding = () => unlockedNow() === null || !deviceSession.open();
 
 /* What went wrong with a save, in the save path's own words where it has them. */
 function saveFailure(error: unknown) {
@@ -261,6 +270,7 @@ export function TextEditor({
     const saved = useRef<Text | null>(null);
     const [dirty, setDirty] = useState(false);
     const dirtyNow = useRef(false);
+    const endedNow = useRef(false);
     const [saving, setSaving] = useState(false);
     const [status, setStatus] = useState<string | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
@@ -268,6 +278,8 @@ export function TextEditor({
     const [edits, setEdits] = useState(0);
     const [stale, setStale] = useState<{ currentVersionId: string | null } | null>(null);
     const [confirmTheirs, setConfirmTheirs] = useState(false);
+    /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
+    const [ended, setEnded] = useState(false);
     const language = editorLanguage(loadFrom.name);
     const checks = structuredKind(language);
 
@@ -290,9 +302,9 @@ export function TextEditor({
             // The file as the server lists it now: a listing on screen can be a version behind
             // (another device's save the feed hasn't brought yet), and editing that one would end
             // in the stale choices at once.
-            const listing = await folderOf(queryClient, loadFrom).catch(() => null);
+            const listed = await targetOf(queryClient, loadFrom).catch(() => null);
             if (!active) return;
-            const file = listing?.children.find((child) => child.id === loadFrom.id) ?? loadFrom;
+            const file = listed?.file ?? loadFrom;
             if (file !== loadFrom) onTarget(file);
             const size = nodeSize(file);
             if (size !== null && size > TEXT_EDIT_LIMIT) {
@@ -351,7 +363,7 @@ export function TextEditor({
                         autocapitalize: 'off',
                     }),
                     EditorView.updateListener.of((update) => {
-                        if (!update.docChanged || !saved.current) return;
+                        if (!update.docChanged || !saved.current || endedNow.current) return;
                         markDirty(!update.state.doc.eq(saved.current));
                         setEdits((count) => count + 1);
                     }),
@@ -395,18 +407,15 @@ export function TextEditor({
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
     useEffect(
-        () =>
-            holdPageWhile(
-                () => dirtyNow.current && !guard.current.discarded && unlockedNow() !== null,
-            ),
+        () => holdPageWhile(() => dirtyNow.current && !guard.current.discarded && !sessionEnding()),
         [guard],
     );
-    // So does a move within the app (Back, a link); signing out goes to the sign-in page and is never held.
+    // So does a move within the app (Back, a link), wherever it leads; a lock or a sign-out never waits.
     useBlocker({
-        shouldBlockFn: async ({ next }) => {
+        shouldBlockFn: async () => {
             if (!dirtyNow.current || guard.current.discarded) return false;
-            if (!next.pathname.startsWith('/app')) return false;
-            if (unlockedNow() === null) return false;
+            // Wherever it goes (a public page included); only a lock or a sign-out isn't held up.
+            if (sessionEnding()) return false;
             return !(await askDiscard());
         },
         enableBeforeUnload: false,
@@ -416,16 +425,10 @@ export function TextEditor({
 
     /* After a save landed: the editor's text is the file's now, from that version on. */
     const settled = useCallback(
-        async (doc: Text, file: DriveNode, versionId: string | null) => {
-            let startedFrom = versionId;
-            // The reply named no version: the file as listed now says which is current.
-            if (!startedFrom) {
-                const listing = await folderOf(queryClient, file).catch(() => null);
-                startedFrom =
-                    listing?.children.find((child) => child.id === file.id)?.currentVersion?.id ??
-                    null;
-            }
-            target.current = { file, startedFrom };
+        (doc: Text, file: DriveNode, versionId: string | null) => {
+            // The version this save published, never one read from a listing afterwards (which may
+            // already be someone else's). Unknown, the next save asks the stale question.
+            target.current = { file, startedFrom: versionId };
             saved.current = doc;
             markDirty(!(view.current?.state.doc.eq(doc) ?? true));
             void invalidateFolders(queryClient, file.parentId);
@@ -436,17 +439,17 @@ export function TextEditor({
     const save = useCallback(
         async (onTopOf?: string) => {
             const current = view.current;
-            if (!current || saving || !editable) return;
+            if (!current || saving || !editable || ended) return;
             const doc = current.state.doc;
             const { file, startedFrom } = target.current;
             setSaving(true);
             setStatus(null);
             setFailure(null);
             try {
-                const listing = await folderOf(queryClient, file);
+                const listing = await targetOf(queryClient, file);
                 // The file as listed now (its current version, its key): the save path holds the
                 // version it replaces to the one this text started from, or Save on top's.
-                const listed = listing.children.find((child) => child.id === file.id);
+                const listed = listing.file;
                 if (!listed) {
                     setStale({ currentVersionId: null });
                     return;
@@ -461,7 +464,7 @@ export function TextEditor({
                     setStale({ currentVersionId: result.currentVersionId });
                     return;
                 }
-                await settled(doc, listed, result.versionId);
+                settled(doc, listed, result.versionId);
                 setStatus(editorWords.saved);
             } catch (error) {
                 if (error instanceof SaveRefused && error.reason === 'no-room' && error.room)
@@ -471,7 +474,7 @@ export function TextEditor({
                 setSaving(false);
             }
         },
-        [saving, editable, queryClient, start, settled],
+        [saving, editable, ended, queryClient, start, settled],
     );
 
     const copy = useCallback(async () => {
@@ -483,23 +486,34 @@ export function TextEditor({
         setStatus(null);
         setFailure(null);
         try {
-            const listing = await folderOf(queryClient, file);
+            const listing = await targetOf(queryClient, file);
             const made = await saveCopy(start, {
                 file,
                 folder: listing.folder,
                 text: doc.toString(),
             });
             // From here on the editor writes the copy: the file someone else saved is left as theirs.
-            const fresh = made ? await folderOf(queryClient, file).catch(() => null) : null;
-            const listed = fresh?.children.find((child) => child.id === made?.id);
-            if (listed) {
-                await settled(doc, listed, listed.currentVersion?.id ?? null);
+            // The copy is the run's own (its id and version); the listing only supplies its row, in
+            // the same folder and workspace.
+            const fresh = made ? await targetOf(queryClient, file).catch(() => null) : null;
+            const listed = fresh?.children.find(
+                (child) =>
+                    child.id === made?.id &&
+                    child.workspaceId === listing.folder.workspaceId &&
+                    child.parentId === listing.folder.id,
+            );
+            if (made && listed) {
+                settled(doc, listed, made.currentVersion?.id ?? null);
                 onTarget(listed);
                 setStatus(editorWords.savedCopy(listed.name));
             } else {
-                setStatus(editorWords.savedCopyUnnamed);
+                // Saved, but which file it became can't be told: nothing more is saved from here
+                // (never into the file someone else saved), and nothing asks before leaving.
+                setEnded(true);
+                endedNow.current = true;
                 saved.current = doc;
-                markDirty(!current.state.doc.eq(doc));
+                markDirty(false);
+                setStatus(editorWords.savedCopyEnded);
             }
         } catch (error) {
             if (error instanceof SaveRefused && error.reason === 'no-room' && error.room)
@@ -515,8 +529,7 @@ export function TextEditor({
         const { file } = target.current;
         setStatus(null);
         setFailure(null);
-        const listing = await folderOf(queryClient, file).catch(() => null);
-        const listed = listing?.children.find((child) => child.id === file.id);
+        const listed = (await targetOf(queryClient, file).catch(() => null))?.file;
         if (!listed) {
             setFailure(editorWords.theirsGone);
             return;
@@ -527,13 +540,14 @@ export function TextEditor({
         setLoadFrom(listed);
     }, [queryClient, onTarget, markDirty]);
 
+    // Only with changes to save; otherwise it does nothing, and never opens the browser's Save Page.
     useHotkey('Mod+S', () => void save(), {
-        enabled: editable && !saving && stale === null,
+        enabled: editable && dirty && !ended && !saving && stale === null,
         preventDefault: 'always',
     });
 
     const format = useFormatForDisplay();
-    const savable = editable && dirty && !saving;
+    const savable = editable && dirty && !saving && !ended;
     const header = actions
         ? createPortal(
               <div className="flex min-w-0 items-center gap-3">

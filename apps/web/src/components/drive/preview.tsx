@@ -14,8 +14,10 @@ import {
     XIcon,
 } from 'lucide-react';
 import {
+    createContext,
     lazy,
     Suspense,
+    useContext,
     useCallback,
     useEffect,
     useMemo,
@@ -101,6 +103,12 @@ const ArchiveView = lazy(() =>
 const loadEditor = () => import('@/components/drive/text-editor');
 const TextEditor = lazy(() => loadEditor().then((m) => ({ default: m.TextEditor })));
 
+/*
+ * A file of no known kind the viewer read and found to be text, by its version id: the viewer offers
+ * Edit for it too (the editor still checks every byte).
+ */
+const SniffedText = createContext<((versionId: string) => void) | null>(null);
+
 /* An editing session: the file Edit was pressed on, and the one being written now. */
 type Editing = { session: number; start: DriveNode; target: DriveNode };
 let sessions = 0;
@@ -177,6 +185,7 @@ export function Preview({
     const [dirty, setDirty] = useState(false);
     const [asking, setAsking] = useState<((discard: boolean) => void) | null>(null);
     const [actions, setActions] = useState<HTMLElement | null>(null);
+    const [sniffed, setSniffed] = useState<string | null>(null);
     /* The session's way out: set once the person chose to discard, so nothing asks again. */
     const guard = useRef<EditGuard>({ discarded: false });
     // The file being edited as listed now (its new size and time after a save), while it is listed.
@@ -224,7 +233,7 @@ export function Preview({
         !version &&
         !editing &&
         current !== null &&
-        editableFile(current) &&
+        editableFile(current, sniffed !== null && current.currentVersion?.id === sniffed) &&
         !((nodeSize(current) ?? 0) > TEXT_EDIT_LIMIT) &&
         (editable?.(current) ?? false);
     const startEditing = (node: DriveNode) => {
@@ -469,11 +478,13 @@ export function Preview({
                         ) : (
                             current && (
                                 <SourceSwitch.Provider value={switchValue}>
-                                    <PreviewBody
-                                        key={current.currentVersion?.id ?? current.id}
-                                        node={current}
-                                        onDownload={onDownload}
-                                    />
+                                    <SniffedText.Provider value={setSniffed}>
+                                        <PreviewBody
+                                            key={current.currentVersion?.id ?? current.id}
+                                            node={current}
+                                            onDownload={onDownload}
+                                        />
+                                    </SniffedText.Provider>
                                 </SourceSwitch.Provider>
                             )
                         )}
@@ -669,6 +680,13 @@ export function PreviewBody({
         kind === 'image' || kind === 'office' || kind === 'text' || kind === 'markdown' || sniff,
         open,
     );
+    // A file of no known kind shown as text from memory: the viewer's own file (not an archive's entry) offers Edit.
+    const reportText = useContext(SniffedText);
+    const shownAsText = sniff && !open && remembered?.kind === 'text';
+    const versionId = node.currentVersion?.id ?? null;
+    useEffect(() => {
+        if (shownAsText && versionId) reportText?.(versionId);
+    }, [shownAsText, versionId, reportText]);
     const download = () => onDownload(node);
     const textLimit = textWhole ? TEXT_CEILING : PREVIEW_LIMITS.text;
     const loadWhole = () => setTextWhole(true);
@@ -760,6 +778,7 @@ export function PreviewBody({
                     limit={PREVIEW_LIMITS.text}
                     onWhole={loadWhole}
                     onDownload={download}
+                    onText={open || !versionId ? undefined : () => reportText?.(versionId)}
                 />
             );
         case 'pdf':
@@ -948,10 +967,13 @@ function TextPreview({
     limit,
     onWhole,
     onDownload,
+    onText,
 }: {
     reader: FileReader;
     node: DriveNode;
     kind: 'text' | 'markdown' | 'sniff';
+    /* Read and found to be text (a sniffed file): the viewer offers Edit for it. */
+    onText?: () => void;
     /* How much is read: the first 8 MB, or up to the ceiling once the person asked for it all. */
     limit: number;
     onWhole: () => void;
@@ -966,6 +988,10 @@ function TextPreview({
     /* A file recorded as video but shown as text (a .ts file) may really be a video. */
     const unsure =
         kind === 'sniff' || (node.metadata?.mime ?? '').toLowerCase().startsWith('video/');
+    const textShown = useRef(onText);
+    useEffect(() => {
+        textShown.current = onText;
+    });
     useEffect(() => {
         let active = true;
         readAll(reader, limit, (value) => active && setProgress(value))
@@ -984,6 +1010,7 @@ function TextPreview({
                         bytes: bytes.byteLength,
                     });
                 setState({ text, truncated, binary: false });
+                textShown.current?.();
             })
             .catch((cause: unknown) => {
                 if (active) setError(readFailure(cause));

@@ -643,6 +643,8 @@ extension Vault {
         /* The metadata to show once it lands: a replacement's own, with the new size and date. */
         let final: NodeMetadata
         let replacing: Bool
+        /* The version this upload publishes, as minted. */
+        let versionId: String
         /* A tool's new version (the save path): the file's name record is left as it is, never signed again. */
         let keepName: Bool
         /* What a replacement's name record may be re-signed against once it lands (`Landing`). */
@@ -832,7 +834,7 @@ extension Vault {
         return Begun(
             workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
             content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
-            urls: urls, final: final, replacing: replacing != nil, keepName: keepName,
+            urls: urls, final: final, replacing: replacing != nil, versionId: versionId, keepName: keepName,
             landing: replacing.map { Landing(versionId: versionId, metadataVersion: $0.node.metadataVersion) }
         )
     }
@@ -943,6 +945,8 @@ extension Vault {
         public let workspaceId: String
         public let uploadId: String
         public let nodeId: String
+        /* The version this upload publishes, as minted: a completion answered from a listing may show a newer one by then. */
+        public var versionId: String? = nil
     }
 
     private func upload(
@@ -957,7 +961,7 @@ extension Vault {
                                         expected: expected, keepName: keepName, held: held)
             // A result's run writes these ids down first: if it can't, nothing is sent and the reservation goes.
             do {
-                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
+                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId, versionId: begun.versionId))
             } catch {
                 await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
                 throw error

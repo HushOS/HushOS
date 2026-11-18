@@ -25,6 +25,8 @@ struct FileViewer: View {
     @State private var action: NodeAction?
     /* The text editor over the file on screen (TextEditorScreen). */
     @State private var editing: Opened?
+    /* The file on screen (id and version) read as text although its name says nothing: offered Edit too. */
+    @State private var readAsText: String?
     /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
     @State private var seenListed: String?
 
@@ -142,7 +144,12 @@ struct FileViewer: View {
         .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
         .fullScreenCover(item: $editing) { file in
-            TextEditorScreen(item: file).environment(store)
+            TextEditorScreen(item: file, onSaved: { landed in
+                // Saved over the file on screen: the viewer shows that version, read again.
+                guard landed.id == current.id, landed.ref == current.ref else { return }
+                current = landed
+                attempt += 1
+            }).environment(store)
         }
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
@@ -154,6 +161,13 @@ struct FileViewer: View {
             // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
             // comes down instead, and the viewer shows that row.
             do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
+            // A file of no kind it knows whose bytes read as text (an extensionless README): offered Edit, as the web's
+            // viewer does after its sniff. The editor reads and checks it again for itself.
+            if let url, version == nil, !TextEditing.opens(current), ItemKind.of(current) == nil, (current.size ?? 0) <= TextEditing.limit {
+                let key = sniffKey(current)
+                let text = await Task.detached { (try? Data(contentsOf: url)).map(TextEditing.readsAsText) ?? false }.value
+                if text, sniffKey(current) == key { readAsText = key }
+            }
         }
         // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
         // again): asked again once the family has been shown anew. The fetch lists the file's folder itself when the vault
@@ -169,9 +183,12 @@ struct FileViewer: View {
         }
     }
 
+    private func sniffKey(_ item: Opened) -> String { "\(item.id)-\(item.node.currentVersion?.id ?? "")" }
+
     /* Whether the file on screen offers Edit: text by its name and type, small enough, and this person may change it. */
     private var editable: Bool {
-        version == nil && TextEditing.opens(current) && (current.size ?? 0) <= TextEditing.limit && store.role(of: current) != .viewer
+        version == nil && (TextEditing.opens(current) || readAsText == sniffKey(current)) && (current.size ?? 0) <= TextEditing.limit
+            && store.mayEdit(current)
     }
 
     /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */

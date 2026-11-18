@@ -91,8 +91,15 @@ export async function parseFailure(
         }
         case 'xml': {
             // Parsed as data, never rendered: DOMParser's XML documents run no script and fetch nothing.
-            const parsed = new DOMParser().parseFromString(text, 'application/xml');
-            const failure = parsed.getElementsByTagName('parsererror')[0];
+            const parser = new DOMParser();
+            const parsed = parser.parseFromString(text, 'application/xml');
+            // The browser's own error element, told apart from a document's <parsererror> by its
+            // namespace (each engine has its own), learnt from a string that never parses.
+            const namespace =
+                parser
+                    .parseFromString('<', 'application/xml')
+                    .getElementsByTagName('parsererror')[0]?.namespaceURI ?? null;
+            const failure = parsed.getElementsByTagNameNS(namespace ?? '*', 'parsererror')[0];
             if (!failure) return null;
             const words = failure.textContent ?? '';
             const line = /line (?:number )?(\d+)/i.exec(words);

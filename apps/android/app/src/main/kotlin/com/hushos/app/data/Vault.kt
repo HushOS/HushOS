@@ -2100,7 +2100,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* The ids a result's upload was begun under, for its run's row (SaveRuns.kt). */
-    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String)
+    /* `versionId`: the version this upload publishes, as minted (a completion answered from a listing may show a newer one by then). */
+    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String, val versionId: String? = null)
 
     /*
      * A result a tool or an editor produced (the save path, SaveRuns.kt), uploaded from memory: its plaintext is never
@@ -2265,7 +2266,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // A result's run writes these ids down first: if it can't, nothing is sent, the reservation is aborted now (the
             // network's to settle when that gets no answer), and it is marked idle below, so settleAll never skips it.
             try {
-                onBegun(BegunIds(ws, begun.uploadId, nodeId))
+                onBegun(BegunIds(ws, begun.uploadId, nodeId, versionId))
             } catch (error: Exception) {
                 runCatching { abortReserved(begun.uploadId, ws) }
                 madeKey?.let { areaLedger.forgetNodeKey(ws, it) }

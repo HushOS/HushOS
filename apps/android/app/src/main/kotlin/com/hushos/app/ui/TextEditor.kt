@@ -52,14 +52,15 @@ import com.hushos.app.data.TextSave
 import com.hushos.app.data.TextSaved
 import com.hushos.app.data.Vault
 import com.hushos.app.data.VaultSaveWriter
+import com.hushos.core.RunControl
 import com.hushos.core.TextReadOnly
+import com.hushos.core.toolWatchdogMillis
 import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 /* The editor's words, the web's (text-editor.tsx editorWords) and iOS's. */
 object EditorWords {
@@ -118,6 +119,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var failure by mutableStateOf<String?>(null); private set
     var stale by mutableStateOf<Stale?>(null)
     private var work: Job? = null
+    private var reading: RunControl? = null
     private var ended = false
 
     private fun writer(vault: Vault) = VaultSaveWriter(vault, storage = { Auth.storage(context) })
@@ -132,21 +134,18 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun load(from: Opened = target) {
         work?.cancel()
         phase = Phase.Loading
+        reading?.cancel()
+        val control = RunControl(toolWatchdogMillis(), null)
+        reading = control
         work = scope.launch {
             val vault = vault() ?: return@launch
             val opened = withContext(Dispatchers.IO) {
                 runCatching {
-                    val file = writer(vault).editTarget(from).second ?: from
+                    // The row in the file's own folder and workspace, and its bytes read for that row's version, in memory:
+                    // nothing decrypted is written to disk for a killed process to leave behind.
+                    val file = writer(vault).editTarget(from).second ?: return@runCatching null
                     if ((file.size ?: 0L) > TextEditing.LIMIT) return@runCatching file to TextEditing.Open.ReadOnly(TextReadOnly.TOO_LARGE, null)
-                    // A decrypted copy only for as long as it takes to read it.
-                    val dir = File(context.cacheDir, "editing/${System.nanoTime()}").also { it.mkdirs() }
-                    try {
-                        val copy = File(dir, "file")
-                        vault.download(file.id, copy, expectedVersionId = file.node.currentVersion?.id, workspaceId = file.node.workspaceId)
-                        file to TextEditing.open(copy.readBytes())
-                    } finally {
-                        dir.deleteRecursively()
-                    }
+                    file to TextEditing.open(TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control))
                 }.getOrNull()
             }
             if (ended) return@launch
@@ -192,7 +191,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
                     is TextSaved.Saved -> {
                         target = done.item
-                        startedFrom = done.item.node.currentVersion?.id
+                        // The version this save published, never the reply row's (which may already be someone else's):
+                        // unknown, the next save asks the stale question.
+                        startedFrom = done.versionId
                         // Typed while it saved: still changed.
                         edited = buffer.toString() != text
                         status = EditorWords.SAVED
@@ -220,12 +221,13 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             saving = false
             if (ended) return@launch
             result.onSuccess { made ->
-                // From here on the editor writes the copy; the file someone else saved stays theirs.
-                target = made
-                startedFrom = made.node.currentVersion?.id
+                // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
+                // stays theirs.
+                target = made.file
+                startedFrom = made.versionId
                 edited = buffer.toString() != text
-                status = EditorWords.savedCopy(made.name)
-                saved(made.node.parentId)
+                status = EditorWords.savedCopy(made.file.name)
+                saved(made.file.node.parentId)
             }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
         }
     }
@@ -244,6 +246,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun end() {
         ended = true
         work?.cancel()
+        reading?.cancel()
         buffer.clear()
         buffer.clearSpans()
         phase = Phase.Loading

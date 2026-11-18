@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -109,6 +110,8 @@ class TextEditingTest {
         val names = mutableMapOf<String, String>()
         val copies = mutableListOf<Prior?>()
         val planned = mutableListOf<List<PlannedResult>>()
+        /* Someone else saves right after this one lands, before its reply is read (the reply row shows theirs). */
+        var theirsAfterLanding: String? = null
         private var count = 0
 
         fun add(name: String, text: String): Opened {
@@ -142,13 +145,14 @@ class TextEditingTest {
             if (replacing != null) {
                 val list = versions[replacing.id] ?: throw SaveStale(null)
                 if (list.last().first != startedFrom) throw SaveStale(list.last().first)
-                onBegun(Vault.BegunIds("ws", "up-$n", replacing.id))
+                onBegun(Vault.BegunIds("ws", "up-$n", replacing.id, "v$n"))
                 onCompleting("up-$n")
                 list.add("v$n" to bytes)
+                theirsAfterLanding?.let { theirsAfterLanding = null; theirs(replacing.id, it) }
                 return file(replacing.id)
             }
             val id = "n$n"
-            onBegun(Vault.BegunIds("ws", "up-$n", id))
+            onBegun(Vault.BegunIds("ws", "up-$n", id, "v$n"))
             onCompleting("up-$n")
             names[id] = name
             versions[id] = mutableListOf("v$n" to bytes)
@@ -211,10 +215,41 @@ class TextEditingTest {
         bench.theirs(file.id, "theirs\n")
         val sources = SaveSources.From(listOf(SaveSource.OfFile(Integrity.UNKNOWN_SIGNER, Integrity.UNKNOWN_SIGNER)))
         val made = TextSave.copy("mine\n", file, folder, sources, start(bench))
-        assertEquals("notes (3).txt", bench.names[made.id])
-        assertEquals("mine\n", bench.text(made.id))
+        assertEquals("notes (3).txt", bench.names[made.file.id])
+        assertEquals("mine\n", bench.text(made.file.id))
+        assertEquals(bench.versions.getValue(made.file.id).first().first, made.versionId)
         assertEquals("theirs\n", bench.text(file.id))
         // An Unverified source's copy is never signed as the person's own writing.
         assertEquals(Integrity.UNKNOWN_SIGNER, bench.copies.last()?.metadata)
+    }
+
+    /* Someone else saved right after this landed: the next save must start from this save's version, not theirs. */
+    @Test fun aSaveNamesTheVersionItPublishedNotTheReplyRowsCurrentOne() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        bench.theirsAfterLanding = "theirs"
+        val saved = TextSave.version("mine", file, folder, file.node.currentVersion?.id, start(bench)) as TextSaved.Saved
+        assertEquals(bench.versions.getValue(file.id)[1].first, saved.versionId)
+        assertEquals("theirs", bench.text(file.id))
+    }
+
+    @Test fun aListingForAnotherFolderOrWorkspaceIsNeverTheFilesFolder() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        val (found, row) = TextEditing.target(folder.node, listOf(file.node), file)
+        assertEquals("f", found.id)
+        assertEquals(file.id, row?.id)
+        val elsewhere = folder.node.copy(id = "g")
+        assertThrows(TextEditing.WrongFolder::class.java) { TextEditing.target(elsewhere, listOf(file.node), file) }
+        val otherDrive = folder.node.copy(workspaceId = "other")
+        assertThrows(TextEditing.WrongFolder::class.java) { TextEditing.target(otherDrive, listOf(file.node), file) }
+        // The file's id in another workspace or another folder is not the file.
+        val twin = file.node.copy(workspaceId = "other")
+        val moved = file.node.copy(parentId = "g")
+        assertEquals(null, TextEditing.target(folder.node, listOf(twin, moved), file).second)
+    }
+
+    @Test fun aPastedCRLFAloneIsLineFeed() {
+        assertEquals("\n", TextEditing.lineFeeds("\r\n").toString())
     }
 }

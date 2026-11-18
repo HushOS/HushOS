@@ -575,7 +575,11 @@ export type ProducedVersion = {
 };
 
 export type VersionSaved =
-    | { status: 'saved'; node: NodeView | null }
+    /*
+     * `versionId`: the version this save published (the upload's own id), or null when the queue
+     * couldn't say; never read from a listing, which may already show someone else's newer one.
+     */
+    | { status: 'saved'; node: NodeView | null; versionId: string | null }
     /* Nothing was published: someone else's version is current (Save on top, Save as a copy, Open theirs). */
     | { status: 'stale'; currentVersionId: string | null };
 
@@ -933,7 +937,11 @@ function createRun(
         void persist();
         output.resolve(
             output.kind === 'version'
-                ? ({ status: 'saved', node: item.node } satisfies VersionSaved)
+                ? ({
+                      status: 'saved',
+                      node: item.node,
+                      versionId: item.versionId ?? null,
+                  } satisfies VersionSaved)
                 : item.node,
         );
     }

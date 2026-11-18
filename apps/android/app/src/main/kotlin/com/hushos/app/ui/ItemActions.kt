@@ -296,8 +296,9 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             }
             if (!mine) SheetRow("Save a copy to my files", Icons.Outlined.LibraryAdd) { model.saveCopy(listOf(item)); dismiss() }
             SheetDivider()
-            // Text and code, for whoever may change the file (an owner, an editor of the share).
-            if (canEdit && editsAsText(item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
+            // Text and code, for whoever may change the file (an owner, an editor of the share). Never a file shared on its
+            // own: its folder can't be listed, and a save needs it.
+            if (canEdit && editsAsText(item) && receivedVia(model, state, item)?.root?.id != item.id) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }

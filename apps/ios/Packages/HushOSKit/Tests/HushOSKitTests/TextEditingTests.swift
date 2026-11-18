@@ -103,6 +103,50 @@ private func word(_ reason: TextReadOnly) -> String {
         #expect(TextEditing.lineFeeds("plain") == "plain")
     }
 
+    /* A paste of nothing but a Windows line break: Swift's one Character "\r\n", which a Character search misses. */
+    @Test func aPastedCRLFAloneIsLineFeed() {
+        #expect(TextEditing.hasCarriageReturn("\r\n"))
+        #expect(TextEditing.lineFeeds("\r\n") == "\n")
+        #expect(TextEditing.lineFeeds("x\r\n") == "x\n")
+    }
+
+    @Test func aListingForAnotherFolderOrWorkspaceIsNeverTheFilesFolder() throws {
+        let file = opened("doc", parent: "f", version: "v1")
+        let row = file.node
+        let folder = opened("f").node
+        let found = try TextEditing.target(in: Listing(folder: folder, ancestors: [], children: [row], nextCursor: nil), for: file)
+        #expect(found.folder.id == "f" && found.file?.id == "doc")
+        #expect(throws: TextEditing.WrongFolder.self) {
+            try TextEditing.target(in: Listing(folder: opened("g").node, ancestors: [], children: [row], nextCursor: nil), for: file)
+        }
+        #expect(throws: TextEditing.WrongFolder.self) {
+            try TextEditing.target(in: Listing(folder: opened("f", workspace: "other").node, ancestors: [], children: [row], nextCursor: nil), for: file)
+        }
+        // The file's id in another workspace or another folder is not the file.
+        let twin = opened("doc", parent: "f", version: "v1", workspace: "other").node
+        let moved = opened("doc", parent: "g", version: "v1").node
+        #expect(try TextEditing.target(in: Listing(folder: folder, ancestors: [], children: [twin, moved], nextCursor: nil), for: file).file == nil)
+    }
+
+    @Test func editRightsComeFromTheMountCoveringTheItem() {
+        let parents = ["doc": "inner", "inner": "viewed", "viewed": "edited", "edited": "top"]
+        let parent = { (id: String) in parents[id] }
+        // Under a folder shared to view, inside one shared to edit: the nearer one decides.
+        #expect(!EditRights.mayEditShared(itemId: "doc", roots: ["viewed": "viewer", "edited": "editor"], parent: parent))
+        #expect(EditRights.mayEditShared(itemId: "doc", roots: ["edited": "editor"], parent: parent))
+        // A file shared on its own, even to edit: its folder can't be listed.
+        #expect(!EditRights.mayEditShared(itemId: "doc", roots: ["doc": "editor"], parent: parent))
+        // No mount found up its folders: not editable.
+        #expect(!EditRights.mayEditShared(itemId: "doc", roots: [:], parent: parent))
+    }
+
+    @Test func aViewerOffersEditForBytesThatReadAsText() {
+        #expect(TextEditing.readsAsText(Data("Read me\n".utf8)))
+        #expect(TextEditing.readsAsText(Data("a\r\nb".utf8)))
+        #expect(!TextEditing.readsAsText(Data([0x61, 0x00, 0x62])))
+        #expect(!TextEditing.readsAsText(Data([0x63, 0x61, 0x66, 0xE9])))
+    }
+
     @Test func readOnlyFilesKeepTheirWordsAndNeverOfferText() {
         #expect(TextEditing.open(Data([0x61, 0x00])) == .readOnly(.binary, nil))
         #expect(TextEditing.open(Data([0xEF, 0xBB, 0xBF, 0x68, 0x69])) == .readOnly(.byteOrderMark, "\u{FEFF}hi"))
@@ -116,6 +160,9 @@ actor TextBench: SaveRunWriter {
     var versions: [String: [(id: String, bytes: Data)]] = [:]
     var names: [String: String] = [:]
     var signed: [(metadata: Signing, version: Signing)] = []
+    /* Someone else saves right after this one lands, before its reply is read (the reply row shows theirs). */
+    var theirsAfterLanding: String?
+    func set(theirsAfterLanding: String?) { self.theirsAfterLanding = theirsAfterLanding }
     private var count = 0
 
     func add(_ name: String, _ text: String) -> Opened {
@@ -125,6 +172,7 @@ actor TextBench: SaveRunWriter {
         versions[id] = [("v\(count)", Data(text.utf8))]
         return file(id)
     }
+    func versionId(of id: String, at index: Int) -> String { versions[id]![index].id }
     func file(_ id: String) -> Opened { opened(id, parent: "f", version: versions[id]!.last!.id, name: names[id]) }
     /* Someone else's save from another device. */
     func theirs(_ id: String, _ text: String) -> String {
@@ -151,13 +199,18 @@ actor TextBench: SaveRunWriter {
         if let replacing {
             guard let list = versions[replacing.id] else { throw SaveStale(currentVersionId: nil) }
             if list.last!.id != startedFrom { throw SaveStale(currentVersionId: list.last!.id) }
-            try onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(count)", nodeId: replacing.id))
+            let minted = "v\(count)"
+            try onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(count)", nodeId: replacing.id, versionId: minted))
             try onCompleting("up-\(count)")
-            versions[replacing.id]!.append(("v\(count)", bytes))
+            versions[replacing.id]!.append((minted, bytes))
+            if let theirs = theirsAfterLanding {
+                theirsAfterLanding = nil
+                _ = self.theirs(replacing.id, theirs)
+            }
             return file(replacing.id)
         }
         let id = "n\(count)"
-        try onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(count)", nodeId: id))
+        try onBegun(Vault.BegunIds(workspaceId: "ws", uploadId: "up-\(count)", nodeId: id, versionId: "v\(count)"))
         try onCompleting("up-\(count)")
         names[id] = name
         versions[id] = [("v\(count)", bytes)]
@@ -197,6 +250,18 @@ actor TextBench: SaveRunWriter {
         #expect(await bench.signed.last.map { $0.version == .own } == true)
     }
 
+    /* Someone else saved right after this landed: the next save must start from this save's version, not theirs. */
+    @Test func aSaveNamesTheVersionItPublishedNotTheReplyRowsCurrentOne() async throws {
+        let bench = TextBench()
+        let file = await bench.add("notes.txt", "a")
+        await bench.set(theirsAfterLanding: "theirs")
+        let saved = try await TextSave.version("mine", of: file, in: opened("f"), startedFrom: file.node.currentVersion?.id, start: start(bench))
+        let mine = await bench.versionId(of: file.id, at: 1)
+        guard case .saved(_, let versionId) = saved else { Issue.record("not saved"); return }
+        #expect(versionId == mine)
+        #expect(await bench.text(file.id) == "theirs")
+    }
+
     @Test func aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() async throws {
         let bench = TextBench()
         let file = await bench.add("notes.txt", "start\n")
@@ -226,8 +291,9 @@ actor TextBench: SaveRunWriter {
         _ = await bench.theirs(file.id, "theirs\n")
         let sources = SaveSources.from([.file(metadata: .unknownSigner, version: .unknownSigner, fromLink: false)])
         let made = try await TextSave.copy("mine\n", of: file, in: opened("f"), sources: sources, start: start(bench))
-        #expect(await bench.names[made.id] == "notes (3).txt")
-        #expect(await bench.text(made.id) == "mine\n")
+        #expect(await bench.names[made.file.id] == "notes (3).txt")
+        #expect(await bench.text(made.file.id) == "mine\n")
+        #expect(made.versionId == (await bench.versionId(of: made.file.id, at: 0)))
         #expect(await bench.text(file.id) == "theirs\n")
         // An Unverified source's copy is never signed as the person's own writing.
         #expect(await bench.signed.last.map { $0.metadata == .copy(.unknownSigner) } == true)
