@@ -1,0 +1,74 @@
+crates/hushos-core/tests/text_edit.rs
+  s_c60e24772e04af::t_6f5234115f6db2 1-59
+apps/web/src/lib/text-parse.ts
+  s_c60e24772e04af::t_b88bc04c6ff9ae 1-102
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_79e3eb4f3efae2 1-671
+  s_c60e24772e04af::t_559e84ce7b95a7 672-694
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_d63916407d1a84 1-302
+  s_c60e24772e04af::t_dc5f64a715b55e 303-325
+apps/web/src/lib/text-edit.ts
+  s_c60e24772e04af::t_24bfc9f079cd1a 1-120
+apps/web/src/lib/text-save.ts
+  s_c60e24772e04af::t_4f4f861d17e4d0 1-76
+crates/hushos-core/src/text_edit.rs
+  s_c60e24772e04af::t_6021126f2ad171 1-214
+apps/web/src/lib/text-edit.test.ts
+  s_c60e24772e04af::t_0da5092fa27ba9 1-140
+  s_c60e24772e04af::t_a1b37ec853ce3a 141
+apps/web/src/lib/text-parse.test.ts
+  s_c60e24772e04af::t_a39d2b52b254f6 1-45
+apps/web/src/lib/text-save.test.ts
+  s_c60e24772e04af::t_c75a97b2b75449 1-203
+  s_c60e24772e04af::t_3858e01f7f12d2 204-214
+apps/web/src/lib/editor-languages.ts
+  s_c60e24772e04af::t_3abe7f57fe2c22 1-76
+  s_c60e24772e04af::t_7aba9d9e35c667 77-81
+apps/web/package.json
+  s_c60e24772e04af::t_141c541443aced 23-41,58,101,107
+apps/web/src/components/drive/drive-shell.tsx
+  s_c60e24772e04af::t_5ac1aaefc327fd 36-37
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_43aba49ba74a17 1866-1867
+apps/web/src/components/drive/home-view.tsx
+  s_c60e24772e04af::t_feff6184e14908 755
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_55ee2c9c890812 11,39-48,72,100-106,154,166-170,172-187,189-194,197-238,246-264,273,285,293,295,298,304,306,308,316,321,324,341,358-377,401,418-428,434,457-479,483-498
+apps/web/src/lib/previews.ts
+  s_c60e24772e04af::t_a3b3da1b38dd09 102-108,116,128
+apps/web/src/lib/transfers.ts
+  s_c60e24772e04af::t_fad752c6a53273 3
+apps/web/src/routes/_authenticated/app/_drive/shared.tsx
+  s_c60e24772e04af::t_e1af6c5d0e0978 511,689-690
+bun.lock
+  s_c60e24772e04af::t_441fcd0a5815ac 29-47,64,107,113,371-374,460-503,690-721,1424-1425,2156-2157,2274-2275
+crates/hushos-core/fixtures/text-edit-cases.json
+  s_c60e24772e04af::t_632e4243604348 1-401
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_e93d2f18d0a515 51,91
+package.json
+  s_c60e24772e04af::t_5d1f2edd71b264 81-84
+packages/drive/package.json
+  s_c60e24772e04af::t_4c161530ce5d89 15
+packages/drive/src/save-runs-live.ts
+  s_c60e24772e04af::t_225f8a61b91df8 1-50
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_73c9a270f6f39f 18,600-601,650,652
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d987eda47ca91090eeec270260714ec7b768867",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
