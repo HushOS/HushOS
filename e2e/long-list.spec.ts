@@ -168,6 +168,16 @@ const settledScroll = (p: Page) =>
         return last;
     });
 
+/* Once the items drawn have finished coming in: an entering item is drawn a few pixels low. */
+const settledItems = (p: Page) =>
+    p.evaluate(() =>
+        Promise.all(
+            [...document.querySelectorAll('[data-node-id]')]
+                .flatMap((item) => item.getAnimations())
+                .map((animation) => animation.finished.catch(() => {})),
+        ),
+    );
+
 async function reset(p: Page) {
     await p.keyboard.press('Escape');
     await p.evaluate(() => window.scrollTo(0, 0));
@@ -422,6 +432,70 @@ test('when Info narrows the grid, the tiles at the top of the screen stay there'
     }
 });
 
+test('when the window narrows deep in the grid, the tile at the top of the screen stays there', async () => {
+    await reset(page);
+    const size = page.viewportSize()!;
+    await page.getByRole('button', { name: 'Show as grid' }).click();
+    try {
+        await expect(rows(page).first()).toBeVisible();
+        await page.evaluate(() => {
+            const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+            sheet.scrollTop = sheet.scrollHeight / 2;
+        });
+        await settledScroll(page);
+        await settledItems(page);
+        // The first tile wholly on screen, scrolled to the very top of it.
+        const picked = await page.evaluate(() => {
+            const sheet = document.querySelector('[data-scroll-restoration-id="app-sheet"]')!;
+            const box = sheet.getBoundingClientRect();
+            const tile = [...document.querySelectorAll<HTMLElement>('[data-node-id]')].find(
+                (item) => item.getBoundingClientRect().top >= box.top,
+            )!;
+            sheet.scrollTop += tile.getBoundingClientRect().top - box.top;
+            return tile.querySelector('[data-row-name]')!.getAttribute('aria-label')!;
+        });
+        await settledScroll(page);
+        await settledItems(page);
+        const tile = row(page, Number(picked.slice(4)));
+        const top = () =>
+            tile.evaluate(
+                (item) =>
+                    item.getBoundingClientRect().top -
+                    document
+                        .querySelector('[data-scroll-restoration-id="app-sheet"]')!
+                        .getBoundingClientRect().top,
+            );
+        const columns = () =>
+            page.evaluate(
+                () =>
+                    getComputedStyle(
+                        document.querySelector('ul[aria-label="Contents of Long"]')!,
+                    ).gridTemplateColumns.split(' ').length,
+            );
+        const was = await top();
+        const wide = await columns();
+        // Within a quarter of a tile: the page's header above the list changes height with the
+        // window too, which Chrome's own scroll anchoring makes up for and WebKit's does not.
+        // A list that lost its place would be a line of tiles or more out.
+        const near = (await tile.evaluate((item) => item.getBoundingClientRect().height)) / 4;
+        // The grid takes fewer columns as the window narrows, with no change of its own to
+        // see it coming; the tile stays where it was, and again as the window widens.
+        await page.setViewportSize({ width: 900, height: size.height });
+        await expect.poll(columns).toBeLessThan(wide);
+        await settledScroll(page);
+        await settledItems(page);
+        expect(Math.abs((await top()) - was)).toBeLessThan(near);
+        await page.setViewportSize(size);
+        await expect.poll(columns).toBe(wide);
+        await settledScroll(page);
+        await settledItems(page);
+        expect(Math.abs((await top()) - was)).toBeLessThan(near);
+    } finally {
+        await page.setViewportSize(size);
+        await page.getByRole('button', { name: 'Show as list' }).click();
+    }
+});
+
 test('at a phone’s width the window scrolls and the rows drawn follow it', async () => {
     await reset(page);
     const size = page.viewportSize()!;
@@ -609,5 +683,56 @@ test('as many rows arriving above the screen as leave below it, in one sync, lea
     const after = await under(page);
     expect(after?.name).toBe(still!.name);
     expect(Math.abs(after!.top - still!.top)).toBeLessThanOrEqual(1);
+    expect(await duplicates(page)).toBe(0);
+});
+
+test('when every row drawn leaves at once, the first row after them takes the place of the first one on screen', async () => {
+    await reset(page);
+    const before = await rowCount(page);
+    await scrollToRow(page, 2 * OVERSCAN);
+    await settledScroll(page);
+    const shown = await firstOnScreen(page);
+    // Every row drawn around the screen, on it and past each edge, leaves by sync: none of
+    // them is left to hold the place, and the rows after them must not be skipped. (A row
+    // kept drawn elsewhere, the one with the keys, is not part of the run.)
+    const drawn = await page.evaluate((shown) => {
+        const all = [...document.querySelectorAll<HTMLElement>('tbody [data-node-id]')].map(
+            (item) =>
+                [
+                    Number(item.getAttribute('aria-rowindex')) - 2,
+                    item.querySelector('[data-row-name]')!.textContent!,
+                ] as [number, string],
+        );
+        const at = all.findIndex(([index]) => index === shown);
+        let start = at;
+        let end = at;
+        while (start > 0 && all[start - 1]![0] === all[start]![0] - 1) start--;
+        while (end + 1 < all.length && all[end + 1]![0] === all[end]![0] + 1) end++;
+        return all.slice(start, end + 1);
+    }, shown);
+    const [first, firstName] = drawn[0]!;
+    const [last, lastName] = drawn.at(-1)!;
+    expect(first).toBeLessThan(shown);
+    expect(last).toBeGreaterThan(shown);
+    const other = await otherTab(page);
+    const named = (label: string) =>
+        other
+            .locator('[data-node-id]')
+            .filter({ has: other.locator('[data-row-name]').getByText(label, { exact: true }) });
+    await scrollToRow(other, first);
+    await named(firstName).click(grip);
+    await scrollToRow(other, last - 4);
+    await named(lastName).click({ ...grip, modifiers: ['Shift'] });
+    await other.keyboard.press('Delete');
+    await expect(other.getByText(/moved to Trash/).first()).toBeVisible({ timeout: 60_000 });
+    await other.close();
+    await expect(page.locator('table')).toHaveAttribute(
+        'aria-rowcount',
+        String(before - drawn.length),
+        { timeout: 90_000 },
+    );
+    await settledScroll(page);
+    // The first row after the ones that left now sits where they began, and is first on screen.
+    expect(await firstOnScreen(page)).toBe(first);
     expect(await duplicates(page)).toBe(0);
 });
