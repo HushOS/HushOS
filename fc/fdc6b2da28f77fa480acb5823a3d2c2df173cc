@@ -1,0 +1,29 @@
+apps/web/src/components/sign-in-step.tsx
+  s_566b8e0c4467a4::t_af35471b167908 98-99,108,117,148-149,175
+apps/web/src/components/two-step-answer.tsx
+  s_c60e24772e04af::t_169e154e783342 145-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fcfdc6b2da28f77fa480acb5823a3d2c2df173cc",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
