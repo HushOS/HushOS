@@ -1,0 +1,39 @@
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_0c6cccf46ba151 543,602
+apps/web/src/lib/archives/open.test.ts
+  s_c60e24772e04af::t_f81a23f5b4b9ce 22,35-63,91,109-110,112
+apps/web/src/lib/archives/open.ts
+  s_c60e24772e04af::t_9bdd9faafe18be 56-61,64
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_7fe31512d2865b 1,185-231
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_b1e88a6d4a45c9 328-331,333-334,502,551,553-554,556
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_20dd5e0ea0d4c1 498-513
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_b92f981c31d422 637-650
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_b4d9b790b159dd 847-864
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_9240bc1aed67d9 1654,1683-1687
+packages/drive/src/downloads.test.ts
+  s_c60e24772e04af::t_78d8b754799379 787-816
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_4db17140dbc730 623-625,706-709,720
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9d1f5a249c60f0059c004f7ff0d4d68ec3c95984",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
