@@ -12,7 +12,7 @@ import {
 import { deviceSession } from '@/lib/device-session';
 import type { Dropped } from '@/lib/dropped-files';
 import { transfers } from '@/lib/transfers';
-import type { EnqueueInput } from '@hushos/drive/transfers';
+import { DESTINATION_CHANGED, type EnqueueInput } from '@hushos/drive/transfers';
 import { wellFormed } from '@hushos/crypto/drive';
 
 /*
@@ -190,6 +190,9 @@ export async function untilWritable(queryClient: QueryClient, folder: DriveNode)
             ...folderQueryOptions(current.id, current.workspaceId),
             staleTime: 0,
         });
+        // Only this folder, in its workspace, is waited for: a listing naming another is no answer.
+        if (fresh.folder.id !== current.id || fresh.folder.workspaceId !== current.workspaceId)
+            throw new Error(DESTINATION_CHANGED);
         current = fresh.folder;
     }
 }

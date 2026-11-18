@@ -6,7 +6,13 @@ import { DriveApiError, type DriveApi } from './api';
 import type { DriveNode } from './client';
 import { scopedId } from '../../db/src/ids';
 import { createMemoryJournal } from './journal';
-import { backoffDelay, KEY_CHANGE_GAVE_UP, VERSION_MOVED, type MemoryFile } from './transfers';
+import {
+    backoffDelay,
+    DESTINATION_CHANGED,
+    KEY_CHANGE_GAVE_UP,
+    VERSION_MOVED,
+    type MemoryFile,
+} from './transfers';
 import {
     CHUNK,
     NODE_ID,
@@ -621,6 +627,29 @@ describe('journal and restore', () => {
         expect(h.item(id!).status).toBe('cancelled');
         for (const operation of ['driveCreateNodes', 'driveUploadPrepare'])
             expect(h.calls).not.toContain(operation);
+    });
+
+    test('a key change’s re-look answered with another folder never becomes the destination', async () => {
+        for (const other of [
+            { ...node('elsewhere', 'root'), keyEpoch: 2 },
+            { ...node('waiting', 'root'), workspaceId: 'ws-other', keyEpoch: 2 },
+        ]) {
+            const h = harness({
+                refuseWrite: (t) => (t.keyEpoch < 2 ? 'Finishing a key change.' : null),
+                waitsForKeyChange: () => true,
+                // The server answers the re-listing of the folder with another one the device can open.
+                openNodes: async () => ({ parent: other }),
+            });
+            const [id] = h.manager.enqueue([
+                { file: fakeFile(CHUNK), parent: { ...node('waiting', 'root'), keyEpoch: 1 } },
+            ]);
+            await settle(5_000);
+            expect(h.item(id!).status).toBe('failed');
+            expect(h.item(id!).error).toBe(DESTINATION_CHANGED);
+            for (const operation of ['driveCreateNodes', 'driveUploadPrepare'])
+                expect(h.calls).not.toContain(operation);
+            expect(h.server.begins).toEqual([]);
+        }
     });
 
     test('a refusal for lack of room fails the upload with the code the app needs to offer a way out', async () => {

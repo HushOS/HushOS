@@ -476,6 +476,27 @@ function abortSettled(failure: unknown) {
         (failure.data as { upload?: string } | undefined)?.upload === 'completed'
     );
 }
+/*
+ * A re-look (openNodes) must answer for the folder, and the file replaced, the upload was queued
+ * for, in their workspace: one naming another (a server answering a key change's re-listing with
+ * some other folder) never becomes the upload's destination, sealed for its members.
+ */
+export const DESTINATION_CHANGED =
+    'HushOS answered with a different folder than the one this was going to. Nothing was uploaded there.';
+function sameDestination(
+    row: JournalEntry | QueuedEntry,
+    looked: { parent: DriveNode; replaces?: DriveNode },
+) {
+    const replacesId = 'replacesId' in row ? row.replacesId : row.newNode ? null : row.nodeId;
+    if (looked.parent.id !== row.parentId || looked.parent.workspaceId !== row.workspaceId)
+        throw new Error(DESTINATION_CHANGED);
+    if (
+        looked.replaces &&
+        (looked.replaces.id !== replacesId || looked.replaces.workspaceId !== row.workspaceId)
+    )
+        throw new Error(DESTINATION_CHANGED);
+    return looked;
+}
 /* The server refused envelopes under a key epoch that is no longer the node's (or its parent's). */
 function isStale(error: unknown) {
     return error instanceof DriveApiError && error.code === 'stale';
@@ -569,6 +590,12 @@ export function createTransferManager(options: TransferManagerOptions) {
         offline = isOffline,
         newId = mintScopedId,
     } = options;
+    // Every re-look of an upload's folder (and file) answers for the ones it was queued for, or throws.
+    const lookUpNodes = options.openNodes;
+    const openNodes = lookUpNodes
+        ? (row: JournalEntry | QueuedEntry, opts?: { fresh?: boolean }) =>
+              lookUpNodes(row, opts).then((looked) => sameDestination(row, looked))
+        : undefined;
     const uploads = new Map<string, Internal>();
     const order: string[] = [];
     /* Begins on their way to the server: the upload id each will answer, or null if it fails. */
@@ -1093,7 +1120,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             const current = (named.currentVersionId as string | null) ?? null;
             return current === expectedOf(u) ? error : new StaleVersionError(current);
         }
-        const lookup = options.openNodes;
+        const lookup = openNodes;
         const row = u.entry ?? u.queued;
         if (!lookup || !row) return error;
         const fresh = await lookup(row, { fresh: true }).catch(() => null);
@@ -1186,13 +1213,13 @@ export function createTransferManager(options: TransferManagerOptions) {
             // Asked again here, right before a node or a content key is made: into the folder, or
             // as a new version under the file's own key, either may be waiting for a key change.
             let refused = refusalOf(parent, u.replaces);
-            if ((refused || u.lookAgain) && options.openNodes && u.queued) {
+            if ((refused || u.lookAgain) && openNodes && u.queued) {
                 // The folder as it was when queued (or when the server last refused it) may be
                 // under an older key than it is now (the walk may have reached it since): looked
                 // up afresh, then asked again.
                 // After a key-only refusal, from the server itself: a listing fetched moments ago
                 // would still carry the key the server just refused.
-                const fresh = await options.openNodes(u.queued, { fresh: keyOnlyLooked });
+                const fresh = await openNodes(u.queued, { fresh: keyOnlyLooked });
                 if (u.generation !== generation) return;
                 // Looked at again for its keys, a replaced file must still be at the version this
                 // upload set out to replace: one someone else made meanwhile is never overwritten.
@@ -1212,7 +1239,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             }
             // A key change still walking the folder: wait for it, then look again, rather than fail.
             const queued = u.queued;
-            const lookup = options.openNodes;
+            const lookup = openNodes;
             if (refused && queued && lookup) {
                 const ready = await untilWritable(
                     u,
@@ -1301,7 +1328,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             } catch (error) {
                 // The worker will not seal under a folder key a key change has not reached:
                 // waited out like the server's 409 rotating, then sealed again from a fresh look.
-                if (!isKeyChangePending(error) || !options.openNodes || !u.queued) throw error;
+                if (!isKeyChangePending(error) || !openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;
                 if (!(await keyChangeRefused(u, generation, pendingKeyChange(), parent))) return;
                 continue;
@@ -1345,14 +1372,13 @@ export function createTransferManager(options: TransferManagerOptions) {
                     // Only its key moved, its version the same: never a version race. The file is
                     // looked up again and sealed afresh under the keys found, once; a second such
                     // refusal (or no way to look) is a failure, never `stale`.
-                    if (keyOnlyLooked || !options.openNodes || !u.queued)
-                        throw new Error(KEY_MOVED);
+                    if (keyOnlyLooked || !openNodes || !u.queued) throw new Error(KEY_MOVED);
                     keyOnlyLooked = true;
                     u.lookAgain = true;
                     continue;
                 }
                 // Without a way to look the folder up again there is nothing to seal afresh from.
-                if (!options.openNodes || !u.queued) throw error;
+                if (!openNodes || !u.queued) throw error;
                 if (u.generation !== generation) return;
                 // The server asks `rotating` before `stale`: once this upload has waited, a walk
                 // that reached the folder between the look and the begin answers `stale`, and it
@@ -1629,10 +1655,10 @@ export function createTransferManager(options: TransferManagerOptions) {
     }
     async function attachOnce(u: Internal, generation: number) {
         const entry = u.entry;
-        if (!u.uploadId || !entry || !options.openNodes)
+        if (!u.uploadId || !entry || !openNodes)
             throw new Error('This file changed while it was uploading. Upload it again.');
         const workspaceId = workspaceOf(u);
-        const lookup = options.openNodes;
+        const lookup = openNodes;
         // Always from the server: the completion was refused because a key or a version moved, so a
         // listing shared from moments ago (lookUp's two seconds) may hold the keys it refused.
         const looked = await lookup(entry, { fresh: true });
@@ -1948,9 +1974,8 @@ export function createTransferManager(options: TransferManagerOptions) {
      */
     async function reopen(u: Internal) {
         const entry = u.entry;
-        if (!entry || !options.openNodes)
-            throw new Error('This upload cannot be resumed on this device.');
-        const { parent, replaces } = await options.openNodes(entry);
+        if (!entry || !openNodes) throw new Error('This upload cannot be resumed on this device.');
+        const { parent, replaces } = await openNodes(entry);
         u.parent = parent;
         u.replaces = replaces;
         const reopened = await rpc('driveUploadReopen', reopenInput(entry));
@@ -2207,7 +2232,7 @@ export function createTransferManager(options: TransferManagerOptions) {
      */
     async function attachQueued(u: Internal, file: UploadFile) {
         const queued = u.queued;
-        if (!queued || u.item.status !== 'paused' || !options.openNodes)
+        if (!queued || u.item.status !== 'paused' || !openNodes)
             return { ok: false as const, reason: 'unknown' as const };
         const same =
             u.stash !== null ||
@@ -2219,7 +2244,7 @@ export function createTransferManager(options: TransferManagerOptions) {
             return { ok: false as const, reason: 'different' as const };
         }
         try {
-            const { parent, replaces } = await options.openNodes(queued);
+            const { parent, replaces } = await openNodes(queued);
             if (u.item.status !== 'paused')
                 return { ok: false as const, reason: 'unknown' as const };
             if (queued.replacesId && !replaces) {
