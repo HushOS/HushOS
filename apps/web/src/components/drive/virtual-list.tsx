@@ -5,6 +5,7 @@ import {
     type Virtualizer,
 } from '@tanstack/react-virtual';
 import {
+    Component,
     useCallback,
     useContext,
     useLayoutEffect,
@@ -14,7 +15,6 @@ import {
     type ReactNode,
 } from 'react';
 import { FirstPaintContext } from '@/components/drive/first-paint';
-import { scrollsByKey } from '@/components/drive/scroll-keys';
 
 /*
  * A long list draws only the items near the screen. A folder of a few thousand files
@@ -28,11 +28,10 @@ import { scrollsByKey } from '@/components/drive/scroll-keys';
  *
  * Items keep their place with spacers rather than absolute positions, so a table stays
  * a table (its columns, its row semantics) and a grid stays a CSS grid. The list keeps the
- * rows on screen in place itself as items arrive or leave above them (a sync, an upload, a
- * move), by as many rows as the first row on screen moved; the browser's scroll anchoring
- * is off inside it, as Chrome's let rows slide under a sync and Safari has none, and the
- * two together would move twice. Rows that must stay drawn off screen, the focused one and
- * one being dragged, are kept with `keep`.
+ * rows on screen in place itself as items arrive or leave above them or the list reflows
+ * (KeepInPlace), as the browser's scroll anchoring would; that is off inside it, as Chrome's
+ * let rows slide under a sync, and the two together would move twice. Rows that must stay
+ * drawn off screen, the focused one and one being dragged, are kept with `keep`.
  */
 
 type Scroller = HTMLElement | Window;
@@ -77,19 +76,6 @@ function followScroller(list: HTMLElement, onChange: (scroller: Scroller) => voi
 
 type ListVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
 
-/*
- * What a person scrolls with: a wheel or trackpad, a moving finger (a tap that only presses
- * a button, Close details say, moves nothing), the keys, the scrollbar.
- */
-const SCROLL_INPUTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const;
-
-/* Whether a press is on the scroller itself, which is its scrollbar. */
-function onScrollbar(event: Event, scroller: Scroller) {
-    return scroller instanceof Window
-        ? event.target === document.documentElement
-        : event.target === scroller;
-}
-
 function observeOffset(
     instance: ListVirtualizer,
     cb: (offset: number, scrolling: boolean) => void,
@@ -97,82 +83,29 @@ function observeOffset(
     const list = instance.scrollElement;
     if (!list) return;
     let timer: number | undefined;
-    /*
-     * Whether the person is scrolling: scroll events within 150 ms of each other, begun within a
-     * second of their own input (a fling runs on past its last touch), and all the while they
-     * hold the scrollbar, moving or not. A scroll the browser makes itself (pulling the scroll
-     * in as the list gets shorter, a jump by script) is not theirs, and nothing else that
-     * reports (the list resizing) ends one. The list keeps its hands off the scroll while they
-     * scroll (useKeepInPlace).
-     */
-    let scrolling = false;
-    let input = -Infinity;
-    let holding = false;
-    const report = () => cb(offsetOf(list, follow.current()), scrolling || holding);
-    const onInput = (event: Event) => {
-        if (
-            event instanceof KeyboardEvent
-                ? scrollsByKey(event.key, event.target)
-                : event.type !== 'pointerdown'
-        )
-            input = performance.now();
-        else if (event.type === 'pointerdown' && onScrollbar(event, follow.current())) {
-            holding = true;
-            report();
-        }
-    };
-    // Let go wherever the pointer is by then; a move with no button down catches a release
-    // the browser kept to itself. Letting go is not input: a drag's own scroll events have
-    // already counted, and a press that moved nothing leaves no scroll to protect.
-    const onRelease = (event: Event) => {
-        if (
-            !holding ||
-            (event instanceof PointerEvent && event.type === 'pointermove' && event.buttons !== 0)
-        )
-            return;
-        holding = false;
-        report();
-    };
+    const report = (scrolling: boolean) => cb(offsetOf(list, follow.current()), scrolling);
     const onScroll = () => {
-        scrolling = scrolling || holding || performance.now() - input < 1000;
-        report();
+        report(true);
         window.clearTimeout(timer);
-        timer = window.setTimeout(() => {
-            scrolling = false;
-            report();
-        }, 150);
-    };
-    const listen = (scroller: Scroller) => {
-        scroller.addEventListener('scroll', onScroll, { passive: true });
-        for (const type of SCROLL_INPUTS)
-            scroller.addEventListener(type, onInput, { passive: true, capture: true });
-    };
-    const unlisten = (scroller: Scroller) => {
-        scroller.removeEventListener('scroll', onScroll);
-        for (const type of SCROLL_INPUTS)
-            scroller.removeEventListener(type, onInput, { capture: true });
+        timer = window.setTimeout(() => report(false), 150);
     };
     const follow = followScroller(list, (scroller) => {
-        unlisten(previous);
+        previous.removeEventListener('scroll', onScroll);
         previous = scroller;
-        listen(scroller);
-        report();
+        scroller.addEventListener('scroll', onScroll, { passive: true });
+        report(false);
     });
     let previous = follow.current();
-    listen(previous);
-    const RELEASES = ['pointerup', 'pointercancel', 'pointermove'] as const;
-    for (const type of RELEASES)
-        window.addEventListener(type, onRelease, { passive: true, capture: true });
+    previous.addEventListener('scroll', onScroll, { passive: true });
     // The list moves without a scroll as it is shown (the drive's first paint) or grows. When
     // something above it comes or goes, the next scroll reads the new place; the rows drawn
     // past each edge of the screen cover the difference until then.
-    const observer = new ResizeObserver(report);
+    const observer = new ResizeObserver(() => report(false));
     observer.observe(list);
-    report();
+    report(false);
     return () => {
         window.clearTimeout(timer);
-        unlisten(previous);
-        for (const type of RELEASES) window.removeEventListener(type, onRelease, { capture: true });
+        previous.removeEventListener('scroll', onScroll);
         follow.stop();
         observer.disconnect();
     };
@@ -240,18 +173,24 @@ export function useVirtualRows({
     perLine?: number;
     overscan?: number;
 }) {
-    const keepKey = keep.join();
+    // The items on screen at the last commit, in order (KeepInPlace). The first of them still
+    // listed stays drawn through a change, so it can be measured before and after it.
+    const anchors = useRef<readonly string[]>([]);
+    const where = useMemo(() => new Map(ids.map((id, at) => [id, at])), [ids]);
+    const anchor = anchors.current.find((id) => where.has(id));
+    const anchorLine = anchor === undefined ? -1 : Math.floor(where.get(anchor)! / perLine);
+    const keepKey = `${keep.join()};${anchorLine}`;
     const rangeExtractor = useCallback(
         (range: Range) => {
             const indexes = defaultRangeExtractor(range);
             // Each index once: the row with the keys is often the one being dragged, and a
             // second copy of a row would be a second element under the same key.
-            const extra = [...new Set(keep)].filter(
+            const extra = [...new Set([...keep, anchorLine])].filter(
                 (index) => index >= 0 && index < range.count && !indexes.includes(index),
             );
             return extra.length ? [...indexes, ...extra].sort((a, b) => a - b) : indexes;
         },
-        // `keepKey` stands for `keep`, which is a new array on every render.
+        // `keepKey` stands for `keep` (a new array on every render) and `anchorLine`.
         // eslint-disable-next-line react-hooks/exhaustive-deps
         [keepKey],
     );
@@ -274,10 +213,9 @@ export function useVirtualRows({
         if (measured.current !== null && measured.current !== size) virtualizer.measure();
         measured.current = size;
     }, [virtualizer, size]);
-    useKeepInPlace(virtualizer, ids, perLine, size);
     const items = virtualizer.getVirtualItems();
     const total = virtualizer.getTotalSize();
-    return useMemo(() => {
+    const placing = useMemo(() => {
         let end = 0;
         const placed: Placed[] = items.map((item) => {
             const before = item.start - end;
@@ -291,73 +229,144 @@ export function useVirtualRows({
             first: virtualizer.range?.startIndex ?? 0,
         };
     }, [items, total, virtualizer]);
+    // Rendered inside the list on every render of it, so it sees every commit that may move it.
+    const keeper = (
+        <KeepInPlace virtualizer={virtualizer} ids={ids} where={where} anchors={anchors} />
+    );
+    return { ...placing, keeper };
 }
 
 /*
- * Keeps the first item on screen where it was when the list changes under it: items arriving
- * or leaving above the screen (a sync, an upload, a move), the grid gaining or losing a column
- * (Info opening beside it, the window resized), a row or tile measuring another height (zoom).
+ * Keeps the items on screen where they are when the list changes under them, as the browser's
+ * scroll anchoring does: items arriving or leaving above the screen (a sync, an upload, a
+ * move), the grid gaining or losing a column (Info opening beside it), a row or tile
+ * measuring another height (zoom).
  *
- * Measured by ids, not pixels: the item at the top of the screen before the change, or the
- * first after it that is still listed if it left too, is put back at the top, as far into its
- * line as it was. The target is absolute, from the offset before the change, so a browser that
- * has already pulled the scroll in (rows removed at the bottom of the list) is not moved twice.
- * A pure reorder (sorted again, or a rename: the same items, the first one's neighbours
- * changed) keeps the scroll as it is, and so does a scroll in progress: writing it then would
- * stop a fling dead under the finger.
+ * Before React touches the page (getSnapshotBeforeUpdate) it reads where the anchor sits on
+ * screen: the first item at least half on screen at the last commit, or the first after it
+ * still listed if it left. After the change, in the same task and before paint, it reads it
+ * again and scrolls by the difference. Relative and measured, so a scroll under way carries
+ * on from where it is, and a scroll the browser has already pulled in (rows leaving near the
+ * foot of the list) is not moved twice. The anchor is kept drawn (useVirtualRows), however
+ * many items arrive above it.
+ *
+ * Every commit is checked, as the browser checks every layout: one that only moves the drawn
+ * range as the list scrolls leaves the anchor where it was, and nothing is written. Between
+ * Info opening and the grid taking its new columns the drawn range does move the anchor, and
+ * that is put back too. Left alone: a pure reorder (sorted again, a rename: the same items,
+ * the anchor between new neighbours), which keeps the scroll, and the top of the list, where
+ * new items show as they arrive.
  */
-function useKeepInPlace(
-    virtualizer: ListVirtualizer,
-    ids: readonly string[],
-    perLine: number,
-    size: number,
-) {
-    const last = useRef<{ ids: readonly string[]; perLine: number; size: number } | null>(null);
-    useLayoutEffect(() => {
-        const before = last.current;
-        last.current = { ids, perLine, size };
+type KeepProps = {
+    virtualizer: ListVirtualizer;
+    ids: readonly string[];
+    /* Each id's index in `ids`. */
+    where: ReadonlyMap<string, number>;
+    anchors: { current: readonly string[] };
+};
+type Anchored = { id: string; top: number; offset: number } | null;
+
+/* How far the scroller is scrolled. */
+function scrolledBy(scroller: Scroller) {
+    return scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
+}
+
+/* Where an element's top sits below the top of the scroller's view. */
+function onScreen(element: Element, scroller: Scroller) {
+    return element.getBoundingClientRect().top - viewportTop(scroller);
+}
+
+function drawnItem(list: HTMLElement, id: string) {
+    return list.querySelector(`[data-node-id="${CSS.escape(id)}"]`);
+}
+
+class KeepInPlace extends Component<KeepProps> {
+    getSnapshotBeforeUpdate(): Anchored {
+        const { virtualizer, where, anchors } = this.props;
         const list = virtualizer.scrollElement;
-        if (!before || !list) return;
-        const reshaped = before.perLine !== perLine || before.size !== size;
-        const relisted = before.ids !== ids;
-        if (!reshaped && !relisted) return;
-        // The offset as it was before this change: scroll events have not reported since.
-        const was = virtualizer.scrollOffset ?? 0;
-        if (was <= 0 || virtualizer.isScrolling || before.size <= 0) return;
-        const line = Math.floor(was / before.size);
-        const into = (was - line * before.size) / before.size;
-        const top = line * before.perLine;
-        let index = top;
-        if (relisted) {
-            // The first item from the top of the screen down that is still listed.
-            const where = new Map(ids.map((id, at) => [id, at]));
-            let from = top;
-            while (from < before.ids.length && !where.has(before.ids[from]!)) from++;
-            if (from >= before.ids.length) return;
-            index = where.get(before.ids[from]!)!;
-            // A pure reorder (sorted again, a rename): the same items, and the first one's
-            // neighbours changed with it. It keeps the scroll, whatever moved; anything else
-            // (items in and out, even as many in as out) keeps the first item where it was.
-            const same =
-                before.ids.length === ids.length && before.ids.every((id) => where.has(id));
-            const neighbours =
-                before.ids[from - 1] === ids[index - 1] && before.ids[from + 1] === ids[index + 1];
-            if (same && !neighbours) {
-                if (!reshaped) return;
-                index = top;
-            }
-        }
-        const target = (Math.floor(index / perLine) + into) * size;
+        if (!list) return null;
+        const id = anchors.current.find((anchor) => where.has(anchor));
+        const element = id === undefined ? null : drawnItem(list, id);
+        if (!element) return null;
         const scroller = scrollerOf(list);
-        const now = offsetOf(list, scroller);
-        const scrolled = scroller instanceof Window ? scroller.scrollY : scroller.scrollTop;
-        const room =
-            scroller instanceof Window
-                ? document.documentElement.scrollHeight - scroller.innerHeight
-                : scroller.scrollHeight - scroller.clientHeight;
-        const next = Math.max(0, Math.min(room, scrolled + target - now));
-        if (Math.abs(next - scrolled) >= 1) scroller.scrollTo({ top: next });
-    });
+        // Unscrolled since it was last put back, the anchor belongs where it was put, not
+        // where rounding left it: WebKit scrolls by whole pixels and snaps rows to them, and
+        // half a pixel a change would add up.
+        const held = this.held;
+        const top =
+            held && held.id === id && held.scrolled === scrolledBy(scroller)
+                ? held.top
+                : onScreen(element, scroller);
+        return { id: id!, top, offset: virtualizer.scrollOffset ?? 0 };
+    }
+
+    componentDidMount() {
+        this.record();
+    }
+
+    componentDidUpdate(previous: KeepProps, _state: unknown, anchored: Anchored) {
+        if (anchored) this.correct(previous, anchored);
+        this.record();
+    }
+
+    render() {
+        return null;
+    }
+
+    /* The anchor last put back: where it was put, and the scroll that left it there, until
+     * the list scrolls again. */
+    private held: { id: string; top: number; scrolled: number } | null = null;
+
+    private correct(previous: KeepProps, anchored: NonNullable<Anchored>) {
+        const { virtualizer, ids, where } = this.props;
+        const list = virtualizer.scrollElement;
+        if (!list || anchored.offset <= 0) return;
+        if (previous.ids !== ids && previous.ids.length === ids.length) {
+            // A pure reorder: the same items, and the anchor's neighbours changed with it.
+            const was = previous.ids.indexOf(anchored.id);
+            const now = where.get(anchored.id)!;
+            const same = previous.ids.every((id) => where.has(id));
+            const neighbours =
+                previous.ids[was - 1] === ids[now - 1] && previous.ids[was + 1] === ids[now + 1];
+            if (same && !neighbours) return;
+        }
+        const element = drawnItem(list, anchored.id);
+        if (!element) return;
+        const scroller = scrollerOf(list);
+        const moved = onScreen(element, scroller) - anchored.top;
+        if (Math.abs(moved) < 1) return;
+        scroller.scrollBy({ top: moved, behavior: 'instant' });
+        this.held = { id: anchored.id, top: anchored.top, scrolled: scrolledBy(scroller) };
+    }
+
+    /*
+     * The items on screen now, read from the page rather than the virtualizer's lines, which
+     * lag a reflow (Info open, the grid still in its old columns). Those at least half on
+     * screen come first, in order: a tile the top of the screen has all but hidden is not
+     * what the person is looking at, and holding it as the grid loses columns would push
+     * the tiles below it, the ones in view, off the foot of the screen.
+     */
+    private record() {
+        const list = this.props.virtualizer.scrollElement;
+        if (!list) return;
+        const scroller = scrollerOf(list);
+        // Unscrolled since the anchor was put back, it stays the anchor: chosen again from a
+        // reflow under way (the grid in CSS's new columns and the virtualizer's old ones), the
+        // first item of its row would be another item each time, and the place would drift.
+        if (this.held?.scrolled === scrolledBy(scroller)) return;
+        this.held = null;
+        const top = viewportTop(scroller);
+        const bottom = top + viewportHeight(scroller);
+        const seen: string[] = [];
+        const glimpsed: string[] = [];
+        for (const item of list.querySelectorAll<HTMLElement>('[data-node-id]')) {
+            const box = item.getBoundingClientRect();
+            const shown = Math.min(box.bottom, bottom) - Math.max(box.top, top);
+            if (shown <= 0) continue;
+            (shown * 2 >= box.height ? seen : glimpsed).push(item.dataset.nodeId!);
+        }
+        this.props.anchors.current = [...seen, ...glimpsed];
+    }
 }
 
 /*
@@ -449,7 +458,7 @@ export function VirtualTableBody({
     // fall, and a size that changed with the reading would move every row below the screen
     // (and the browser's scroll with them) on every scroll.
     const size = useDrawnSize(body, rowHeight, estimate, (a, b) => Math.abs(a - b) < 1);
-    const { placed, after, first } = useVirtualRows({
+    const { placed, after, first, keeper } = useVirtualRows({
         count: ids.length,
         size,
         list: body,
@@ -472,6 +481,7 @@ export function VirtualTableBody({
     return (
         <tbody ref={setBody} style={{ overflowAnchor: 'none' }}>
             {children}
+            {keeper}
         </tbody>
     );
 }
@@ -516,7 +526,7 @@ export function VirtualGrid({
     );
     const count = ids.length;
     const lines = Math.ceil(count / columns);
-    const { placed, after, first } = useVirtualRows({
+    const { placed, after, first, keeper } = useVirtualRows({
         count: lines,
         size: height + gap,
         list: grid,
@@ -547,6 +557,7 @@ export function VirtualGrid({
             {...props}
         >
             {children}
+            {keeper}
         </ul>
     );
 }
