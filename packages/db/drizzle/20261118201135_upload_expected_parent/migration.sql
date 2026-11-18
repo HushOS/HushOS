@@ -1,0 +1,1 @@
+ALTER TABLE "drive_uploads" ADD COLUMN "expected_parent_id" uuid;

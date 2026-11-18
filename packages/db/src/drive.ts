@@ -1710,7 +1710,18 @@ export type UploadBegin = {
     /* A new file node, invisible until its first version is ready, or an existing file. */
     node:
         | { existing: false; id: string; parentId: string; envelopes: NodeEnvelopes }
-        | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
+        | {
+              existing: true;
+              id: string;
+              keyEpoch: number;
+              expectedVersionId: string | null;
+              /*
+               * An editor's save: the folder the file was in when the editor checked it. Begin and
+               * complete both refuse the version once the file is elsewhere (a move keeps its key
+               * epoch and current version, so those two alone would publish it there). Absent: not asked.
+               */
+              expectedParentId?: string | null;
+          };
     /* The content-key envelope and the writer's signature over the version statement. */
     version: { id: string; contentKeyEnvelope: Buffer; signature: Buffer };
     /* Suites 2 and 3: the sizes are in the envelope, so the row carries only the declared object size. */
@@ -1873,6 +1884,9 @@ async function beginUploadOnce(input: UploadBegin) {
             if (await underUnrotatedParent(tx, input.workspaceId, chain))
                 return { status: 'rotating' as const };
             if (chain.node.key_epoch !== input.node.keyEpoch) return { status: 'stale' as const };
+            // Moved since the editor looked: refused as a version race is (the client finds it gone from its folder).
+            if (input.node.expectedParentId && chain.node.parent_id !== input.node.expectedParentId)
+                return { status: 'stale' as const };
             const [current] = await tx
                 .select({ currentVersionId: driveNodes.currentVersionId })
                 .from(driveNodes)
@@ -2006,6 +2020,7 @@ async function beginUploadOnce(input: UploadBegin) {
                 objectKey: input.object.objectKey,
                 keyEpoch,
                 expectedVersionId,
+                expectedParentId: (input.node.existing && input.node.expectedParentId) || null,
                 newNode: !input.node.existing,
                 multipartId: input.multipartId,
                 reservedBytes: reserve,
@@ -2037,6 +2052,7 @@ const uploadColumns = {
     objectId: driveUploads.objectId,
     keyEpoch: driveUploads.keyEpoch,
     expectedVersionId: driveUploads.expectedVersionId,
+    expectedParentId: driveUploads.expectedParentId,
     newNode: driveUploads.newNode,
     multipartId: driveUploads.multipartId,
     reservedBytes: driveUploads.reservedBytes,
@@ -2052,9 +2068,10 @@ const uploadColumns = {
 /* The object framing is null once the object row was retired (aborted uploads). */
 export type UploadRow = Omit<
     { [K in keyof typeof uploadColumns]: (typeof uploadColumns)[K]['_']['data'] },
-    'chunkSize' | 'chunkCount' | 'ciphertextSize' | 'expectedVersionId'
+    'chunkSize' | 'chunkCount' | 'ciphertextSize' | 'expectedVersionId' | 'expectedParentId'
 > & {
     expectedVersionId: string | null;
+    expectedParentId: string | null;
     chunkSize: number | null;
     chunkCount: number | null;
     ciphertextSize: bigint | null;
@@ -2100,13 +2117,15 @@ export async function startCompleting(workspaceId: string, uploadId: string, wri
             .select({
                 currentVersionId: driveNodes.currentVersionId,
                 keyEpoch: driveNodes.keyEpoch,
+                parentId: driveNodes.parentId,
             })
             .from(driveNodes)
             .where(eq(driveNodes.id, upload.nodeId));
         const stale =
             !node ||
             node.keyEpoch !== upload.keyEpoch ||
-            (!upload.newNode && node.currentVersionId !== upload.expectedVersionId);
+            (!upload.newNode && node.currentVersionId !== upload.expectedVersionId) ||
+            (upload.expectedParentId !== null && node.parentId !== upload.expectedParentId);
         return { status: 'ok' as const, upload: upload as UploadRow, stale };
     });
 }
@@ -2370,12 +2389,18 @@ async function finishCompletingOnce(
             const parent = chain.ancestors.at(-1);
             if (!parent || parent.keyEpoch !== node.parentKeyEpoch) conflicted = true;
         } else if (node.currentVersionId !== row.expectedVersionId) conflicted = true;
-        if (conflicted) {
+        // Moved since the editor looked, under the lock: nothing is published there. Answered as
+        // conflicted naming no current version, which a client takes for a file gone from its folder.
+        const moved = row.expectedParentId !== null && node.parentId !== row.expectedParentId;
+        if (conflicted || moved) {
             await tx
                 .update(driveUploads)
                 .set({ status: 'conflicted' })
                 .where(eq(driveUploads.id, uploadId));
-            return { status: 'conflicted' as const, currentVersionId: node.currentVersionId };
+            return {
+                status: 'conflicted' as const,
+                currentVersionId: moved ? null : node.currentVersionId,
+            };
         }
 
         const published = await publishUpload(
@@ -2573,10 +2598,16 @@ async function attachUploadOnce(
                 return { status: 'rotating' as const };
             if (chain.node.key_epoch !== input.keyEpoch) return { status: 'stale' as const };
             const [node] = await tx
-                .select({ currentVersionId: driveNodes.currentVersionId })
+                .select({
+                    currentVersionId: driveNodes.currentVersionId,
+                    parentId: driveNodes.parentId,
+                })
                 .from(driveNodes)
                 .where(eq(driveNodes.id, row.nodeId));
             if (!node) return { status: 'not-found' as const };
+            // Moved since the editor looked: never attached there either.
+            if (row.expectedParentId !== null && node.parentId !== row.expectedParentId)
+                return { status: 'conflicted' as const, currentVersionId: null };
             if (row.newNode || node.currentVersionId !== row.expectedVersionId)
                 return { status: 'conflicted' as const, currentVersionId: node.currentVersionId };
             await tx

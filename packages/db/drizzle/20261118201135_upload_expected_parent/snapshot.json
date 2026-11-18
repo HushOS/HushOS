@@ -1,0 +1,37 @@
+{
+    "type": "diff",
+    "version": "9",
+    "dialect": "postgres",
+    "id": "0bf02950-c938-448c-be16-30a1238662c2",
+    "prevIds": ["d3f5d9e1-0207-4b77-bbe0-a5e9a0c3aecd"],
+    "footprints": [
+        {
+            "statementType": "add_column",
+            "statementTarget": ["column", "public", "drive_uploads", "expected_parent_id"],
+            "writes": [
+                "s|col|public.drive_uploads.expected_parent_id",
+                "n|col|public.drive_uploads.expected_parent_id",
+                "e|col|public.drive_uploads.expected_parent_id"
+            ],
+            "reads": ["n|tbl|public.drive_uploads", "n|sch|public"]
+        }
+    ],
+    "deltas": [
+        {
+            "op": "create",
+            "row": {
+                "schema": "public",
+                "table": "drive_uploads",
+                "name": "expected_parent_id",
+                "type": "uuid",
+                "typeSchema": null,
+                "notNull": false,
+                "dimensions": 0,
+                "default": null,
+                "generated": null,
+                "identity": null,
+                "entityType": "columns"
+            }
+        }
+    ]
+}

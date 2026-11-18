@@ -111,6 +111,8 @@ export function harness(
         send?: SendHandler;
         journal?: Journal;
         conflict?: boolean;
+        /* The file left the folder it was saved into: completion answers conflicted naming no version. */
+        moved?: boolean;
         /*
          * The replaced file's current version as the server holds it now: a begin naming
          * another is refused `stale`, and a completion that finds it moved since begin is
@@ -405,6 +407,18 @@ export function harness(
                     'conflict',
                     409,
                     { conflicted: true, currentVersionId: options.serverVersion() },
+                );
+            }
+            if (options.moved) {
+                server.uploads.get(id)!.status = 'conflicted';
+                throw new DriveApiError(
+                    'This file changed while it was uploading.',
+                    'conflict',
+                    409,
+                    {
+                        conflicted: true,
+                        currentVersionId: null,
+                    },
                 );
             }
             if (options.conflict) {

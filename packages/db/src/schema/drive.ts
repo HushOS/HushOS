@@ -355,6 +355,9 @@ export const driveUploads = pgTable(
         // node's current version when the upload began: complete re-checks both.
         keyEpoch: integer('key_epoch').notNull(),
         expectedVersionId: uuid('expected_version_id'),
+        // A new version saved from an editor: the folder the file was in when the editor checked it.
+        // Begin and complete both refuse it once the file has moved elsewhere (null: not asked).
+        expectedParentId: uuid('expected_parent_id'),
         newNode: boolean('new_node').notNull().default(false),
         multipartId: text('multipart_id').notNull(),
         reservedBytes: bigint('reserved_bytes', { mode: 'bigint' }).notNull(),

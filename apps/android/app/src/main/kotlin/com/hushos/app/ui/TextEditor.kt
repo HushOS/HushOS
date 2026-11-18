@@ -32,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,6 +88,7 @@ object EditorWords {
     fun leaveText(name: String) = "Your changes to “$name” aren’t saved."
     const val DISCARD = "Discard changes"
     const val KEEP_EDITING = "Keep editing"
+    const val FINISHING = "Finishing your save, then closing"
 }
 
 /*
@@ -115,6 +117,12 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var phase by mutableStateOf<Phase>(Phase.Loading); private set
     var target by mutableStateOf(item); private set
     private var startedFrom: String? = item.node.currentVersion?.id
+    /*
+     * The row the text's bytes were read from: a copy is signed as it is (an Unverified file's copy stays Unverified). Set only
+     * when a version is opened; a save or a copy moves `target` on, and the copy's row (which may already carry someone else's
+     * version) never stands in for it.
+     */
+    private var source: Opened = item
     /* The text, edited in place by the EditText: never copied per keystroke, never put in a Bundle. */
     val buffer = SpannableStringBuilder()
     var edited by mutableStateOf(false); private set
@@ -122,6 +130,13 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var status by mutableStateOf<String?>(null); private set
     var failure by mutableStateOf<String?>(null); private set
     var stale by mutableStateOf<Stale?>(null)
+    /*
+     * A close asked for while a save or a copy was on its way: never Discard then (it may still publish). The editor says it
+     * is finishing (`closing`); once the save settles, `closeAfter` says whether it landed (the close goes on, asking first if
+     * typed meanwhile) or not (the editor stays, saying why).
+     */
+    var closing by mutableStateOf(false); private set
+    var closeAfter by mutableStateOf<Boolean?>(null); private set
     private var work: Job? = null
     private var reading: RunControl? = null
     /* The save on its way: cancelled with the session (its run start and upload also ask the session themselves). */
@@ -129,6 +144,24 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 
     private fun writer(vault: Vault) = VaultSaveWriter(vault, storage = { Auth.storage(context) })
     private fun start(vault: Vault) = TextSave.runs(writer(vault), SaveRunJournal.of(context))
+
+    /* Close while saving: wait for the save to settle. */
+    fun closeWhenSaved() {
+        if (saving) closing = true
+    }
+
+    fun closeHandled() {
+        closeAfter = null
+    }
+
+    /* A save or a copy settled (`landed`: it published): a close waiting on it goes on or is let go. */
+    private fun settledSave(landed: Boolean) {
+        saving = false
+        if (closing) {
+            closing = false
+            closeAfter = landed
+        }
+    }
 
     fun markEdited() {
         if (!edited) edited = true
@@ -162,6 +195,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             val (file, text) = opened
             target = file
             startedFrom = file.node.currentVersion?.id
+            source = file
             edited = false
             buffer.clear()
             buffer.clearSpans()
@@ -195,7 +229,6 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 }
             }
             if (!session.live(token)) return@launch
-            saving = false
             result.onSuccess { done ->
                 when (done) {
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
@@ -211,14 +244,17 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     }
                 }
             }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
+            settledSave(result.getOrNull() is TextSaved.Saved)
         }
     }
 
     fun saveCopy() {
+        if (saving) return
         val token = session.take() ?: return
         val vault = token.owner
         val text = buffer.toString()
         val file = target
+        val from = source
         saving = true
         failure = null
         saveJob?.cancel()
@@ -227,12 +263,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 runCatching {
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file)
-                    TextSave.copy(text, file, folder, writer.copySources(file), TextSave.runs(writer, SaveRunJournal.of(context)),
+                    TextSave.copy(text, file, folder, writer.copySources(from), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
             }
             if (!session.live(token)) return@launch
-            saving = false
             result.onSuccess { made ->
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs.
@@ -242,6 +277,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
             }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
+            settledSave(result.isSuccess)
         }
     }
 
@@ -279,7 +315,19 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit) {
     val alpine = Alpine.colors
     var leaving by remember { mutableStateOf(false) }
     var confirmTheirs by remember { mutableStateOf(false) }
-    val tryClose = { if (edit.edited) leaving = true else close() }
+    // While a save is on its way it may still publish: Close never offers Discard then, it waits (TextEdit.closing).
+    val tryClose = {
+        when {
+            edit.saving -> edit.closeWhenSaved()
+            edit.edited -> leaving = true
+            else -> close()
+        }
+    }
+    LaunchedEffect(edit.closeAfter) {
+        val landed = edit.closeAfter ?: return@LaunchedEffect
+        edit.closeHandled()
+        if (landed) { if (edit.edited) leaving = true else close() }
+    }
     Dialog(onDismissRequest = tryClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(
             containerColor = alpine.ground,
@@ -305,8 +353,8 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit) {
                         phase.text?.let { text -> PlainText(text = text, buffer = null, onEdit = {}) } ?: Spacer(Modifier.height(0.dp))
                     }
                     TextEdit.Phase.Editing -> {
-                        val line = edit.failure ?: edit.status.takeIf { !edit.edited }
-                        line?.let { Note(it, failed = edit.failure != null) }
+                        val line = if (edit.closing) EditorWords.FINISHING else edit.failure ?: edit.status.takeIf { !edit.edited }
+                        line?.let { Note(it, failed = !edit.closing && edit.failure != null) }
                         PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited)
                     }
                 }

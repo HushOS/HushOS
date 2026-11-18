@@ -261,18 +261,18 @@ test('broken JSON gets a warning beside Save, and still saves', async () => {
     expect((await downloaded(page, 'config.json')).toString()).toBe('{\n  "a": 1\n}\n}');
 });
 
-test('a save whose editor was closed and discarded while it looked up the folder saves nothing', async () => {
+test('closing while a save is on its way never offers Discard: it waits, then closes', async () => {
     await openEditor(page, 'config.json');
-    await retype(page, '{"discarded": true}');
+    await retype(page, '{"finished": true}');
     const restore = await slowListings(page, 4_000);
     await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
     await dialog(page).getByRole('button', { name: 'Close preview' }).click();
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
-    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
-    // Long enough for the held listing to answer and anything still on its way to have landed.
-    await page.waitForTimeout(8_000);
+    // The save may still publish, so nothing offers to discard it: the editor says it is finishing.
+    await expect(dialog(page)).toContainText('Finishing your save, then closing');
+    await expect(page.getByRole('alertdialog')).toHaveCount(0);
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0, { timeout: 60_000 });
     await restore();
-    expect((await downloaded(page, 'config.json')).toString()).toBe('{\n  "a": 1\n}\n}');
+    expect((await downloaded(page, 'config.json')).toString()).toBe('{"finished": true}');
 });
 
 test('leaving with changes asks first', async () => {
@@ -375,6 +375,24 @@ test.describe('when someone else saved first', () => {
         await close(page);
         expect((await downloaded(page, 'notes (2).txt')).toString()).toBe('mine as a copy');
         expect((await downloaded(page, 'notes.txt')).toString()).toBe('theirs again');
+    });
+
+    test('closing while a copy is on its way never offers Discard: it waits, then closes', async () => {
+        const choices = await race('mine, copied as it closed', 'theirs once more');
+        // Every listing the copy asks for (its folder, the next free name, the copy's row) held back.
+        const restore = await slowListings(page, 3_000);
+        await choices.getByRole('button', { name: 'Save as a copy' }).click();
+        await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+        await expect(dialog(page)).toContainText('Finishing your save, then closing');
+        await expect(page.getByRole('alertdialog')).toHaveCount(0);
+        await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0, {
+            timeout: 60_000,
+        });
+        await restore();
+        expect((await downloaded(page, 'notes (3).txt')).toString()).toBe(
+            'mine, copied as it closed',
+        );
+        expect((await downloaded(page, 'notes.txt')).toString()).toBe('theirs once more');
     });
 
     test('Open theirs discards mine only after a confirmation', async () => {

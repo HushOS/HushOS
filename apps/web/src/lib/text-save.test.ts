@@ -2,14 +2,23 @@ import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import {
     RecordNotUpdated,
+    resultSignatures,
     RunStopped,
     SaveRefused,
+    type ResultSources,
     type RunPlan,
     type SaveRun,
 } from '@hushos/drive/save-runs';
 import { describe, expect, test } from 'vitest';
 import { encodeText } from '@/lib/text-edit';
-import { editTargetOf, saveCopy, saveVersion, SessionEnded } from '@/lib/text-save';
+import {
+    editTargetOf,
+    openedTarget,
+    saveCopy,
+    savedTarget,
+    saveVersion,
+    SessionEnded,
+} from '@/lib/text-save';
 
 /*
  * The editor's save and its stale choices, over a stand-in for the save path
@@ -198,7 +207,12 @@ describe('when someone else saved first', () => {
     test('Save as a copy makes a sibling under the next free name and leaves theirs current', async () => {
         const { b, id, file } = await stale();
         b.add('notes (2).txt', 'already here');
-        const made = await saveCopy(b.start, { file, folder: b.folder, text: 'mine\n' });
+        const made = await saveCopy(b.start, {
+            file,
+            source: file,
+            folder: b.folder,
+            text: 'mine\n',
+        });
         const copy = b.files.get(made.node!.id)!;
         expect(made.versionId).toBe(copy.versions[0]!.id);
         expect(copy.name).toBe('notes (3).txt');
@@ -209,6 +223,44 @@ describe('when someone else saved first', () => {
         expect(b.plans.at(-1)!.targets).toEqual([b.folder]);
         expect(b.sources.at(-1)).toEqual([{ node: file, source: 'drive' }]);
         expect(b.sources[0]).toBe('own-writing');
+    });
+
+    test('a later copy is signed as the text’s source, never as the copy’s row now reads', async () => {
+        const b = bench();
+        const id = b.add('notes.txt', 'start');
+        const opened = {
+            ...b.asNode(id),
+            integrity: { metadata: 'unverified', version: 'unverified' },
+        } as unknown as DriveNode;
+        const first = openedTarget(opened);
+        const made = await saveCopy(b.start, {
+            file: first.file,
+            source: first.source,
+            folder: b.folder,
+            text: 'mine',
+        });
+        // Before the editor finds its copy, someone replaces it with a version that checks as verified.
+        const theirs = b.theirs(made.node!.id, 'theirs');
+        const listed = {
+            ...b.asNode(made.node!.id),
+            integrity: { metadata: 'verified', version: 'verified' },
+        } as unknown as DriveNode;
+        const next = savedTarget(first, listed, made.versionId);
+        expect(next.file).toBe(listed);
+        expect(next.startedFrom).toBe(made.versionId);
+        expect(next.startedFrom).not.toBe(theirs);
+        await saveCopy(b.start, {
+            file: next.file,
+            source: next.source,
+            folder: b.folder,
+            text: 'mine again',
+        });
+        // Both copies carry the Unverified file's form: re-sealed, never the person's ordinary word.
+        for (const sources of b.sources)
+            expect(resultSignatures(sources as ResultSources)).toEqual({
+                metadata: 'resealed',
+                version: 'resealed',
+            });
     });
 
     test('a file gone from its folder is stale with no version to save on top of', async () => {
@@ -325,7 +377,11 @@ test('a save whose editor session ended before its run starts uploads nothing', 
         ),
     ).rejects.toBeInstanceOf(SessionEnded);
     await expect(
-        saveCopy(b.start, { file, folder: b.folder, text: 'b' }, { stillOn: () => false }),
+        saveCopy(
+            b.start,
+            { file, source: file, folder: b.folder, text: 'b' },
+            { stillOn: () => false },
+        ),
     ).rejects.toBeInstanceOf(SessionEnded);
     expect(b.plans).toHaveLength(0);
     expect(b.files.get(id)!.versions).toHaveLength(1);
@@ -359,7 +415,11 @@ test('a save whose editor session ends while its run starts uploads nothing and 
         return run;
     };
     await expect(
-        saveCopy(startCopy, { file, folder: b.folder, text: 'b' }, { stillOn: () => on }),
+        saveCopy(
+            startCopy,
+            { file, source: file, folder: b.folder, text: 'b' },
+            { stillOn: () => on },
+        ),
     ).rejects.toBeInstanceOf(SessionEnded);
     expect(b.files.size).toBe(1);
     expect(b.ends.finishes).toBe(2);

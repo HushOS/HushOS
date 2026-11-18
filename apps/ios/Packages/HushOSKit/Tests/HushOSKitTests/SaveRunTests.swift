@@ -1879,6 +1879,48 @@ extension OnFakeDrive {
             #expect(try chunkDecrypt(content: content, index: 0, ciphertext: part) == bytes)
         }
 
+        /*
+         * An editor's or a tool's new version is held to the folder its save checked: G moved out of B while its bytes went
+         * up publishes nothing (stale, naming no version), its upload aborted; moved before begin, refused at begin. Fails
+         * if the version lands on a file no longer in the folder the save looked in.
+         */
+        @Test func aNewVersionOfAFileMovedAwayMeanwhilePublishesNothing() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let current = g.node.currentVersion!.id
+            server.beforeComplete = { [unowned server] in self.moveG(server, to: server.root) }
+            await #expect(throws: SaveStale(currentVersionId: nil)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: current, signing: (.own, .own))
+            }
+            server.beforeComplete = nil
+            #expect((server.begins.last?["node"] as? [String: Any])?["expectedParentId"] as? String == b.id)
+            #expect(server.completed.isEmpty)
+            #expect(server.aborted.count == 1)
+            #expect(server.nodes[server.g]?.currentVersion?.id == current)
+
+            // Already elsewhere at begin: refused there, nothing begun.
+            let begun = server.begins.count
+            await #expect(throws: SaveStale(currentVersionId: nil)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: current, signing: (.own, .own))
+            }
+            #expect(server.begins.count == begun)
+            #expect(server.completed.isEmpty)
+            #expect(server.nodes[server.g]?.currentVersion?.id == current)
+        }
+
+        func moveG(_ server: FakeDrive, to parent: String) {
+            let old = server.nodes[server.g]!
+            var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: parent, kind: old.kind, keyEpoch: old.keyEpoch,
+                                   parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion,
+                                   metadataEnvelope: old.metadataEnvelope, currentVersion: old.currentVersion, trashedAt: nil,
+                                   changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+            updated.metadataSigner = old.metadataSigner
+            updated.metadataSignature = old.metadataSignature
+            server.nodes[server.g] = updated
+        }
+
         func newer(_ server: FakeDrive) -> VersionView {
             VersionView(id: UUID().uuidString.lowercased(), objectId: "o", contentKeyEnvelope: server.nodes[server.g]!.currentVersion!.contentKeyEnvelope,
                         status: "ready", contentSuite: 3, chunkCount: 1, contentNonce: "", plaintextSize: nil, ciphertextSize: nil, readyAt: nil)

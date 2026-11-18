@@ -111,7 +111,13 @@ export function beginUpload(
     input: Omit<drive.UploadBegin, 'node' | 'version'> & {
         node:
             | { existing: false; id: string; parentId: string; envelopes: Unsigned }
-            | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
+            | {
+                  existing: true;
+                  id: string;
+                  keyEpoch: number;
+                  expectedVersionId: string | null;
+                  expectedParentId?: string | null;
+              };
         version: { id: string; contentKeyEnvelope: Buffer };
     },
 ) {

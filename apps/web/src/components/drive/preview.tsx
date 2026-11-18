@@ -182,7 +182,8 @@ export function Preview({
      * listing lets go of the file (moved or deleted elsewhere): the save then says so.
      */
     const [editing, setEditing] = useState<Editing | null>(null);
-    const [dirty, setDirty] = useState(false);
+    /* Whether the editor has changes, as it said last: read when a close asks (after any wait, afresh). */
+    const dirtyNow = useRef(false);
     const [asking, setAsking] = useState<((discard: boolean) => void) | null>(null);
     const [actions, setActions] = useState<HTMLElement | null>(null);
     const [sniffed, setSniffed] = useState<string | null>(null);
@@ -216,16 +217,21 @@ export function Preview({
     const sessionCalls = useMemo(
         () => ({
             onDirty: (value: boolean) => {
-                if (session !== null && liveSession.current === session) setDirty(value);
+                if (session === null || liveSession.current !== session) return;
+                dirtyNow.current = value;
             },
             onTarget: (target: DriveNode) =>
                 setEditing((now) => (now && now.session === session ? { ...now, target } : now)),
+            onFinishing: (wait: () => Promise<boolean> | null) => {
+                if (session !== null && liveSession.current === session)
+                    guard.current.finishing = wait;
+            },
             onLeave: () => {
                 if (session === null || liveSession.current !== session) return;
                 liveSession.current = null;
                 guard.current.discarded = true;
                 setEditing(null);
-                setDirty(false);
+                dirtyNow.current = false;
             },
         }),
         [session],
@@ -242,19 +248,34 @@ export function Preview({
                     guard.current.discarded = true;
                     liveSession.current = null;
                     setEditing(null);
-                    setDirty(false);
+                    dirtyNow.current = false;
                 }
                 return discard;
             }),
         [],
     );
-    /* Closing the viewer: with unsaved changes, only once the person chose to discard them. */
+    /*
+     * Closing the viewer: with unsaved changes, only once the person chose to discard them. While a
+     * save is on its way (it may still publish) Discard isn't offered: the close waits for it, goes
+     * on once it landed (asking first if typed meanwhile), and leaves the editor open if it didn't.
+     */
+    const closing = useRef(false);
     const close = async () => {
-        if (editing && dirty && !guard.current.discarded && !(await askDiscard())) return;
+        if (closing.current) return;
+        const finishing = editing && !guard.current.discarded ? guard.current.finishing?.() : null;
+        if (finishing) {
+            closing.current = true;
+            const landed = await finishing.finally(() => {
+                closing.current = false;
+            });
+            if (!landed || liveSession.current !== editing?.session) return;
+        }
+        if (editing && dirtyNow.current && !guard.current.discarded && !(await askDiscard()))
+            return;
         guard.current.discarded = true;
         liveSession.current = null;
         setEditing(null);
-        setDirty(false);
+        dirtyNow.current = false;
         onChange(null);
     };
     const canEdit =
@@ -265,7 +286,7 @@ export function Preview({
         !((nodeSize(current) ?? 0) > TEXT_EDIT_LIMIT) &&
         (editable?.(current) ?? false);
     const startEditing = (node: DriveNode) => {
-        setDirty(false);
+        dirtyNow.current = false;
         guard.current = { discarded: false };
         const session = ++sessions;
         liveSession.current = session;
@@ -501,6 +522,7 @@ export function Preview({
                                     onTarget={sessionCalls.onTarget}
                                     onDirty={sessionCalls.onDirty}
                                     onLeave={sessionCalls.onLeave}
+                                    onFinishing={sessionCalls.onFinishing}
                                 />
                             </Suspense>
                         ) : (

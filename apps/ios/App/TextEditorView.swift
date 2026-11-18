@@ -32,6 +32,12 @@ struct TextEditorScreen: View {
     /* The file being written and the version this text started from. */
     @State private var target: Opened?
     @State private var startedFrom: String?
+    /*
+     * The row the text's bytes were read from: a copy is signed as it is (an Unverified file's copy stays Unverified). Set
+     * only when a version is opened; a save or a copy moves `target` on, and the copy's row (which may already carry someone
+     * else's version) never stands in for it.
+     */
+    @State private var source: Opened?
     @State private var edited = false
     @State private var saving = false
     @State private var status: String?
@@ -39,6 +45,12 @@ struct TextEditorScreen: View {
     @State private var stale: StaleVersion?
     @State private var confirmTheirs = false
     @State private var confirmLeave = false
+    /*
+     * A close asked for while a save or a copy was on its way: never Discard then (it may still publish). The editor says it
+     * is finishing, and once the save settles the close goes on (asking first if typed meanwhile) or, if it didn't land, is
+     * let go with the reason on screen.
+     */
+    @State private var closing = false
     @State private var attempt = 0
     @State private var loadFrom: Opened?
     /* The save on its way, cancelled when the screen goes or the session changes. */
@@ -62,7 +74,7 @@ struct TextEditorScreen: View {
                 .background(Alpine.ground.ignoresSafeArea())
         }
         // Changes are never dropped by a swipe: Close asks first.
-        .interactiveDismissDisabled(edited)
+        .interactiveDismissDisabled(edited || saving)
         .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
         // Another session (a sign-out and in, another account): this text was the last one's.
         .onChange(of: ObjectIdentifier(store.vault)) { _, _ in
@@ -71,7 +83,12 @@ struct TextEditorScreen: View {
             editor.drop()
             dismiss()
         }
-        .onChange(of: leaveAsked) { _, _ in
+        .onChange(of: leaveAsked) { _, _ in requestClose() }
+        .onChange(of: saving) { _, now in
+            guard !now, closing else { return }
+            closing = false
+            // Not landed (it failed, or someone else's version is current): the editor stays, saying why.
+            guard failure == nil, stale == nil else { return }
             if edited { confirmLeave = true } else { close() }
         }
         .onDisappear {
@@ -114,7 +131,7 @@ struct TextEditorScreen: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button { if edited { confirmLeave = true } else { close() } } label: { HeaderWord(text: EditorWords.close) }
+            Button { requestClose() } label: { HeaderWord(text: EditorWords.close) }
         }
         if phase == .editing {
             ToolbarItem(placement: .confirmationAction) {
@@ -143,8 +160,8 @@ struct TextEditorScreen: View {
             }
         case .editing:
             VStack(spacing: 0) {
-                if let line = failure ?? (edited ? nil : status) {
-                    note(line, failed: failure != nil)
+                if let line = closing ? EditorWords.finishing : failure ?? (edited ? nil : status) {
+                    note(line, failed: !closing && failure != nil)
                 }
                 PlainTextView(box: editor, text: editor.opening, editable: true) {
                     if !edited { edited = true }
@@ -164,7 +181,18 @@ struct TextEditorScreen: View {
             .accessibilityAddTraits(.updatesFrequently)
     }
 
+    /* Close: while a save is on its way it waits for it (`closing`); with changes it asks first. */
+    private func requestClose() {
+        if saving { closing = true } else if edited { confirmLeave = true } else { close() }
+    }
+
+    /*
+     * The session ends here, at once (a save not yet started never starts, nothing begun lands on screen), not only when
+     * the screen goes (onDisappear stays the fallback).
+     */
     private func close() {
+        session.close()
+        work?.cancel()
         editor.drop()
         edited = false
         dismiss()
@@ -193,6 +221,7 @@ struct TextEditorScreen: View {
             guard session.live(token, current: store.vault) else { return }
             target = file
             startedFrom = file.node.currentVersion?.id
+            source = file
             edited = false
             switch TextEditing.open(data) {
             case .editable(let text):
@@ -258,7 +287,7 @@ struct TextEditorScreen: View {
     }
 
     private func saveCopy() async {
-        guard let file = target, let token = session.take(store.vault) else { return }
+        guard let file = target, let from = source, let token = session.take(store.vault) else { return }
         let vault = token.owner
         let text = editor.text
         saving = true
@@ -266,7 +295,7 @@ struct TextEditorScreen: View {
         defer { saving = false }
         do {
             let (folder, _) = try await vault.editTarget(file)
-            let sources = try await vault.copySources(of: file)
+            let sources = try await vault.copySources(of: from)
             guard stillOn(token) else { return }
             let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
                                                stillOn: { @MainActor in stillOn(token) })
@@ -322,6 +351,7 @@ enum EditorWords {
     static let theirsText = "The newer version opens instead, and your changes are lost."
     static func leaveText(_ name: String) -> String { "Your changes to “\(name)” aren’t saved." }
     static let discard = "Discard changes"
+    static let finishing = "Finishing your save, then closing"
     static let keepEditing = "Keep editing"
 }
 

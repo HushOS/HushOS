@@ -786,6 +786,9 @@ class FakeDrive : AutoCloseable {
                 body.optJSONObject("node")?.takeIf { it.optBoolean("existing") }?.let { n ->
                     if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
                         return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
+                    // A version held to the folder its save checked (`expectedParentId`), as beginUpload answers: `stale` once moved.
+                    if (n.has("expectedParentId") && !n.isNull("expectedParentId") && nodes[n.getString("id")]?.parentId != n.getString("expectedParentId"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
                 }
                 // A new file sealed under its folder's key as it is now, or `stale`.
                 body.optJSONObject("node")?.takeIf { !it.optBoolean("existing") && it.has("parentKeyEpoch") }?.let { n ->
@@ -850,6 +853,10 @@ class FakeDrive : AutoCloseable {
                     // The version moved on, or the file's key did (a key change since begin): `conflicted` either way.
                     if (existing.version?.id != expected || existing.keyEpoch != n.getLong("keyEpoch")) return 409 to JSONObject().put("code", "conflict").put("message", "A newer version is there")
                         .put("data", JSONObject().put("conflicted", true).put("currentVersionId", existing.version?.id ?: JSONObject.NULL))
+                    // Moved out of the folder the save checked since begin: `conflicted` naming no version, as finishCompleting answers.
+                    if (n.has("expectedParentId") && !n.isNull("expectedParentId") && existing.parentId != n.getString("expectedParentId"))
+                        return 409 to JSONObject().put("code", "conflict").put("message", "This file changed while it was uploading.")
+                            .put("data", JSONObject().put("conflicted", true).put("currentVersionId", JSONObject.NULL))
                     existing.also { bump(it) }
                 } else if (nodes[n.getString("parentId")]?.keyEpoch?.let { it != n.getLong("parentKeyEpoch") } == true) {
                     // A new file whose folder was re-keyed since begin: `conflicted`, as packages/db finishCompleting answers.

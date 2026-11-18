@@ -50,7 +50,15 @@ import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
 import { parseFailure, parseWarning, preloadParsers, structuredKind } from '@/lib/text-parse';
-import { editTargetOf, saveCopy, saveVersion, type StartRun } from '@/lib/text-save';
+import {
+    editTargetOf,
+    openedTarget,
+    saveCopy,
+    savedTarget,
+    saveVersion,
+    type EditTarget,
+    type StartRun,
+} from '@/lib/text-save';
 
 /*
  * The text editor (docs/editing-design.md section 1; Editing 1a): CodeMirror over the
@@ -63,7 +71,13 @@ import { editTargetOf, saveCopy, saveVersion, type StartRun } from '@/lib/text-s
  * Loaded on first use, never with the drive (the preload is Editing 1b).
  */
 
-export type EditGuard = { discarded: boolean };
+/*
+ * The session's way out, shared with the viewer. `discarded`: the person chose to discard, so
+ * nothing asks again. `finishing`: while a save or a copy is on its way (it may still publish), a
+ * close waits on it instead of offering Discard: the promise says whether it landed, and the
+ * editor says it is finishing meanwhile; null when nothing is on its way.
+ */
+export type EditGuard = { discarded: boolean; finishing?: () => Promise<boolean> | null };
 type SessionToken = { opening: number; account: number };
 
 /*
@@ -83,7 +97,6 @@ type Phase =
     | { kind: 'editing'; text: string };
 
 /* The file being written, and the version this editor's text started from. */
-type Target = { file: DriveNode; startedFrom: string | null };
 
 export const editorWords = {
     save: 'Save',
@@ -109,6 +122,7 @@ export const editorWords = {
     theirsText: 'The newer version opens instead, and your changes are lost.',
     discard: 'Discard changes',
     theirsGone: 'This file is no longer there.',
+    finishing: 'Finishing your save, then closing',
 };
 
 const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
@@ -267,6 +281,7 @@ export function TextEditor({
     onTarget,
     onDirty,
     onLeave,
+    onFinishing,
 }: {
     /* The file as the viewer listed it when Edit was pressed. */
     node: DriveNode;
@@ -281,6 +296,8 @@ export function TextEditor({
     onDirty: (dirty: boolean) => void;
     /* A move away was let through (nothing unsaved, or it was discarded): the session ends. */
     onLeave: () => void;
+    /* How the viewer's Close waits on a save on its way (EditGuard.finishing). */
+    onFinishing: (wait: () => Promise<boolean> | null) => void;
 }) {
     const queryClient = useQueryClient();
     const leaving = useRef(onLeave);
@@ -301,7 +318,7 @@ export function TextEditor({
     const [phase, setPhase] = useState<Phase>({ kind: 'loading', progress: null });
     const [loadFrom, setLoadFrom] = useState(node);
     const [attempt, setAttempt] = useState(0);
-    const target = useRef<Target>({ file: node, startedFrom: node.currentVersion?.id ?? null });
+    const target = useRef<EditTarget>(openedTarget(node));
     const host = useRef<HTMLDivElement>(null);
     const view = useRef<EditorView | null>(null);
     /* Whether the text may be changed: off for a read-only file, and once a copy's file can't be told. */
@@ -313,6 +330,12 @@ export function TextEditor({
     const [saving, setSaving] = useState(false);
     const savingNow = useRef(false);
     const reloadingNow = useRef(false);
+    /* The save or copy on its way, settled with whether it landed; a close waits on it. */
+    const pending = useRef<{ done: Promise<boolean>; settle: (landed: boolean) => void } | null>(
+        null,
+    );
+    /* A close is waiting on the save on its way: the editor says so. */
+    const [finishing, setFinishing] = useState(false);
     const [status, setStatus] = useState<string | null>(null);
     const [failure, setFailure] = useState<string | null>(null);
     const [warning, setWarning] = useState<string | null>(null);
@@ -380,7 +403,7 @@ export function TextEditor({
                 );
                 if (!still()) return;
                 const text = openText(bytes);
-                target.current = { file, startedFrom: file.currentVersion?.id ?? null };
+                target.current = openedTarget(file);
                 setPhase(
                     text.editable
                         ? { kind: 'editing', text: text.text }
@@ -468,13 +491,48 @@ export function TextEditor({
         () => holdPageWhile(() => dirtyNow.current && !guard.current.discarded && !sessionEnding()),
         [guard],
     );
+    /* A save or a copy begins: nothing else saves, and a close waits on it from here. */
+    const beginSaving = useCallback(() => {
+        let settle: (landed: boolean) => void = () => {};
+        const done = new Promise<boolean>((resolve) => {
+            settle = resolve;
+        });
+        pending.current = { done, settle };
+        savingNow.current = true;
+        setSaving(true);
+    }, []);
+    /* It settled: `landed`, whether it published (a close then goes on; otherwise the editor stays). */
+    const endSaving = useCallback((landed: boolean) => {
+        const was = pending.current;
+        pending.current = null;
+        savingNow.current = false;
+        if (mounted.current) setSaving(false);
+        was?.settle(landed);
+    }, []);
+    /* A close while a save is on its way: never Discard (it may still publish); it waits, and says so. */
+    const waitForSave = useCallback(() => {
+        const was = pending.current;
+        if (!was) return null;
+        setFinishing(true);
+        return was.done.finally(() => {
+            if (mounted.current) setFinishing(false);
+        });
+    }, []);
+    useEffect(() => {
+        onFinishing(waitForSave);
+    }, [onFinishing, waitForSave]);
+
     // So does a move within the app (Back, a link), wherever it leads; a lock or a sign-out never waits.
     const blocker = useBlocker({
         // Wherever it goes (a public page included); only a lock or a sign-out isn't held up. Decided
         // at once, so the router holds the move (Back included) until the person answers below.
         // A move let through ends the session: Back that drops the viewer's address closes it.
         shouldBlockFn: () => {
-            if (!dirtyNow.current || guard.current.discarded || sessionEnding()) {
+            if (
+                (!dirtyNow.current && !savingNow.current) ||
+                guard.current.discarded ||
+                sessionEnding()
+            ) {
                 leaving.current();
                 return false;
             }
@@ -493,12 +551,25 @@ export function TextEditor({
         // Answered even once this editor is gone: discarding unmounts it before the answer lands, and
         // the held move must still go on (or be put back).
         const held = answer.current;
-        void askDiscard().then((discard) => {
+        void (async () => {
+            // A save on its way may still publish: never Discard then. The move waits for it, goes on
+            // once it landed (asking first if typed meanwhile), and is put back if it didn't.
+            const finishing = waitForSave();
+            if (finishing) {
+                const landed = await finishing;
+                if (held.status !== 'blocked') return;
+                if (!landed) return held.reset();
+                if (!dirtyNow.current) {
+                    leaving.current();
+                    return held.proceed();
+                }
+            }
+            const discard = await askDiscard();
             if (held.status !== 'blocked') return;
             if (discard) held.proceed();
             else held.reset();
-        });
-    }, [blocked, askDiscard]);
+        })();
+    }, [blocked, askDiscard, waitForSave]);
 
     const start: StartRun = useCallback((plan) => startSaveRun(queryClient, plan), [queryClient]);
 
@@ -526,8 +597,9 @@ export function TextEditor({
     const settled = useCallback(
         (doc: Text, file: DriveNode, versionId: string | null) => {
             // The version this save published, never one read from a listing afterwards (which may
-            // already be someone else's). Unknown, the next save asks the stale question.
-            target.current = { file, startedFrom: versionId };
+            // already be someone else's). Unknown, the next save asks the stale question. A copy
+            // is still signed from the version the text was read from, never this row.
+            target.current = savedTarget(target.current, file, versionId);
             saved.current = doc;
             markDirty(!(view.current?.state.doc.eq(doc) ?? true));
             void invalidateFolders(queryClient, file.parentId);
@@ -538,11 +610,12 @@ export function TextEditor({
     const save = useCallback(
         async (onTopOf?: string) => {
             const current = view.current;
-            if (!current || saving || !editable || ended || reloading) return;
+            if (!current || saving || savingNow.current || !editable || ended || reloading) return;
             const taken = token();
             const doc = current.state.doc;
             const { file, startedFrom } = target.current;
-            setSaving(true);
+            let landed = false;
+            beginSaving();
             setStatus(null);
             setFailure(null);
             try {
@@ -571,6 +644,7 @@ export function TextEditor({
                     return;
                 }
                 settled(doc, listed, result.versionId);
+                landed = true;
                 setStatus(editorWords.saved);
             } catch (error) {
                 if (!live(taken)) return;
@@ -578,19 +652,32 @@ export function TextEditor({
                     openStorageFull();
                 setFailure(saveFailure(error));
             } finally {
-                if (mounted.current) setSaving(false);
+                endSaving(landed);
             }
         },
-        [saving, editable, ended, reloading, queryClient, start, settled, token, live],
+        [
+            saving,
+            editable,
+            ended,
+            reloading,
+            queryClient,
+            start,
+            settled,
+            token,
+            live,
+            beginSaving,
+            endSaving,
+        ],
     );
 
     const copy = useCallback(async () => {
         const current = view.current;
-        if (!current || reloading) return;
+        if (!current || reloading || savingNow.current) return;
         const taken = token();
         const doc = current.state.doc;
-        const { file } = target.current;
-        setSaving(true);
+        const { file, source } = target.current;
+        let landed = false;
+        beginSaving();
         setStatus(null);
         setFailure(null);
         try {
@@ -598,7 +685,7 @@ export function TextEditor({
             if (!live(taken)) return;
             const made = await saveCopy(
                 start,
-                { file, folder: listing.folder, text: doc.toString() },
+                { file, source, folder: listing.folder, text: doc.toString() },
                 { stillOn: () => live(taken) },
             );
             if (!live(taken)) return;
@@ -614,6 +701,8 @@ export function TextEditor({
                 );
             const listed = made.node ? ((await locate()) ?? (await locate())) : undefined;
             if (!live(taken)) return;
+            // Published either way: a close waiting on it goes on (asking first if typed meanwhile).
+            landed = true;
             if (made.node && listed) {
                 settled(doc, listed, made.versionId);
                 onTarget(listed);
@@ -636,9 +725,20 @@ export function TextEditor({
                 openStorageFull();
             setFailure(saveFailure(error));
         } finally {
-            if (mounted.current) setSaving(false);
+            endSaving(landed);
         }
-    }, [queryClient, start, settled, onTarget, markDirty, reloading, token, live]);
+    }, [
+        queryClient,
+        start,
+        settled,
+        onTarget,
+        markDirty,
+        reloading,
+        token,
+        live,
+        beginSaving,
+        endSaving,
+    ]);
 
     /* Their version, as listed now, opened in place of this text. */
     const openTheirs = useCallback(async () => {
@@ -698,7 +798,11 @@ export function TextEditor({
                           <span className="truncate">{warning}</span>
                       </output>
                   )}
-                  {failure ? (
+                  {finishing ? (
+                      <output className="truncate text-[13px] text-muted-foreground">
+                          {editorWords.finishing}
+                      </output>
+                  ) : failure ? (
                       <span
                           role="alert"
                           className="min-w-0 truncate text-[13px] text-destructive"

@@ -2198,6 +2198,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val expectedVersion = if (expected != null) expected.versionId else replacing.node.currentVersion?.id
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
                 .put("expectedVersionId", expectedVersion ?: JSONObject.NULL)
+            // A tool's or an editor's version (`result`) is held to the folder its save checked (`held`, else the folder named):
+            // a file moved away since, at begin or before completion, publishes nothing (stale, or conflicted with no version).
+            if (result) nodeInput.put("expectedParentId", held?.id ?: parentId)
             metadata = replacing.metadata
         } else {
             val parent = destination()

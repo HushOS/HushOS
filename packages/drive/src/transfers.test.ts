@@ -2066,6 +2066,42 @@ describe('produced results', () => {
         openNodes: async () => ({ parent: node('root', null), replaces: fileAt(version()) }),
     });
 
+    test('an editor’s version names the folder it was saved into; an ordinary replacement names none', async () => {
+        const h = harness({ serverVersion: () => 'v1', ...listedAt(() => 'v1') });
+        h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        h.manager.enqueue([
+            { file: memory('doc.txt'), parent: node('root', null), replaces: fileAt('v1') },
+        ]);
+        await settle(5_000);
+        const nodes = h.server.begins.map((begin) => begin.node);
+        expect(nodes).toHaveLength(2);
+        expect(nodes[0]).toMatchObject({ existing: true, expectedParentId: 'root' });
+        expect(nodes[1]).not.toHaveProperty('expectedParentId');
+    });
+
+    test('a file moved between begin and completion is stale with no version: no copy, nothing attached', async () => {
+        const h = harness({ moved: true, ...listedAt(() => 'v1') });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).errorCode).toBe('stale');
+        expect(h.item(id!).stale).toMatchObject({ currentVersionId: null });
+        expect(h.server.attached).toEqual([]);
+    });
+
     test('a version race at completion is stale, naming the winner: no conflict copy, the upload aborted', async () => {
         let current = 'v1';
         const h = harness({

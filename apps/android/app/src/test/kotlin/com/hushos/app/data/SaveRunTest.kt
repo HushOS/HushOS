@@ -17,6 +17,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -2170,6 +2171,38 @@ class SaveResultTest {
         assertEquals(theirs, raced.currentVersionId)
         assertTrue(theirs != startedFrom)
         assertTrue(server.requests.any { it.contains("/abort") })
+    }
+
+    /*
+     * An editor's or a tool's new version is held to the folder its save checked: a file moved elsewhere while the bytes went
+     * up publishes nothing there (stale, naming no version), its room released; moved before begin, nothing is begun.
+     * Fails if the version lands on a file that is no longer in the folder the save looked in.
+     */
+    @Test
+    fun aNewVersionOfAFileMovedAwayMeanwhilePublishesNothing() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path -> if (method == "POST" && path.endsWith("/complete")) server.moveAs(id, elsewhere) }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+        assertEquals(server.root, server.begins.last().getJSONObject("node").getString("expectedParentId"))
+        assertTrue(server.requests.any { it.contains("/abort") })
+        // Already elsewhere when the save begins: refused at begin (asked, never taken), nothing published.
+        val begun = server.begins.size
+        val asked = server.requests.count { it.endsWith("drive/uploads") }
+        val early = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, startedFrom, copy = null)
+        }
+        assertNull(early.currentVersionId)
+        assertEquals(asked + 1, server.requests.count { it.endsWith("drive/uploads") })
+        assertEquals(begun, server.begins.size)
+        assertEquals(startedFrom, server.node(id).version?.id)
     }
 
     /*

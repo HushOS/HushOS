@@ -48,6 +48,29 @@ export type TextSaved =
     /* Someone else's version is current (null: the file is gone from its folder). */
     | { status: 'stale'; currentVersionId: string | null };
 
+/*
+ * What the editor writes to and what its text came from. `file`: where the next save goes (the
+ * opened file, or the copy saved last); `startedFrom`: the version that save replaces; `source`:
+ * the row the text's bytes were read from, whose checks sign a copy (an Unverified file's copy stays
+ * Unverified). Only opening a version sets `source`: a save or a copy moves `file` on, and a listing
+ * of the file written to never stands in for it (that row may already carry someone else's version).
+ */
+export type EditTarget = { file: DriveNode; startedFrom: string | null; source: DriveNode };
+
+/* A version just opened: written to, started from and signed from as it was read. */
+export function openedTarget(file: DriveNode): EditTarget {
+    return { file, startedFrom: file.currentVersion?.id ?? null, source: file };
+}
+
+/* After a save or a copy landed as `versionId` of `file`: written there next, from that version, signed as before. */
+export function savedTarget(
+    before: EditTarget,
+    file: DriveNode,
+    versionId: string | null,
+): EditTarget {
+    return { file, startedFrom: versionId, source: before.source };
+}
+
 /* A save's folder and file as the editor asks for them: the folder's listing, as the app reads it. */
 export type FolderListing = { folder: DriveNode; children: DriveNode[] };
 
@@ -112,13 +135,14 @@ export async function saveVersion(
 export type TextCopy = { node: NodeView | null; versionId: string | null };
 
 /*
- * A new file beside `file` in `folder`, under the next free name, holding `text`. Its version is
- * the one the upload minted, never the reply row's: a repeated completion answers with the node as
- * it is by then, which may already carry another device's edit.
+ * A new file beside `file` in `folder`, under the next free name, holding `text`, signed as
+ * `source` (the row the text was read from) is. Its version is the one the upload minted, never
+ * the reply row's: a repeated completion answers with the node as it is by then, which may already
+ * carry another device's edit.
  */
 export async function saveCopy(
     start: StartRun,
-    edit: { file: DriveNode; folder: DriveNode; text: string },
+    edit: { file: DriveNode; source: DriveNode; folder: DriveNode; text: string },
     { stillOn = () => true, pause }: SaveOptions = {},
 ): Promise<TextCopy> {
     const bytes = encodeText(edit.text);
@@ -136,7 +160,7 @@ export async function saveCopy(
         name: edit.file.name,
         bytes,
         mime: edit.file.metadata?.mime ?? null,
-        sources: [{ node: edit.file, source: 'drive' }],
+        sources: [{ node: edit.source, source: 'drive' }],
         into: edit.folder,
         onVersion: (minted) => {
             versionId = minted;

@@ -781,6 +781,9 @@ extension Vault {
             let expectedVersion = expected ?? replacing.node.currentVersion?.id
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": expectedVersion ?? NSNull()]
+            // A tool's or an editor's version (`keepName`) is held to the folder its save checked (`held`, else the folder named):
+            // a file moved away since, at begin or before completion, publishes nothing (stale, or conflicted with no version).
+            if keepName { nodeInput["expectedParentId"] = held?.nodeId ?? parentId }
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = keepName ? replacing.metadata
                 : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,

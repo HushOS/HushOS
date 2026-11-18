@@ -90,7 +90,8 @@ describe('a save changes only the edited bytes', () => {
             if (!opened.editable) continue;
             // Through CodeMirror's own document, as the editor holds it.
             const doc = EditorState.create({ doc: opened.text }).doc.toString();
-            expect(plain(encodeText(doc)), c.name).toEqual(plain(bytes));
+            // Compared as buffers: the cases run to the 8 MiB limit, too long to diff element by element.
+            expect(Buffer.from(encodeText(doc)).equals(Buffer.from(bytes)), c.name).toBe(true);
         }
     });
 

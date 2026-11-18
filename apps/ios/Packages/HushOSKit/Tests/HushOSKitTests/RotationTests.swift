@@ -576,6 +576,10 @@ final class FakeDrive: @unchecked Sendable {
             if let epoch = (wire["keyEpoch"] as? NSNumber)?.uint64Value, epoch != nodes[nodeId]?.keyEpoch {
                 return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
             }
+            // Held to the folder its save checked (`expectedParentId`): `stale` once the file moved out of it.
+            if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
             let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
             guard let versionKind = try statement(version: sent["contentKeyEnvelope"] as? String ?? "", signature: sent["versionSignature"] as? String,
                                                   statement: VersionStatement(workspaceId: workspace, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite))
@@ -642,6 +646,11 @@ final class FakeDrive: @unchecked Sendable {
                     rekeyAtComplete = false
                     return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
                                   "data": ["conflicted": true, "currentVersionId": current as Any? ?? NSNull()]])
+                }
+                // Moved out of the folder its save checked since begin: `conflicted`, naming no version.
+                if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent {
+                    return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
+                                  "data": ["conflicted": true, "currentVersionId": NSNull()]])
                 }
             }
             completed.append(rest[1])
