@@ -50,7 +50,15 @@ extension Vault {
                 guard node.id.lowercased() == id.lowercased(), node.workspaceId.lowercased() == workspace.workspaceId.lowercased() else {
                     throw DriveAPIError.server(502, "HushOS answered with a different item than the one written. Nothing was kept.")
                 }
-                return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
+                // Filed as it was sent (its place, key epochs, envelopes and signature), as the web and Android do: the reply
+                // gives only what the server assigns (its change number, times, the signer it recorded).
+                var built = NodeView(id: node.id, workspaceId: node.workspaceId, parentId: parent.node.id, kind: "folder", keyEpoch: epochs.from,
+                                     parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: base64urlEncode(bytes: wrapped), metadataVersion: 1,
+                                     metadataEnvelope: base64urlEncode(bytes: sealed), currentVersion: nil, trashedAt: nil, changeSeq: node.changeSeq,
+                                     createdAt: node.createdAt, updatedAt: node.updatedAt)
+                built.metadataSigner = node.metadataSigner
+                built.metadataSignature = signature
+                return try adopt(built, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
             } catch {
                 // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
                 if family { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) }

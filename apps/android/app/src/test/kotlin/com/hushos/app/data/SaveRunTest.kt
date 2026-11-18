@@ -1747,8 +1747,10 @@ class SaveResultTest {
         val id = server.file(server.root, "doc.txt", "first".toByteArray())
         val other = server.file(server.root, "other.txt", "second".toByteArray())
         vault.listChildren(server.root)
+        var outOfReach = false
         server.extraRoutes = { method, segments, _, _ ->
             when {
+                method == "GET" && segments.lastOrNull() == "trash" && outOfReach -> 403 to JSONObject().put("code", "forbidden").put("message", "No.")
                 method == "POST" && segments.lastOrNull() == "trash-batch" -> 501 to JSONObject().put("code", "unsupported").put("message", "Not here.")
                 method == "POST" && segments.lastOrNull() == "trash" && segments.getOrNull(2)?.startsWith("nope") == true ->
                     404 to JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
@@ -1757,12 +1759,17 @@ class SaveResultTest {
         }
         val epoch = SaveRunJournal.Epoch()
         val writer = VaultSaveWriter(vault, epoch) { throw IllegalStateException("not asked") }
-        // Every item not found, one by one: out of reach, as the batch's 404 says, never "nothing was there".
+        // Every item not found, one by one, in a space this device still reaches: not made (yet), each left for the clean-up
+        // to weigh (a folder whose creation got no answer may still land), never lost access.
+        assertEquals(setOf(SaveItemFate.GONE), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
+        // The space itself refused too: out of reach, as the batch's 404 says.
+        outOfReach = true
         assertEquals(setOf(SaveItemFate.DENIED), writer.trash(listOf("nope-1", "nope-2"), vault.workspaceId).values.toSet())
+        outOfReach = false
         val fates = writer.trash(listOf(id), vault.workspaceId)
         assertEquals(SaveItemFate.DONE, fates[id])
         val batches = server.requests.count { it.endsWith("/trash-batch") }
-        assertEquals(2, batches)
+        assertEquals(3, batches)
         assertEquals(1, server.requests.count { it.endsWith("/nodes/$id/trash") })
         // Signed out: nothing more is sent, one item or another.
         epoch.end()

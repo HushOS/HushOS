@@ -1489,9 +1489,25 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
                 // A server without the batch route: one request an item, the session asked before each (as the Trash
                 // screen falls back), still inside this write's family gate.
                 for (id in batch) fates[id] = trashOne(id, workspaceId)
-                // Every item not found (404s, one by one): the space is out of reach, as the batch's 404 says, never
-                // "nothing was there".
-                if (batch.all { fates[it] == SaveItemFate.GONE }) batch.forEach { fates[it] = SaveItemFate.DENIED }
+                // Every item not found (404s, one by one) may be a folder whose creation got no answer and isn't made yet,
+                // or the space out of reach. Only one read of the space itself tells: refused, it is lost access (as the
+                // batch's 404 says); answered, each stays GONE for the clean-up to weigh (it waits for one that may land).
+                if (batch.all { fates[it] == SaveItemFate.GONE } && stillOn()) {
+                    val reach = try {
+                        sessionCheck()
+                        vault.api.trashListing(workspaceId, null)
+                        null
+                    } catch (gone: NotFound) {
+                        SaveItemFate.DENIED
+                    } catch (error: ApiError) {
+                        when {
+                            error.status == 403 -> SaveItemFate.DENIED
+                            error.status == 0 || error.status >= 500 -> throw error
+                            else -> SaveItemFate.REFUSED
+                        }
+                    }
+                    reach?.let { fate -> batch.forEach { fates[it] = fate } }
+                }
                 continue
             } catch (error: Exception) {
                 // A family manager's pause is not lost access: kept for after the hold.

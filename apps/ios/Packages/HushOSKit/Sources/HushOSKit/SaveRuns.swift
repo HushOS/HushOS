@@ -1824,9 +1824,20 @@ extension Vault: SaveRunWriter {
                         fates[id] = .refused
                     }
                 }
-                // Every item not found (404s, one by one): the space is out of reach, as the batch's 404 says, never
-                // "nothing was there".
-                if batch.allSatisfy({ fates[$0] == .gone }) { for id in batch { fates[id] = .denied } }
+                // Every item not found (404s, one by one) may be a folder whose creation got no answer and isn't made yet,
+                // or the space out of reach. Only one read of the space itself tells: refused, it is lost access (as the
+                // batch's 404 says); answered, each stays `gone` for the clean-up to weigh (it waits for one that may land).
+                if batch.allSatisfy({ fates[$0] == .gone }), stillOn() {
+                    do {
+                        _ = try await api.trashListing(workspaceId: workspaceId, after: nil)
+                    } catch DriveAPIError.notFound, DriveAPIError.forbidden {
+                        for id in batch { fates[id] = .denied }
+                    } catch DriveAPIError.transport(let why) {
+                        throw DriveAPIError.transport(why)
+                    } catch {
+                        for id in batch { fates[id] = .refused }
+                    }
+                }
                 continue
             } catch DriveAPIError.held {
                 // A family manager's pause is not lost access: kept for after the hold.

@@ -1896,8 +1896,12 @@ extension OnFakeDrive {
             _ = try await vault.children(of: server.root)
             let batches = Locked(0)
             let trashed = Locked<[String]>([])
+            let outOfReach = Locked(false)
             let rows = try server.nodes.mapValues { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
             server.intercept = { method, parts, _ in
+                if method == "GET", parts.last == "trash" {
+                    return outOfReach.value ? (403, ["code": "forbidden", "message": "No."]) : (200, ["items": [Any](), "nextCursor": NSNull()])
+                }
                 guard method == "POST" else { return nil }
                 if parts.last == "trash-batch" {
                     batches.value += 1
@@ -1914,9 +1918,15 @@ extension OnFakeDrive {
             #expect(fates["never-there"] == .gone)
             #expect(batches.value == 1)
             #expect(trashed.value == [server.a])
-            // Every item not found, one by one: out of reach, as the batch's 404 says, never "nothing was there".
+            // Every item not found, one by one, in a space this device still reaches: not made (yet), each left for the
+            // clean-up to weigh (a folder whose creation got no answer may still land), never lost access.
             let missing = try await vault.trash(["never-1", "never-2"], in: server.workspace, while: { true })
-            #expect(Set(missing.values) == [.denied])
+            #expect(Set(missing.values) == [.gone])
+            // The space itself refused too: out of reach, as the batch's 404 says.
+            outOfReach.value = true
+            let unreachable = try await vault.trash(["never-1", "never-2"], in: server.workspace, while: { true })
+            #expect(Set(unreachable.values) == [.denied])
+            outOfReach.value = false
             // Signed out after the first item went: the rest unsent (asked for the batch, then before each item).
             let asked = Locked(0)
             let rest = try await vault.trash([server.b, server.f], in: server.workspace, while: {
@@ -1926,6 +1936,45 @@ extension OnFakeDrive {
             #expect(rest[server.b] == .done)
             #expect(rest[server.f] == .refused)
             #expect(trashed.value == [server.a, server.b])
+            server.intercept = nil
+        }
+
+        /*
+         * A folder this device created is filed as it sent it: the reply's parent, key epochs and envelopes are ignored (only the
+         * server's own fields, such as its change number, are taken), and a reply naming another folder is no answer.
+         */
+        @Test func aCreatedFolderIsFiledAsItWasSentNeverAsTheReplyDescribesIt() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let template = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(server.nodes[server.b]!)) as? [String: Any])
+            let sent = Locked<[String: Any]>([:])
+            let replyId = Locked<String?>(nil)
+            server.intercept = { method, parts, body in
+                guard method == "POST", parts.last == "folders", let folder = (body["folders"] as? [[String: Any]])?.first else { return nil }
+                sent.value = folder
+                var lying = template
+                lying["id"] = replyId.value ?? folder["id"]
+                lying["parentId"] = "someone-elses-folder"
+                lying["keyEpoch"] = 99
+                lying["parentKeyEpoch"] = 42
+                lying["keyEnvelope"] = "theirs"
+                lying["metadataEnvelope"] = "theirs-too"
+                lying["changeSeq"] = 7
+                return (200, ["nodes": [lying]])
+            }
+            let made = try await vault.createFolder(in: server.root, name: "Out")
+            #expect(made.node.parentId == server.root)
+            #expect(made.node.keyEpoch == (sent.value["keyEpoch"] as? NSNumber)?.uint64Value)
+            #expect(made.node.parentKeyEpoch == (sent.value["parentKeyEpoch"] as? NSNumber)?.uint64Value)
+            #expect(made.node.keyEnvelope == sent.value["keyEnvelope"] as? String)
+            #expect(made.node.metadataEnvelope == sent.value["metadataEnvelope"] as? String)
+            #expect(made.name == "Out")
+            // The server's own field is taken.
+            #expect(made.node.changeSeq == 7)
+            // A reply naming another folder is no answer.
+            replyId.value = "another-folder"
+            await #expect(throws: DriveAPIError.self) { _ = try await vault.createFolder(in: server.root, name: "Again") }
             server.intercept = nil
         }
 
