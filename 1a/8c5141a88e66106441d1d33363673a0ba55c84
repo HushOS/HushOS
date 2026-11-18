@@ -1,0 +1,213 @@
+.github/workflows/ci.yml
+  s_c60e24772e04af::t_a02c5861330918 147-150
+.github/workflows/fuzz.yml
+  s_c60e24772e04af::t_96952c850af29e 12-13,56,60-63,68-71,147-148,197-198
+Cargo.lock
+  s_c60e24772e04af::t_c8d46807a338e7 24,471-479,606-611,846-854,1184,1191,1193,1196,1207,3746-3751
+Cargo.toml
+  s_c60e24772e04af::t_d7c7db22732914 14-24
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_77e579515bbfe7 670-697
+apps/android/app/src/main/kotlin/com/hushos/app/data/AccountStore.kt
+  s_c60e24772e04af::t_bb3c082cee48b9 51-52
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveSessions.kt
+  s_c60e24772e04af::t_f2e4517df768df 1-604
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveTree.kt
+  s_c60e24772e04af::t_53c637ed3140e8 1-149
+apps/android/app/src/main/kotlin/com/hushos/app/data/ArchiveWords.kt
+  s_c60e24772e04af::t_d8feaa4a376e2f 1-81
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilySessions.kt
+  s_c60e24772e04af::t_014151efe9b6e8 35-36
+apps/android/app/src/main/kotlin/com/hushos/app/data/ToolRuns.kt
+  s_c60e24772e04af::t_1f3e6b36adef9d 315,331,344
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_32cf24acaa2621 1566-1569
+apps/android/app/src/main/kotlin/com/hushos/app/data/VaultFamilies.kt
+  s_c60e24772e04af::t_2d387e83fd3d66 124-126,134-137,140-142,144,412-414,417-419,424-426,428,462-495
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveBrowse.kt
+  s_c60e24772e04af::t_617dce26539723 1-375
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ArchiveScreen.kt
+  s_c60e24772e04af::t_7e28c496114b6f 1-684
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_c3b41d1e093905 17-19,26,147-148,639,973,1005,1057,2269,2507-2602
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FamiliesModel.kt
+  s_c60e24772e04af::t_b244297df4509d 137-138,1234-1235
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_c60e24772e04af::t_988fc4246b75a7 186,258-260,262,456
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HomeScreen.kt
+  s_c60e24772e04af::t_839997759f621a 208,313,343-344
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c60e24772e04af::t_cf21e4c5944241 175
+apps/android/app/src/main/kotlin/com/hushos/app/ui/MarkdownViewer.kt
+  s_c60e24772e04af::t_0a322029debb40 127
+apps/android/app/src/main/kotlin/com/hushos/app/ui/SharedScreen.kt
+  s_c60e24772e04af::t_c0d42b4065cc73 149
+apps/android/app/src/test/kotlin/com/hushos/app/data/ArchiveTreeTest.kt
+  s_c60e24772e04af::t_a57035ebd09dbf 1-179
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilySyncTest.kt
+  s_c60e24772e04af::t_23058031c5e990 278-360
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveBrowseTest.kt
+  s_c60e24772e04af::t_d76a3a2c8b20b0 1-285
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveSessionsTest.kt
+  s_c60e24772e04af::t_1fff0c6d34e6c7 1-356
+apps/android/app/src/test/kotlin/com/hushos/app/ui/ArchiveTextBlocksTest.kt
+  s_c60e24772e04af::t_005335698f1b14 1-46
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_38bd054220e440 712-755
+apps/ios/App/AppModel.swift
+  s_c60e24772e04af::t_c988776a826ad8 335-337
+apps/ios/App/ArchiveView.swift
+  s_c60e24772e04af::t_d8b8755110c278 1-752
+apps/ios/App/BackgroundTransfers.swift
+  s_c60e24772e04af::t_ca0fe5caab905e 136
+apps/ios/App/BrowseView.swift
+  s_c60e24772e04af::t_f9ebaf850d03c5 150-151
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_f7742c157aa121 16-35
+apps/ios/App/FamilyWalkTasks.swift
+  s_c60e24772e04af::t_97fb993f100c78 33
+apps/ios/App/MarkdownView.swift
+  s_c60e24772e04af::t_ec51ee88f73bde 11-13,16-25,45-46,51
+apps/ios/App/RecentsView.swift
+  s_c60e24772e04af::t_84593d9e107e94 573-574,695,707-709,846-888
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_5d8a738e88fc0a 39-41,76-87,98-104,126-127,132-134,142,311-315
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/AccountStore.swift
+  s_c60e24772e04af::t_b3cdd3bf4bd29b 125-127
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveSessions.swift
+  s_c60e24772e04af::t_b480df2ab071d6 1-1198
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ArchiveWords.swift
+  s_c60e24772e04af::t_4ebbb66f272c68 1-88
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FamilySync.swift
+  s_c60e24772e04af::t_6f07e4a8d29996 771-775
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_c60e24772e04af::t_386f92f2ae4970 309,320-322,330-333,489,494-499
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Families.swift
+  s_c60e24772e04af::t_16d134ed2ea4fb 240-245,295-298
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_206570f4bf9e11 1-853
+apps/web/package.json
+  s_c60e24772e04af::t_85e66e5e68557b 52
+apps/web/public/download-sw.js
+  s_c60e24772e04af::t_2845a05c62c1a7 43-48,50,52-79,81-82,88-93,96-101,103-107,109
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_af9be8581baeaa 27
+apps/web/src/components/drive/archive-view.tsx
+  s_c60e24772e04af::t_487fb1cc5ff168 1-828
+apps/web/src/components/drive/file-list.tsx
+  s_c60e24772e04af::t_77c6218d6f38bc 5,7,19,67-74,126,128-133,135-145,161-165,175-182,185-189,357,851-893
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_d612d13c4ee3e8 7,30,32,40,42,44,46,49,62,104,130-139,232-482,518-519,637-640,848-852,1043-1045,1049-1050,1055,1060,1063,1067-1068,1070,1075,1079-1115,1117-1146,1148-1154,1169,1181-1182,1197-1201,1232,1269-1271,1273-1335,1337-1348,1504,1507-1510,1561-1562,1566,1616,1651-1657,1659-1673,1675-1676,1680,1683-1687,1689-1693,1695-1696,1699-1703,1705-1735,1741-1748
+apps/web/src/components/drive/node-actions.tsx
+  s_c60e24772e04af::t_7cbea285e47e34 40,212-231,236-243,245-246,248,256,258,260,262,273-337
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_4cfb6e83c1ba44 85-87,373-378,385,387,394-422,426,464,467,471-472,474-475,494-505,507,510,512,518-523
+apps/web/src/components/drive/unverified-mark.tsx
+  s_c60e24772e04af::t_8fefaedb0419ec 192-205
+apps/web/src/components/drive/virtual-list.tsx
+  s_c60e24772e04af::t_af84de0109ede1 1-751
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_b9407631f6a013 53,299
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_09c90abc5933ff 4,357,541-544,602
+apps/web/src/lib/archives/archive.tool-worker.ts
+  s_c60e24772e04af::t_f76301d3cda096 1-224
+apps/web/src/lib/archives/differential.ts
+  s_c60e24772e04af::t_0bad4d690a6257 1-323
+apps/web/src/lib/archives/entry-node.test.ts
+  s_c60e24772e04af::t_f7213f892b0c08 1-72
+apps/web/src/lib/archives/fixtures.test.ts
+  s_c60e24772e04af::t_6635008d1916b2 1-344
+apps/web/src/lib/archives/open.test.ts
+  s_c60e24772e04af::t_aeb991df872621 1-147
+apps/web/src/lib/archives/open.ts
+  s_c60e24772e04af::t_9a9779ef3ae8f7 1-199
+apps/web/src/lib/archives/protocol.ts
+  s_c60e24772e04af::t_19745e8a912046 1-59
+apps/web/src/lib/archives/rows.ts
+  s_c60e24772e04af::t_a7d072a5aa8f96 1-106
+apps/web/src/lib/archives/session.test.ts
+  s_c60e24772e04af::t_ed29af2cb94892 1-677
+apps/web/src/lib/archives/session.ts
+  s_c60e24772e04af::t_f22ad18c9bf9a4 1-710
+apps/web/src/lib/archives/words.ts
+  s_c60e24772e04af::t_08793ed8531b11 1-80
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_00969b8f4835c0 1-547
+apps/web/src/lib/archives/zip-archive.ts
+  s_c60e24772e04af::t_dee621d91e8d99 1-649
+apps/web/src/lib/archives/zip-format.test.ts
+  s_c60e24772e04af::t_f8ad67e1f9c52c 1-394
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_63fd83e5d88270 1-1010
+apps/web/src/lib/download-sinks.ts
+  s_c60e24772e04af::t_13d7462345ae28 109-111
+apps/web/src/lib/download-sw.test.ts
+  s_c60e24772e04af::t_d78947b18059a2 1-109
+apps/web/src/lib/preload.ts
+  s_c60e24772e04af::t_b11728867482ea 27-28
+apps/web/src/lib/previews.ts
+  s_c60e24772e04af::t_dbf68d0c7179fa 25-26,112-113,337-338,391-395
+apps/web/src/lib/tools/ranges.ts
+  s_c60e24772e04af::t_f82662da199224 17-28
+apps/web/src/lib/tools/worker.ts
+  s_c60e24772e04af::t_803879c026560e 38-39,58,87-92,106,109-118,120,129
+apps/web/vite.config.ts
+  s_c60e24772e04af::t_2c2ca84af3b095 163-190,199-200,226
+bun.lock
+  s_c60e24772e04af::t_0103c2e7cb181a 58,1202-1203
+crates/hushos-core/AGENTS.md
+  s_c60e24772e04af::t_b694b0cd5a9e49 1396
+crates/hushos-core/Cargo.toml
+  s_c60e24772e04af::t_fc4f202d5186ff 50-58
+crates/hushos-core/fuzz/Cargo.lock
+  s_c60e24772e04af::t_ea6ec3a0fe1901 24,202-210,322-327,507-515,593,600,602,605,615,1012-1022,1286-1291
+crates/hushos-core/fuzz/Cargo.toml
+  s_c60e24772e04af::t_be83b16cc64580 31-37
+crates/hushos-core/fuzz/fuzz_targets/archive.rs
+  s_c60e24772e04af::t_dfd166c79a5761 1-3
+crates/hushos-core/fuzz/src/targets.rs
+  s_c60e24772e04af::t_972e0933c92927 60-62,2178-2355,2360-2387
+crates/hushos-core/src/archive.rs
+  s_c60e24772e04af::t_1f6018cc9f511c 1-2333
+crates/hushos-core/src/archive/tests.rs
+  s_c60e24772e04af::t_7c0e1386cea284 1-1130
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_03935421f97ec3 15,55-58,101-121
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_113746858ee9b3 176,197,450-457,492-493,513-554,572,574,576-578,600-601,648,682,684-686,694,954-987
+docs/file-tools-design.md
+  s_c60e24772e04af::t_f48984d113bea8 28,30,198,215,222,224,229,338-339,383,401-403
+e2e/archives.spec.ts
+  s_c60e24772e04af::t_5fb3b6d5d65ad1 1-473
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_0496b24b36d686 1-1333
+e2e/fixtures/archives/make.ts
+  s_c60e24772e04af::t_f0efc1596aa9f2 1-1847
+e2e/helpers.ts
+  s_c60e24772e04af::t_4b4e898b506576 12,262-276
+e2e/long-list.spec.ts
+  s_c60e24772e04af::t_114f50ea213d51 1-772
+packages/crypto/fuzz/run.ts
+  s_c60e24772e04af::t_c8a8c0acafac63 2-11,36-41,58-63,66,84-85,118,127,222-250,254-257,259-262
+packages/drive/src/downloads.test.ts
+  s_c60e24772e04af::t_382ac0f72677c4 787-840,872-907
+packages/drive/src/downloads.ts
+  s_c60e24772e04af::t_32c012770c6088 571-579,623-633,636,640-646,696-711,727-730,741-743
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1a8c5141a88e66106441d1d33363673a0ba55c84",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
