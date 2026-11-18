@@ -418,11 +418,24 @@ struct ApprovalSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                // What is asked, and by which device, whole: a bar's title would cut a long device name short.
+                // What is asked, then the device and where it is as rows, whole: a bar's title would cut a long device name short.
                 Section {} header: {
-                    VStack(alignment: .leading, spacing: Alpine.Space.s2) {
-                        Text(flow.asks).font(Theme.Text.title).foregroundStyle(Alpine.ink)
+                    VStack(alignment: .leading, spacing: Alpine.Space.s3) {
+                        Text(flow.details.what).font(Theme.Text.title).foregroundStyle(Alpine.ink)
                             .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
+                        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: Alpine.Space.s6, verticalSpacing: Alpine.Space.s1) {
+                            ForEach(flow.details.rows, id: \.label) { row in
+                                // The labels keep their width; the values take the rest of the line and wrap there.
+                                GridRow {
+                                    Text(row.label).foregroundStyle(Alpine.inkMuted).fixedSize()
+                                    Text(row.value).foregroundStyle(Alpine.ink)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .accessibilityElement(children: .combine)
+                            }
+                        }
+                        .font(Theme.Text.callout)
                         // The asking device named this one: no other device was shown the request.
                         if let chosen = flow.chosenLine {
                             Text(chosen).font(Theme.Text.callout).foregroundStyle(Alpine.ink).fixedSize(horizontal: false, vertical: true)

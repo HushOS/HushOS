@@ -103,16 +103,16 @@ describe('the count of prompts shown today', () => {
         expect(localStorage.getItem(KEY)).toBeNull();
     });
 
-    test('what is shown is counted, and the sixth of a class in a day is not shown', async () => {
+    test('what is shown is counted, and the eleventh of a class of sign-in in a day is not shown', async () => {
         const ids = Array.from(
-            { length: 6 },
-            (_, index) => `7c9e6679-7425-40de-944b-e07fc1f90a0${index}`,
+            { length: 11 },
+            (_, index) => `7c9e6679-7425-40de-944b-e07fc1f90a${String(index).padStart(2, '0')}`,
         );
         listed.mockResolvedValue(ids.map((id) => asked(id)));
-        expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 5));
-        expect(JSON.parse(localStorage.getItem(KEY)!).seen.unknown).toEqual(ids.slice(0, 5));
-        // The sixth alone, later the same day: still not shown.
-        listed.mockResolvedValue([asked(ids[5]!)]);
+        expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 10));
+        expect(JSON.parse(localStorage.getItem(KEY)!).seen.unknown).toEqual(ids.slice(0, 10));
+        // The eleventh alone, later the same day: still not shown.
+        listed.mockResolvedValue([asked(ids[10]!)]);
         expect(await look()).toEqual([]);
     });
 
@@ -123,21 +123,21 @@ describe('the count of prompts shown today', () => {
         });
         try {
             const ids = Array.from(
-                { length: 7 },
-                (_, index) => `11111111-7425-40de-944b-e07fc1f90a0${index}`,
+                { length: 12 },
+                (_, index) => `11111111-7425-40de-944b-e07fc1f90a${String(index).padStart(2, '0')}`,
             );
-            listed.mockResolvedValue(ids.slice(0, 6).map((id) => asked(id)));
-            expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 5));
+            listed.mockResolvedValue(ids.slice(0, 11).map((id) => asked(id)));
+            expect((await look()).map((prompt) => prompt.id)).toEqual(ids.slice(0, 10));
             expect(localStorage.getItem(KEY)).toBeNull();
-            // The sixth and a seventh, alone, on later looks: the five are still counted.
-            listed.mockResolvedValue([asked(ids[5]!), asked(ids[6]!)]);
+            // The eleventh and a twelfth, alone, on later looks: the ten are still counted.
+            listed.mockResolvedValue([asked(ids[10]!), asked(ids[11]!)]);
             expect(await look()).toEqual([]);
-            // Someone else signs in on this page: they start from nothing, not from Maya's five.
-            listed.mockResolvedValue([asked(ids[6]!, SAM)]);
-            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[6]]);
+            // Someone else signs in on this page: they start from nothing, not from Maya's ten.
+            listed.mockResolvedValue([asked(ids[11]!, SAM)]);
+            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[11]]);
             // And Maya's count went when the account changed, as the stored one does at sign-out.
-            listed.mockResolvedValue([asked(ids[5]!)]);
-            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[5]]);
+            listed.mockResolvedValue([asked(ids[10]!)]);
+            expect((await look()).map((prompt) => prompt.id)).toEqual([ids[10]]);
         } finally {
             refused.mockRestore();
         }

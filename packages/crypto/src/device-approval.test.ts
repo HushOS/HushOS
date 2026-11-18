@@ -3,7 +3,6 @@ import { wordlist } from '@scure/bip39/wordlists/english.js';
 import { beforeAll, describe, expect, test } from 'vitest';
 import core from './__fixtures__/core-device-approval.json';
 import {
-    APPROVAL_PROMPTS_A_DAY,
     approvalPromptsAllowed,
     approvalQr,
     approvalWords,
@@ -273,7 +272,7 @@ describe('malformed input', () => {
 
 describe('the approving device’s own limit on prompts', () => {
     const day = new Date('2026-11-14T10:00:00Z');
-    test('no more than five a day for a class, whatever is sent, and classes share nothing', () => {
+    test('no more than ten a day for a class of sign-in, whatever is sent, and classes share nothing', () => {
         let record: PromptRecord | null = null;
         let shown = 0;
         for (let round = 0; round < 20; round++) {
@@ -285,7 +284,7 @@ describe('the approving device’s own limit on prompts', () => {
             shown += allowed.shown.length;
             record = allowed.record;
         }
-        expect(shown).toBe(APPROVAL_PROMPTS_A_DAY);
+        expect(shown).toBe(10);
         const own = approvalPromptsAllowed(
             record,
             [
@@ -307,5 +306,12 @@ describe('the approving device’s own limit on prompts', () => {
                 new Date('2026-11-15T00:00:01Z'),
             ).shown,
         ).toEqual(['new']);
+    });
+
+    test('step-ups, and a class from a later release, have five a day', () => {
+        for (const name of ['change', 'later']) {
+            const asked = Array.from({ length: 8 }, (_, n) => ({ id: `${name}${n}`, class: name }));
+            expect(approvalPromptsAllowed(null, asked, day).shown).toHaveLength(5);
+        }
     });
 });

@@ -104,8 +104,8 @@ export function approvalAsks(asked: {
 }
 
 /*
- * This browser's own count of the prompts it has shown today, by class: at most five a day for
- * each, whatever the server lists, so requests from sign-ins nobody knows can never use up the
+ * This browser's own count of the prompts it has shown today, by class: at most ten a day for
+ * each class of sign-in and five for step-ups, whatever the server lists, so requests from sign-ins nobody knows can never use up the
  * room for the owner's own. Kept per browser; storage that cannot be read counts as empty.
  */
 const PROMPTS_KEY = 'hushos-approval-prompts';

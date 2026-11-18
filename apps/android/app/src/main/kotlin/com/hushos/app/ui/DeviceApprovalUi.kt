@@ -9,6 +9,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,6 +81,7 @@ import com.hushos.app.data.StepWords
 import com.hushos.app.data.TwoStep
 import com.hushos.app.data.TwoStepFlow
 import com.hushos.app.data.TwoStepStatus
+import com.hushos.core.ApprovalDetails
 import com.hushos.core.ApprovalPrompt
 import com.hushos.core.StepMethod
 import com.hushos.core.StepProof
@@ -576,7 +578,7 @@ internal fun CodeField(label: String, typed: String, completions: List<String>, 
 /* MARK: Answering */
 
 /*
- * The requests this phone may answer now, after its own limit of five a day for each class
+ * The requests this phone may answer now, after its own daily limit for each class
  * (`PromptLimit`). Read when the app comes to the front, every five seconds while Account is on
  * screen, and when a push arrives; Home's banner and Devices' rows show them. Held by the view
  * model, with the request being answered: its sheet is `Main`'s, and survives a rebuilt screen.
@@ -743,6 +745,7 @@ internal class ApprovalAnswer(
 
     val id: String get() = flow.id
     val asks: String get() = flow.asks
+    val details: ApprovalDetails get() = flow.details
 
     /* The one line under what is asked: that the other device chose this phone to answer, when it did. */
     val note: String? get() = StepWords.APPROVAL_CHOSEN.takeIf { flow.chosen }
@@ -953,9 +956,15 @@ internal fun ApprovalSheet(inbox: ApprovalInbox, answer: ApprovalAnswer) {
     Sheet(onDismissRequest = { if (!busy) inbox.dismiss() }, secure = true) {
         // The sheet itself rises over the keyboard: nothing here pays that inset again.
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S4)) {
-            // What is asked, and by which device, whole: never cut short.
-            Text(answer.asks, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink,
+            // What is asked, then the device and where it is as rows, whole: never cut short.
+            Text(answer.details.what, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = alpine.ink,
                 modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3).semantics { heading() })
+            Column(Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S1)) {
+                for (row in answer.details.rows) Row(Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S6)) {
+                    Text(row.label, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, modifier = Modifier.widthIn(min = 88.dp))
+                    Text(row.value, style = MaterialTheme.typography.bodyMedium, color = alpine.ink, modifier = Modifier.weight(1f))
+                }
+            }
             answer.note?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.padding(horizontal = AlpineSpace.S6).padding(bottom = AlpineSpace.S3)) }
             when (answer.phase) {
                 // Turning the method on is never scanned or typed here: this is only where an open that got no answer is asked again.

@@ -952,7 +952,7 @@ class DeviceApprovalTest {
     private fun id(number: Int) = "00000000-0000-4000-8000-%012d".format(number)
 
     @Test
-    fun noMoreThanFivePromptsADayForEachClassWhateverTheServerLists() {
+    fun noMoreThanTenPromptsADayForEachClassOfSignInAndFiveForChangesWhateverTheServerLists() {
         var kept = ""
         var saves = 0
         val limit = PromptLimit({ kept }, { kept = it; saves++ })
@@ -962,24 +962,24 @@ class DeviceApprovalTest {
         server.set("ended")
         assertTrue(limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").isEmpty())
         assertEquals(0, saves)
-        // A server that lists eight requests from sign-ins it does not know: five are shown, in its order.
-        server.others = (1..8).map { id(it) to "unknown" }
+        // A server that lists twelve requests from sign-ins it does not know: ten are shown, in its order.
+        server.others = (1..12).map { id(it) to "unknown" }
         val first = limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id }
-        assertEquals((1..5).map(::id), first)
-        // Asked again, the same five: a request shown once stays shown, and the sixth never appears that day.
+        assertEquals((1..10).map(::id), first)
+        // Asked again, the same ten: a request shown once stays shown, and the eleventh never appears that day.
         assertEquals(first, limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id })
-        // The first five gone from the server's list, the others are still past the day's five.
-        server.others = (6..8).map { id(it) to "unknown" }
+        // The first ten gone from the server's list, the others are still past the day's ten.
+        server.others = (11..12).map { id(it) to "unknown" }
         assertTrue(limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").isEmpty())
-        // The owner's own devices, and changes, have their own room: strangers' requests never used it up.
-        server.others = (6..8).map { id(it) to "unknown" } + (11..17).map { id(it) to "known" } + (21..27).map { id(it) to "change" }
-        assertEquals((11..15).map(::id) + (21..25).map(::id), limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id })
+        // The owner's own devices, and changes, have their own room: strangers' requests never used it up. Changes have five.
+        server.others = (11..12).map { id(it) to "unknown" } + (21..32).map { id(it) to "known" } + (41..47).map { id(it) to "change" }
+        assertEquals((21..30).map(::id) + (41..45).map(::id), limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id })
         // What was counted is kept by the phone, not by the server: a new limit over the same record shows no more.
-        assertEquals((11..15).map(::id) + (21..25).map(::id), PromptLimit({ kept }, { kept = it }).shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id })
+        assertEquals((21..30).map(::id) + (41..45).map(::id), PromptLimit({ kept }, { kept = it }).shown(DeviceApprovals.listed(server.wire()), "2026-11-14").map { it.id })
         // A record that was wiped (sign-out) starts again, and so does the next day.
-        // (The three strangers left in the list, then five of each of the other two classes.)
-        assertEquals(13, PromptLimit({ "" }, {}).shown(DeviceApprovals.listed(server.wire()), "2026-11-14").size)
-        assertEquals(13, limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-15").size)
+        // (The two strangers left in the list, ten of the owner's own, five changes.)
+        assertEquals(17, PromptLimit({ "" }, {}).shown(DeviceApprovals.listed(server.wire()), "2026-11-14").size)
+        assertEquals(17, limit.shown(DeviceApprovals.listed(server.wire()), "2026-11-15").size)
         assertEquals("2026-11-14", PromptLimit.day(java.time.LocalDate.of(2026, 11, 14)))
         // The record is one of the account's files: it goes with the account.
         val files = java.nio.file.Files.createTempDirectory("approvals").toFile()

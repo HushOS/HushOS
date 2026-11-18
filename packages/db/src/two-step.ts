@@ -123,7 +123,8 @@ export { REPLACEMENT_SESSION_SECONDS, TWO_STEP_REMEMBER_SECONDS } from './sessio
 export { STEP_UP_DEVICE_SECONDS } from './two-step.core';
 export {
     CHANGE_REQUESTS_A_DAY,
-    DEVICE_REQUESTS_A_DAY,
+    SIGN_IN_REQUESTS_A_DAY,
+    STEP_UP_REQUESTS_A_DAY,
     approveDeviceRequest,
     canAddDeviceStep,
     confirmDeviceFactor,
