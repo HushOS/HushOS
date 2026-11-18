@@ -19,21 +19,19 @@ export function approvalPromptsAllowed(
     now: Date = new Date(),
 ) {
     const day = now.toISOString().slice(0, 10);
-    const seen: Record<string, string[]> =
+    // A map, not an object: a class is any name, `__proto__` and `constructor` included.
+    const seen = new Map<string, string[]>(
         record?.day === day && typeof record.seen === 'object' && record.seen !== null
-            ? Object.fromEntries(
-                  Object.entries(record.seen).map(([name, ids]) => [
-                      name,
-                      Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [],
-                  ]),
-              )
-            : {};
+            ? Object.entries(record.seen).map(([name, ids]) => [
+                  name,
+                  Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [],
+              ])
+            : [],
+    );
     const shown: string[] = [];
     for (const request of requests) {
-        // Own keys only: a class named like an Object method is a class like any other.
-        const ids = Object.hasOwn(seen, request.class)
-            ? seen[request.class]!
-            : (seen[request.class] = []);
+        let ids = seen.get(request.class);
+        if (!ids) seen.set(request.class, (ids = []));
         if (!ids.includes(request.id)) {
             const most = Object.hasOwn(APPROVAL_PROMPTS_A_DAY, request.class)
                 ? APPROVAL_PROMPTS_A_DAY[request.class]!
@@ -43,5 +41,8 @@ export function approvalPromptsAllowed(
         }
         shown.push(request.id);
     }
-    return { shown, record: { day, seen } satisfies PromptRecord };
+    return {
+        shown,
+        record: { day, seen: Object.fromEntries(seen) } satisfies PromptRecord,
+    };
 }

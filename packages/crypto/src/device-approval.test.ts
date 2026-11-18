@@ -308,6 +308,17 @@ describe('the approving device’s own limit on prompts', () => {
         ).toEqual(['new']);
     });
 
+    test('a class named like an object property is counted like any other', () => {
+        for (const name of ['__proto__', 'constructor', 'toString']) {
+            const asked = Array.from({ length: 8 }, (_, n) => ({ id: `${name}${n}`, class: name }));
+            const first = approvalPromptsAllowed(null, asked, day);
+            expect(first.shown).toHaveLength(5);
+            // And the count survives the record, read back the way storage gives it.
+            const kept = JSON.parse(JSON.stringify(first.record)) as PromptRecord;
+            expect(approvalPromptsAllowed(kept, asked.slice(5), day).shown).toEqual([]);
+        }
+    });
+
     test('step-ups, and a class from a later release, have five a day', () => {
         for (const name of ['change', 'later']) {
             const asked = Array.from({ length: 8 }, (_, n) => ({ id: `${name}${n}`, class: name }));
