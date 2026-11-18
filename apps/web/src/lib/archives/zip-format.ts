@@ -495,8 +495,22 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     const fields = extraFields(
         header.subarray(LOCAL_LENGTH + nameLength, LOCAL_LENGTH + nameLength + extraLength),
     );
-    // A WinZip AES entry says so in both places: a local header without its AES field is another entry.
-    if (entry.lock === 'aes' && !fields.has(0x9901)) throw new ZipError('local');
+    // A WinZip AES entry says so in both places, alike: its version, key strength and real method.
+    // A local field missing or saying otherwise describes another entry.
+    if (entry.lock === 'aes') {
+        const field = fields.get(0x9901);
+        const f = field && field.length >= 7 ? view(field) : null;
+        if (
+            !field ||
+            !f ||
+            field[2] !== 0x41 ||
+            field[3] !== 0x45 ||
+            f.getUint16(0, true) !== entry.aes!.version ||
+            field[4] !== entry.aes!.strength ||
+            f.getUint16(5, true) !== entry.aes!.method
+        )
+            throw new ZipError('local');
+    }
     // Its data descriptor at its real width without a signature (dataStart adds one it finds there).
     if ((flags & 8) !== 0 && start + entry.packed + descriptorLength(fields) > entry.bound)
         throw new ZipError('overlap');

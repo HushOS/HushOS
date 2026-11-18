@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { folderName, readListing, type ArchiveEntry } from './session';
 
 /*
@@ -179,6 +179,53 @@ describe('leaving an entry while it previews', () => {
             data: { type: 'bytes', id: asked.id, bytes: new ArrayBuffer(10) },
         } as MessageEvent);
         expect(terminated).toBe(true);
+    });
+});
+
+describe('a stopped preview', () => {
+    it('keeps the watchdog on until the worker’s last message: one stuck in a decode is ended', async () => {
+        vi.useFakeTimers();
+        try {
+            const { openArchive } = await import('./session');
+            const { memoryReader } = await import('@/lib/tools/ranges');
+            const worker = driven();
+            const session = openArchive(
+                memoryReader(new Uint8Array(100)),
+                () => worker.fake as unknown as Worker,
+            );
+            worker.send({ type: 'listing', ...message([entry()]) });
+            await session.listing;
+            const leaving = new AbortController();
+            const previewing = session.preview(entry() as ArchiveEntry, 1024, leaving.signal);
+            previewing.catch(() => {});
+            await vi.advanceTimersByTimeAsync(0);
+            leaving.abort();
+            await expect(previewing).rejects.toThrow('Stopped.');
+            // The worker never reads the stop (a synchronous decode): the watchdog still ends it.
+            await vi.advanceTimersByTimeAsync(31_000);
+            expect(worker.terminated()).toBe(true);
+
+            // One that answers the stop with its last message is idle from then: nothing ends it.
+            const calm = driven();
+            const other = openArchive(
+                memoryReader(new Uint8Array(100)),
+                () => calm.fake as unknown as Worker,
+            );
+            calm.send({ type: 'listing', ...message([entry()]) });
+            await other.listing;
+            const away = new AbortController();
+            const again = other.preview(entry() as ArchiveEntry, 1024, away.signal);
+            again.catch(() => {});
+            await vi.advanceTimersByTimeAsync(0);
+            const asked = calm.asked.find((message) => message.type === 'preview')!;
+            away.abort();
+            calm.send({ type: 'end', id: asked.id });
+            await vi.advanceTimersByTimeAsync(31_000);
+            expect(calm.terminated()).toBe(false);
+            other.close();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

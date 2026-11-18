@@ -19,6 +19,7 @@ vi.mock('@/lib/previews', () => ({
     PREVIEW_LIMITS: { document: 16 * 1024 * 1024 },
     recallPreview: () => null,
     rememberPreview: vi.fn(),
+    forgetPreviewsWhere: vi.fn(),
     // The real readAll: one 8 MiB chunk at a time, then the padding after the file.
     readAll: async (reader: {
         size: number;
@@ -31,31 +32,37 @@ vi.mock('@/lib/previews', () => ({
         await reader.drain?.();
         return { bytes: out, truncated: false };
     },
-    openReader: () => {
-        let isClosed = false;
-        return {
-            size,
-            read: async (offset: number, length: number) => {
-                if (isClosed) throw new Error('The preview was closed.');
-                reads.push(offset);
-                await new Promise<void>((resolve) => (release = resolve));
-                return new Uint8Array(length);
-            },
-            // The padding after the file: closing cuts it short.
-            drain: async () => {
-                draining = true;
-                await new Promise<void>((resolve) => (drained = resolve));
-                if (isClosed) throw new Error('Closed mid-padding.');
-                draining = false;
-            },
-            close: async () => {
-                isClosed = true;
-                closed++;
-            },
-        };
+}));
+// The download engine's tool reader: its padding is fetched to the end as ciphertext whether or not
+// it is closed; a drain on a closed reader returns at once, holding nothing.
+vi.mock('@/lib/downloads', () => ({
+    downloads: {
+        openReader: () => {
+            let isClosed = false;
+            return {
+                size,
+                read: async (offset: number, length: number) => {
+                    if (isClosed) throw new Error('The preview was closed.');
+                    reads.push(offset);
+                    await new Promise<void>((resolve) => (release = resolve));
+                    return new Uint8Array(length);
+                },
+                drain: async () => {
+                    if (isClosed) return;
+                    draining = true;
+                    await new Promise<void>((resolve) => (drained = resolve));
+                    draining = false;
+                },
+                close: async () => {
+                    isClosed = true;
+                    closed++;
+                    // A drain waiting on the padding is let go of: the padding goes on without the reader.
+                    drained();
+                },
+            };
+        },
     },
 }));
-vi.mock('@/lib/downloads', () => ({ downloads: {} }));
 
 describe('reading a small archive whole', () => {
     it('stops when the viewer closes: the reader closed, no further chunk read, nothing remembered', async () => {
@@ -81,7 +88,7 @@ describe('reading a small archive whole', () => {
         expect(rememberPreview).not.toHaveBeenCalled();
     });
 
-    it('lets the padding finish when the viewer closes while it is fetched, then closes', async () => {
+    it('lets go of the plaintext at once when the viewer closes while the padding is fetched', async () => {
         const { archiveReader } = await import('./open');
         reads.length = 0;
         closed = 0;
@@ -99,12 +106,10 @@ describe('reading a small archive whole', () => {
         await vi.waitFor(() => expect(reads).toEqual([0]));
         release();
         await vi.waitFor(() => expect(draining).toBe(true));
+        // Closed while the padding is fetched (offline, it may take long): the reader closes now, its
+        // plaintext and key gone, and the read ends without waiting for the padding.
         leaving.abort();
-        // The padding is still being fetched: not cut short where the file ends.
-        expect(closed).toBe(0);
-        drained();
+        expect(closed).toBe(1);
         await expect(reading).rejects.toThrow();
-        expect(draining).toBe(false);
-        expect(closed).toBeGreaterThan(0);
     });
 });

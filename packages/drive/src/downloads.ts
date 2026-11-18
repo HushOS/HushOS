@@ -620,6 +620,9 @@ export function createDownloadManager(options: DownloadManagerOptions) {
         let tail: Promise<Uint8Array> | null = null;
         let trailing: Promise<void> | null = null;
         let paddingFailed: unknown = null;
+        /* Settles when the reader closes: a drain waiting on a tool's padding is let go of then. */
+        let released!: () => void;
+        const closing = new Promise<void>((resolve) => (released = resolve));
         let fetches = 0;
         function fetchOne(index: number) {
             if (options.tool && !options.uncapped && ++fetches > TOOL_FETCH_FACTOR * source.total)
@@ -700,7 +703,10 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 if (closed) return;
                 if (options.tool) {
                     // Only a tail that was asked for brings its padding; one never asked for stays unasked.
-                    await trailing;
+                    // A close lets go of the wait: the padding goes on as ciphertext without the reader, so
+                    // whatever holds the file it read (a viewer closed while offline) never waits on it.
+                    await Promise.race([trailing, closing]);
+                    if (closed) return;
                     if (paddingFailed) throw paddingFailed;
                     return;
                 }
@@ -711,6 +717,7 @@ export function createDownloadManager(options: DownloadManagerOptions) {
                 // Plaintext and the key go first; a tool's padding, ciphertext only, is waited
                 // for after, so a lock while offline holds no decrypted bytes meanwhile.
                 closed = true;
+                released();
                 cache.clear();
                 tail = null;
                 listeners.clear();

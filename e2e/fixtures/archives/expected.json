@@ -844,6 +844,24 @@
                     "check": "local",
                     "download": "local",
                     "lock": "aes"
+                },
+                {
+                    "path": "local-aes-method.txt",
+                    "check": "local",
+                    "download": "local",
+                    "lock": "aes"
+                },
+                {
+                    "path": "local-aes-strength.txt",
+                    "check": "local",
+                    "download": "local",
+                    "lock": "aes"
+                },
+                {
+                    "path": "local-aes-version.txt",
+                    "check": "local",
+                    "download": "local",
+                    "lock": "aes"
                 }
             ]
         },

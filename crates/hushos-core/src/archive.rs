@@ -634,9 +634,20 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
         return refused(Refusal::Local);
     }
     let fields = extra_fields(&header[LOCAL_LENGTH + name_length..LOCAL_LENGTH + name_length + extra_length]);
-    // A WinZip AES entry says so in both places: a local header without its AES field is another entry.
-    if entry.lock == Lock::Aes && !fields.contains_key(&0x9901) {
-        return refused(Refusal::Local);
+    // A WinZip AES entry says so in both places, alike: its version, key strength and real method.
+    // A local field missing or saying otherwise describes another entry.
+    if entry.lock == Lock::Aes {
+        let same = fields.get(&0x9901).is_some_and(|field| {
+            field.len() >= 7
+                && field[2] == b'A'
+                && field[3] == b'E'
+                && u16_at(field, 0) as u16 == entry.aes_version
+                && field[4] == entry.aes_strength
+                && Some(u16_at(field, 5) as u16) == entry.aes_method
+        });
+        if !same {
+            return refused(Refusal::Local);
+        }
     }
     // Its data descriptor at its real width without a signature (`data_start` adds one it finds there).
     if flags & 8 != 0 && start + entry.packed + descriptor_length(&fields) > entry.bound {

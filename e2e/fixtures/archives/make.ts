@@ -1651,7 +1651,7 @@ function ciphersFixture() {
     return writeRaw(specs);
 }
 
-/* AES gone wrong: a flipped byte (deflated and stored), AE-1 with a wrong CRC, another password, no AES field in the local header. */
+/* AES gone wrong: a flipped byte (deflated and stored), AE-1 with a wrong CRC, another password, no AES field in the local header or one unlike the central. */
 function aesTamperedFixture() {
     const flippedDeflated = aesAt(FOX_PACKED(), 3, 501);
     flippedDeflated.bytes[flippedDeflated.dataAt + 5]! ^= 1;
@@ -1680,6 +1680,11 @@ function aesTamperedFixture() {
         }),
         entry('other-password.txt', aesAt(FOX, 3, 505, 'another password').bytes),
         entry('local-no-aes-field.txt', ok.bytes, { localExtra: new Uint8Array(0) }),
+        // A local AES field that names another real method, key strength or AE version than the
+        // central one: each describes another entry.
+        entry('local-aes-method.txt', ok.bytes, { localExtra: aesFieldAt(2, 3, 8) }),
+        entry('local-aes-strength.txt', ok.bytes, { localExtra: aesFieldAt(2, 1, 0) }),
+        entry('local-aes-version.txt', ok.bytes, { localExtra: aesFieldAt(1, 3, 0) }),
     ]);
 }
 

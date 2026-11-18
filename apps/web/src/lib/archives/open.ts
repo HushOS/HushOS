@@ -2,7 +2,6 @@ import type { DriveNode } from '@hushos/drive/client';
 import { nodeSize } from '@/lib/drive';
 import { downloads } from '@/lib/downloads';
 import {
-    openReader,
     PREVIEW_LIMITS,
     readAll,
     forgetPreviewsWhere,
@@ -54,23 +53,15 @@ export async function archiveReader(node: DriveNode, signal?: AbortSignal): Prom
     if (size <= PREVIEW_LIMITS.document) {
         const remembered = versionId ? recallPreview(versionId) : null;
         if (remembered?.kind === 'document') return memoryReader(remembered.data);
-        const reader = openReader(node, true);
-        /*
-         * Stopped while the file is read: closed at once. Stopped while its padding is fetched
-         * (the file read whole): that fetch finishes first, as a tool's reader lets it, so the
-         * store never sees reading stop where the file ends.
-         */
-        let draining: Promise<void> | null = null;
-        const reading = {
-            ...reader,
-            drain: () => (draining = reader.drain?.() ?? Promise.resolve()),
-        };
-        const stop = () => {
-            if (!draining) void reader.close();
-        };
+        // A tool's reader, read whole: closing it lets go of its plaintext and key at once, while the
+        // padding after the file, once its last chunk was asked for, is still fetched to the end as
+        // ciphertext only (the store never sees reading stop where the file ends). So a close while
+        // the padding is fetched, offline included, never keeps the decrypted file waiting on it.
+        const reader = downloads.openReader(node, 1, { tool: true, uncapped: true });
+        const stop = () => void reader.close();
         signal?.addEventListener('abort', stop, { once: true });
         try {
-            const { bytes } = await readAll(reading, PREVIEW_LIMITS.document);
+            const { bytes } = await readAll(reader, PREVIEW_LIMITS.document);
             signal?.throwIfAborted();
             if (versionId)
                 rememberPreview(versionId, { kind: 'document', data: bytes, bytes: bytes.length });

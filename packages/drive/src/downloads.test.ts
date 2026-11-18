@@ -784,6 +784,36 @@ describe('download manager', () => {
         expect((await later).byteLength).toBe(1);
     });
 
+    test('a close lets go of a drain waiting on a tool’s padding, which is still fetched to the end', async () => {
+        const size = 512 * 1024 * 1024 - 100;
+        const sealed = { 'o-hd': { plaintextSize: size, thumbnailBytes: 1000 } };
+        // The first padding chunk hangs, as one fetched offline would.
+        let answer!: (value: { status: number; length: number }) => void;
+        const h = harness({
+            sealed,
+            raw: (_v, index) =>
+                index === 64 ? new Promise((resolve) => (answer = resolve)) : null,
+        });
+        const reader = h.manager.openReader(paddedFile('hd', size, 1000), 1, { tool: true });
+        const read = reader.read(size - 10, 10);
+        await settle(100);
+        await read;
+        let drained = false;
+        const draining = reader.drain!().then(() => (drained = true));
+        await settle(1_000);
+        expect(drained).toBe(false);
+        // Closed while the padding hangs: the drain returns now, not when the padding does.
+        const closing = reader.close();
+        await settle(0);
+        expect(drained).toBe(true);
+        await draining;
+        // The padding is still fetched to its end, with the reader gone.
+        answer({ status: 206, length: CHUNK + 16 });
+        await settle(1_000);
+        await closing;
+        expect(h.raw).toEqual(['v-hd:64', 'v-hd:65']);
+    });
+
     test('after the reader closed, each padding chunk is tried once', async () => {
         const size = 512 * 1024 * 1024 - 100;
         const sealed = { 'o-cz': { plaintextSize: size, thumbnailBytes: 1000 } };

@@ -325,9 +325,13 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
         if (ended) return;
         const msg = event.data as Record<string, unknown> | null;
         if (typeof msg?.id === 'number' && stopped.has(msg.id)) {
-            // Every id gets one last message, `end` after a stop: then it is forgotten here too.
-            if (['end', 'fail', 'bytes', 'span'].includes(msg.type as string))
+            // Every id gets one last message, `end` after a stop: then it is forgotten here too, and only
+            // then is it idle. Until it comes the watchdog stays on: a worker stuck in a decode that never
+            // reads the stop is ended by it, never left busy.
+            if (['end', 'fail', 'bytes', 'span'].includes(msg.type as string)) {
                 stopped.delete(msg.id);
+                idle();
+            }
             return;
         }
         switch (msg?.type) {
@@ -495,7 +499,7 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
                 stopped.add(asked.id);
                 post({ type: 'stop', id: asked.id });
                 pending.delete(asked.id);
-                idle();
+                // Not idle yet: that waits for the worker's last message for it.
                 waiter.reject(new Error('Stopped.'));
             };
             signal?.addEventListener('abort', stop, { once: true });
@@ -543,12 +547,13 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
             /* Tells the worker to stop, lets go of what it still sends, and fails the download. */
             function halt() {
                 if (!id) return;
+                const waiter = pending.get(id);
+                // Settled already (its last message came): nothing to stop.
+                if (!waiter) return;
                 stopped.add(id);
                 post({ type: 'stop', id });
-                const waiter = pending.get(id);
-                if (!waiter) return;
                 pending.delete(id);
-                idle();
+                // Not idle yet: that waits for the worker's last message for it, the watchdog on until then.
                 waiter.reject(failure ?? new Error('Stopped.'));
             }
             let lent: ReturnType<typeof lend> = null;
