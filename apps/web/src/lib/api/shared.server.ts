@@ -196,7 +196,8 @@ export const requestContext = new Elysia({ name: 'hushos-api-context' })
                 return error.reason === 'held'
                     ? status(403, {
                           message: 'A group manager has paused changes to this folder.',
-                          code: 'forbidden' as const,
+                          // Not `forbidden`: a hold lifts, and nothing about access ended.
+                          code: 'held' as const,
                       })
                     : status(404, {
                           message: 'This item no longer exists.',

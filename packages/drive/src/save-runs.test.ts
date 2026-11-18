@@ -1,0 +1,3208 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { describe, expect, test } from 'vitest';
+import {
+    CHUNK_TAG_BYTES,
+    CONTENT_SUITE,
+    THUMBNAIL_MAX_BYTES,
+    chunkCount,
+    ciphertextSize,
+    contentLength,
+    paddedLength,
+    validObjectSize,
+} from '@hushos/crypto/drive';
+import {
+    integrityOf,
+    signStatement,
+    versionStatementAs,
+    versionStatements,
+    type Integrity,
+} from '@hushos/crypto/signatures';
+import { countedPool, wholeGibUp } from '../../db/src/pool-count';
+import { DriveApiError, type NodeView } from './api';
+import type { DriveNode } from './client';
+import { createMemoryRunJournal, type RunRow } from './journal';
+import {
+    ALREADY_SAVED,
+    NO_ROOM,
+    NO_ROOM_SHARED,
+    OUTSIDE_RUN,
+    RecordNotUpdated,
+    OWN_WRITING,
+    RUN_CANCELLED,
+    RunBusy,
+    RunStopped,
+    SaveRefused,
+    abandonRuns,
+    CREATION_SETTLE_MS,
+    abortFateOf,
+    askAbort,
+    cleanUpInterrupted,
+    deniedWhole,
+    heldNow,
+    interruptedRuns,
+    quietlySettled,
+    UNCOUNTED,
+    keepInterrupted,
+    lockRuns,
+    resultEstimate,
+    resultsWaiting,
+    roomOf,
+    runEstimate,
+    SignedOutError,
+    startRun,
+    trashInBatches,
+    unsettledAbort,
+    unknownResultSize,
+    whileSignedIn,
+    type ItemFate,
+    type Room,
+    type SaveRunDeps,
+} from './save-runs';
+import { MAX_TRASH_BATCH } from './protocol';
+import { DESTINATION_CHANGED } from './transfers';
+import { freeLock, runLocks } from './save-runs.locks.harness';
+import type { EnqueueInput, TransferManagerOptions, UploadItem } from './transfers';
+import { sourcesSignatureForms } from './trust';
+
+/*
+ * The save path decides, before anything is made, whether a run may write and
+ * whether it fits, and afterwards what a cancel or a failure removes. A wrong
+ * estimate lets a run start that the server refuses halfway (or refuses one
+ * that fits); a wrong signature launders an Unverified file's mark into a
+ * result; a wrong clean-up leaves half a result in someone's Drive, deletes
+ * what an editor may only trash, or loses the row the next open cleans up
+ * from.
+ */
+
+const THUMBNAILS = [0, 1, 1_000, 30_000, THUMBNAIL_MAX_BYTES];
+const SIZES = [
+    0,
+    1,
+    255,
+    256,
+    257,
+    65_535,
+    65_536,
+    1 << 20,
+    8 * 1024 * 1024 - 1,
+    8 * 1024 * 1024,
+    8 * 1024 * 1024 + 1,
+    16 * 1024 * 1024 - 65_552,
+    100_000_000,
+    2 ** 32 + 1,
+    10_000_000_000,
+];
+
+describe('a result’s room', () => {
+    test('covers what begin reserves for it whatever its thumbnail, and by no more than a chunk tag', () => {
+        for (const size of SIZES) {
+            const reserved = THUMBNAILS.map((t) => ciphertextSize(CONTENT_SUITE, size, t));
+            const estimate = resultEstimate(size);
+            for (const [i, bytes] of reserved.entries())
+                expect(
+                    estimate,
+                    `${size} bytes, thumbnail ${THUMBNAILS[i]}`,
+                ).toBeGreaterThanOrEqual(bytes);
+            expect(estimate - Math.max(...reserved), `${size} bytes`).toBeLessThanOrEqual(
+                CHUNK_TAG_BYTES,
+            );
+        }
+    });
+
+    test('of a result that carries no thumbnail is exactly what begin reserves for it, no allowance set aside', () => {
+        for (const size of SIZES) {
+            expect(resultEstimate(size, false), `${size} bytes`).toBe(
+                ciphertextSize(CONTENT_SUITE, size, 0),
+            );
+            // The allowance it no longer takes: a run of small text files is not refused for thumbnails.
+            if (size < 1_000)
+                expect(resultEstimate(size)).toBeGreaterThan(resultEstimate(size, false));
+        }
+        expect(runEstimate([{ size: 10, thumbnail: false }])).toBe(resultEstimate(10, false));
+        expect(runEstimate([{ sourcesSize: 500, thumbnail: false }])).toBe(
+            resultEstimate(unknownResultSize(500), false),
+        );
+    });
+
+    test('is a Padmé bucket and its tags: one bucket up to 256 bytes with the thumbnail allowance, the next bucket past it', () => {
+        // 0 and 1000 bytes share the bucket over a full thumbnail trailer; a byte past it moves up.
+        const edge = paddedLength(THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES) - THUMBNAIL_MAX_BYTES;
+        expect(resultEstimate(0)).toBe(resultEstimate(edge - CHUNK_TAG_BYTES));
+        expect(resultEstimate(edge - CHUNK_TAG_BYTES + 1)).toBeGreaterThan(resultEstimate(0));
+        expect(resultEstimate(0)).toBe(
+            paddedLength(THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES) + CHUNK_TAG_BYTES,
+        );
+    });
+
+    test('of the largest file the server takes is exactly the bound the server checks every object against', () => {
+        // packages/drive/src/server.ts parseCiphertextSize, at the default DRIVE_MAX_FILE_BYTES.
+        const largest = 32 * 1024 * 1024 * 1024;
+        const bound = paddedLength(largest + THUMBNAIL_MAX_BYTES + CHUNK_TAG_BYTES);
+        const estimate = resultEstimate(largest);
+        expect(estimate - CHUNK_TAG_BYTES * chunkCount(bound)).toBe(bound);
+        for (const thumbnail of THUMBNAILS) {
+            const object = ciphertextSize(CONTENT_SUITE, largest, thumbnail);
+            const chunks = chunkCount(contentLength(CONTENT_SUITE, largest, thumbnail));
+            expect(validObjectSize(object, chunks)).toBe(true);
+            expect(object - CHUNK_TAG_BYTES * chunks).toBeLessThanOrEqual(bound);
+            expect(object).toBeLessThanOrEqual(estimate);
+        }
+    });
+
+    test('of an unknown result is its sources’ total and 1%, rounded up, then estimated as a result', () => {
+        expect(unknownResultSize(100)).toBe(101);
+        expect(unknownResultSize(101)).toBe(103);
+        const sources = 1_000_000_007;
+        expect(runEstimate([{ sourcesSize: sources }])).toBe(resultEstimate(1_010_000_008));
+        // A result 1% larger than its sources, with a full thumbnail, still fits what was set aside.
+        expect(unknownResultSize(sources)).toBeGreaterThanOrEqual(sources * 1.01);
+        expect(runEstimate([{ sourcesSize: sources }])).toBeGreaterThanOrEqual(
+            ciphertextSize(CONTENT_SUITE, Math.ceil(sources * 1.01), THUMBNAIL_MAX_BYTES),
+        );
+        expect(runEstimate([{ size: 0 }, { size: 0 }])).toBe(2 * resultEstimate(0));
+    });
+
+    test('is the number every client gives (the core reads the same cases)', () => {
+        const cases = JSON.parse(
+            readFileSync(
+                new URL(
+                    '../../../crates/hushos-core/fixtures/save-estimate-cases.json',
+                    import.meta.url,
+                ),
+                'utf8',
+            ),
+        ) as {
+            known: { size: number; thumbnail: boolean; estimate: number }[];
+            unknown: { sourcesSize: number; size: number; estimate: number }[];
+            run: {
+                results: (({ size: number } | { sourcesSize: number }) & { thumbnail: boolean })[];
+                estimate: number;
+            };
+        };
+        expect(cases.known.some((entry) => !entry.thumbnail)).toBe(true);
+        for (const { size, thumbnail, estimate } of cases.known)
+            expect(resultEstimate(size, thumbnail)).toBe(estimate);
+        for (const { sourcesSize, size, estimate } of cases.unknown) {
+            expect(unknownResultSize(sourcesSize)).toBe(size);
+            expect(runEstimate([{ sourcesSize }])).toBe(estimate);
+        }
+        expect(runEstimate(cases.run.results)).toBe(cases.run.estimate);
+    });
+});
+
+describe('the room a run checks against', () => {
+    const GIB = 1n << 30n;
+    /*
+     * The server's own arithmetic (packages/db/src/pool.ts poolFigures): each part rounded up
+     * to a whole GiB on its own, the writer's own part counted to the byte when it is their own
+     * files, in whole GiB when it is the family folders. `shown` is what the person reads.
+     */
+    function pool(parts: { me: bigint; folders: bigint; others: bigint[] }, allowance: bigint) {
+        const all = [parts.me, parts.folders, ...parts.others];
+        const countedAll = countedPool(all);
+        return {
+            shown: allowance - countedAll,
+            serverOwn: allowance - (countedAll - wholeGibUp(parts.me)) - parts.me,
+            serverFolders: allowance - countedAll,
+        };
+    }
+
+    test('in a family’s pool, the person’s own files take what the server says they may, never the rounded figure', () => {
+        for (const me of [0n, 1n, GIB - 1n, GIB, GIB + 1n, 7n * GIB + 12_345n]) {
+            const figures = pool(
+                { me, folders: 3n * GIB + 5n, others: [2n * GIB + 9n] },
+                50n * GIB,
+            );
+            const storage = {
+                workspaceId: 'mine',
+                availableBytes: figures.shown.toString(),
+                pool: { groupId: 'fam' },
+                own: { freeBytes: figures.serverOwn.toString() },
+            };
+            expect(roomOf(storage, 'mine', null)).toEqual({
+                kind: 'own',
+                free: Number(figures.serverOwn),
+            });
+            // A family folder: whole GiB on both sides, the shown figure exactly.
+            expect(roomOf(storage, 'folder', 'fam')).toEqual({
+                kind: 'family',
+                free: Number(figures.serverFolders),
+            });
+            // An older server without the figure: the shown one, never more than the server's.
+            const older = roomOf({ ...storage, own: {} }, 'mine', null) as { free: number };
+            expect(older.free).toBeLessThanOrEqual(Number(figures.serverOwn));
+        }
+    });
+
+    test('someone else’s share is never known; a family whose pool these figures are not is unknown, not shared', () => {
+        const storage = { workspaceId: 'mine', availableBytes: '100', pool: null };
+        expect(roomOf(storage, 'mine', null)).toEqual({ kind: 'own', free: 100 });
+        expect(roomOf(storage, 'theirs', null)).toEqual({ kind: 'shared' });
+        expect(roomOf(storage, 'folder', 'fam')).toEqual({ kind: 'family', free: null });
+        expect(roomOf(null, 'folder', 'fam')).toEqual({ kind: 'family', free: null });
+    });
+});
+
+/* An Ed25519 key in libsodium's form (seed, then public key), from Node's own. */
+function writerKey() {
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const jwk = privateKey.export({ format: 'jwk' });
+    const seed = Buffer.from(jwk.d!, 'base64url');
+    const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url');
+    return {
+        secret: new Uint8Array(Buffer.concat([seed, raw])),
+        public: new Uint8Array(raw),
+    };
+}
+
+describe('a result’s signature, from its sources', () => {
+    const version = (nodeId: string) => ({
+        workspaceId: '11111111-1111-4111-8111-111111111111',
+        nodeId,
+        versionId: '33333333-3333-4333-8333-333333333333',
+        objectId: '44444444-4444-4444-8444-444444444444',
+        contentSuite: CONTENT_SUITE,
+    });
+    const NODE_A = '22222222-2222-4222-8222-22222222222a';
+    const NODE_B = '22222222-2222-4222-8222-22222222222b';
+    const RESULT = '22222222-2222-4222-8222-2222222222cc';
+    const envelope = crypto.getRandomValues(new Uint8Array(84));
+
+    /* A source's version as a reader checks it: signed for real in `form`, read under `trusted`. */
+    async function source(
+        nodeId: string,
+        form: 'ordinary' | 'saved' | 'resealed',
+        signer: ReturnType<typeof writerKey>,
+        trusted: ReturnType<typeof writerKey> | null,
+    ) {
+        const signature = await signStatement(
+            await versionStatementAs(form, version(nodeId), envelope),
+            signer.secret,
+        );
+        const integrity = await integrityOf(
+            () => versionStatements(version(nodeId), envelope),
+            signature,
+            trusted ? { current: trusted.public, retired: [] } : null,
+        );
+        return {
+            node: {
+                kind: 'file' as const,
+                integrity: { metadata: integrity, version: integrity },
+            },
+            source: 'drive' as const,
+            integrity,
+        };
+    }
+
+    /* What the result reads as once it is signed as the save path says, by the person saving it. */
+    async function resultReads(sources: Awaited<ReturnType<typeof source>>[]) {
+        const me = writerKey();
+        const forms = sourcesSignatureForms(sources);
+        const signature = await signStatement(
+            await versionStatementAs(forms.version, version(RESULT), envelope),
+            me.secret,
+        );
+        return integrityOf(() => versionStatements(version(RESULT), envelope), signature, {
+            current: me.public,
+            retired: [],
+        }) as Promise<Integrity>;
+    }
+
+    test('one Unverified source makes the result Unverified, however many verified sources beside it', async () => {
+        const maya = writerKey();
+        const stranger = writerKey();
+        const verified = await source(NODE_A, 'ordinary', maya, maya);
+        // Signed by someone this reader has never checked: an unknown signer.
+        const unknown = await source(NODE_B, 'ordinary', stranger, null);
+        expect(verified.integrity).toBe('verified');
+        expect(unknown.integrity).toBe('unknown-signer');
+        expect(await resultReads([verified, unknown, verified])).toBe('resealed');
+        expect(await resultReads([verified, verified])).toBe('verified');
+    });
+
+    test('a source that reads as forged or re-sealed is the weakest too, not only an unknown signer', async () => {
+        const maya = writerKey();
+        const forger = writerKey();
+        const verified = await source(NODE_A, 'ordinary', maya, maya);
+        // Claims Maya, signed by someone else: bad-signature.
+        const forged = await source(NODE_B, 'ordinary', forger, maya);
+        const resealed = await source(NODE_B, 'resealed', maya, maya);
+        expect(forged.integrity).toBe('bad-signature');
+        expect(resealed.integrity).toBe('resealed');
+        expect(await resultReads([verified, forged])).toBe('resealed');
+        expect(await resultReads([resealed, verified])).toBe('resealed');
+    });
+
+    test('a source saved from a link makes a verified one’s result saved from a link, never verified', async () => {
+        const maya = writerKey();
+        const verified = await source(NODE_A, 'ordinary', maya, maya);
+        const saved = await source(NODE_B, 'saved', maya, maya);
+        expect(saved.integrity).toBe('saved-from-link');
+        expect(await resultReads([verified, saved])).toBe('saved-from-link');
+    });
+
+    test('each record takes its own weakest: a verified name never covers unverified content', () => {
+        const forms = sourcesSignatureForms([
+            {
+                node: { kind: 'file', integrity: { metadata: 'verified', version: 'unsigned' } },
+                source: 'drive',
+            },
+            {
+                node: { kind: 'file', integrity: { metadata: 'verified', version: 'verified' } },
+                source: 'drive',
+            },
+        ]);
+        expect(forms).toEqual({ metadata: 'ordinary', version: 'resealed' });
+        // From a link, every source is saved whatever it showed.
+        expect(
+            sourcesSignatureForms([
+                {
+                    node: {
+                        kind: 'file',
+                        integrity: { metadata: 'verified', version: 'verified' },
+                    },
+                    source: 'link',
+                },
+            ]),
+        ).toEqual({ metadata: 'saved', version: 'saved' });
+        expect(() => sourcesSignatureForms([])).toThrow();
+    });
+    test('a folder counts with what was read from inside it, and one that does not say is refused', () => {
+        const verifiedFolder = {
+            node: {
+                kind: 'folder' as const,
+                integrity: { metadata: 'verified' as const, version: null },
+            },
+            source: 'drive' as const,
+        };
+        const plantedFile = {
+            node: {
+                kind: 'file' as const,
+                integrity: { metadata: 'verified' as const, version: 'unknown-signer' as const },
+            },
+            source: 'drive' as const,
+        };
+        expect(() => sourcesSignatureForms([verifiedFolder])).toThrow(
+            /what the result was made from/,
+        );
+        expect(sourcesSignatureForms([{ ...verifiedFolder, within: [] }])).toEqual({
+            metadata: 'ordinary',
+            version: 'ordinary',
+        });
+        // A zip of a verified folder holding one planted file is not vouched for.
+        expect(sourcesSignatureForms([{ ...verifiedFolder, within: [plantedFile] }]).version).toBe(
+            'resealed',
+        );
+    });
+});
+
+/* ---------------------------------------------------------------------------------------------- */
+
+type TransferEvent = Parameters<NonNullable<TransferManagerOptions['onEvent']>>[0];
+
+function folder(id: string, workspaceId = 'ws-own', keyEpoch = 1): DriveNode {
+    return {
+        id,
+        workspaceId,
+        parentId: 'root',
+        kind: 'folder',
+        keyEpoch,
+        name: id,
+        currentVersion: null,
+        metadata: { name: id, mime: null, size: null, modified: null },
+    } as unknown as DriveNode;
+}
+
+function nextName(name: string, taken: Set<string>) {
+    const lower = new Set([...taken].map((entry) => entry.toLowerCase()));
+    if (!lower.has(name.toLowerCase())) return name;
+    const dot = name.lastIndexOf('.');
+    const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    for (let n = 2; ; n++) {
+        const candidate = `${base} (${n})${ext}`;
+        if (!lower.has(candidate.toLowerCase())) return candidate;
+    }
+}
+
+/*
+ * The server as a run's clean-up meets it: which nodes exist and where (live,
+ * in the Trash, deleted forever), which uploads are open or finished, and a
+ * free space. Its trash and purge answer per item as the batch routes do, and
+ * the test can make an item refused, the workspace no longer the person's, a
+ * purge left busy, or the network gone. The upload queue holds what it is given
+ * until the test lands or fails it, and cancels as the real one does (telling
+ * every listener at once).
+ */
+function world(
+    options: {
+        room?: Room;
+        member?: boolean;
+        names?: string[];
+        refuse?: (target: DriveNode) => string | null;
+        waits?: (target: DriveNode) => boolean;
+    } = {},
+) {
+    const listeners = new Set<(event: TransferEvent) => void>();
+    const runs = createMemoryRunJournal();
+    const queued = new Map<string, { input: EnqueueInput; item: UploadItem }>();
+    const cancelled: string[] = [];
+    const server = {
+        live: new Set<string>(),
+        trash: new Set<string>(),
+        purged: new Set<string>(),
+        open: new Set<string>(),
+        finished: new Set<string>(),
+        aborted: [] as string[],
+        refuse: new Set<string>(),
+        busy: new Set<string>(),
+        offline: false,
+        denied: false,
+        /* A family manager paused this person's changes: every write refused `held` (403). */
+        held: false,
+        /* Items in a folder, for lookFolder. */
+        items: new Map<string, number>(),
+        /* There, but out of this person's reach (a share that ended): answered not found. */
+        unreachable: new Set<string>(),
+        /* Folders found whose items can't be counted (in the Trash). */
+        uncounted: new Set<string>(),
+    };
+    let session = true;
+    const madeFolders: { parent: string; name: string; signAs: string }[] = [];
+    let next = 0;
+    const emit = (event: TransferEvent) => {
+        for (const listener of listeners) listener(event);
+    };
+    const locks = runLocks();
+    const deps: SaveRunDeps = {
+        transfers: {
+            enqueue: (inputs) =>
+                inputs.map((input) => {
+                    const id = `item-${++next}`;
+                    const item = {
+                        id,
+                        name: input.name ?? input.file.name,
+                        status: 'queued',
+                        error: null,
+                        errorCode: null,
+                        node: null,
+                        origin: input.origin,
+                    } as unknown as UploadItem;
+                    queued.set(id, { input, item });
+                    return id;
+                }),
+            cancel: async (id) => {
+                const held = queued.get(id);
+                if (!held || held.item.status === 'done' || held.item.status === 'cancelled')
+                    return;
+                cancelled.push(id);
+                held.item.status = 'cancelled';
+                emit({ type: 'cancelled', item: held.item });
+            },
+        },
+        events: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        runs,
+        refuseWrite: options.refuse ?? (() => null),
+        waitsForKeyChange: options.waits ?? (() => false),
+        room: async () => options.room ?? { kind: 'own', free: 1e12 },
+        namesIn: async () => options.names ?? [],
+        nextName,
+        makeFolder: async (parent, name, signAs, minted) => {
+            const made = folder(`made-${madeFolders.length + 1}`, parent.workspaceId);
+            // Its id heard before the creation is sent, as createFolderPath's onMinted does.
+            await minted(made.id);
+            madeFolders.push({ parent: parent.id, name, signAs });
+            server.live.add(made.id);
+            return made;
+        },
+        abortUpload: async (_ws, uploadId) => {
+            if (server.offline) return 'unknown';
+            if (server.held) return 'held';
+            if (server.denied) return 'denied';
+            server.aborted.push(uploadId);
+            if (server.finished.has(uploadId)) return 'finished';
+            return server.open.delete(uploadId) ? 'aborted' : 'gone';
+        },
+        trash: async (_ws, ids) => {
+            if (server.offline) throw new Error('offline');
+            const fates = new Map<string, ItemFate>();
+            for (const id of ids) {
+                if (server.held) fates.set(id, 'held');
+                else if (server.denied) fates.set(id, 'denied');
+                else if (server.refuse.has(id)) fates.set(id, 'refused');
+                else if (server.unreachable.has(id)) fates.set(id, 'gone');
+                else if (server.live.delete(id)) {
+                    server.trash.add(id);
+                    fates.set(id, 'done');
+                } else fates.set(id, server.trash.has(id) ? 'done' : 'gone');
+            }
+            return fates;
+        },
+        purge: async (_ws, ids) => {
+            if (server.offline) throw new Error('offline');
+            const fates = new Map<string, ItemFate>();
+            for (const id of ids) {
+                if (server.busy.has(id)) fates.set(id, 'refused');
+                else if (server.trash.delete(id)) {
+                    server.purged.add(id);
+                    fates.set(id, 'done');
+                } else fates.set(id, 'gone');
+            }
+            return fates;
+        },
+        mayPurge: async () => options.member ?? true,
+        findChild: async (_parent, id) => (server.live.has(id) ? folder(id) : null),
+        lookFolder: async (_ws, id) => {
+            if (server.offline) throw new Error('offline');
+            if (server.unreachable.has(id)) return null;
+            if (server.uncounted.has(id)) return UNCOUNTED;
+            return server.live.has(id) || server.trash.has(id) ? (server.items.get(id) ?? 0) : null;
+        },
+        current: () => session,
+        account: 'me',
+        ...locks,
+    };
+    /* The queue began an upload: the server holds it open, and the run's row learns of it. */
+    function begin(id: string, uploadId: string, nodeId: string) {
+        server.open.add(uploadId);
+        const held = queued.get(id)!;
+        held.input.produced!.onBegun!({
+            workspaceId: held.input.parent.workspaceId,
+            uploadId,
+            nodeId,
+        });
+    }
+    function land(id: string, nodeId: string, uploadId?: string) {
+        const held = queued.get(id)!;
+        if (uploadId) {
+            server.open.delete(uploadId);
+            server.finished.add(uploadId);
+        }
+        if (!held.input.replaces) server.live.add(nodeId);
+        held.item.status = 'done';
+        held.item.node = { id: nodeId, workspaceId: held.input.parent.workspaceId } as NodeView;
+        emit({ type: 'done', item: held.item });
+    }
+    function failWith(
+        id: string,
+        errorCode: UploadItem['errorCode'],
+        extra: Partial<UploadItem> = {},
+    ) {
+        const held = queued.get(id)!;
+        Object.assign(held.item, { status: 'failed', errorCode, error: 'refused', ...extra });
+        emit({ type: 'failed', item: held.item });
+    }
+    function lock(id: string) {
+        const held = queued.get(id)!;
+        held.item.status = 'paused';
+        emit({ type: 'locked', item: held.item });
+    }
+    return {
+        deps,
+        runs,
+        queued,
+        locks,
+        emit,
+        cancelled,
+        server,
+        madeFolders,
+        begin,
+        land,
+        failWith,
+        lock,
+        signOut: () => {
+            session = false;
+        },
+        ids: () => [...queued.keys()],
+    };
+}
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const own = { sources: OWN_WRITING } as const;
+const bytes = (n = 1) => new Uint8Array(n);
+
+describe('an abort’s answer', () => {
+    const refusal = (status: number, data?: unknown) =>
+        new DriveApiError('refused', status === 409 ? 'conflict' : 'not-found', status, data);
+
+    test('a finishing upload is asked about again, and is no answer (never finished) if it still is after the tries', async () => {
+        const pauses: number[] = [];
+        const answers = [
+            refusal(409, { upload: 'completing' }),
+            refusal(409, { upload: 'completing' }),
+        ];
+        const fate = await askAbort(
+            async () => {
+                const next = answers.shift();
+                if (next) throw next;
+            },
+            { stillOn: () => true, pause: async (ms) => void pauses.push(ms) },
+        );
+        expect(fate).toBe('aborted');
+        expect(pauses).toEqual([2_000, 2_000]);
+        expect(
+            await askAbort(() => Promise.reject(refusal(409, { upload: 'completing' })), {
+                stillOn: () => true,
+                tries: 3,
+                pause: async () => {},
+            }),
+        ).toBe('unknown');
+    });
+
+    test('finished, gone, denied and no answer each say what they are; an unnamed 409 is no answer', async () => {
+        const ask = (error: unknown) =>
+            askAbort(() => Promise.reject(error), { stillOn: () => true, pause: async () => {} });
+        expect(await ask(refusal(409, { upload: 'completed' }))).toBe('finished');
+        expect(await ask(refusal(404))).toBe('gone');
+        expect(await ask(refusal(403))).toBe('denied');
+        expect(await ask(refusal(409))).toBe('unknown');
+        expect(await ask(new TypeError('Failed to fetch'))).toBe('unknown');
+    });
+});
+
+describe('a save run', () => {
+    test('refuses a read-only family folder before anything is made; one waiting for a key change takes the run', async () => {
+        const w = world({ refuse: () => 'This family folder is read-only on this device.' });
+        await expect(
+            startRun(w.deps, { targets: [folder('fam', 'ws-fam')], results: [{ size: 10 }] }),
+        ).rejects.toMatchObject({ reason: 'read-only' });
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.queued.size).toBe(0);
+
+        const waiting = world({ refuse: () => 'Finishing a key change.', waits: () => true });
+        const run = await startRun(waiting.deps, {
+            targets: [folder('fam', 'ws-fam')],
+            results: [{ size: 10 }],
+        });
+        void run
+            .file({ name: 'a.txt', bytes: bytes(10), mime: 'text/plain', ...own })
+            .catch(() => {});
+        await tick();
+        expect(waiting.queued.size).toBe(1);
+        await run.cancel();
+    });
+
+    test('refuses a run that does not fit the free space, by its estimate, and takes one that fits exactly', async () => {
+        const results = [{ size: 5_000_000 }, { sourcesSize: 2_000_000, thumbnail: false }];
+        const needed = runEstimate(results);
+        const short = world({ room: { kind: 'own', free: needed - 1 } });
+        const refused = await startRun(short.deps, { targets: [folder('f')], results }).catch(
+            (error: unknown) => error,
+        );
+        expect(refused).toBeInstanceOf(SaveRefused);
+        expect(refused).toMatchObject({ reason: 'no-room', room: { needed, free: needed - 1 } });
+        expect((refused as Error).message).toBe(NO_ROOM);
+        expect(short.runs.rows.size).toBe(0);
+
+        const exact = world({ room: { kind: 'family', free: needed } });
+        const run = await startRun(exact.deps, { targets: [folder('f')], results });
+        expect(exact.runs.rows.size).toBe(1);
+        await run.cancel();
+    });
+
+    test('a result planned without a thumbnail may not carry one: its room was never set aside', async () => {
+        const w = world();
+        const run = await startRun(w.deps, {
+            targets: [folder('f')],
+            results: [{ size: 10, thumbnail: false }, { size: 10 }],
+        });
+        void run
+            .file({ name: 'a.png', bytes: bytes(), mime: 'image/png', thumbnail: bytes(5), ...own })
+            .catch(() => {});
+        await expect(
+            run.file({
+                name: 'b.png',
+                bytes: bytes(),
+                mime: 'image/png',
+                thumbnail: bytes(5),
+                ...own,
+            }),
+        ).rejects.toThrow(/without a thumbnail/);
+        await run.cancel();
+    });
+
+    test('in someone else’s share a 402 ends the run “no room” without the server’s figure, and only trashes', async () => {
+        const w = world({ room: { kind: 'shared' }, member: false });
+        const run = await startRun(w.deps, {
+            targets: [folder('shared', 'ws-owner')],
+            results: [{ size: 1e15 }],
+        });
+        const first = run.file({ name: 'a.txt', bytes: bytes(4), mime: null, ...own });
+        const second = run.file({ name: 'b.txt', bytes: bytes(4), mime: null, ...own });
+        await tick();
+        const [a, b] = w.ids();
+        w.begin(a!, 'up-a', 'node-a');
+        w.land(a!, 'node-a', 'up-a');
+        w.begin(b!, 'up-b', 'node-b');
+        w.failWith(b!, 'over-quota', { error: 'There isn’t enough room. 12 MB free.' });
+        await expect(first).resolves.toEqual({ id: 'node-a', workspaceId: 'ws-owner' });
+        const stopped = (await second.catch((error: unknown) => error)) as RunStopped;
+        expect(stopped).toBeInstanceOf(RunStopped);
+        expect(stopped).toMatchObject({ reason: 'no-room', cleanup: 'trashed' });
+        expect(stopped.message).toBe(NO_ROOM_SHARED);
+        expect(stopped.message).not.toContain('12 MB');
+        expect(w.server.trash).toEqual(new Set(['node-a']));
+        expect(w.server.purged.size).toBe(0);
+        expect(w.server.aborted).toContain('up-b');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('unknown figures in the person’s own space never say “shared folder”', async () => {
+        const w = world({ room: { kind: 'own', free: null } });
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [{ size: 1e15 }] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.failWith(w.ids()[0]!, 'over-quota');
+        await expect(saved).rejects.toMatchObject({ message: NO_ROOM });
+    });
+
+    test('names each new file the next free name in its folder, case and all, and never replaces', async () => {
+        const w = world({ names: ['report.pdf', 'Report (2).pdf'] });
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        for (const name of ['report.pdf', 'REPORT.pdf', 'notes.txt'])
+            void run.file({ name, bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        const inputs = [...w.queued.values()].map(({ input }) => input);
+        expect(inputs.map((input) => input.name)).toEqual([
+            'report (3).pdf',
+            'REPORT (4).pdf',
+            'notes.txt',
+        ]);
+        expect(inputs.every((input) => input.replaces === undefined)).toBe(true);
+        expect(inputs.every((input) => input.produced && input.origin === 'result')).toBe(true);
+        await run.cancel();
+    });
+
+    test('each result is signed by its own sources, the weakest of them; own writing is ordinary', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const verified = {
+            node: {
+                kind: 'file' as const,
+                integrity: { metadata: 'verified' as const, version: 'verified' as const },
+            },
+            source: 'drive' as const,
+        };
+        const planted = {
+            node: {
+                kind: 'file' as const,
+                integrity: {
+                    metadata: 'unknown-signer' as const,
+                    version: 'unknown-signer' as const,
+                },
+            },
+            source: 'drive' as const,
+        };
+        void run
+            .file({ name: 'a', bytes: bytes(), mime: null, sources: [verified] })
+            .catch(() => {});
+        void run
+            .file({ name: 'b', bytes: bytes(), mime: null, sources: [verified, planted] })
+            .catch(() => {});
+        void run.file({ name: 'c', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        expect([...w.queued.values()].map(({ input }) => input.signAs)).toEqual([
+            { metadata: 'ordinary', version: 'ordinary' },
+            { metadata: 'resealed', version: 'resealed' },
+            { metadata: 'ordinary', version: 'ordinary' },
+        ]);
+        await expect(
+            run.file({ name: 'd', bytes: bytes(), mime: null, sources: [] }),
+        ).rejects.toThrow();
+        await run.cancel();
+    });
+
+    test('two results cut from one buffer each upload their own bytes: neither takes the other’s buffer', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const whole = new Uint8Array([1, 2, 3, 4, 5, 6]);
+        void run
+            .file({ name: 'a', bytes: whole.subarray(0, 3), mime: null, ...own })
+            .catch(() => {});
+        void run.file({ name: 'b', bytes: whole.subarray(3), mime: null, ...own }).catch(() => {});
+        await tick();
+        const parts = [...w.queued.values()].map(
+            ({ input }) => (input.file as { parts: Uint8Array[] }).parts[0]!,
+        );
+        expect(parts.map((part) => [...part])).toEqual([
+            [1, 2, 3],
+            [4, 5, 6],
+        ]);
+        // Each part owns its whole buffer, and no two share one: moving one moves nothing else.
+        expect(parts.every((part) => part.byteLength === part.buffer.byteLength)).toBe(true);
+        expect(parts[0]!.buffer).not.toBe(parts[1]!.buffer);
+        expect(parts[0]!.buffer).not.toBe(whole.buffer);
+        await run.cancel();
+    });
+
+    test('a stale version gives back its thumbnail’s room: Save on top or Save as a copy may carry the same thumbnail', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, {
+            targets: [doc],
+            results: [{ size: 3, thumbnail: true }],
+        });
+        const thumb = new Uint8Array([1, 2]);
+        const first = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            thumbnail: thumb,
+            ...own,
+        });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        w.failWith(w.ids()[0]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: true },
+        });
+        expect(await first).toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        // Save on top: the same thumbnail again, within the one planned.
+        const again = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v-theirs',
+            bytes: bytes(),
+            thumbnail: thumb,
+            ...own,
+        });
+        await tick();
+        expect(w.queued.size).toBe(2);
+        void again.catch(() => {});
+        await run.cancel();
+    });
+
+    test('a new version’s bytes stay the caller’s: a stale outcome leaves them whole for Save on top or Save as a copy', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [{ size: 3 }] });
+        const mine = new Uint8Array([7, 8, 9]);
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: mine,
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        const sent = (w.queued.get(id!)!.input.file as { parts: Uint8Array[] }).parts[0]!;
+        // What goes to the worker is a copy: moving it there detaches nothing the caller holds.
+        expect(sent.buffer).not.toBe(mine.buffer);
+        w.begin(id!, 'up-v', 'doc');
+        w.failWith(id!, 'stale', { stale: { currentVersionId: 'v-theirs', released: true } });
+        expect(await saved).toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        expect([...mine]).toEqual([7, 8, 9]);
+        // A new file's whole buffer still goes without a copy.
+        void run
+            .file({ name: 'a', bytes: new Uint8Array([1]), mime: null, ...own })
+            .catch(() => {});
+        await run.cancel();
+    });
+
+    test('a new version someone else beat is `stale` with their version: the run goes on, nothing to clean', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [{ size: 3 }] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(3),
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        expect(w.queued.get(id!)!.input.produced!.startedFrom).toBe('v1');
+        expect(w.queued.get(id!)!.input.replaces).toBe(doc);
+        w.begin(id!, 'up-1', 'doc');
+        w.failWith(id!, 'stale', { stale: { currentVersionId: 'v-theirs' } });
+        await expect(saved).resolves.toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        // A version's file is never the run's to delete: the row never named it.
+        expect(w.runs.rows.get(run.id)!.nodeIds).toEqual([]);
+        expect(w.runs.rows.get(run.id)!.uploadIds).toEqual([]);
+        await run.finish();
+        expect(w.server.trash.size).toBe(0);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a stale version whose reservation the abort didn’t release keeps its id: finish asks again, then a row of its own the next open settles quietly', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [{ size: 3 }] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(3),
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        w.begin(id!, 'up-1', 'doc');
+        w.failWith(id!, 'stale', { stale: { currentVersionId: 'v-theirs', released: false } });
+        await expect(saved).resolves.toEqual({ status: 'stale', currentVersionId: 'v-theirs' });
+        expect(w.runs.rows.get(run.id)!.uploadIds).toEqual(['up-1']);
+        // Still no answer at finish: the saved results stay, and a row with no nodes keeps the id.
+        w.server.offline = true;
+        await run.finish();
+        expect(w.runs.rows.get(run.id)).toMatchObject({ nodeIds: [], uploadIds: ['up-1'] });
+        w.server.offline = false;
+        abandonRuns();
+        const offered = await interruptedRuns({
+            exclusive: freeLock,
+            current: () => true,
+            account: 'me',
+            runs: w.runs,
+            isLive: async () => false,
+            abortUpload: w.deps.abortUpload,
+        });
+        expect(offered).toEqual([]);
+        await quietlySettled();
+        expect(w.server.aborted).toContain('up-1');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a version that landed before a cancel is kept and said so, never “nothing was saved”', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc, folder('f')], results: [] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        const other = run.file({ name: 'side.txt', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [version, file] = w.ids();
+        w.begin(version!, 'up-v', 'doc');
+        w.land(version!, 'doc', 'up-v');
+        w.begin(file!, 'up-f', 'node-f');
+        await saved;
+        const stopped = await run.cancel();
+        await expect(other).rejects.toBe(stopped);
+        expect(stopped.keptVersions).toBe(1);
+        expect(stopped.message).not.toContain('Nothing was saved');
+        expect(stopped.message).toMatch(/new version .* was kept/);
+        // The version's file stays where it is; only the new file goes.
+        expect(w.server.trash.has('doc')).toBe(false);
+        expect(w.server.aborted).toEqual(['up-f']);
+    });
+
+    test('a version the server finished during the cancel is counted as kept', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        const [version] = w.ids();
+        w.begin(version!, 'up-v', 'doc');
+        // Its completion went through as the cancel was sent: the abort is answered "finished".
+        w.server.open.delete('up-v');
+        w.server.finished.add('up-v');
+        const stopped = await run.cancel();
+        expect(stopped.keptVersions).toBe(1);
+        expect(stopped.cleanup).toBe('nothing');
+    });
+
+    test('a completion slower than the abort’s tries keeps the row and says the version may have been saved', async () => {
+        const w = world();
+        // The object store is still completing both: the server answers "completing" every time.
+        const completing = new Set(['up-v', 'up-f']);
+        w.deps.abortUpload = (_ws, uploadId) =>
+            askAbort(
+                async () => {
+                    if (completing.has(uploadId))
+                        throw new DriveApiError('refused', 'conflict', 409, {
+                            upload: 'completing',
+                        });
+                },
+                { stillOn: () => true, pause: async () => {} },
+            );
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc, folder('f')], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        const [version, file] = w.ids();
+        w.begin(version!, 'up-v', 'doc');
+        w.begin(file!, 'up-f', 'node-f');
+        // Both completions sent: the server is completing them.
+        await w.queued.get(version!)!.input.produced!.beforeComplete!();
+        await w.queued.get(file!)!.input.produced!.beforeComplete!();
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.keptVersions).toBe(0);
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).toBe(
+            'Cancelled. A new version may have been saved. Some of what was made may still be there. You’ll be asked about it next time.',
+        );
+        // The row still names both: the file that lands later is the next open's to remove.
+        expect(w.runs.rows.get(run.id)).toMatchObject({
+            nodeIds: ['node-f'],
+            uploadIds: ['up-v', 'up-f'],
+        });
+        // It lands; the next open's clean-up hears "completed" and removes the file.
+        completing.clear();
+        w.server.finished.add('up-f');
+        w.server.live.add('node-f');
+        w.deps.abortUpload = async () => 'finished';
+        const [left] = await interruptedRuns({
+            exclusive: freeLock,
+            current: () => true,
+            account: 'me',
+            runs: w.runs,
+            isLive: async () => false,
+        });
+        expect(await cleanUpInterrupted(w.deps, left!)).toBe('deleted');
+        expect(w.server.purged.has('node-f')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a cancel stops open uploads and deletes forever what was published; the row goes last', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        const open = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a, b] = w.ids();
+        w.begin(a!, 'up-a', 'node-a');
+        w.land(a!, 'node-a', 'up-a');
+        w.begin(b!, 'up-b', 'node-b');
+        await tick();
+        // The row as a closed tab would leave it: the published file and the open upload's ids.
+        expect(w.runs.rows.get(run.id)).toMatchObject({
+            nodeIds: ['node-a', 'node-b'],
+            uploadIds: ['up-b'],
+        });
+        expect(resultsWaiting()).toBe(true);
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('deleted');
+        expect(stopped.message).toBe(RUN_CANCELLED);
+        expect(w.cancelled).toEqual([b]);
+        expect(w.server.purged).toEqual(new Set(['node-a']));
+        expect(w.server.open.size).toBe(0);
+        expect(w.runs.rows.size).toBe(0);
+        await expect(open).rejects.toMatchObject({ reason: 'cancelled', cleanup: 'deleted' });
+        expect(resultsWaiting()).toBe(false);
+    });
+
+    test('a result handed in while the run is stopping is refused and never reaches the queue; finish fails too', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        const stopping = run.cancel();
+        // Handed in after the cancel began, before its clean-up answered.
+        const late = run.file({ name: 'late', bytes: bytes(), mime: null, ...own });
+        const finished = run.finish();
+        await expect(late).rejects.toBeInstanceOf(RunStopped);
+        await expect(finished).rejects.toBeInstanceOf(RunStopped);
+        await stopping;
+        expect(w.queued.size).toBe(1);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a result whose folder was still being listed when the stop began never reaches the queue', async () => {
+        const w = world();
+        let listed: (names: string[]) => void = () => {};
+        w.deps.namesIn = () =>
+            new Promise<string[]>((resolve) => {
+                listed = resolve;
+            });
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const late = run.file({ name: 'late', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const stopping = run.cancel();
+        listed([]);
+        await expect(late).rejects.toBeInstanceOf(RunStopped);
+        await stopping;
+        expect(w.queued.size).toBe(0);
+    });
+
+    test('a cancel from the transfers panel stops the whole run: all or nothing', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const a = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        const b = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [idA, idB] = w.ids();
+        w.begin(idA!, 'up-a', 'node-a');
+        await w.deps.transfers.cancel(idA!);
+        await expect(a).rejects.toBeInstanceOf(RunStopped);
+        await expect(b).rejects.toBeInstanceOf(RunStopped);
+        // The other result was cancelled too, and only once each.
+        expect(w.cancelled).toEqual([idA, idB]);
+        expect(w.server.aborted).toEqual(['up-a']);
+    });
+
+    test('a lock stops the run and cleans up, rather than hold the plaintext until someone unlocks', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        const open = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a, b] = w.ids();
+        w.begin(a!, 'up-a', 'node-a');
+        w.land(a!, 'node-a', 'up-a');
+        w.begin(b!, 'up-b', 'node-b');
+        w.lock(b!);
+        await expect(open).rejects.toMatchObject({ reason: 'locked', cleanup: 'deleted' });
+        expect(w.cancelled).toContain(b);
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(resultsWaiting()).toBe(false);
+    });
+
+    test('a sign-out in another tab abandons the run: results rejected, nothing written after, nothing asked of the server', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const open = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        w.begin(a!, 'up-a', 'node-a');
+        await tick();
+        // That tab deletes the journal; this one must not write the row back.
+        w.signOut();
+        w.runs.rows.clear();
+        abandonRuns();
+        await expect(open).rejects.toMatchObject({ reason: 'signed-out' });
+        expect(resultsWaiting()).toBe(false);
+        // A begin answering late, and the heartbeat, write nothing.
+        w.queued.get(a!)!.input.produced!.onBegun!({
+            workspaceId: 'ws-own',
+            uploadId: 'up-x',
+            nodeId: 'n-x',
+        });
+        await tick();
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.aborted).toEqual([]);
+        await expect(
+            run.file({ name: 'b', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toMatchObject({
+            reason: 'signed-out',
+        });
+    });
+
+    test('a restart’s second begin replaces the first in the row: the clean-up aborts and removes the live one', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        const [a] = w.ids();
+        w.begin(a!, 'up-1', 'node-1');
+        w.server.open.delete('up-1');
+        w.begin(a!, 'up-2', 'node-2');
+        await tick();
+        expect(w.runs.rows.get(run.id)).toMatchObject({ nodeIds: ['node-2'], uploadIds: ['up-2'] });
+        await run.cancel();
+        expect(w.server.aborted).toEqual(['up-2']);
+    });
+
+    test('an attached sibling is in the row before its attach is sent, and a stopping run refuses the attach', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        const [a] = w.ids();
+        w.begin(a!, 'up-a', 'node-begun');
+        const produced = w.queued.get(a!)!.input.produced!;
+        await produced.onAttach!({ workspaceId: 'ws-own', nodeId: 'node-sibling' });
+        expect(w.runs.rows.get(run.id)!.nodeIds).toEqual(['node-begun', 'node-sibling']);
+        // The attach landed but its answer was lost: the clean-up still removes the sibling.
+        w.server.live.add('node-sibling');
+        const stopping = run.cancel();
+        await expect(
+            produced.onAttach!({ workspaceId: 'ws-own', nodeId: 'node-other' }),
+        ).rejects.toThrow();
+        await stopping;
+        expect(w.server.purged.has('node-sibling')).toBe(true);
+    });
+
+    test('per-item refusals, a purge left busy or no answer to an abort keep the row: nothing is called deleted', async () => {
+        for (const breakIt of [
+            (w: ReturnType<typeof world>) => w.server.refuse.add('node-a'),
+            (w: ReturnType<typeof world>) => w.server.busy.add('node-a'),
+            (w: ReturnType<typeof world>) => {
+                w.server.offline = true;
+            },
+        ]) {
+            const w = world();
+            const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+            void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+            await tick();
+            const [a] = w.ids();
+            w.begin(a!, 'up-a', 'node-a');
+            w.land(a!, 'node-a', 'up-a');
+            breakIt(w);
+            expect((await run.cancel()).cleanup).toBe('left');
+            expect(w.runs.rows.get(run.id)!.nodeIds).toEqual(['node-a']);
+        }
+    });
+
+    test('an interrupted version save with no answer to its abort keeps its only row', async () => {
+        const w = world();
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: ['up-v'],
+            at: 1,
+        };
+        await w.runs.put(left);
+        w.server.offline = true;
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('left');
+        expect(w.runs.rows.has('r')).toBe(true);
+        w.server.offline = false;
+        w.server.open.add('up-v');
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('nothing');
+        expect(w.runs.rows.has('r')).toBe(false);
+    });
+
+    test('a clean-up refused because the space is no longer the person’s drops the row instead of asking forever', async () => {
+        const w = world();
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-gone',
+            nodeIds: ['node-a'],
+            uploadIds: ['up-a'],
+            at: 1,
+        };
+        await w.runs.put(left);
+        w.server.denied = true;
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('no-access');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('keep what was made: the files stay, its open uploads still aborted, the row never offered again', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        w.server.open.add('up-b');
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: ['up-b'],
+            at: 1,
+        };
+        await w.runs.put(left);
+        expect(await keepInterrupted(w.deps, left)).toBe('kept');
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(w.server.aborted).toEqual(['up-b']);
+        // Kept as a done mark (another tab's Delete finds it kept), never offered: the next open drops it.
+        expect(w.runs.rows.get('r')).toMatchObject({ chosen: 'keep', done: true });
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: async () => false,
+            }),
+        ).toEqual([]);
+        expect(w.runs.rows.size).toBe(0);
+        // With no answer to the abort (offline, an older server), the row goes all the same:
+        // an open upload expires on the server, and Keep never leaves a row it can't clear.
+        await w.runs.put({ ...left, id: 'r2' });
+        w.server.offline = true;
+        expect(await keepInterrupted(w.deps, { ...left, id: 'r2' })).toBe('kept');
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: async () => false,
+            }),
+        ).toEqual([]);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder the run made goes as one: what is inside it is not listed, nor removed one by one', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const planted = {
+            node: {
+                kind: 'file' as const,
+                integrity: { metadata: 'unsigned' as const, version: 'unsigned' as const },
+            },
+            source: 'drive' as const,
+        };
+        const made = await run.folder('Archive', { sources: [planted] });
+        expect(w.madeFolders).toEqual([{ parent: 'f', name: 'Archive', signAs: 'resealed' }]);
+        void run
+            .file({ name: 'inside.txt', bytes: bytes(), mime: null, into: made, ...own })
+            .catch(() => {});
+        await tick();
+        const [inside] = w.ids();
+        w.begin(inside!, 'up-1', 'node-inside');
+        w.land(inside!, 'node-inside', 'up-1');
+        await tick();
+        expect(w.runs.rows.get(run.id)!.nodeIds).toEqual([made.id]);
+        await run.cancel();
+        expect(w.server.purged).toEqual(new Set([made.id]));
+    });
+
+    test('a folder made while the run stopped, which then cannot be removed, keeps a row naming it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let finishMaking: (made: DriveNode) => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('late-folder');
+            return new Promise<DriveNode>((resolve) => {
+                finishMaking = resolve;
+            });
+        };
+        const making = run.folder('Archive', own);
+        await tick();
+        // The stop waits for the creation it found sent.
+        const cancelling = run.cancel();
+        await tick();
+        w.server.refuse.add('late-folder');
+        w.server.live.add('late-folder');
+        finishMaking(folder('late-folder'));
+        await expect(making).rejects.toBeInstanceOf(RunStopped);
+        expect((await cancelling).cleanup).toBe('left');
+        expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([['late-folder']]);
+    });
+
+    test('a late folder that cannot be removed is added to the row a failed clean-up kept, never replacing it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        let finishMaking: (made: DriveNode) => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('late-folder');
+            return new Promise<DriveNode>((resolve) => {
+                finishMaking = resolve;
+            });
+        };
+        const making = run.folder('Archive', own);
+        await tick();
+        // The stop's clean-up fails for the file it made, and for the folder that lands meanwhile too.
+        w.server.refuse.add('node-a');
+        const cancelling = run.cancel();
+        await tick();
+        w.server.refuse.add('late-folder');
+        w.server.live.add('late-folder');
+        finishMaking(folder('late-folder'));
+        await expect(making).rejects.toBeInstanceOf(RunStopped);
+        expect((await cancelling).cleanup).toBe('left');
+        expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([
+            ['node-a', 'late-folder'],
+        ]);
+    });
+
+    test('a version whose completion was never sent is not said to maybe be saved, though its abort got no answer', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await tick();
+        // The network went while its parts went up: no completion was sent, and the abort gets no answer.
+        w.server.offline = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.uncertainVersions).toBe(0);
+        expect(stopped.message).toBe(RUN_CANCELLED);
+        // Its reservation is still the next open's to abort.
+        expect(w.runs.rows.get(run.id)?.uploadIds).toEqual(['up-v']);
+    });
+
+    test('a clean-up that leaves a published file says what may remain, never “nothing was saved”', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.server.refuse.add('node-a');
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(
+            'Cancelled. Some of what was made may still be there. You’ll be asked about it next time.',
+        );
+        // The space no longer the person's: it may remain, and they can no longer remove it.
+        const gone = world();
+        const other = await startRun(gone.deps, { targets: [folder('f')], results: [] });
+        const result = other.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        gone.begin(gone.ids()[0]!, 'up-a', 'node-a');
+        gone.land(gone.ids()[0]!, 'node-a', 'up-a');
+        await result;
+        gone.server.denied = true;
+        const denied = await other.cancel();
+        expect(denied.cleanup).toBe('no-access');
+        expect(denied.message).toBe(
+            'Cancelled. Some of what was made may still be there, and you can no longer remove it.',
+        );
+    });
+
+    test('a finished run whose row the journal won’t remove is never offered for deletion', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const remove = w.runs.remove.bind(w.runs);
+        w.runs.remove = () => Promise.reject(new DOMException('closed', 'InvalidStateError'));
+        await run.finish();
+        expect(w.runs.rows.get(run.id)?.done).toBe(true);
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: async () => false,
+            }),
+        ).toEqual([]);
+        // Keep is retired the same way.
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+        };
+        await w.runs.put(left);
+        await keepInterrupted(w.deps, left);
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: async () => false,
+            }),
+        ).toEqual([]);
+        // Once the journal works again the next open drops them.
+        w.runs.remove = remove;
+        await interruptedRuns({
+            exclusive: freeLock,
+            current: () => true,
+            account: 'me',
+            runs: w.runs,
+            isLive: async () => false,
+        });
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a folder creation refused for a key change (409 rotating) is asked again; earlier results stay, and only the made folder is named', async () => {
+        const w = world();
+        w.deps.pause = async () => {};
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        let tries = 0;
+        const epochs: number[] = [];
+        // The folder as the server lists it now: one key epoch on after each refusal.
+        w.deps.lookFolderAgain = async (asked) => ({ ...asked, keyEpoch: asked.keyEpoch + 1 });
+        w.deps.makeFolder = async (parent, _name, _signAs, minted) => {
+            tries += 1;
+            epochs.push(parent.keyEpoch);
+            await minted(`try-${tries}`);
+            if (tries < 3) throw new DriveApiError('Finishing a key change.', 'rotating', 409);
+            w.server.live.add(`try-${tries}`);
+            return folder(`try-${tries}`, parent.workspaceId);
+        };
+        const made = await run.folder('Out', own);
+        expect(made.id).toBe('try-3');
+        // Each try under the folder as listed afresh, never the copy the run began with.
+        expect(epochs).toEqual([1, 2, 3]);
+        expect(w.runs.rows.get(run.id)?.nodeIds).toEqual(['node-a', 'try-3']);
+        expect(w.server.purged.size).toBe(0);
+        // Any other refusal, or an answer that never came, is never sent again.
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            tries += 1;
+            await minted(`try-${tries}`);
+            throw new TypeError('Failed to fetch');
+        };
+        const before = tries;
+        await expect(run.folder('Again', own)).rejects.toMatchObject({ reason: 'failed' });
+        expect(tries).toBe(before + 1);
+    });
+
+    test('a rotation retry whose fresh listing names another folder makes nothing there', async () => {
+        const w = world();
+        w.deps.pause = async () => {};
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.lookFolderAgain = async () => folder('elsewhere');
+        let tries = 0;
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            tries += 1;
+            await minted(`try-${tries}`);
+            throw new DriveApiError('Finishing a key change.', 'rotating', 409);
+        };
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'failed' });
+        expect(tries).toBe(1);
+    });
+
+    test('a row an owner wrote after this tab listed it is never removed for the older read', async () => {
+        const w = world();
+        const empty: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: [],
+            at: 1,
+        };
+        await w.runs.put(empty);
+        const list = w.runs.list.bind(w.runs);
+        let raced = false;
+        // Listed empty; then, before this tab acts, the run's owner writes what it made.
+        w.runs.list = async () => {
+            const rows = await list();
+            if (!raced) {
+                raced = true;
+                await w.runs.put({ ...empty, nodeIds: ['node-a'] });
+            }
+            return rows;
+        };
+        const offered = await interruptedRuns(w.deps);
+        expect(offered.map((row) => row.nodeIds)).toEqual([['node-a']]);
+        expect(w.runs.rows.get('r')?.nodeIds).toEqual(['node-a']);
+    });
+
+    test('a folder that lands while the run stops is cleaned up once, by the stop, before its lock is let go', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let finishMaking: (made: DriveNode) => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('late-folder');
+            return new Promise<DriveNode>((resolve) => (finishMaking = resolve));
+        };
+        const trashed: string[] = [];
+        const trash = w.deps.trash;
+        w.deps.trash = async (ws, ids) => {
+            trashed.push(...ids);
+            return trash(ws, ids);
+        };
+        const making = run.folder('Archive', own);
+        await tick();
+        const cancelling = run.cancel();
+        await tick();
+        w.server.refuse.add('late-folder');
+        w.server.live.add('late-folder');
+        finishMaking(folder('late-folder'));
+        await expect(making).rejects.toBeInstanceOf(RunStopped);
+        await cancelling;
+        await tick();
+        // Only the stop's own clean-up, under the lock; nothing after it let the lock go.
+        expect(trashed).toEqual(['late-folder']);
+        expect(w.locks.held.size).toBe(0);
+    });
+
+    test('a stop lets the run’s lock go only after its queued row writes landed, and none lands after', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        // The journal turns slow: a row write waits.
+        const waiting: (() => void)[] = [];
+        const land = () => waiting.splice(0).forEach((resolve) => resolve());
+        const put = w.runs.put.bind(w.runs);
+        const writes: string[] = [];
+        w.runs.put = async (row) => {
+            await new Promise<void>((resolve) => waiting.push(resolve));
+            await put(row);
+            writes.push(w.locks.held.has(run.id) ? 'held' : 'released');
+        };
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        // The clean-up is left (the file refused): the row must stay as it was written.
+        w.server.refuse.add('node-a');
+        w.server.live.add('node-a');
+        const stopping = run.cancel();
+        await tick();
+        expect(w.locks.held.has(run.id)).toBe(true);
+        land();
+        const stopped = await stopping;
+        await saved;
+        expect(stopped.cleanup).toBe('left');
+        expect(w.locks.held.has(run.id)).toBe(false);
+        expect(writes.length).toBeGreaterThan(0);
+        expect(writes.every((at) => at === 'held')).toBe(true);
+        expect(w.runs.rows.get(run.id)?.nodeIds).toEqual(['node-a']);
+    });
+
+    test('results on their way are counted once each', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const first = run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        const second = run.file({ name: 'b', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        expect(w.queued.size).toBe(2);
+        expect(run.waiting()).toBe(2);
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await first;
+        expect(run.waiting()).toBe(1);
+        await run.cancel();
+        await second;
+        expect(run.waiting()).toBe(0);
+    });
+
+    test('a stop whose clean-up throws still lets the run’s lock go, and leaves the row for later', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        w.deps.abortUpload = async () => {
+            throw new Error('unexpected');
+        };
+        const stopped = await run.cancel();
+        await saved.catch(() => {});
+        expect(stopped.cleanup).toBe('left');
+        expect(w.locks.held.size).toBe(0);
+        expect(w.runs.rows.has(run.id)).toBe(true);
+    });
+
+    test('a lock while a run starts (its room asked, its lock taken, its row written) stops it before it is live', async () => {
+        for (const at of ['room', 'hold', 'put'] as const) {
+            const w = world();
+            const room = w.deps.room;
+            const hold = w.deps.hold;
+            const put = w.runs.put.bind(w.runs);
+            if (at === 'room')
+                w.deps.room = async (ws) => {
+                    await lockRuns();
+                    return room(ws);
+                };
+            if (at === 'hold')
+                w.deps.hold = async (id) => {
+                    await lockRuns();
+                    return hold(id);
+                };
+            if (at === 'put')
+                w.runs.put = async (row) => {
+                    await put(row);
+                    await lockRuns();
+                };
+            await expect(
+                startRun(w.deps, { targets: [folder('f')], results: [] }),
+            ).rejects.toMatchObject({ reason: 'locked', cleanup: 'nothing' });
+            expect(w.runs.rows.size).toBe(0);
+            // Its lock let go: nothing holds it.
+            expect(w.locks.held.size).toBe(0);
+        }
+    });
+
+    test('an upload begun in another workspace than the run’s is never recorded, and the run stops', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saving = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const held = w.queued.get(w.ids()[0]!)!;
+        expect(() =>
+            held.input.produced!.onBegun!({
+                workspaceId: 'ws-elsewhere',
+                uploadId: 'up-x',
+                nodeId: 'node-x',
+            }),
+        ).toThrow(DESTINATION_CHANGED);
+        await expect(saving).rejects.toMatchObject({ reason: 'failed' });
+        expect(w.runs.rows.get(run.id)?.nodeIds ?? []).not.toContain('node-x');
+        expect([...w.server.trash, ...w.server.purged]).not.toContain('node-x');
+    });
+
+    test('a folder creation answered with another node while the run stops never removes that node (review probe)', async () => {
+        const w = world();
+        w.server.live.add('victim');
+        const run = await startRun(w.deps, { targets: [folder('dest')], results: [] });
+        let answer: (node: DriveNode) => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('minted-id');
+            return new Promise<DriveNode>((resolve) => (answer = resolve));
+        };
+        const making = run.folder('Out', own).catch((error: unknown) => error);
+        await tick();
+        const cancelling = run.cancel();
+        await tick();
+        // The server answers the creation naming an existing folder of the person's.
+        answer(folder('victim'));
+        expect(await making).toBeInstanceOf(RunStopped);
+        await cancelling;
+        expect(w.server.live.has('victim')).toBe(true);
+        expect([...w.server.trash, ...w.server.purged]).not.toContain('victim');
+    });
+
+    test('a folder creation answered with another node never adopts it: no result lands in it, and it is never removed', async () => {
+        const w = world();
+        // Someone's unrelated folder, in the same Drive.
+        w.server.live.add('theirs');
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = async (parent, name, signAs, minted) => {
+            await make(parent, name, signAs, minted);
+            return folder('theirs');
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        expect(stopped).toBeInstanceOf(RunStopped);
+        expect(stopped.reason).toBe('failed');
+        expect(w.server.live.has('theirs')).toBe(true);
+        expect([...w.server.trash, ...w.server.purged]).not.toContain('theirs');
+        // The folder minted here is what the clean-up removed (it was made, only the reply was wrong).
+        expect(w.server.purged.has('made-1')).toBe(true);
+        expect(w.queued.size).toBe(0);
+        // In another workspace, even under the minted id: no answer either.
+        const v = world();
+        const other = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const vmake = v.deps.makeFolder;
+        v.deps.makeFolder = async (parent, name, signAs, minted) => {
+            const made = await vmake(parent, name, signAs, minted);
+            return { ...made, workspaceId: 'ws-elsewhere' };
+        };
+        await expect(other.folder('Out', own)).rejects.toMatchObject({ reason: 'failed' });
+    });
+
+    test('a folder’s id is on disk before its creation is sent, so a lost answer still leaves a row that removes it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const make = w.deps.makeFolder;
+        const recordedAtSend: string[][] = [];
+        w.deps.makeFolder = async (parent, name, signAs, minted) =>
+            make(parent, name, signAs, async (id) => {
+                await minted(id);
+                recordedAtSend.push([...(w.runs.rows.get(run.id)?.nodeIds ?? [])]);
+            }).then(() => {
+                // Created, but the answer never came back.
+                throw new TypeError('Failed to fetch');
+            });
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        expect(recordedAtSend).toEqual([['made-1']]);
+        expect(stopped).toBeInstanceOf(RunStopped);
+        expect(stopped.reason).toBe('failed');
+        expect(w.server.purged.has('made-1')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a cancel that overtakes a folder’s creation waits for its answer, so a folder made after the clean-up looked is never left untracked', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The server creates it once the cancel's clean-up would already have looked, and the answer is lost.
+            await new Promise<void>((resolve) => {
+                create = resolve;
+            });
+            w.server.live.add('slow');
+            throw new TypeError('Failed to fetch');
+        };
+        const making = run.folder('Out', own).catch((error: unknown) => error);
+        await tick();
+        await tick();
+        const cancelled = run.cancel();
+        await tick();
+        create();
+        const stopped = await cancelled;
+        await making;
+        expect(stopped.cleanup).toBe('deleted');
+        expect(w.server.purged.has('slow')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder whose creation got no answer and is made after the clean-up looked keeps the row, and the next open removes it', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The connection drops while the server is still making it: it commits later.
+            void new Promise<void>((resolve) => {
+                create = resolve;
+            }).then(() => w.server.live.add('slow'));
+            throw new TypeError('Failed to fetch');
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        create();
+        await tick();
+        expect(stopped.reason).toBe('failed');
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).not.toContain('Nothing was saved');
+        expect(stopped.message).toContain('You’ll be asked about it next time.');
+        const [row] = await interruptedRuns({
+            exclusive: freeLock,
+            current: () => true,
+            account: 'me',
+            runs: w.runs,
+            isLive: async () => false,
+        });
+        expect(row?.nodeIds).toEqual(['slow']);
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('slow')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder whose creation the server refused with its reason was never made: the row goes', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('refused');
+            throw new DriveApiError(
+                'The destination folder is in the trash.',
+                'parent-trashed',
+                409,
+            );
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        expect(stopped.cleanup).toBe('nothing');
+        expect(stopped.message).toContain('Nothing was saved');
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder creation answered 409 for its own id (the browser sent it again) may exist: the row stays', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('twice');
+            // The first send is still being made; the resend finds its id taken.
+            void new Promise<void>((resolve) => {
+                create = resolve;
+            }).then(() => w.server.live.add('twice'));
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const stopped = (await run
+            .folder('Out', own)
+            .catch((error: unknown) => error)) as RunStopped;
+        create();
+        await tick();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).not.toContain('Nothing was saved');
+        const [row] = await interruptedRuns({
+            exclusive: freeLock,
+            current: () => true,
+            account: 'me',
+            runs: w.runs,
+            isLive: async () => false,
+        });
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('twice')).toBe(true);
+    });
+
+    test('a folder whose answer was lost when the app ended keeps its row at the next open until the folder appears, then goes', async () => {
+        const w = world();
+        let clock = 1_000;
+        w.deps.now = () => clock;
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('slow');
+            // The app ends with the creation on its way: no answer ever comes back here.
+            return new Promise<DriveNode>(() => {});
+        };
+        void run.folder('Out', own);
+        await tick();
+        await tick();
+        expect(w.runs.rows.get(run.id)!.uncertain).toEqual([{ id: 'slow', at: 1_000 }]);
+        abandonRuns();
+        // The next open, before the server made it: the person says delete; not found, the row stays
+        // with that answer.
+        const reopen = () => interruptedRuns({ ...w.deps, isLive: async () => false });
+        const [row] = await reopen();
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
+        expect(w.runs.rows.get(row!.id)?.chosen).toBe('delete');
+        // Later opens never ask again while the folder isn't there: they only look for it.
+        expect(await reopen()).toEqual([]);
+        await quietlySettled();
+        expect(w.runs.rows.size).toBe(1);
+        // It lands, and someone fills it: the next open deletes nothing unasked. The answer goes,
+        // and the open after offers the row again with what the folder holds now.
+        w.server.live.add('slow');
+        w.server.items.set('slow', 2);
+        expect(await reopen()).toEqual([]);
+        await quietlySettled();
+        expect(w.server.trash.has('slow') || w.server.purged.has('slow')).toBe(false);
+        const [again] = await reopen();
+        expect(again).toMatchObject({ id: row!.id, nodeIds: ['slow'], holds: 2 });
+        expect(again!.chosen).toBeUndefined();
+
+        // Not found once CREATION_SETTLE_MS has passed: never made, and the row goes quietly.
+        w.server.live.delete('slow');
+        await w.runs.put({ ...again!, chosen: 'delete' });
+        clock += CREATION_SETTLE_MS;
+        expect(await reopen()).toEqual([]);
+        await quietlySettled();
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('the rows to offer come back at once: the quiet ones are settled after, never before', async () => {
+        const w = world();
+        let answer: () => void = () => {};
+        const answered = new Promise<void>((resolve) => {
+            answer = resolve;
+        });
+        w.deps.lookFolder = async () => {
+            await answered;
+            return null;
+        };
+        await w.runs.put({
+            id: 'asked',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['n'],
+            uploadIds: [],
+            at: 1,
+        });
+        await w.runs.put({
+            id: 'answered',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow'],
+            uploadIds: [],
+            at: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        });
+        // The look never answers until told: the listing is back regardless.
+        const offered = await interruptedRuns({ ...w.deps, isLive: async () => false });
+        expect(offered.map((row) => row.id)).toEqual(['asked']);
+        answer();
+        await quietlySettled();
+    });
+
+    test('finish is refused while a result is still being prepared, and once finished nothing is removed', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        // The next result's folder is still being listed: finish is refused, never a success.
+        let fail: (error: Error) => void = () => {};
+        w.deps.namesIn = () =>
+            new Promise<string[]>((_resolve, reject) => {
+                fail = reject;
+            });
+        const next = run
+            .file({ name: 'b', bytes: bytes(), mime: null, ...own, into: folder('g') })
+            .catch((error: unknown) => error);
+        await tick();
+        await expect(run.finish()).rejects.toBeInstanceOf(RunBusy);
+        // The listing fails: the run was never finished, so it stops all or nothing.
+        fail(new TypeError('Failed to fetch'));
+        expect(await next).toBeInstanceOf(RunStopped);
+        await expect(run.finish()).rejects.toBeInstanceOf(RunStopped);
+
+        // Finished: a stop after that (the app's lock) removes nothing, and new work is refused.
+        const v = world();
+        const done = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const kept = done.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await kept;
+        await done.finish();
+        const [locked] = await lockRuns();
+        expect(locked ?? (await done.cancel())).toMatchObject({
+            message: ALREADY_SAVED,
+            cleanup: 'nothing',
+        });
+        expect(v.server.live.has('node-a')).toBe(true);
+        await expect(
+            done.file({ name: 'b', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toThrow();
+    });
+
+    test('the quiet look writes nothing after a sign-out, and two opens never settle one row twice', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const answered: RunRow = {
+            id: 'answered',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow'],
+            uploadIds: [],
+            at: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        };
+        await w.runs.put(answered);
+        w.server.live.add('slow');
+        // Signed out while it looked: the answer and the row stay as they were.
+        let looks = 0;
+        const look = w.deps.lookFolder!;
+        w.deps.lookFolder = async (ws, id) => {
+            looks += 1;
+            const items = await look(ws, id);
+            session = false;
+            return items;
+        };
+        await interruptedRuns({ ...w.deps, isLive: async () => false });
+        await quietlySettled();
+        expect(w.runs.rows.get('answered')).toEqual(answered);
+        // Signed in again: two opens at once look once; the second finds the row changed and leaves it.
+        session = true;
+        w.deps.lookFolder = async (ws, id) => {
+            looks += 1;
+            return look(ws, id);
+        };
+        looks = 0;
+        await Promise.all([
+            interruptedRuns({ ...w.deps, isLive: async () => false }),
+            interruptedRuns({ ...w.deps, isLive: async () => false }),
+        ]);
+        await quietlySettled();
+        expect(looks).toBe(1);
+        expect(w.runs.rows.get('answered')).toMatchObject({ holds: 0 });
+        expect(w.runs.rows.get('answered')!.chosen).toBeUndefined();
+    });
+
+    test('a lock that comes while finish asks about a stale upload removes nothing: the run had finished', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [folder('f'), doc], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const stale = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        w.begin(w.ids()[1]!, 'up-v', 'doc');
+        w.failWith(w.ids()[1]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: false },
+        });
+        await stale;
+        // finish asks again about the stale upload; that answer is held while the app locks.
+        let answer: () => void = () => {};
+        const abort = w.deps.abortUpload;
+        w.deps.abortUpload = (ws, id) =>
+            new Promise((resolve) => {
+                answer = () => void abort(ws, id).then(resolve);
+            });
+        const finishing = run.finish();
+        await tick();
+        const [locked] = await lockRuns();
+        expect(locked).toMatchObject({ cleanup: 'nothing', message: ALREADY_SAVED });
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(w.server.trash.size).toBe(0);
+        answer();
+        await finishing;
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a family manager’s pause (403 held) keeps the row and says so; the open after the hold lifts cleans up', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.server.held = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(
+            'Cancelled. Changes are paused in this family, so what was made is still there. You’ll be asked about it next time.',
+        );
+        expect(w.server.live.has('node-a')).toBe(true);
+        // Never taken for lost access: the row stays for the next open.
+        const [row] = await interruptedRuns({ ...w.deps, isLive: async () => false });
+        expect(row?.nodeIds).toEqual(['node-a']);
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('left');
+        expect(w.runs.rows.size).toBe(1);
+        // The hold lifts: the next open removes it and the row goes.
+        w.server.held = false;
+        expect(await cleanUpInterrupted(w.deps, row!)).toBe('deleted');
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('an abort a family manager’s pause refused keeps its id: finish and the quiet settle never drop it', async () => {
+        const w = world();
+        // A nodeless row (a stale version's reservation): settled quietly at the next open.
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: ['up-a'],
+            at: 1,
+        };
+        await w.runs.put(left);
+        w.server.open.add('up-a');
+        w.server.held = true;
+        expect(await interruptedRuns({ ...w.deps, isLive: async () => false })).toEqual([]);
+        await quietlySettled();
+        expect(w.runs.rows.get('r')?.uploadIds).toEqual(['up-a']);
+        w.server.held = false;
+        await interruptedRuns({ ...w.deps, isLive: async () => false });
+        await quietlySettled();
+        expect(w.runs.rows.has('r')).toBe(false);
+        // finish: a stale version's abort refused `held` stays in a row of its own.
+        const v = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const stale = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-v', 'doc');
+        v.failWith(v.ids()[0]!, 'stale', {
+            stale: { currentVersionId: 'v-theirs', released: false },
+        });
+        await stale;
+        v.server.open.add('up-v');
+        v.server.held = true;
+        await run.finish();
+        expect([...v.runs.rows.values()].map((row) => row.uploadIds)).toEqual([['up-v']]);
+        expect(unsettledAbort('held')).toBe(true);
+        expect(unsettledAbort('denied')).toBe(false);
+    });
+
+    test('a pause that kept only a version’s reservation keeps the row but never says what was made is still there', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await tick();
+        w.server.open.add('up-v');
+        w.server.held = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).not.toContain('still there');
+        // Its reservation is still the next open's to let go.
+        expect(w.runs.rows.get(run.id)?.uploadIds).toEqual(['up-v']);
+    });
+
+    test('a clean-up that can’t tell yet whether it may delete forever keeps the row after the trash, never retires it', async () => {
+        const w = world();
+        w.server.live.add('node-a');
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+        };
+        await w.runs.put(left);
+        w.deps.mayPurge = async () => null;
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('left');
+        expect(w.server.trash.has('node-a')).toBe(true);
+        expect(w.runs.rows.get('r')).toEqual(left);
+        // Known later: deleted forever, and the row goes.
+        w.deps.mayPurge = async () => true;
+        expect(await cleanUpInterrupted(w.deps, left)).toBe('deleted');
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+        expect(abortFateOf(new DriveApiError('Sign in again.', 'forbidden', 401))).toBe('unknown');
+    });
+
+    test('a held answer is not lost access: its own fate, never denied', () => {
+        const held = new DriveApiError(
+            'A group manager has paused changes to this folder.',
+            'held',
+            403,
+        );
+        expect(heldNow(held)).toBe(true);
+        expect(deniedWhole(held)).toBe(false);
+        expect(abortFateOf(held)).toBe('held');
+        // A server before the code says a pause only in words, under `forbidden`: still held.
+        const legacy = new DriveApiError(
+            'A group manager has paused changes to this folder.',
+            'forbidden',
+            403,
+        );
+        expect(heldNow(legacy)).toBe(true);
+        expect(abortFateOf(legacy)).toBe('held');
+        expect(deniedWhole(legacy)).toBe(false);
+        expect(deniedWhole(new DriveApiError('No.', 'forbidden', 403))).toBe(true);
+    });
+
+    test('Keep after a sign-out asks nothing more and changes nothing in that account’s journal', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'kept',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-x'],
+            uploadIds: ['up-1', 'up-2'],
+            at: 1,
+        };
+        await w.runs.put(row);
+        const asked: string[] = [];
+        const abort = w.deps.abortUpload;
+        // Signed out while the first abort was on its way.
+        w.deps.abortUpload = async (ws, id) => {
+            asked.push(id);
+            const fate = await abort(ws, id);
+            session = false;
+            return fate;
+        };
+        const changes: string[] = [];
+        const runs = {
+            ...w.runs,
+            remove: async (id: string) => void changes.push(`remove ${id}`),
+            put: async (r: RunRow) => void changes.push(`put ${r.id}`),
+            update: async (id: string) => {
+                changes.push(`update ${id}`);
+                return true;
+            },
+        };
+        expect(await keepInterrupted({ ...w.deps, runs }, row)).toBe('signed-out');
+        expect(asked).toEqual(['up-1']);
+        expect(changes).toEqual([]);
+        // Signed out before the journal change, its retries included: nothing is written.
+        session = true;
+        let refusals = 0;
+        const refusing = {
+            ...w.runs,
+            update: async () => {
+                refusals += 1;
+                session = false;
+                throw new Error('refused');
+            },
+            remove: async (id: string) => void changes.push(`remove ${id}`),
+            put: async (r: RunRow) => void changes.push(`put ${r.id}`),
+        };
+        w.deps.abortUpload = abort;
+        expect(await keepInterrupted({ ...w.deps, runs: refusing }, row)).toBe('signed-out');
+        expect(refusals).toBe(1);
+        expect(changes).toEqual([]);
+    });
+
+    test(`a sign-out during the first of two trash batches (${MAX_TRASH_BATCH + 1} ids) sends no second`, async () => {
+        const ids = Array.from({ length: MAX_TRASH_BATCH + 1 }, (_, i) => `node-${i}`);
+        let session = true;
+        const sent: string[][] = [];
+        const fates = await trashInBatches(
+            ids,
+            MAX_TRASH_BATCH,
+            () => session,
+            async (batch) => {
+                sent.push(batch);
+                session = false;
+                return new Map(batch.map((id): [string, ItemFate] => [id, 'done']));
+            },
+        );
+        expect(sent).toEqual([ids.slice(0, MAX_TRASH_BATCH)]);
+        // The unsent one is left for a later clean-up, never counted gone.
+        expect(fates.get(ids[MAX_TRASH_BATCH]!)).toBe('refused');
+        expect(fates.get(ids[0]!)).toBe('done');
+    });
+
+    test('a sign-out between tries of an abort, or of any request, sends no next try', async () => {
+        let session = true;
+        let tries = 0;
+        const fate = await askAbort(
+            async () => {
+                tries += 1;
+                session = false;
+                throw new DriveApiError('Still finishing.', 'conflict', 409, {
+                    upload: 'completing',
+                });
+            },
+            { stillOn: () => session, pause: async () => {} },
+        );
+        expect(tries).toBe(1);
+        expect(fate).toBe('unknown');
+        // Any request wrapped for the session: each call (a retry included) checks before it goes.
+        session = true;
+        const calls: string[] = [];
+        const send = whileSignedIn(
+            () => session,
+            async (id: string) => void calls.push(id),
+        );
+        await send('first');
+        session = false;
+        await expect(send('retry')).rejects.toBeInstanceOf(SignedOutError);
+        expect(calls).toEqual(['first']);
+    });
+
+    test('a sign-out while an interrupted clean-up trashes sends no delete forever, nor any other request', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'left',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-x'],
+            uploadIds: ['up-x'],
+            at: 1,
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        w.server.open.add('up-x');
+        const sent: string[] = [];
+        const { trash, purge, mayPurge, abortUpload } = w.deps;
+        w.deps.abortUpload = (ws, id) => (sent.push('abort'), abortUpload(ws, id));
+        w.deps.trash = async (ws, ids) => {
+            sent.push('trash');
+            const fates = await trash(ws, ids);
+            // Signed out while the trash was on its way (another account may sign in next).
+            session = false;
+            return fates;
+        };
+        w.deps.mayPurge = (ws) => (sent.push('may-purge'), mayPurge(ws));
+        w.deps.purge = (ws, ids) => (sent.push('purge'), purge(ws, ids));
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        expect(sent).toEqual(['abort', 'trash']);
+        expect(w.server.purged.size).toBe(0);
+    });
+
+    test('not found, to someone who isn’t a member, is gone only while every folder the run saved into is still found', async () => {
+        // An editor of two of one owner's folders who lost only the result's: its file still there.
+        const w = world({ member: false });
+        const row: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-share',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+            destinations: ['dest'],
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-a');
+        w.server.unreachable.add('node-a');
+        w.server.unreachable.add('dest');
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        // The only record of it kept, as it was; nothing removed.
+        expect(w.runs.rows.get('r')).toEqual(row);
+        expect(w.server.live.has('node-a')).toBe(true);
+        // No destinations named (an older row): not known to be reached either.
+        const unnamed: RunRow = { ...row, id: 'u', destinations: undefined };
+        await w.runs.put(unnamed);
+        expect(await cleanUpInterrupted(w.deps, unnamed)).toBe('left');
+        expect(w.runs.rows.get('u')).toEqual(unnamed);
+        // Every destination still found: the person reaches them, so "not found" is gone.
+        const v = world({ member: false });
+        await v.runs.put(row);
+        v.server.live.add('dest');
+        expect(await cleanUpInterrupted(v.deps, row)).toBe('nothing');
+        expect(v.runs.rows.has('r')).toBe(false);
+        // A member reaches all of the space: gone, without looking.
+        const m = world();
+        await m.runs.put({ ...row, destinations: undefined });
+        expect(await cleanUpInterrupted(m.deps, { ...row, destinations: undefined })).toBe(
+            'nothing',
+        );
+        // A run's row names the folders it saves into.
+        const run = await startRun(m.deps, { targets: [folder('f')], results: [] });
+        expect(m.runs.rows.get(run.id)?.destinations).toEqual(['f']);
+        await run.finish();
+    });
+
+    test('a waiting folder found in the Trash is never said to hold nothing', async () => {
+        const w = world();
+        const answered: RunRow = {
+            id: 'answered',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow', 'full'],
+            uploadIds: [],
+            at: 1,
+            uncertain: [{ id: 'slow', at: 1 }],
+            chosen: 'delete',
+        };
+        await w.runs.put(answered);
+        w.server.trash.add('slow');
+        w.server.uncounted.add('slow');
+        w.server.live.add('full');
+        w.server.items.set('full', 2);
+        await interruptedRuns(w.deps);
+        await quietlySettled();
+        const again = w.runs.rows.get('answered');
+        expect(again).toMatchObject({ holds: 2, uncounted: true });
+        expect(again?.chosen).toBeUndefined();
+        // Counted alone, a later look says so plainly.
+        w.server.uncounted.delete('slow');
+        w.server.items.set('slow', 1);
+        await w.runs.put({ ...again!, chosen: 'delete' });
+        await interruptedRuns(w.deps);
+        await quietlySettled();
+        expect(w.runs.rows.get('answered')).toMatchObject({ holds: 3 });
+        expect(w.runs.rows.get('answered')?.uncounted).toBeUndefined();
+    });
+
+    test('a sign-out while the interrupted rows are read offers none of them, and settles none', async () => {
+        const w = world();
+        const made: RunRow = {
+            id: 'made',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: [],
+            at: 1,
+        };
+        const nodeless: RunRow = { ...made, id: 'nodeless', nodeIds: [], uploadIds: ['up-a'] };
+        await w.runs.put(made);
+        await w.runs.put(nodeless);
+        w.server.open.add('up-a');
+        // Signed out right as the last row is read again under its lock.
+        const list = w.runs.list.bind(w.runs);
+        let reads = 0;
+        w.runs.list = async () => {
+            const rows = await list();
+            if (++reads === 3) w.signOut();
+            return rows;
+        };
+        expect(await interruptedRuns(w.deps)).toEqual([]);
+        await quietlySettled();
+        expect(w.server.aborted).toEqual([]);
+        expect(w.runs.rows.get('nodeless')).toEqual(nodeless);
+    });
+
+    test('another account’s row, or one naming none, is never offered, settled, kept, deleted or removed', async () => {
+        const w = world();
+        // A run's row names the account that made it.
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        expect(w.runs.rows.get(run.id)?.account).toBe('me');
+        await run.finish();
+        const theirs: RunRow = {
+            id: 'theirs',
+            account: 'them',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-t'],
+            uploadIds: ['up-t'],
+            at: 1,
+        };
+        const nobodys: RunRow = { ...theirs, id: 'nobodys', account: undefined };
+        const finished: RunRow = { ...theirs, id: 'finished', done: true };
+        const nodeless: RunRow = { ...theirs, id: 'nodeless', nodeIds: [] };
+        const answered: RunRow = { ...theirs, id: 'answered', chosen: 'delete' };
+        for (const row of [theirs, nobodys, finished, nodeless, answered]) await w.runs.put(row);
+        w.server.live.add('node-t');
+        w.server.open.add('up-t');
+        w.server.items.set('node-t', 3);
+        expect(await interruptedRuns(w.deps)).toEqual([]);
+        await quietlySettled();
+        // A Delete or a Keep handed one anyway (an older read): as if it weren't there.
+        expect(await cleanUpInterrupted(w.deps, theirs)).toBe('gone');
+        expect(await cleanUpInterrupted(w.deps, nobodys)).toBe('gone');
+        expect(await keepInterrupted(w.deps, theirs)).toBe('gone');
+        // Nothing sent, nothing written: every row as it was, the file still there, its upload open.
+        expect(w.server.live.has('node-t')).toBe(true);
+        expect(w.server.trash.size).toBe(0);
+        expect(w.server.aborted).toEqual([]);
+        expect(w.server.open.has('up-t')).toBe(true);
+        for (const row of [theirs, nobodys, finished, nodeless, answered])
+            expect(w.runs.rows.get(row.id)).toEqual(row);
+        // The same rows are that account's own when it signs in here.
+        const them = world();
+        await them.runs.put(theirs);
+        them.server.live.add('node-t');
+        expect(
+            (await interruptedRuns({ ...them.deps, account: 'them' })).map((row) => row.id),
+        ).toEqual(['theirs']);
+        // No account unlocked: nothing starts.
+        await expect(
+            startRun({ ...w.deps, account: null }, { targets: [folder('f')], results: [] }),
+        ).rejects.toBeInstanceOf(RunStopped);
+    });
+
+    test('an interrupted clean-up that a sign-out overtakes writes nothing back for that account', async () => {
+        const w = world();
+        let session = true;
+        w.deps.current = () => session;
+        const row: RunRow = {
+            id: 'left',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['slow', 'node-x'],
+            uploadIds: [],
+            at: 1,
+            uncertain: [{ id: 'slow', at: Date.now() }],
+        };
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        // The sign-out lands while the clean-up asks the server: the journal goes with the account.
+        const trash = w.deps.trash;
+        w.deps.trash = async (ws, ids) => {
+            const fates = await trash(ws, ids);
+            session = false;
+            w.runs.rows.clear();
+            return fates;
+        };
+        await cleanUpInterrupted(w.deps, row);
+        expect(w.runs.rows.size).toBe(0);
+        // Signed out before it began: nothing is asked of the server at all.
+        w.deps.trash = trash;
+        await w.runs.put(row);
+        w.server.live.add('node-x');
+        expect(await cleanUpInterrupted(w.deps, row)).toBe('left');
+        expect(w.server.live.has('node-x')).toBe(true);
+    });
+
+    test('finish waits for a folder still being made: the row stays until its creation settles', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let create: () => void = () => {};
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = (parent, name, signAs, minted) =>
+            make(parent, name, signAs, async (id) => {
+                await minted(id);
+                await new Promise<void>((resolve) => {
+                    create = resolve;
+                });
+            });
+        const making = run.folder('Out', own);
+        await tick();
+        await tick();
+        await expect(run.finish()).rejects.toThrow('still has results on their way');
+        expect(w.runs.rows.get(run.id)!.nodeIds).toEqual(['made-1']);
+        create();
+        await making;
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('made-1')).toBe(true);
+    });
+
+    test('a folder inside one the run made, answered 409 for its own id, is found too: the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const out = await run.folder('Out', own);
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = async (parent, name, signAs, minted) => {
+            if (parent.id !== out.id) return make(parent, name, signAs, minted);
+            await minted('inner');
+            w.server.live.add('inner');
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const inner = await run.folder('In', { into: out, ...own });
+        expect(inner.id).toBe('inner');
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('a folder creation answered 409 for its own id that is there is the folder: the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted('resent');
+            // The first send made it; the browser's resend found the id taken.
+            w.server.live.add('resent');
+            throw new DriveApiError('An item with this id already exists.', 'conflict', 409);
+        };
+        const out = await run.folder('Out', own);
+        expect(out.id).toBe('resent');
+        await run.finish();
+        expect(w.server.live.has('resent')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+    });
+
+    test('two late folders that both can’t be removed are both named by the row', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const finishers: ((made: DriveNode) => void)[] = [];
+        let next = 0;
+        w.deps.makeFolder = async (_parent, _name, _signAs, minted) => {
+            await minted(`late-${++next}`);
+            return new Promise<DriveNode>((resolve) => {
+                finishers.push(resolve);
+            });
+        };
+        const first = run.folder('One', own);
+        const second = run.folder('Two', own);
+        await tick();
+        const cancelling = run.cancel();
+        await tick();
+        for (const id of ['late-1', 'late-2']) {
+            w.server.live.add(id);
+            w.server.refuse.add(id);
+        }
+        finishers[0]!(folder('late-1'));
+        finishers[1]!(folder('late-2'));
+        await expect(first).rejects.toBeInstanceOf(RunStopped);
+        await expect(second).rejects.toBeInstanceOf(RunStopped);
+        expect((await cancelling).cleanup).toBe('left');
+        expect([...w.runs.rows.values()].map((row) => row.nodeIds)).toEqual([['late-1', 'late-2']]);
+    });
+
+    test('a folder listing or creation that fails stops the run and removes what it made, all or nothing', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.deps.namesIn = () => Promise.reject(new TypeError('Failed to fetch'));
+        await expect(
+            run.file({ name: 'b', bytes: bytes(), mime: null, ...own, into: folder('g') }),
+        ).rejects.toMatchObject({ reason: 'failed' });
+        expect(w.server.purged.has('node-a')).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+        expect(resultsWaiting()).toBe(false);
+
+        const v = world();
+        const other = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const kept = other.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await kept;
+        v.deps.makeFolder = () => Promise.reject(new Error('This folder is read-only.'));
+        await expect(other.folder('Out', own)).rejects.toMatchObject({ reason: 'failed' });
+        expect(v.server.purged.has('node-a')).toBe(true);
+        await expect(
+            other.file({ name: 'c', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toBeInstanceOf(RunStopped);
+    });
+
+    test('a `stale` that is only a key having moved is a failure, never someone else’s version', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        // The engine gave up on a key-only refusal: `stale` as the server's code, no race confirmed.
+        w.failWith(w.ids()[0]!, 'stale');
+        await expect(saved).rejects.toMatchObject({ reason: 'failed' });
+    });
+
+    test('a result asked into another Drive than the run’s is refused before anything is listed, minted or queued', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const elsewhere = folder('b', 'ws-other');
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, into: elsewhere, ...own }),
+        ).rejects.toThrow(OUTSIDE_RUN);
+        await expect(run.folder('Out', { into: elsewhere, ...own })).rejects.toThrow(OUTSIDE_RUN);
+        const theirs = { ...folder('doc', 'ws-other'), kind: 'file', parentId: 'b' } as DriveNode;
+        await expect(
+            run.version({
+                file: theirs,
+                folder: elsewhere,
+                startedFrom: 'v1',
+                bytes: bytes(),
+                ...own,
+            }),
+        ).rejects.toThrow(OUTSIDE_RUN);
+        expect(w.queued.size).toBe(0);
+        expect(w.madeFolders).toEqual([]);
+        expect(w.runs.rows.get(run.id)?.nodeIds ?? []).toEqual([]);
+        // The run itself goes on.
+        const saving = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        expect(w.queued.size).toBe(1);
+        await run.cancel();
+        await saving.catch(() => {});
+    });
+
+    test('a completion naming another node than the one written stops the run and never deletes that node', async () => {
+        const w = world();
+        // Someone's unrelated file, in the same Drive.
+        w.server.live.add('node-theirs');
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saving = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        // The reply names node-theirs: never adopted, never a deletion target.
+        w.land(w.ids()[0]!, 'node-theirs', 'up-a');
+        await expect(saving).rejects.toMatchObject({ reason: 'failed' });
+        expect(w.server.live.has('node-theirs')).toBe(true);
+        expect(w.server.trash.has('node-theirs')).toBe(false);
+        expect(w.server.purged.has('node-theirs')).toBe(false);
+        // The id this run minted is the one its clean-up looked for.
+        expect([...w.server.trash, ...w.server.purged]).not.toContain('node-theirs');
+        // And one in another workspace, even naming the minted id, is no answer either.
+        const v = world();
+        const other = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const next = other.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-b', 'node-b');
+        await tick();
+        const held = v.queued.get(v.ids()[0]!)!;
+        held.item.status = 'done';
+        held.item.node = { id: 'node-b', workspaceId: 'ws-elsewhere' } as NodeView;
+        v.emit({ type: 'done', item: held.item });
+        await expect(next).rejects.toMatchObject({ reason: 'failed' });
+    });
+
+    test('a sign-out while a live run stops sends nothing more, and says what may stay', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        void run.file({ name: 'b', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[1]!, 'up-b', 'node-b');
+        await tick();
+        // Signed out while the stop's first abort was on its way.
+        const abort = w.deps.abortUpload;
+        w.deps.abortUpload = async (workspaceId, uploadId) => {
+            const fate = await abort(workspaceId, uploadId);
+            w.signOut();
+            return fate;
+        };
+        const stopped = await run.cancel();
+        expect(w.server.trash.size).toBe(0);
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(stopped.message).toContain('may still be there');
+    });
+
+    test('a sign-out while a finish or a clean-up retires its row writes nothing back, done or not', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const writes: string[] = [];
+        const put = w.runs.put.bind(w.runs);
+        w.runs.put = async (row: RunRow) => {
+            writes.push(`put ${row.id}${row.done ? ' done' : ''}`);
+            return put(row);
+        };
+        // The removal refused, and the account signed out meanwhile: no retry, no `done` fallback.
+        let removals = 0;
+        w.runs.remove = async () => {
+            removals += 1;
+            w.signOut();
+            throw new DOMException('full', 'QuotaExceededError');
+        };
+        await run.finish();
+        expect(removals).toBe(1);
+        expect(writes).toEqual([]);
+        // An interrupted run's Delete: the same.
+        const v = world();
+        const left: RunRow = {
+            id: 'left',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-z'],
+            uploadIds: [],
+            at: 1,
+        };
+        await v.runs.put(left);
+        v.server.live.add('node-z');
+        const vput = v.runs.put.bind(v.runs);
+        const vwrites: string[] = [];
+        v.runs.put = async (row: RunRow) => {
+            vwrites.push(`put ${row.id}${row.done ? ' done' : ''}`);
+            return vput(row);
+        };
+        let vremovals = 0;
+        v.runs.remove = async () => {
+            vremovals += 1;
+            v.signOut();
+            throw new DOMException('full', 'QuotaExceededError');
+        };
+        expect(await cleanUpInterrupted(v.deps, left)).toBe('left');
+        expect(vremovals).toBe(1);
+        expect(vwrites).toEqual([]);
+        // As it was (with this Delete's claim, which a sign-out leaves for the cleared journal), never `done`.
+        expect(v.runs.rows.get('left')).toMatchObject(left);
+        expect(v.runs.rows.get('left')!.done).toBeUndefined();
+    });
+
+    test('a finish whose record the journal won’t update says so, stays live, and can be asked again', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        const put = w.runs.put.bind(w.runs);
+        const remove = w.runs.remove.bind(w.runs);
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        await expect(run.finish()).rejects.toBeInstanceOf(RecordNotUpdated);
+        // Still this page's: never taken for interrupted here, and nothing more taken in.
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: async () => false,
+            }),
+        ).toEqual([]);
+        await expect(run.file({ name: 'b', bytes: bytes(), mime: null, ...own })).rejects.toThrow();
+        w.runs.put = put;
+        w.runs.remove = remove;
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+        // Keep, the same: not recorded is said, never "kept".
+        const left: RunRow = {
+            id: 'r',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: [],
+            uploadIds: [],
+            at: 1,
+        };
+        await w.runs.put(left);
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.update = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        expect(await keepInterrupted(w.deps, left)).toBe('not-recorded');
+        expect(w.runs.rows.has('r')).toBe(true);
+    });
+
+    test('a failure on the run’s own way says why', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.deps.namesIn = () => Promise.reject(new Error('This folder couldn’t be listed'));
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toMatchObject({
+            message: 'This folder couldn’t be listed. Nothing was saved.',
+        });
+    });
+
+    test('a sign-out after a result was sent to be published says it may still be there; a cancel after finish says it was saved', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        w.signOut();
+        abandonRuns();
+        await expect(saved).rejects.toMatchObject({
+            reason: 'signed-out',
+            message:
+                'You signed out before this was saved. Some of what was made may still be there.',
+        });
+
+        const v = world();
+        const done = await startRun(v.deps, { targets: [folder('f')], results: [] });
+        const result = done.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        v.begin(v.ids()[0]!, 'up-a', 'node-a');
+        v.land(v.ids()[0]!, 'node-a', 'up-a');
+        await result;
+        await done.finish();
+        expect((await done.cancel()).message).toBe(ALREADY_SAVED);
+    });
+
+    test('an abort refused as no longer theirs, once its completion was sent, may have landed', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        w.server.denied = true;
+        const stopped = await run.cancel();
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).toMatch(/may have been saved/);
+    });
+
+    test('an offline clean-up of a file whose completion was never sent doesn’t say it may still be there', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        await tick();
+        w.server.offline = true;
+        const stopped = await run.cancel();
+        expect(stopped.cleanup).toBe('left');
+        expect(stopped.message).toBe(RUN_CANCELLED);
+    });
+
+    test('the app’s lock stops a run whose result is paused or completing, and its clean-up starts', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const paused = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        const completing = run.file({ name: 'b', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a, b] = w.ids();
+        // `a` begun and its parts paused; `b` with its completion sent. No upload reports a lock.
+        w.begin(a!, 'up-a', 'node-a');
+        w.begin(b!, 'up-b', 'node-b');
+        await w.queued.get(b!)!.input.produced!.beforeComplete!();
+        await lockRuns();
+        await expect(paused).rejects.toMatchObject({ reason: 'locked' });
+        await expect(completing).rejects.toMatchObject({ reason: 'locked' });
+        expect(w.server.aborted).toEqual(expect.arrayContaining(['up-a', 'up-b']));
+        expect(w.runs.rows.size).toBe(0);
+        expect(resultsWaiting()).toBe(false);
+    });
+
+    test('a version whose completion was sent and whose abort finds nothing (a share ended) may have been saved', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        void run
+            .version({ file: doc, folder: folder('f'), startedFrom: 'v1', bytes: bytes(), ...own })
+            .catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-v', 'doc');
+        await w.queued.get(w.ids()[0]!)!.input.produced!.beforeComplete!();
+        // Access lost: the server answers 404 for the upload, as it does for a workspace no longer theirs.
+        w.server.open.delete('up-v');
+        const stopped = await run.cancel();
+        expect(stopped.uncertainVersions).toBe(1);
+        expect(stopped.message).not.toMatch(/Nothing was saved/);
+    });
+
+    test('a row the journal refuses to write stops the run: nothing is attached or completed that it does not name', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        const produced = w.queued.get(a!)!.input.produced!;
+        // Storage full: the begin's row can't be written.
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.begin(a!, 'up-a', 'node-a');
+        await expect(produced.beforeComplete!()).rejects.toThrow();
+        await expect(
+            produced.onAttach!({ workspaceId: 'ws-own', nodeId: 'n-2' }),
+        ).rejects.toThrow();
+        const stopped = (await saved.catch((error: unknown) => error)) as RunStopped;
+        expect(stopped).toMatchObject({ reason: 'failed' });
+        expect(stopped.message).toMatch(/couldn’t keep a record/);
+        // Its upload was aborted on the server all the same.
+        expect(w.server.aborted).toContain('up-a');
+    });
+
+    test('one refused write (a connection the browser closed) is written again; the run goes on', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        const produced = w.queued.get(a!)!.input.produced!;
+        const put = w.runs.put.bind(w.runs);
+        let refusals = 1;
+        w.runs.put = (row) =>
+            refusals-- > 0
+                ? Promise.reject(new DOMException('closed', 'InvalidStateError'))
+                : put(row);
+        w.begin(a!, 'up-a', 'node-a');
+        await produced.beforeComplete!();
+        expect(w.runs.rows.get(run.id)).toMatchObject({
+            nodeIds: ['node-a'],
+            uploadIds: ['up-a'],
+        });
+        w.land(a!, 'node-a', 'up-a');
+        await saved;
+        await run.finish();
+        expect(w.server.aborted).toEqual([]);
+        expect(w.server.live.has('node-a')).toBe(true);
+    });
+
+    test('a sign-out while a run starts: it never starts, writes no row and lets its hold go', async () => {
+        for (const during of ['room', 'hold', 'row'] as const) {
+            const w = world();
+            const held = new Set<string>();
+            const room = w.deps.room;
+            w.deps.room = async (ws) => {
+                if (during === 'room') w.signOut();
+                return room(ws);
+            };
+            w.deps.hold = async (id) => {
+                held.add(id);
+                if (during === 'hold') w.signOut();
+                return () => held.delete(id);
+            };
+            const put = w.runs.put.bind(w.runs);
+            w.runs.put = async (row) => {
+                // The sign-out cleared the journal just before this row went in: it lands in the next one.
+                if (during === 'row') {
+                    w.signOut();
+                    w.runs.rows.clear();
+                }
+                await put(row);
+            };
+            await expect(
+                startRun(w.deps, { targets: [folder('f')], results: [] }),
+                during,
+            ).rejects.toMatchObject({ reason: 'signed-out' });
+            expect(w.runs.rows.size, during).toBe(0);
+            expect(held.size, during).toBe(0);
+            expect(resultsWaiting()).toBe(false);
+        }
+    });
+
+    test('a run whose session ended without reaching it takes no more work and makes no folder', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        w.signOut();
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'signed-out' });
+        await expect(
+            run.file({ name: 'a', bytes: bytes(), mime: null, ...own }),
+        ).rejects.toMatchObject({ reason: 'signed-out' });
+        expect(w.madeFolders).toEqual([]);
+        expect(w.ids()).toEqual([]);
+        expect(w.server.aborted).toEqual([]);
+    });
+
+    test('a folder that lands after a sign-out is neither removed nor written down for that account', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const make = w.deps.makeFolder;
+        w.deps.makeFolder = async (parent, name, signAs, minted) => {
+            const made = await make(parent, name, signAs, minted);
+            w.signOut();
+            w.runs.rows.clear();
+            return made;
+        };
+        await expect(run.folder('Out', own)).rejects.toMatchObject({ reason: 'signed-out' });
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.server.live.has('made-1')).toBe(true);
+        expect([...w.server.trash, ...w.server.purged]).toEqual([]);
+    });
+
+    test('the next open lists a closed tab’s run, not a live one, and cleans it up from its ids alone', async () => {
+        const w = world();
+        const left: RunRow = {
+            id: 'run-closed',
+            account: 'me',
+            workspaceId: 'ws-own',
+            nodeIds: ['node-a'],
+            uploadIds: ['up-b'],
+            at: 1,
+        };
+        w.server.live.add('node-a');
+        w.server.open.add('up-b');
+        await w.runs.put(left);
+        const live = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        // Another tab's run, its lock held there: not this tab's to clean up.
+        await w.runs.put({ ...left, id: 'run-other-tab' });
+        const release = await w.locks.hold('run-other-tab');
+        const found = await interruptedRuns(w.deps);
+        expect(found.map((row) => row.id)).toEqual(['run-closed']);
+        expect(await cleanUpInterrupted(w.deps, found[0]!)).toBe('deleted');
+        expect(w.server.aborted).toEqual(['up-b']);
+        expect(w.server.purged).toEqual(new Set(['node-a']));
+        expect([...w.runs.rows.keys()].sort()).toEqual([live.id, 'run-other-tab'].sort());
+        await live.cancel();
+        release();
+    });
+
+    test('its row is written only once its lock is held, and the lock is held for as long as the run runs', async () => {
+        const w = world();
+        // A lock manager that grants a moment later, as the browser's does.
+        const held = new Set<string>();
+        const unheldWrites: string[] = [];
+        w.deps.hold = async (id) => {
+            await tick();
+            held.add(id);
+            return () => held.delete(id);
+        };
+        w.deps.isLive = async (id) => held.has(id);
+        const put = w.runs.put.bind(w.runs);
+        w.runs.put = async (row) => {
+            if (!held.has(row.id)) unheldWrites.push(row.id);
+            await put(row);
+        };
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        expect(unheldWrites).toEqual([]);
+        // Another tab's next open, at any point while it runs: never interrupted.
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: w.deps.isLive,
+            }),
+        ).toEqual([]);
+        void run.file({ name: 'a', bytes: bytes(), mime: null, ...own }).catch(() => {});
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await tick();
+        expect(unheldWrites).toEqual([]);
+        expect(
+            await interruptedRuns({
+                exclusive: freeLock,
+                current: () => true,
+                account: 'me',
+                runs: w.runs,
+                isLive: w.deps.isLive,
+            }),
+        ).toEqual([]);
+        await run.finish();
+        expect(held.size).toBe(0);
+    });
+
+    test('finish is refused while a result is on its way, and drops the row once all are in', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: [bytes(2), bytes(3)], mime: null, ...own });
+        await tick();
+        const [a] = w.ids();
+        expect(w.queued.get(a!)!.input.file).toMatchObject({ kind: 'memory', size: 5 });
+        await expect(run.finish()).rejects.toThrow();
+        w.begin(a!, 'up-a', 'node-a');
+        w.land(a!, 'node-a', 'up-a');
+        await saved;
+        await run.finish();
+        expect(w.runs.rows.size).toBe(0);
+        // Finished: a cancel afterwards removes nothing it kept.
+        expect((await run.cancel()).cleanup).toBe('nothing');
+        expect(w.server.trash.size).toBe(0);
+    });
+});

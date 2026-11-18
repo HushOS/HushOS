@@ -89,6 +89,19 @@ class AccountStoreTest {
         for (file in aliceFiles) assertFalse("$file of an unknown account survived", file.exists())
     }
 
+    /* A save-run journal's staging file a write left (a failed write, or the process gone mid-write) goes with the account. */
+    @Test
+    fun signingOutRemovesASaveRunsLeftoverStagingFile() {
+        store.claim("alice")
+        val staging = File(files, SaveRunJournal.STAGING).apply { parentFile!!.mkdirs(); writeText("[]") }
+        store.wipe()
+        assertFalse(staging.exists())
+        // And a journal opened over a leftover one drops it at once.
+        val left = File(files, SaveRunJournal.STAGING).apply { parentFile!!.mkdirs(); writeText("[]") }
+        SaveRunJournal(File(files, SaveRunJournal.FILE), SaveRunJournal.Epoch())
+        assertFalse(left.exists())
+    }
+
     @Test
     fun signingOutRemovesEverythingAndTheOwner() {
         store.claim("alice")

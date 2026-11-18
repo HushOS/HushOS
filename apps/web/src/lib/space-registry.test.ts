@@ -28,6 +28,24 @@ const fake = (name: string, seen: string[] = []): Fake => ({
 const GROUP = 'g1';
 
 describe('space registry', () => {
+    test('whether a family folder may be changed: its own answer, a forgotten one never, and unknown for the rest', () => {
+        const spaces = createSpaceRegistry<Fake>(() => fake('personal'));
+        let refusal: string | null = null;
+        spaces.register('ws-a', {
+            groupId: GROUP,
+            client: fake('family'),
+            refuseWrite: () => null,
+            refuseChange: () => refusal,
+        });
+        expect(spaces.refuseChange('ws-a')).toBeNull();
+        refusal = 'keys changed';
+        expect(spaces.refuseChange('ws-a')).toBe('keys changed');
+        spaces.forget('ws-a');
+        expect(spaces.refuseChange('ws-a')).toBe(FOLDER_GONE);
+        // Never registered: the caller decides (one's own Drive, a share, or a family not open yet).
+        expect(spaces.refuseChange('ws-own')).toBeUndefined();
+    });
+
     test('a family folder forgotten or pruned fails closed, never falling back to the personal client', () => {
         const personal = fake('personal');
         const spaces = createSpaceRegistry<Fake>(() => personal);

@@ -15,6 +15,9 @@ public struct StorageAllowance: Codable, Sendable {
     public let reservedBytes: String
     public let availableBytes: String
     public let pool: StoragePool?
+    /* While `pool` is set: what the account's own files take, exact, and what they may still take as an upload begin checks it. */
+    public let ownUsedBytes: String?
+    public let ownFreeBytes: String?
     public var quota: Int64 { Int64(quotaBytes) ?? 0 }
     public var used: Int64 { Int64(usedBytes) ?? 0 }
     /*
@@ -24,7 +27,11 @@ public struct StorageAllowance: Codable, Sendable {
      */
     public var free: Int64 { max(0, Int64(availableBytes) ?? 0) }
 
-    private enum CodingKeys: String, CodingKey { case workspaceId, quotaBytes, usedBytes, reservedBytes, availableBytes, pool }
+    private enum CodingKeys: String, CodingKey { case workspaceId, quotaBytes, usedBytes, reservedBytes, availableBytes, pool, own }
+    private struct Own: Codable {
+        let usedBytes: String
+        var freeBytes: String?
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -36,6 +43,20 @@ public struct StorageAllowance: Codable, Sendable {
         // A pool this build can't read is no pool: the figures still show, under today's words,
         // rather than the whole allowance failing to decode and the card going blank.
         pool = (try? container.decodeIfPresent(StoragePool.self, forKey: .pool)) ?? nil
+        let own = (try? container.decodeIfPresent(Own.self, forKey: .own)) ?? nil
+        ownUsedBytes = own?.usedBytes
+        ownFreeBytes = own?.freeBytes
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(workspaceId, forKey: .workspaceId)
+        try container.encode(quotaBytes, forKey: .quotaBytes)
+        try container.encode(usedBytes, forKey: .usedBytes)
+        try container.encode(reservedBytes, forKey: .reservedBytes)
+        try container.encode(availableBytes, forKey: .availableBytes)
+        try container.encodeIfPresent(pool, forKey: .pool)
+        try container.encodeIfPresent(ownUsedBytes.map { Own(usedBytes: $0, freeBytes: ownFreeBytes) }, forKey: .own)
     }
 }
 

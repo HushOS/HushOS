@@ -217,7 +217,7 @@ extension OnFakeDrive {
             var upload = FamilyUpload(family: .init(groupId: family.groupId, workspaceId: family.workspaceId), folderId: family.rootId,
                                       name: "minutes.txt", mime: "text/plain", replacingId: nil, replacingVersionId: nil)
             let uploads = queue(phone)
-            let held: (Int, [String: Any]) = (403, ["code": "forbidden", "message": "A group manager has paused changes to this folder."])
+            let held: (Int, [String: Any]) = (403, ["code": "held", "message": "A group manager has paused changes to this folder."])
 
             server.beginAnswers = [held]
             guard case .failed(let refused) = await uploads.seal(&upload, in: directory, thumbnail: nil) else { Issue.record("a held begin wasn't a failure"); return }

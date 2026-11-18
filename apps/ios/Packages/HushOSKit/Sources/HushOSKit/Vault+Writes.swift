@@ -21,10 +21,29 @@ extension Vault {
      * A new folder; `signing` is `.own` for one this person makes, and a copy's verdict for a copied folder's name.
      * `attributes` are a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:]) async throws -> Opened {
+    /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
+    public func createFolder(in parentId: String, name: String, signing: Signing = .own, attributes: [String: String] = [:],
+                             onMinted: @Sendable (String) throws -> Void = { _ in }) async throws -> Opened {
+        try await createFolder(name: name, signing: signing, attributes: attributes, onMinted: onMinted) { try await self.resolve(parentId) }
+    }
+
+    /*
+     * Into the very row `held` names, workspace and all, as this process holds it now (a save run's destination, checked
+     * by its ref): never looked up again by id, which answers with the own Drive's row first and so could name another
+     * workspace's folder. One no longer held is refused before anything is minted or sent.
+     */
+    func createFolder(under held: Opened, name: String, signing: Signing, onMinted: @Sendable (String) throws -> Void) async throws -> Opened {
+        try await createFolder(name: name, signing: signing, attributes: [:], onMinted: onMinted) {
+            guard let row = self.opened[held.ref] else { throw IdCollision() }
+            return row
+        }
+    }
+
+    private func createFolder(name: String, signing: Signing, attributes: [String: String], onMinted: @Sendable (String) throws -> Void,
+                              parent find: () async throws -> Opened) async throws -> Opened {
         return try await writing {
             _ = try await loadWorkspace()
-            let parent = try await resolve(parentId)
+            let parent = try await find()
             let family = try familyTarget(parent.node.workspaceId)
             // Shared folders belong to the granter's workspace; an editor writes there.
             let workspace = Target(workspaceId: parent.node.workspaceId)
@@ -36,6 +55,7 @@ extension Vault {
                 let metadata = NodeMetadata(name: name, mime: nil, size: nil, modified: nil, attributes: attributes)
                 let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace.workspaceId, nodeId: id, metadataVersion: 1), nodeKey: key, metadata: metadata)
                 let signature = try await signMetadata(workspaceId: workspace.workspaceId, nodeId: id, kind: .folder, version: 1, envelope: sealed, signing: signing)
+                try onMinted(id)
                 // Right before it leaves: a sync may have committed while this awaited (FamilyGuard.swift).
                 try sendingIntoFamily(workspace.workspaceId)
                 let nodes = try await api.createFolders(workspaceId: workspace.workspaceId, folders: [[
@@ -43,7 +63,19 @@ extension Vault {
                     "keyEnvelope": base64urlEncode(bytes: wrapped), "metadataEnvelope": base64urlEncode(bytes: sealed), "metadataSignature": signature,
                 ]])
                 guard let node = nodes.first else { throw DriveAPIError.server(500, "No folder returned") }
-                return try adopt(node, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
+                // The reply must name the folder minted here (Android's checkWritten): another is never adopted under its key.
+                guard node.id.lowercased() == id.lowercased(), node.workspaceId.lowercased() == workspace.workspaceId.lowercased() else {
+                    throw DriveAPIError.server(502, "HushOS answered with a different item than the one written. Nothing was kept.")
+                }
+                // Filed as it was sent (its place, key epochs, envelopes and signature), as the web and Android do: the reply
+                // gives only what the server assigns (its change number, times, the signer it recorded).
+                var built = NodeView(id: node.id, workspaceId: node.workspaceId, parentId: parent.node.id, kind: "folder", keyEpoch: epochs.from,
+                                     parentKeyEpoch: parent.node.keyEpoch, keyEnvelope: base64urlEncode(bytes: wrapped), metadataVersion: 1,
+                                     metadataEnvelope: base64urlEncode(bytes: sealed), currentVersion: nil, trashedAt: nil, changeSeq: node.changeSeq,
+                                     createdAt: node.createdAt, updatedAt: node.updatedAt)
+                built.metadataSigner = node.metadataSigner
+                built.metadataSignature = signature
+                return try adopt(built, nodeKey: key, metadata: metadata, in: workspace.workspaceId)
             } catch {
                 // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
                 if family { areaLedger.forgetNodeKey(workspaceId: workspace.workspaceId, nodeId: id) }
@@ -611,6 +643,8 @@ extension Vault {
         /* The metadata to show once it lands: a replacement's own, with the new size and date. */
         let final: NodeMetadata
         let replacing: Bool
+        /* A tool's new version (the save path): the file's name record is left as it is, never signed again. */
+        let keepName: Bool
         /* What a replacement's name record may be re-signed against once it lands (`Landing`). */
         let landing: Landing?
     }
@@ -633,14 +667,72 @@ extension Vault {
         func holds(_ node: NodeView) -> Bool { node.currentVersion?.id == versionId && node.metadataVersion == metadataVersion }
     }
 
-    private func begin(fileURL: URL, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
+    /*
+     * Where an upload's bytes are read from: a file on disk, or a result held in memory (the save
+     * path, SaveRuns.swift), which never touches the disk as plaintext.
+     */
+    enum PlainSource {
+        case file(URL)
+        case memory(Data, modified: Date)
+
+        func facts() throws -> (size: UInt64, modified: Date) {
+            switch self {
+            case .file(let url):
+                let onDisk = try FileManager.default.attributesOfItem(atPath: url.path)
+                return ((onDisk[.size] as? NSNumber)?.uint64Value ?? 0, (onDisk[.modificationDate] as? Date) ?? Date())
+            case .memory(let data, let modified):
+                return (UInt64(data.count), modified)
+            }
+        }
+    }
+
+    /* Reads a source's chunks: a file through one handle, kept open while the upload runs. */
+    final class PlainReader {
+        private let handle: FileHandle?
+        private let data: Data?
+
+        init(_ source: PlainSource) throws {
+            switch source {
+            case .file(let url): handle = try FileHandle(forReadingFrom: url); data = nil
+            case .memory(let bytes, _): handle = nil; data = bytes
+            }
+        }
+
+        func read(at offset: UInt64, length: UInt64) throws -> Data {
+            if let data {
+                let start = Int(min(offset, UInt64(data.count)))
+                let end = Int(min(offset + length, UInt64(data.count)))
+                return data.subdata(in: data.startIndex + start ..< data.startIndex + end)
+            }
+            guard let handle else { return Data() }
+            try handle.seek(toOffset: offset)
+            // In its own pool: FileHandle hands back autoreleased data, which would otherwise pile up until the async
+            // caller returns, the whole file in memory (fatal in Save to HushOS, whose limit is about 120 MB).
+            return try autoreleasepool { try handle.read(upToCount: Int(length)) ?? Data() }
+        }
+
+        func close() { try? handle?.close() }
+    }
+
+    /*
+     * `expected`: the version a new version must find current at begin; the replaced file's as
+     * held unless the save path names the one its work started from.
+     */
+    private func begin(source: PlainSource, name: String, mime: String?, parentId: String, replacing given: Opened?, thumbnailBytes: UInt32,
                        signing: (metadata: Signing, version: Signing), attributes: [String: String] = [:], waited: Bool = false,
-                       moveOf: MoveSource? = nil) async throws -> Begun {
+                       moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false, held: NodeRef? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
+        // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
+        // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
+        func destination() async throws -> Opened {
+            guard let held else { return try await resolve(parentId) }
+            guard let row = opened[held] else { throw IdCollision() }
+            return row
+        }
         // The drive the parent (or the file replaced) lives in: a shared folder's is the granter's.
         let workspace: Target
-        if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await resolve(parentId).node.workspaceId) }
+        if let replacing { workspace = Target(workspaceId: replacing.node.workspaceId) } else { workspace = Target(workspaceId: try await destination().node.workspaceId) }
         let family = try familyTarget(workspace.workspaceId)
         if family {
             // Looked up afresh before a node or a content key is made: the folder (and the file replaced) as the server serves
@@ -653,9 +745,9 @@ extension Vault {
                 replacing = fresh
             }
         }
-        let onDisk = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-        let plaintextSize = (onDisk[.size] as? NSNumber)?.uint64Value ?? 0
-        let modified = ISO8601DateFormatter().string(from: (onDisk[.modificationDate] as? Date) ?? Date())
+        let facts = try source.facts()
+        let plaintextSize = facts.size
+        let modified = ISO8601DateFormatter().string(from: facts.modified)
         let madeVersion = try mint(.version, in: workspace.workspaceId)
         let madeObject = try mint(.object, in: workspace.workspaceId)
         let (versionId, objectId) = (madeVersion.id, madeObject.id)
@@ -673,7 +765,9 @@ extension Vault {
         if let replacing {
             // The replacement re-signs the record's name when it completes (see `complete`): without whom to trust, nothing is
             // sent. In a family folder that is the family's judgement, asked at completion.
-            if !family { _ = try await changeSigners() }
+            // A tool's new version (`keepName`) leaves the name record as it is (docs/editing-design.md section 3, as the web
+            // does): nothing is signed again, so nothing waits on whom to trust.
+            if !family, !keepName { _ = try await changeSigners() }
             nodeId = replacing.id
             // In a family folder the file's key only as the ledger holds it rooted at the folder's current key (KEY_CHANGE_PENDING otherwise).
             if family {
@@ -682,13 +776,15 @@ extension Vault {
                 guard let key = self.nodeKey(of: replacing) else { throw DriveAPIError.server(500, "Node not opened") }
                 nodeKey = key
             }
+            let expectedVersion = expected ?? replacing.node.currentVersion?.id
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
-                         "expectedVersionId": replacing.node.currentVersion?.id ?? NSNull()]
+                         "expectedVersionId": expectedVersion ?? NSNull()]
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
-            final = NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
-                                 attributes: replacing.metadata.attributes)
+            final = keepName ? replacing.metadata
+                : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
+                               attributes: replacing.metadata.attributes)
         } else {
-            let parent = try await resolve(parentId)
+            let parent = try await destination()
             // The folder's key as the ledger holds it, before anything is asked of the server: a key change that hasn't
             // reached the folder is a wait (KEY_CHANGE_PENDING), not an epoch allocated for nothing.
             if family { _ = try areaLedger.writableNodeKey(workspaceId: workspace.workspaceId, nodeId: parent.id) }
@@ -736,18 +832,15 @@ extension Vault {
         return Begun(
             workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
             content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
-            urls: urls, final: final, replacing: replacing != nil,
+            urls: urls, final: final, replacing: replacing != nil, keepName: keepName,
             landing: replacing.map { Landing(versionId: versionId, metadataVersion: $0.node.metadataVersion) }
         )
     }
 
     /* One part's sealed bytes: the chunk's ciphertext, and on the last the thumbnail trailer. */
-    private func sealPart(_ begun: Begun, index: UInt64, from handle: FileHandle, thumbnail: Data?) throws -> Data {
+    private func sealPart(_ begun: Begun, index: UInt64, from reader: PlainReader, thumbnail: Data?) throws -> Data {
         let length = chunkLength(plaintextSize: begun.plaintextSize, index: index)
-        try handle.seek(toOffset: index * begun.chunkBytes)
-        // In its own pool: FileHandle hands back autoreleased data, which would otherwise pile up until the async
-        // caller returns, the whole file in memory (fatal in Save to HushOS, whose limit is about 120 MB).
-        let plaintext = try autoreleasepool { try handle.read(upToCount: Int(length)) ?? Data() }
+        let plaintext = try reader.read(at: index * begun.chunkBytes, length: length)
         if UInt64(plaintext.count) != length { throw DriveAPIError.server(500, "The file changed while uploading.") }
         var sealed = try chunkEncrypt(content: begun.content, index: index, plaintext: plaintext)
         if index == begun.chunkCount - 1, let thumbnail, begun.content.thumbnailBytes > 0 {
@@ -757,8 +850,10 @@ extension Vault {
     }
 
     /* Completes on the server with every part's ETag; a replacement's metadata is sealed again with its new size and date. */
-    private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing: Bool,
-                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String], landing: Landing?) async throws -> Opened {
+    private func complete(uploadId: String, workspaceId: String, nodeId: String, parentId: String, replacing given: Bool,
+                          final: NodeMetadata, nodeKey knownKey: Data?, etags: [Int: String], landing: Landing?, keepName: Bool = false) async throws -> Opened {
+        // A tool's new version keeps the name record as it is: completed as a new file is, adopted with the record unchanged.
+        let replacing = given && !keepName
         // Built here, not passed in: a dictionary of Any made in this call can be handed to the API; a parameter could not.
         let parts: [[String: Any]] = etags.keys.sorted().map { ["partNumber": $0, "etag": etags[$0]!] }
         // A family folder's replacement is checked before the version goes live: the file's key as the ledger holds it and the
@@ -774,11 +869,16 @@ extension Vault {
         try sendingIntoFamily(workspaceId)
         let completed = try await api.completeUpload(uploadId: uploadId, workspaceId: workspaceId, parts: parts)
         guard let node = completed.node else { throw DriveAPIError.server(500, "Upload completed without a node") }
+        // The reply must name the item written, in its workspace (Android's checkWritten): another is never adopted under
+        // this upload's key and name.
+        guard node.id == nodeId, node.workspaceId == workspaceId else {
+            throw DriveAPIError.server(502, "HushOS answered with a different item than the one written. Nothing was kept.")
+        }
         if replacing {
             // Another member renamed the file or put a newer version on it before this answer (a repeated completion): this
             // version landed, and their name record is theirs. Nothing is re-signed. An upload sealed before the landing was
             // kept (an older record) has nothing to check against and is re-signed as before.
-            if let landing, !landing.holds(node) { throw UploadLanded() }
+            if let landing, !landing.holds(node) { throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil)) }
             // The version is live from here: whatever refuses the name record now (a key change, a newer rename, no answer)
             // leaves an upload that landed, with its name to repair, never one to fail, abort or seal again.
             do {
@@ -791,13 +891,26 @@ extension Vault {
                 if let familyName { prior = familyName.prior } else { prior = try await priorMetadata(of: node, family: false) }
                 return try await resignLanded(node, nodeKey: nodeKey, prior: prior, final: final)
             } catch {
-                throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id))
+                throw UploadLanded(published: Published(metadataVersion: node.metadataVersion, versionId: node.currentVersion?.id),
+                                   landed: Opened(node: node, metadata: final, nodeKey: nil))
             }
         }
         // The file is on the server from here: a row this process won't keep now (its family let go of meanwhile) is an upload
         // that landed, never one that failed (for a move, its source is already deleted).
         if let knownKey {
-            do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch { throw UploadLanded() }
+            // A tool's new version keeps the name record as it is: one another device changed while the version went up is
+            // the server's now, opened as it is served (its signature checked), never kept with the name this upload began from.
+            if given, keepName, let landing, node.metadataVersion != landing.metadataVersion {
+                do {
+                    _ = try await resolve(parentId)
+                    return try open(node, replacing: true)
+                } catch {
+                    throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
+                }
+            }
+            do { return try adopt(node, nodeKey: knownKey, metadata: final, in: workspaceId) } catch {
+                throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
+            }
         }
         // Finished by another launch: the node key comes from the parent's, which the tree opens. The upload has landed
         // either way: a row that doesn't open here now is not an upload to fail, retry or abort.
@@ -805,7 +918,7 @@ extension Vault {
             _ = try await resolve(parentId)
             return try open(node)
         } catch {
-            throw UploadLanded()
+            throw UploadLanded(landed: Opened(node: node, metadata: final, nodeKey: nil))
         }
     }
 
@@ -821,12 +934,37 @@ extension Vault {
         thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing) = (.own, .own), attributes: [String: String] = [:],
         moveOf: MoveSource? = nil, progress: @Sendable (Double) -> Void = { _ in }
     ) async throws -> Opened {
+        try await upload(source: .file(fileURL), name: name, mime: mime, in: parentId, replacing: replacing, thumbnail: thumbnail,
+                         signing: signing, attributes: attributes, moveOf: moveOf, progress: progress)
+    }
+
+    /* The ids a result's upload was begun under, for its run's row (SaveRuns.swift). */
+    public struct BegunIds: Sendable, Equatable {
+        public let workspaceId: String
+        public let uploadId: String
+        public let nodeId: String
+    }
+
+    private func upload(
+        source: PlainSource, name: String, mime: String?, in parentId: String, replacing: Opened?,
+        thumbnail: Data?, signing: (metadata: Signing, version: Signing), attributes: [String: String],
+        moveOf: MoveSource?, expected: String?? = nil, keepName: Bool = false, onBegun: @Sendable (BegunIds) throws -> Void = { _ in },
+        onCompleting: @Sendable (String) throws -> Void = { _ in }, progress: @Sendable (Double) -> Void, held: NodeRef? = nil
+    ) async throws -> Opened {
         return try await writing {
-            let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
-                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf)
+            let begun = try await begin(source: source, name: name, mime: mime, parentId: parentId, replacing: replacing,
+                                        thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: signing, attributes: attributes, moveOf: moveOf,
+                                        expected: expected, keepName: keepName, held: held)
+            // A result's run writes these ids down first: if it can't, nothing is sent and the reservation goes.
+            do {
+                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
+            } catch {
+                await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+                throw error
+            }
             var urls = begun.urls
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
+            let handle = try PlainReader(source)
+            defer { handle.close() }
             var etags: [Int: String] = [:]
             do {
                 for index in 0 ..< begun.chunkCount {
@@ -856,6 +994,14 @@ extension Vault {
                 await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
                 throw error
             }
+            // Its completion goes out from here: what a save run's clean-up may then find landed. A run that stopped
+            // meanwhile refuses it: nothing is completed, and the reservation goes.
+            do {
+                try onCompleting(begun.uploadId)
+            } catch {
+                await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
+                throw error
+            }
             do {
                 // A move's completion is asked again when no answer came: the server may have deleted the source already, and a
                 // repeated completion is answered with the node as it landed. Taken for a failure, the move would say it failed.
@@ -863,7 +1009,8 @@ extension Vault {
                 while true {
                     do {
                         return try await complete(uploadId: begun.uploadId, workspaceId: begun.workspaceId, nodeId: begun.nodeId, parentId: begun.parentId,
-                                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing)
+                                                  replacing: begun.replacing, final: begun.final, nodeKey: begun.nodeKey, etags: etags, landing: begun.landing,
+                                                  keepName: begun.keepName)
                     } catch DriveAPIError.transport(let why) {
                         attempt += 1
                         guard moveOf != nil, attempt < 4 else { throw DriveAPIError.transport(why) }
@@ -881,6 +1028,64 @@ extension Vault {
                 guard let item = opened[NodeRef(workspaceId: begun.workspaceId, nodeId: begun.nodeId)] else { throw landed }
                 return item
             }
+        }
+    }
+
+    /*
+     * A result a tool or an editor produced (the save path, SaveRuns.swift), uploaded from memory: its
+     * plaintext is never written to disk, and nothing keeps it to resume. As a new version
+     * (`replacing`) it never becomes a conflict copy: unless `startedFrom` is still the file's current
+     * version, at begin and at completion, it throws `SaveStale` naming the version current now, its
+     * reservation released.
+     */
+    public func uploadResult(
+        _ bytes: Data, name: String, mime: String?, in parentId: String, replacing: Opened?, startedFrom: String?,
+        thumbnail: Data? = nil, signing: (metadata: Signing, version: Signing), modified: Date = Date(),
+        onBegun: @escaping @Sendable (BegunIds) throws -> Void = { _ in }, onCompleting: @escaping @Sendable (String) throws -> Void = { _ in },
+        progress: @Sendable (Double) -> Void = { _ in }, held: NodeRef? = nil
+    ) async throws -> Opened {
+        if let replacing, replacing.node.currentVersion?.id != startedFrom {
+            throw SaveStale(currentVersionId: replacing.node.currentVersion?.id)
+        }
+        let begun = BegunBox()
+        do {
+            return try await upload(source: .memory(bytes, modified: modified), name: name, mime: mime, in: parentId, replacing: replacing,
+                                    thumbnail: thumbnail, signing: signing, attributes: [:], moveOf: nil,
+                                    expected: replacing == nil ? nil : .some(startedFrom), keepName: true,
+                                    onBegun: { ids in begun.ids = ids; try onBegun(ids) }, onCompleting: onCompleting, progress: progress,
+                                    held: held)
+        } catch let landed as UploadLanded {
+            // Completed on the server, though this process can't file its row now: a save that landed, answered with the
+            // node the completion named and the record it was sealed with (Android's result path), never a failure that
+            // would remove it.
+            guard let item = landed.landed else { throw landed }
+            return item
+        } catch {
+            let raced: Bool
+            switch error {
+            case DriveAPIError.stale: raced = replacing != nil
+            case DriveAPIError.conflicted: raced = true
+            default: raced = false
+            }
+            guard raced else { throw error }
+            // Its reservation goes: a conflicted completion keeps it on the server until it expires. One the abort
+            // didn't confirm released is named back (`unreleased`), and the run keeps its id until one does.
+            var unreleased: String?
+            if let ids = begun.ids {
+                let fate = await api.abortUploadFate(uploadId: ids.uploadId, workspaceId: ids.workspaceId)
+                if fate.unsettled { unreleased = ids.uploadId }
+            }
+            // A new file refused only because a key change reached its folder while it went up: sealed afresh.
+            guard let replacing else { throw SaveRekeyed(unreleased: unreleased) }
+            // As the server holds the file now: gone from its folder, or someone else's version current, is
+            // stale (never a new file where it was); the same version is only its key having moved, sealed
+            // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
+            // From the server itself, never the catalogue, which may not have heard of another device's save yet.
+            let listed = try await listChildren(of: parentId, in: replacing.node.workspaceId)
+            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
+            let current = fresh.currentVersion?.id
+            if current != startedFrom { throw SaveStale(currentVersionId: current, unreleased: unreleased) }
+            throw SaveRekeyed(unreleased: unreleased)
         }
     }
 
@@ -952,12 +1157,12 @@ extension Vault {
 
     private func sealUploadOnce(fileURL: URL, name: String, mime: String?, in parentId: String, replacing: Opened?,
                                 thumbnail: Data?, into directory: URL, waited: Bool) async throws -> SealedUpload {
-        let begun = try await begin(fileURL: fileURL, name: name, mime: mime, parentId: parentId, replacing: replacing,
+        let begun = try await begin(source: .file(fileURL), name: name, mime: mime, parentId: parentId, replacing: replacing,
                                     thumbnailBytes: UInt32(thumbnail?.count ?? 0), signing: (.own, .own), waited: waited)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let handle = try FileHandle(forReadingFrom: fileURL)
-            defer { try? handle.close() }
+            let handle = try PlainReader(.file(fileURL))
+            defer { handle.close() }
             for index in 0 ..< begun.chunkCount {
                 try Task.checkCancellation()
                 let sealed = try sealPart(begun, index: index, from: handle, thumbnail: thumbnail)

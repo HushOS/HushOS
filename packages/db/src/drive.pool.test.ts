@@ -434,8 +434,12 @@ describe('pool usage', () => {
             availableBytes: String(6n * GIB),
             pool: { groupId, name: 'The Family' },
             // Beside the pool's: Sam's own 400 bytes, exactly, and his own 100-byte allowance,
-            // never anyone else's bytes.
-            own: { usedBytes: '400', allowanceBytes: '100' },
+            // never anyone else's bytes; and what his own files may take, as his begin checks it.
+            own: {
+                usedBytes: '400',
+                allowanceBytes: '100',
+                freeBytes: String((await drive.getStorage(sam.workspaceId))!.free),
+            },
         });
         expect((await billing.getPoolUsage(groupId)).used).toBe(4n * GIB);
         // The leaver and the outsider keep their own allowances, counting only their own bytes.
@@ -537,7 +541,7 @@ describe('pool usage', () => {
         await setBytes(ana.workspaceId, 40n);
         expect(await auth.getStorageAllowance(ana.userId)).toMatchObject({
             quotaBytes: String(10n * GIB),
-            own: { usedBytes: '40', allowanceBytes: '175' },
+            own: { usedBytes: '40', allowanceBytes: '175', freeBytes: String(9n * GIB - 40n) },
         });
         await setBytes(ana.workspaceId, 0n);
         expect(await groups.leaveGroup(groupId, ana.userId)).toEqual({ status: 'left' });
@@ -574,8 +578,14 @@ describe('what one member sees', () => {
             reservedBytes: '0',
             availableBytes: String(87n * GIB),
             pool: { groupId, name: 'The Family' },
-            // Her own files exactly, which she knows; nothing of Sam's.
-            own: { usedBytes: String(2n * GIB + 7n), allowanceBytes: '100' },
+            // Her own files exactly, which she knows; nothing of Sam's. And what she may still take,
+            // exactly what a begin of hers checks (and a refusal of hers names): the save path
+            // checks a run against it.
+            own: {
+                usedBytes: String(2n * GIB + 7n),
+                allowanceBytes: '100',
+                freeBytes: String(88n * GIB - 7n),
+            },
         });
         // Sam stores half a gigabyte more and starts a 300 MB upload: Maya's figures don't move.
         await setBytes(sam.workspaceId, 5n * GIB + 500n * MIB + 12n, 300n * MIB);

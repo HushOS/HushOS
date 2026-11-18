@@ -118,6 +118,10 @@ public struct AccountStore: Sendable {
         let files = FileManager.default
         // First: every download of the session, family or personal, stops writing before its folder goes.
         TemporaryCopies.endAccount(copies)
+        // The save path's runs stop at once, writing and deleting nothing more; their rows (ids only, in this process's
+        // own storage) go, and no run writes one again.
+        SaveRuns.abandonAll()
+        SaveRunJournal.endAccount()
         // Every zip open in a viewer closes, its password wiped, and its reads stop. After the session's end, so a late
         // let-go or proof of it (refused from here on) can't refill what the next session's zips are held to.
         ArchiveSessions.closeAll()

@@ -59,6 +59,86 @@ class FamilyWritesTest {
     }
 
     /*
+     * A save run into the family's top folder, end to end through the real vault: a folder, a file in it, and a new version
+     * of Sam's file, each through the family's write gate. Then a cancel: the folder and the file go to the Trash and are
+     * deleted forever, through the gate too; the version is kept. Fails if the clean-up's trash or purge is sent outside a
+     * write the gate knows (it would be refused before it left, and the results left behind).
+     */
+    @Test
+    fun aSaveRunIntoAFamilyFolderSavesThroughTheGateAndACancelRemovesWhatItMade() {
+        val phone = opened()
+        val vault = phone.vault
+        val previous = server.extraRoutes
+        server.extraRoutes = { method, segments, query, body ->
+            when {
+                method == "POST" && segments.size == 4 && segments[3] == "trash-batch" -> {
+                    val ids = body.getJSONArray("nodeIds")
+                    200 to org.json.JSONObject().put("results", org.json.JSONArray((0 until ids.length()).map { i ->
+                        val id = ids.getString(i)
+                        if (runCatching { server.node(id) }.isSuccess) { server.trash(id); org.json.JSONObject().put("id", id).put("status", "trashed") }
+                        else org.json.JSONObject().put("id", id).put("status", "refused").put("reason", "not-found")
+                    }))
+                }
+                method == "DELETE" && segments.size == 3 && segments[1] == "nodes" -> {
+                    val held = runCatching { server.node(segments[2]) }.getOrNull()
+                    when {
+                        held == null -> 404 to org.json.JSONObject().put("code", "not-found").put("message", "This item no longer exists.")
+                        held.trashedAt == null -> 409 to org.json.JSONObject().put("code", "conflict").put("message", "This item isn't in the Trash.")
+                        // A folder goes with everything inside it.
+                        else -> {
+                            fun purge(id: String) { server.children(id).forEach { purge(it.id) }; server.purgeAs(id) }
+                            purge(segments[2])
+                            200 to org.json.JSONObject()
+                        }
+                    }
+                }
+                else -> previous?.invoke(method, segments, query, body)
+            }
+        }
+        val top = vault.resolve(family.rootId)
+        val recipes = vault.listChildren(family.rootId, family.workspaceId).single { it.id == family.fileId }
+        val rows = SaveRunJournal(File(app.cacheDir, "family-save-runs-${System.nanoTime()}/${SaveRunJournal.FILE}"), SaveRunJournal.Epoch())
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val run = SaveRun.start(writer, listOf(top, recipes), emptyList(), rows, pause = {})
+        val out = run.folder("Out", SaveSources.OwnWriting, top)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, out.id))
+        val made = run.file("made".toByteArray(), "made.txt", "text/plain", SaveSources.OwnWriting, folder = out)
+        val saved = run.version("newer recipes".toByteArray(), recipes, top, recipes.node.currentVersion!!.id, SaveSources.OwnWriting)
+        assertTrue(saved is VersionSaved.Saved)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, made.id))
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.DELETED, stopped.cleanup)
+        assertNull(runCatching { server.node(out.id) }.getOrNull())
+        assertNull(runCatching { server.node(made.id) }.getOrNull())
+        assertNotNull(server.node(family.fileId).version)
+        assertTrue(rows.list().isEmpty())
+        server.extraRoutes = previous
+    }
+
+    /*
+     * The family folder stops being writable here after a save run made something in it (its member list no longer
+     * committed, as after a refusal): the run's cancel removes nothing, sends no trash or delete forever, and keeps its
+     * row for when it may. Fails if a clean-up's trash or purge goes out past the family's write gate.
+     */
+    @Test
+    fun aCleanUpInAFamilyFolderThatMayNoLongerBeWrittenRemovesNothingAndKeepsItsRow() {
+        val phone = opened()
+        val vault = phone.vault
+        val top = vault.resolve(family.rootId)
+        val rows = SaveRunJournal(File(app.cacheDir, "family-save-runs-${System.nanoTime()}/${SaveRunJournal.FILE}"), SaveRunJournal.Epoch())
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val run = SaveRun.start(writer, listOf(top), emptyList(), rows, pause = {})
+        val out = run.folder("Out", SaveSources.OwnWriting, top)
+        vault.areaLedger.uncommit(family.groupId, false)
+        val sent = server.requests.size
+        val stopped = run.cancel()
+        assertEquals(SaveCleanup.LEFT, stopped.cleanup)
+        assertNull(server.node(out.id).trashedAt)
+        assertTrue(sentSince(sent).none { it.contains("trash") || it.startsWith("DELETE") })
+        assertEquals(listOf(out.id), rows.list().single().nodeIds)
+    }
+
+    /*
      * A new folder, a file uploaded into the top folder and moved into it, renamed, a new version of Sam's file, and a
      * trash put back: each lands, each row this phone keeps afterwards is the ledger's own, and another phone of the
      * account (a fresh session and ledger) opens all of it through its ledger and reads the bytes. Fails if a family
@@ -95,6 +175,44 @@ class FamilyWritesTest {
         assertEquals("Packing.txt", inside.name)
         assertEquals("packing list", read(other.vault, inside))
         assertTrue(other.vault.nodes.viaLedger(family.workspaceId, inside.id))
+    }
+
+    /*
+     * A tool's result signed by its sources goes into a family folder through the ledger (the save path, as on the web and
+     * iOS), with its folder: a plain copy into one stays refused. Another phone reads it. Fails if results are refused.
+     */
+    @Test
+    fun aSourceSignedResultGoesIntoAFamilyFolderThroughItsLedger() {
+        val phone = opened()
+        val vault = phone.vault
+        val sources = Prior(com.hushos.core.Integrity.VERIFIED, com.hushos.core.Integrity.RESEALED)
+        val folder = vault.createFolder(family.rootId, "Converted", sources, result = true)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, folder.id))
+        val out = vault.uploadResult("tool output".toByteArray(), "Out.txt", "text/plain", folder.id, null, null, copy = sources)
+        assertTrue(vault.nodes.viaLedger(family.workspaceId, out.id))
+        assertThrows(FamilyUnavailable::class.java) { vault.createFolder(family.rootId, "Plain copy", sources) }
+        vault.close()
+        val other = family.phone()
+        accepted(other)
+        val inside = other.vault.listChildren(folder.id, family.workspaceId).single()
+        assertEquals("Out.txt", inside.name)
+        assertEquals("tool output", read(other.vault, inside))
+    }
+
+    /*
+     * Another member changes the family folder's keys while a save waits: before the save looks its folder up again, the
+     * phone syncs the family, so its ledger opens the folder at the new keys (as iOS's recheck does). Fails if the retry
+     * opens the folder through a ledger that never learned the change.
+     */
+    @Test
+    fun aSaveRetryLearnsAnotherMembersKeyChangeBeforeItLooksTheFolderUpAgain() {
+        val phone = opened()
+        val top = phone.vault.nodes.row(family.workspaceId, family.rootId) ?: throw AssertionError("the top folder wasn't opened")
+        family.replaceKeys()
+        val writer = VaultSaveWriter(phone.vault) { throw IllegalStateException("not asked") }
+        val fresh = writer.refreshFolder(top)
+        assertEquals(100L, fresh.node.keyEpoch.toLong())
+        assertTrue(phone.vault.nodes.viaLedger(family.workspaceId, fresh.id))
     }
 
     /*

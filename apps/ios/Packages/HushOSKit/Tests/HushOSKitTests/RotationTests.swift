@@ -337,6 +337,26 @@ final class FakeDrive: @unchecked Sendable {
     var begins: [[String: Any]] = []
     var uploads: [String: [String: Any]] = [:]
     var completed: [String] = []
+    /* Each part's body as PUT to the store, by "<upload id>/<part number>"; and the uploads aborted. */
+    var stored: [String: Data] = [:]
+    var aborted: [String] = []
+    /* Runs as a part's PUT arrives, with its body (a test looking at the device's disk mid-upload). */
+    var onPart: ((Data) -> Void)?
+    /* Runs as a completion arrives, before it is answered (another device saving first). */
+    var beforeComplete: (() -> Void)?
+    /* A completion refused only because a key change re-keyed the file meanwhile (its version unchanged). */
+    var rekeyAtComplete = false
+    /* A new file's completion filed under this envelope suite (one the device can't open), when set. */
+    var landedSuite: Int?
+    /* What aborts answer, in order, before the usual answer (a test's upload still finishing). */
+    var abortReplies: [(Int, Any)] = []
+    /*
+     * A test's own answer before any route (a fault, or a route this fake doesn't serve), and its look after one: a throw
+     * there drops the answer (the server acted, the reply lost). Both run outside the fake's lock; `locked` takes it.
+     */
+    var intercept: ((_ method: String, _ parts: [String], _ body: [String: Any]) throws -> (Int, Any)?)?
+    var afterAnswer: ((_ method: String, _ parts: [String]) throws -> Void)?
+    func locked<T>(_ body: () throws -> T) rethrows -> T { try lock.withLock(body) }
     private let lock = NSLock()
     private var target: UInt64 = 0
     /* What A, F and G carry beside their names when made `attributed`: a colour, and keys no client knows yet. */
@@ -402,6 +422,12 @@ final class FakeDrive: @unchecked Sendable {
      * key wrapped under its parent's, its name sealed again under it and signed by the owner. What it holds stays where it
      * was, under its key before. Called under the server's lock (from `beforeRotationSend`).
      */
+    /* Another device's key change of `id` (a file or a folder) to a new epoch, as it would land; under the server's lock. */
+    func rekeyHeld(_ id: String) throws {
+        target = max(target, nodes[id]?.keyEpoch ?? 0) + 1
+        try rekeyedElsewhere(id)
+    }
+
     func rekeyedElsewhere(_ id: String) throws {
         guard let old = nodes[id], let key = keys[id] else { return }
         let parentKey = old.parentId.flatMap { keys[$0] } ?? workspaceKey
@@ -420,6 +446,35 @@ final class FakeDrive: @unchecked Sendable {
         nodes[id] = updated
         previousKeys[id, default: [:]][old.keyEpoch] = key
         keys[id] = fresh
+    }
+
+    /* `id`'s record replaced one metadata version up by one nobody can open (a torn write elsewhere, say). */
+    func unreadableRecord(_ id: String) {
+        guard let old = nodes[id] else { return }
+        var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                               parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion + 1,
+                               metadataEnvelope: "AAAA", currentVersion: old.currentVersion, trashedAt: nil,
+                               changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+        updated.metadataSigner = old.metadataSigner
+        updated.metadataSignature = old.metadataSignature
+        nodes[id] = updated
+    }
+
+    /* Another device of the owner renames `id`: its name sealed one metadata version up under its key, signed by the owner. */
+    func renamedElsewhere(_ id: String, to name: String) throws {
+        guard let old = nodes[id], let key = keys[id] else { return }
+        let version = old.metadataVersion + 1
+        let sealed = try metadataSeal(ctx: MetadataContext(workspaceId: workspace, nodeId: id, metadataVersion: version), nodeKey: key,
+                                      metadata: NodeMetadata(name: name, mime: "text/plain", size: nil, modified: nil, attributes: [:]))
+        var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: old.parentId, kind: old.kind, keyEpoch: old.keyEpoch,
+                               parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: version,
+                               metadataEnvelope: base64urlEncode(bytes: sealed), currentVersion: old.currentVersion, trashedAt: nil,
+                               changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+        updated.metadataSigner = writer
+        updated.metadataSignature = base64urlEncode(bytes: try metadataSign(
+            signingSeed: identity.signingSeed, statement: MetadataStatement(workspaceId: workspace, nodeId: id, kind: old.isFolder ? .folder : .file, metadataVersion: version),
+            metadataEnvelope: sealed))
+        nodes[id] = updated
     }
 
     /* `id`'s name as another device reads it: its key unwrapped from the envelopes the server holds, from the workspace key down. */
@@ -513,6 +568,14 @@ final class FakeDrive: @unchecked Sendable {
                   made(.version, sent["versionId"], sent["versionIdSeed"]), made(.object, sent["objectId"], sent["objectIdSeed"]),
                   let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
             else { return Self.notMade }
+            // As packages/db's begin: a new version names the version it replaces, and the key epoch the file has
+            // now, or is `stale`.
+            if (wire["expectedVersionId"] as? String) != nodes[nodeId]?.currentVersion?.id {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
+            if let epoch = (wire["keyEpoch"] as? NSNumber)?.uint64Value, epoch != nodes[nodeId]?.keyEpoch {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
             let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
             guard let versionKind = try statement(version: sent["contentKeyEnvelope"] as? String ?? "", signature: sent["versionSignature"] as? String,
                                                   statement: VersionStatement(workspaceId: workspace, nodeId: nodeId, versionId: versionId, objectId: objectId, contentSuite: suite))
@@ -527,6 +590,11 @@ final class FakeDrive: @unchecked Sendable {
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
         case ("POST", ["uploads"]):
             guard let wire = sent["node"] as? [String: Any], wire["existing"] as? Bool == false, let nodeId = wire["id"] as? String else { return (400, ["message": "Bad upload"]) }
+            // Sealed under the folder's key as it is now, or `stale`.
+            if let parent = wire["parentId"] as? String, let epoch = (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value,
+               let held = nodes[parent], held.keyEpoch != epoch {
+                return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
+            }
             guard made(.node, nodeId, wire["idSeed"]), made(.version, sent["versionId"], sent["versionIdSeed"]),
                   made(.object, sent["objectId"], sent["objectIdSeed"]),
                   let versionId = sent["versionId"] as? String, let objectId = sent["objectId"] as? String
@@ -546,10 +614,36 @@ final class FakeDrive: @unchecked Sendable {
             let urls = (1 ... max(count, 1)).map { ["partNumber": $0, "length": 0, "url": "https://drive.test/store/\(uploadId)/\($0)"] as [String: Any] }
             return (200, ["upload": ["id": uploadId, "nodeId": nodeId, "versionId": versionId, "status": "pending", "chunkCount": count],
                           "parts": urls, "urlExpiresAt": "2099-01-01T00:00:00Z"])
+        case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "abort":
+            if !abortReplies.isEmpty { return abortReplies.removeFirst() }
+            // As packages/db abortUpload answers: a finished upload is never aborted, and says so.
+            if completed.contains(rest[1]) {
+                return (409, ["code": "conflict", "message": "This upload already finished.", "data": ["upload": "completed"]])
+            }
+            if uploads[rest[1]] == nil { return (404, ["code": "not-found", "message": "This upload no longer exists."]) }
+            aborted.append(rest[1])
+            return (200, ["aborted": true])
         case ("POST", let rest) where rest.count == 3 && rest[0] == "uploads" && rest[2] == "complete":
             guard let begun = uploads[rest[1]], let wire = begun["node"] as? [String: Any], let nodeId = wire["id"] as? String,
                   let versionId = begun["versionId"] as? String, let objectId = begun["objectId"] as? String else { return (404, ["message": "No upload"]) }
             if completed.contains(rest[1]) { return (409, ["message": "This upload is ready."]) }
+            beforeComplete?()
+            // As packages/db finishCompleting: a new version whose file moved on, or was re-keyed, is `conflicted`; a new
+            // file whose folder was re-keyed too.
+            if wire["existing"] as? Bool != true, let parent = wire["parentId"] as? String,
+               let epoch = (wire["parentKeyEpoch"] as? NSNumber)?.uint64Value, let held = nodes[parent], held.keyEpoch != epoch {
+                return (409, ["code": "conflict", "message": "This file changed while it was uploading.", "data": ["conflicted": true]])
+            }
+            if wire["existing"] as? Bool == true {
+                let expected = wire["expectedVersionId"] as? String
+                let current = nodes[nodeId]?.currentVersion?.id
+                let rekeyed = (wire["keyEpoch"] as? NSNumber).map { $0.uint64Value != nodes[nodeId]?.keyEpoch } ?? false
+                if expected != current || rekeyAtComplete || rekeyed {
+                    rekeyAtComplete = false
+                    return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
+                                  "data": ["conflicted": true, "currentVersionId": current as Any? ?? NSNull()]])
+                }
+            }
             completed.append(rest[1])
             var version = VersionView(id: versionId, objectId: objectId, contentKeyEnvelope: begun["contentKeyEnvelope"] as? String ?? "", status: "ready",
                                       contentSuite: (begun["contentSuite"] as? NSNumber)?.uint32Value ?? 0, chunkCount: (begun["chunkCount"] as? Int) ?? 1,
@@ -567,7 +661,13 @@ final class FakeDrive: @unchecked Sendable {
                 nodes[nodeId] = updated
                 return (200, ["status": "ready", "node": try json(updated)])
             }
-            return (200, ["status": "ready", "node": try json(store(wire, id: nodeId, kind: "file", version: version))])
+            var landed = store(wire, id: nodeId, kind: "file", version: version)
+            if let landedSuite {
+                // Filed under an envelope suite this device can't open: it landed, but no row of it opens here.
+                landed.envelopeSuite = landedSuite
+                nodes[nodeId] = landed
+            }
+            return (200, ["status": "ready", "node": try json(landed)])
         default:
             return nil
         }
@@ -586,10 +686,32 @@ final class FakeDrive: @unchecked Sendable {
     }
 
     func answer(_ request: URLRequest, body: Data?) throws -> (Int, Any) {
+        let method = request.httpMethod ?? "GET"
+        let path = (request.url?.path ?? "").split(separator: "/").map(String.init)
+        if let intercept, let reply = try intercept(method, path, (try? JSONSerialization.jsonObject(with: body ?? Data()) as? [String: Any]) ?? [:]) {
+            return reply
+        }
+        let reply = try routed(request, body: body)
+        try afterAnswer?(method, path)
+        return reply
+    }
+
+    /* A request the server takes up after its answer was lost: routed now, with no test hook in the way. */
+    func answerLater(_ method: String, parts: [String], body: Data?) throws -> (Int, Any) {
+        var request = URLRequest(url: URL(string: "https://fake.test/" + parts.joined(separator: "/"))!)
+        request.httpMethod = method
+        return try routed(request, body: body)
+    }
+
+    private func routed(_ request: URLRequest, body: Data?) throws -> (Int, Any) {
         lock.lock()
         defer { lock.unlock() }
         let parts = (request.url?.path ?? "").split(separator: "/").map(String.init) // api, drive, nodes, <id>, …
-        if parts.first == "store", request.httpMethod == "PUT" { return (200, [:]) }
+        if parts.first == "store", request.httpMethod == "PUT" {
+            if parts.count == 3 { stored["\(parts[1])/\(parts[2])"] = body ?? Data() }
+            onPart?(body ?? Data())
+            return (200, [:])
+        }
         if let answer = try answerCreate(request, parts: parts, body: body) { return answer }
         if parts.count == 5, parts[2] == "workspaces", parts[4] == "epochs" {
             target = max(target, 1) + 1

@@ -33,6 +33,7 @@ import { preloadViewers } from '@/lib/preload';
 import { resumePendingRotation } from '@/lib/rotation';
 import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
+import { lockSaveRuns } from '@/lib/save-runs';
 import { cancelAllToolRuns } from '@/lib/tools/active';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
@@ -86,6 +87,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         // No tool goes on parsing decrypted bytes past the lock, and no result of one, finished
         // or not, stays in memory waiting for upload.
         cancelAllToolRuns();
+        // Nor does a save run keep a result, paused or completing, past it: each stops and cleans up.
+        void lockSaveRuns();
         void queryClient.resetQueries({ queryKey: driveKeys.all });
         // The worker forgot every family's chain and folder keys too: each family is checked again.
         void queryClient.resetQueries({ queryKey: ['families'] });

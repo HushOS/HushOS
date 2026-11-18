@@ -9,7 +9,17 @@ import java.net.URLEncoder
 
 class NotAuthenticated : Exception("Sign in to HushOS to see your files.")
 /* `data`: the structured part of the server's refusal (its `data`), e.g. a completion's `conflicted` and `currentVersionId`. */
-open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message)
+open class ApiError(val status: Int, message: String, val code: String? = null, val data: JSONObject? = null) : Exception(message) {
+    /*
+     * A family manager's pause: 403 `held`, or, from a server before the code, 403 with these words (as the legacy abort
+     * answers are read by their words).
+     */
+    val held: Boolean get() = status == 403 && (code == "held" || message == LEGACY_HELD)
+
+    companion object {
+        const val LEGACY_HELD = "A group manager has paused changes to this folder."
+    }
+}
 
 /*
  * A family upload's completion refused because a key change reached the file or its folder while the parts went up
@@ -166,6 +176,8 @@ class DriveApi(val session: Shared.Session) : RootApi {
         const val ALREADY_FINISHED = "This upload already finished."
         /* The most a cut-off-able JSON answer (an object's address) may be: a few hundred bytes in practice. */
         const val CUT_BODY_MAX = 64 * 1024
+        /* An older server's refusal of an abort while it completes the upload (packages/drive/src/server.ts abortUpload). */
+        const val STILL_FINISHING = "This upload is finishing and cannot be cancelled."
     }
 
     private val origin = session.origin
@@ -238,12 +250,24 @@ class DriveApi(val session: Shared.Session) : RootApi {
 
     private fun send(path: String, body: JSONObject, method: String = "POST"): JSONObject {
         val connection = open(path, method)
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
+        val bytes = body.toString().toByteArray()
+        sentOnce(connection, bytes.size)
         // Writing the body is the first thing to touch the network: no network there is Unreachable too, not
         // a raw "unable to resolve host" for the error dialog.
-        try { connection.outputStream.use { it.write(body.toString().toByteArray()) } } catch (error: java.io.IOException) { throw Unreachable() }
+        try { connection.outputStream.use { it.write(bytes) } } catch (error: java.io.IOException) { throw Unreachable() }
         return finish(connection)
+    }
+
+    /*
+     * A write goes out once. Left to buffer its body, HttpURLConnection sends it again by itself when the connection
+     * drops after it went (the JDK's retryPost; Android's OkHttp retryOnConnectionFailure): a folder creation or a begin
+     * the server already took then comes back a 409 for its own id, and a lost answer reads as a refusal. Streamed
+     * at a fixed length the body can't be replayed, so a drop is Unreachable and the caller's own rules decide.
+     */
+    private fun sentOnce(connection: HttpURLConnection, length: Int) {
+        connection.doOutput = true
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setFixedLengthStreamingMode(length)
     }
 
     /* A write into `workspaceId`: the final gate, then the request. */
@@ -466,8 +490,56 @@ class DriveApi(val session: Shared.Session) : RootApi {
     override fun createRoot(workspaceId: String, root: RootInput): NodeView =
         NodeView.from(write(workspaceId, "/workspaces/$workspaceId/root", root.body()).getJSONObject("root"))
 
-    fun createFolder(workspaceId: String, folder: JSONObject): NodeView =
-        NodeView.from(write(workspaceId, "/folders", JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))).getJSONArray("nodes").getJSONObject(0))
+    /*
+     * Sent once more on a fresh connection when the first got no answer. A 409 `conflict` for its own id (minted here) then
+     * means the first send made it: the folder as the server lists it now.
+     */
+    fun createFolder(workspaceId: String, folder: JSONObject): NodeView {
+        val body = JSONObject().put("workspaceId", workspaceId).put("folders", JSONArray().put(folder))
+        fun made() = NodeView.from(write(workspaceId, "/folders", body).getJSONArray("nodes").getJSONObject(0))
+        return try {
+            made()
+        } catch (_: Unreachable) {
+            // The first send may still be made: only the second's answer naming this very folder settles it. Anything else
+            // (its own id taken but not listed, a 429, a key change starting, a 5xx, a sign-out, this app's own write gate, a
+            // listing that failed) says nothing of the first send: unanswered, as it was. An interrupt is thrown on.
+            try {
+                made()
+            } catch (interrupted: InterruptedException) {
+                throw interrupted
+            } catch (taken: ApiError) {
+                if (taken.status != 409 || taken.code != "conflict") throw Unreachable()
+                val found = try {
+                    listed(folder.getString("parentId"), workspaceId, folder.getString("id"))
+                } catch (interrupted: InterruptedException) {
+                    throw interrupted
+                } catch (_: Exception) {
+                    null
+                }
+                found ?: throw Unreachable()
+            } catch (_: Exception) {
+                throw Unreachable()
+            }
+        }
+    }
+
+    /* `id` as the server lists it in `folderId` now, or null. */
+    private fun listed(folderId: String, workspaceId: String, id: String): NodeView? {
+        var after: String? = null
+        do {
+            val page = children(folderId, workspaceId, after)
+            page.children.firstOrNull { it.id == id }?.let { return it }
+            after = page.nextCursor
+        } while (after != null)
+        return null
+    }
+
+    /*
+     * A write that is safe to repeat (an abort, a trash batch), sent once more on a fresh connection when the first got
+     * no answer: what OkHttp's own retry did for a dead pooled connection before writes were streamed (sentOnce). A second
+     * Unreachable is the caller's to judge.
+     */
+    private fun <T> againOnce(write: () -> T): T = try { write() } catch (_: Unreachable) { write() }
 
     /* `metadataSignature` is over `metadataVersion + 1`, the version the server stores. */
     fun rename(nodeId: String, workspaceId: String, metadataVersion: ULong, keyEpoch: ULong, metadataEnvelope: String, metadataSignature: String): NodeView =
@@ -482,15 +554,16 @@ class DriveApi(val session: Shared.Session) : RootApi {
         NodeView.from(write(workspaceId, "/nodes/$sourceNodeId/copy", body.put("workspaceId", workspaceId)).getJSONObject("node"))
 
     /* One request of a selection to the trash, or back in place (Undo): up to MAX_TRASH_BATCH ids of one workspace. */
-    fun trashBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids)
+    /* `before` runs before each send, the one more after a lost answer too (the save path's session check: a throw sends nothing). */
+    fun trashBatch(workspaceId: String, ids: List<String>, before: () -> Unit = {}): List<BatchAnswer> =
+        againOnce { before(); batch(workspaceId, "/workspaces/$workspaceId/trash-batch", ids) }
     fun restoreBatch(workspaceId: String, ids: List<String>): List<BatchAnswer> = batch(workspaceId, "/workspaces/$workspaceId/restore-batch", ids)
 
     private fun batch(workspaceId: String, path: String, ids: List<String>): List<BatchAnswer> {
         beforeWrite(workspaceId)
         val connection = open(path, "POST")
-        connection.doOutput = true
-        connection.setRequestProperty("Content-Type", "application/json")
         val body = JSONObject().put("nodeIds", org.json.JSONArray(ids)).toString().toByteArray()
+        sentOnce(connection, body.size)
         try { connection.outputStream.use { it.write(body) } } catch (error: java.io.IOException) { throw Unreachable() }
         val status: Int
         val text: String
@@ -515,8 +588,17 @@ class DriveApi(val session: Shared.Session) : RootApi {
         return NodeView.from(write(workspaceId, "/nodes/$nodeId/restore", body).getJSONObject("node"))
     }
 
-    fun purge(nodeId: String, workspaceId: String) {
-        write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+    /* Sent once more when the first got no answer; that one's 404 means the first deleted it. `before`: as trashBatch's. */
+    fun purge(nodeId: String, workspaceId: String, before: () -> Unit = {}) {
+        fun delete() {
+            before()
+            write(workspaceId, "/nodes/$nodeId", JSONObject().put("workspaceId", workspaceId), "DELETE")
+        }
+        try {
+            delete()
+        } catch (_: Unreachable) {
+            try { delete() } catch (_: NotFound) { /* Gone with the first send. */ }
+        }
     }
 
     /* One batch of the trash, as the server takes it; `remaining` says whether to ask again. */
@@ -551,14 +633,46 @@ class DriveApi(val session: Shared.Session) : RootApi {
      * 409 "finishing" (completing: its bytes stay reserved until it completes or the expiry sweep settles it), any other
      * answer, no answer and an ended session are PENDING, asked again later.
      */
+    /*
+     * The save path's reading of an abort's answer (SaveRuns.kt): `FINISHING` while the server is still completing it
+     * (`data.upload` "completing"), to be asked about again.
+     */
+    fun abortUploadFate(uploadId: String, workspaceId: String, before: () -> Unit = {}): SaveAbortFate = try {
+        againOnce { before(); send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
+        SaveAbortFate.ABORTED
+    } catch (_: NotFound) {
+        SaveAbortFate.GONE
+    } catch (error: ApiError) {
+        when {
+            error.status == 409 && error.data?.optString("upload") == "completed" -> SaveAbortFate.FINISHED
+            error.status == 409 && error.data?.optString("upload") == "completing" -> SaveAbortFate.FINISHING
+            // A self-hosted server from before `data.upload` says which only in words.
+            error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> SaveAbortFate.FINISHED
+            error.status == 409 && error.data?.has("upload") != true && error.message == STILL_FINISHING -> SaveAbortFate.FINISHING
+            // A family manager paused changes: nothing ended, the abort is asked again after the hold.
+            error.held -> SaveAbortFate.HELD
+            // A 401 (thrown as NotAuthenticated, UNKNOWN below) says nothing of the upload: asked again.
+            error.status == 403 -> SaveAbortFate.DENIED
+            error.status == 404 -> SaveAbortFate.GONE
+            else -> SaveAbortFate.UNKNOWN
+        }
+    } catch (_: Exception) {
+        SaveAbortFate.UNKNOWN
+    }
+
     fun abortUpload(uploadId: String, workspaceId: String): Reservations.Abort = try {
-        send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId))
+        againOnce { send("/uploads/$uploadId/abort", JSONObject().put("workspaceId", workspaceId)) }
         Reservations.Abort.RELEASED
     } catch (_: NotFound) {
         Reservations.Abort.GONE
     } catch (error: ApiError) {
         when {
-            error.status == 409 && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            // By the server's `data.upload` (packages/drive/src/server.ts abortUpload), as the web and iOS read it.
+            error.status == 409 && error.data?.optString("upload") == "completed" -> Reservations.Abort.COMPLETED
+            // A server from before `data.upload` says so only in words.
+            error.status == 409 && error.data?.has("upload") != true && error.message == ALREADY_FINISHED -> Reservations.Abort.COMPLETED
+            // A family manager's pause refused it: nothing ended, and the reservation stays (asked again later).
+            error.held -> Reservations.Abort.PENDING
             error.status == 403 || error.status == 404 -> Reservations.Abort.GONE
             else -> Reservations.Abort.PENDING
         }

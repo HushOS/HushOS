@@ -24,6 +24,7 @@ import {
     syncLocked,
     waitsForKeyChange,
     writeRefusal,
+    changeRefusal,
     type AreaState,
 } from '@/lib/groups/sync';
 import { familyWalks, stillRunning, walkToEnd, type WalkTarget } from '@/lib/groups/walks';
@@ -141,6 +142,7 @@ function register(area: Area) {
         client: area.client,
         refuseWrite: (folder) => writeRefusal(areas.get(workspaceId)?.state, folder),
         waitsForKeyChange: (folder) => waitsForKeyChange(areas.get(workspaceId)?.state, folder),
+        refuseChange: () => changeRefusal(areas.get(workspaceId)?.state),
         refreshKeyChange: () => refreshFamily(area.userId, area.groupId),
     });
 }

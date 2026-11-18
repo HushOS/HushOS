@@ -5,15 +5,19 @@ import { openDB, type DBSchema, type IDBPDatabase, type OpenDBCallbacks } from '
  * longer serve: another tab (or this one) deleting or upgrading the database, the browser
  * closing it on its own (WebKit does when its storage process goes away), or an open that
  * failed. The next call opens a fresh one. A late event from a connection already replaced
- * never drops its successor.
+ * never drops its successor. `forget` lets go of one a caller found refusing work (WebKit can
+ * close one without telling it): the next call opens a fresh one; the old one still closes
+ * itself for another tab's deletion.
  */
 export function cachedConnection<Schema extends DBSchema>(
     name: string,
     version: number,
     upgrade: OpenDBCallbacks<Schema>['upgrade'],
-): () => Promise<IDBPDatabase<Schema>> {
+): (() => Promise<IDBPDatabase<Schema>>) & {
+    forget(stale: Promise<IDBPDatabase<Schema>>): void;
+} {
     let database: Promise<IDBPDatabase<Schema>> | undefined;
-    return () => {
+    const get = () => {
         if (database) return database;
         const opening: Promise<IDBPDatabase<Schema>> = openDB<Schema>(name, version, {
             upgrade,
@@ -31,4 +35,9 @@ export function cachedConnection<Schema extends DBSchema>(
         });
         return opening;
     };
+    return Object.assign(get, {
+        forget(stale: Promise<IDBPDatabase<Schema>>) {
+            if (database === stale) database = undefined;
+        },
+    });
 }

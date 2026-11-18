@@ -320,6 +320,15 @@ export type PurgeBatchItem =
     | { id: string; status: 'refused'; reason: PurgeRefusal; message: string };
 
 /* A server refusal the client can act on. */
+/*
+ * A family manager's pause: 403 `held`, or, from a server before the code, 403 `forbidden` with
+ * these words (as the legacy abort answers are read by their words).
+ */
+export const LEGACY_HELD = 'A group manager has paused changes to this folder.';
+export function heldCode(code: string | null | undefined, message: string) {
+    return code === 'held' || message === LEGACY_HELD;
+}
+
 export class DriveApiError extends Error {
     constructor(
         message: string,

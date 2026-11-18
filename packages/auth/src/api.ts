@@ -63,7 +63,7 @@ export type StorageAllowance = {
      * on its own (Free and any grants), which is what it keeps after leaving the family.
      * Null on the account's own allowance, where the figures above are already its own.
      */
-    own: { usedBytes: string; allowanceBytes: string } | null;
+    own: { usedBytes: string; allowanceBytes: string; freeBytes?: string } | null;
 };
 
 export type ContactIdentity = {

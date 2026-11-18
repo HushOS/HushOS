@@ -30,6 +30,8 @@ type Entry<C> = {
     refuseWrite: (folder: WriteTarget) => string | null;
     /* Whether that refusal is only a key change that has not reached `folder` yet: adds wait. */
     waitsForKeyChange?: (folder: WriteTarget) => boolean;
+    /* Why nothing in the folder may be changed now (trashed, deleted forever), or null while it is writable. */
+    refuseChange?: () => string | null;
     /*
      * The family synced again, for an upload waiting out a key change (or one
      * the server refused for it, 409 rotating): the folder's client learns of
@@ -60,6 +62,10 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         has: (workspaceId: string) => {
             return entries.has(workspaceId) || gone.has(workspaceId);
         },
+        /* The family a folder's workspace is in, or null for this account's own Drive and shares. */
+        groupOf: (workspaceId: string): string | null => {
+            return entries.get(workspaceId)?.groupId ?? null;
+        },
         /* The client of the workspace a node lives in; throws for a family folder forgotten here. */
         clientFor: (workspaceId: string | null | undefined): C => {
             if (!workspaceId) return personal();
@@ -76,6 +82,16 @@ export function createSpaceRegistry<C extends { close(): void; knows(nodeId: str
         refuseWrite: (folder: WriteTarget) => {
             if (gone.has(folder.workspaceId)) return FOLDER_GONE;
             return entries.get(folder.workspaceId)?.refuseWrite(folder) ?? null;
+        },
+        /*
+         * Why nothing in a family folder may be changed now, `undefined` for a workspace never
+         * registered here (this account's own Drive, a share, or a family folder not opened yet).
+         */
+        refuseChange: (workspaceId: string): string | null | undefined => {
+            if (gone.has(workspaceId)) return FOLDER_GONE;
+            const entry = entries.get(workspaceId);
+            if (!entry) return undefined;
+            return entry.refuseChange ? entry.refuseChange() : null;
         },
         waitsForKeyChange: (folder: WriteTarget) => {
             if (gone.has(folder.workspaceId)) return false;

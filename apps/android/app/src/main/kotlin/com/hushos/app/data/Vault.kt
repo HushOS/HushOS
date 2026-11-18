@@ -1709,13 +1709,30 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * `copy`: set when the name comes from a record that existed before (a copy, a save from a link); see Prior.
      * `attributes`: a copied folder's source's, carried whole (keys this app doesn't know included); none for a new one.
      */
-    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false): Opened = writing {
+    /* `result`: a folder a tool makes for its results (SaveRuns.kt), signed by their sources, into a family folder too. */
+    /* `onMinted` hears the new folder's id before its creation is sent (a save run records it first); a throw sends nothing. */
+    fun createFolder(parentId: String, name: String, copy: Prior? = null, attributes: Map<String, String> = emptyMap(), moving: Boolean = false,
+                     result: Boolean = false, onMinted: (String) -> Unit = {}): Opened =
+        createFolder(name, copy, attributes, moving, result, onMinted) { resolve(parentId) }
+
+    /*
+     * Into the very row `held` names, workspace and all, as this process holds it now (a save run's destination, checked by
+     * its workspace): never looked up again by id, which answers with the own Drive's row first and so could name another
+     * workspace's folder. One no longer held is refused before anything is minted or sent.
+     */
+    fun createFolder(held: Opened, name: String, copy: Prior?, onMinted: (String) -> Unit): Opened =
+        createFolder(name, copy, emptyMap(), moving = false, result = true, onMinted = onMinted) {
+            nodes.row(held.node.workspaceId, held.id) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+        }
+
+    private fun createFolder(name: String, copy: Prior?, attributes: Map<String, String>, moving: Boolean, result: Boolean, onMinted: (String) -> Unit,
+                             findParent: () -> Opened): Opened = writing {
         // Shared folders belong to the granter's workspace; an editor writes there, and the id is minted there.
-        val parent = resolve(parentId)
+        val parent = findParent()
         val ws = parent.node.workspaceId
         // A family folder takes a new folder through its ledger, and a moved folder's copy (moveAcross); a plain copy into one
         // isn't offered.
-        val family = if (copy != null && !moving) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        val family = if (copy != null && !moving && !result) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
         val epoch = api.allocateEpoch(ws)
         val made = IdField.NODE.mint(ws)
@@ -1725,16 +1742,34 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val metadata = NodeMetadata(typedName(name), null, null, null, attributes)
             val sealed = metadataSeal(MetadataContext(ws, id, 1uL), key, metadata)
             val signature = if (copy != null) signCopiedMetadata(ws, id, NodeKind.FOLDER, sealed, copy) else signMetadata(ws, id, NodeKind.FOLDER, 1uL, sealed)
+            onMinted(id)
             sendingIntoFamily(ws)
-            val node = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
+            val served = api.createFolder(ws, JSONObject().putId(made).put("parentId", parent.id).put("keyEpoch", epoch.toLong())
                 .put("parentKeyEpoch", parent.node.keyEpoch.toLong()).put("keyEnvelope", base64urlEncode(wrapped)).put("metadataEnvelope", base64urlEncode(sealed))
                 .put("metadataSignature", signature))
+            // A reply naming another folder is no answer (checkWritten throws). The row filed is the folder as it was sent (its
+            // place, key epochs, envelopes and signature); the reply gives only what the server assigns (its change number,
+            // times, the signer it recorded), as the web's createFolderPath does.
+            checkWritten(served, ws, id)
+            val node = createdAsSent(served, parent, epoch, base64urlEncode(wrapped), base64urlEncode(sealed), signature)
             adoptWritten(node, key, metadata, ws, id).also { foldersChanged(listOf(parent.id)) }
         } catch (error: Exception) {
             // The server didn't take it: the key the ledger made for it goes (the web's forgetNodeKey).
             if (family) areaLedger.forgetNodeKey(ws, id)
             throw error
         }
+    }
+
+    /* A folder this device created, as it sent it: only the server's own fields come from its reply. */
+    private fun createdAsSent(served: NodeView, parent: Opened, epoch: ULong, keyEnvelope: String, metadataEnvelope: String, signature: String): NodeView {
+        val raw = (runCatching { JSONObject(served.rawJson) }.getOrNull() ?: JSONObject().put("id", served.id).put("workspaceId", served.workspaceId))
+            .put("parentId", parent.id).put("kind", "folder").put("keyEpoch", epoch.toLong()).put("parentKeyEpoch", parent.node.keyEpoch.toLong())
+            .put("keyEnvelope", keyEnvelope).put("metadataVersion", 1).put("metadataEnvelope", metadataEnvelope).put("metadataSignature", signature)
+            .put("currentVersion", JSONObject.NULL).put("trashedAt", JSONObject.NULL).put("envelopeSuite", ENVELOPE_SUITE)
+            .put("prevKeyEnvelope", JSONObject.NULL).put("prevKeyEpoch", JSONObject.NULL).put("prevParentKeyEpoch", JSONObject.NULL)
+        return served.copy(parentId = parent.id, kind = "folder", keyEpoch = epoch, parentKeyEpoch = parent.node.keyEpoch, keyEnvelope = keyEnvelope,
+            metadataVersion = 1uL, metadataEnvelope = metadataEnvelope, currentVersion = null, trashedAt = null, rawJson = raw.toString(),
+            envelopeSuite = ENVELOPE_SUITE, metadataSignature = signature)
     }
 
     fun rename(id: String, name: String): Opened = writing {
@@ -2058,26 +2093,87 @@ class Vault(internal val context: Context, val api: DriveApi) {
      */
     fun upload(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray? = null, copy: Prior? = null,
                attributes: Map<String, String> = emptyMap(), job: String = "", moveOf: MoveOf? = null, progress: (Float) -> Unit = {}): Opened = writing {
-        uploadInside(file, name, mime, parentId, replacing, thumbnail, copy, attributes, job, moveOf, progress)
+        uploadInside(Plain.OnDisk(file), name, mime, parentId, replacing, thumbnail, copy, attributes, job, moveOf, progress)
     }
+
+    /* The ids a result's upload was begun under, for its run's row (SaveRuns.kt). */
+    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String)
+
+    /*
+     * A result a tool or an editor produced (the save path, SaveRuns.kt), uploaded from memory: its plaintext is never
+     * written to disk, and nothing keeps it to resume. As a new version (`replacing`) it never becomes a conflict copy:
+     * unless `startedFrom` is still the file's current version, at begin and at completion, it throws SaveStale naming
+     * the version current now, its reservation released.
+     */
+    fun uploadResult(bytes: ByteArray, name: String, mime: String?, parentId: String, replacing: Opened?, startedFrom: String?,
+                     copy: Prior?, thumbnail: ByteArray? = null, modified: Long = System.currentTimeMillis(),
+                     onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {}, progress: (Float) -> Unit = {},
+                     held: Opened? = null): Opened {
+        if (replacing != null && replacing.node.currentVersion?.id != startedFrom) throw SaveStale(replacing.node.currentVersion?.id)
+        try {
+            return writing {
+                uploadInside(Plain.InMemory(bytes, modified), name, mime, parentId, replacing, thumbnail, copy, emptyMap(), "", null, progress,
+                    expected = replacing?.let { Expected(startedFrom) }, onBegun = onBegun, onCompleting = onCompleting, result = true, held = held)
+            }
+        } catch (error: ApiError) {
+            // Begin refused `stale`, or completion `conflict` (aborted there, its room released). A new file refused so was only
+            // its folder's key moving: sealed afresh (SaveRekeyed). For a new version, as the server holds the file now: gone from
+            // its folder, or someone else's version current, is stale (never a new file where it was); the same version is only
+            // its key having moved, sealed afresh. A family's key-change refusal (KeyChangeConflict) is waited out by the run.
+            if (error is KeyChangeConflict || error.status != 409 || (error.code != "stale" && error.code != "conflict")) throw error
+            // A completion's `conflicted` only (finishCompleting): "This upload was cancelled" is a 409 `conflict` too.
+            val conflicted = error.code == "conflict" && error.data?.optBoolean("conflicted") == true
+            if (error.code == "conflict" && !conflicted) throw error
+            if (replacing == null) {
+                if (conflicted) throw SaveRekeyed()
+                throw error
+            }
+            val current = servedNode(parentId, replacing.node.workspaceId, replacing.id) ?: throw SaveStale(null)
+            if (current.currentVersion?.id != startedFrom) throw SaveStale(current.currentVersion?.id)
+            throw SaveRekeyed()
+        }
+    }
+
+    /* `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there. */
+    private fun servedNode(folderId: String, workspaceId: String, id: String): NodeView? {
+        var after: String? = null
+        do {
+            val page = api.children(folderId, workspaceId, after)
+            page.children.firstOrNull { it.id == id }?.let { return it }
+            after = page.nextCursor
+        } while (after != null)
+        return null
+    }
+
+    /* The version a new version must find current at begin, when the save path names the one its work started from. */
+    internal data class Expected(val versionId: String?)
 
     /* An abort of this vault's reservation, applied to the ledger: its record goes only when the answer settled it (true). */
     private fun abortReserved(uploadId: String, workspaceId: String): Boolean =
         Reservations.aborted(context, uploadId, api.abortUpload(uploadId, workspaceId))
 
-    private fun uploadInside(file: File, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
-                             attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit): Opened {
+    private fun uploadInside(plain: Plain, name: String, mime: String?, parentId: String, replacing: Opened?, thumbnail: ByteArray?, copy: Prior?,
+                             attributes: Map<String, String>, job: String, moveOf: MoveOf?, progress: (Float) -> Unit,
+                             expected: Expected? = null, onBegun: (BegunIds) -> Unit = {}, onCompleting: (String) -> Unit = {},
+                             result: Boolean = false, held: Opened? = null): Opened {
+        // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
+        // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
+        fun destination(): Opened = if (held != null) nodes.row(held.node.workspaceId, held.id) ?: throw FamilyFailure(FamilyWords.COULDNT_CHECK_KEYS)
+            else resolve(parentId)
         // The workspace written to: the replaced file's, or the folder's (a share's subtree is the granter's).
-        val ws = replacing?.node?.workspaceId ?: resolve(parentId).node.workspaceId
+        val ws = replacing?.node?.workspaceId ?: destination().node.workspaceId
         // A family folder takes a file or a new version through its ledger, and a move's copy (moveAcross); a plain copy into
         // one isn't offered.
-        val family = if (copy != null && moveOf == null) { refuseFamilyWrite(ws); false } else familyTarget(ws)
+        // A tool's result (`result`) goes into a family folder signed by its sources, as on the web and iOS.
+        val family = if (copy != null && moveOf == null && !result) { refuseFamilyWrite(ws); false } else familyTarget(ws)
         // A new version carries the old name over into metadata signed again: checked before any byte goes up, so an
         // unverified name is re-sealed rather than vouched for, and nothing is uploaded when the check can't run. In a
         // family folder as its member list judges it.
-        val keptName = replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
-        val size = file.length().toULong()
-        val modified = Instant.ofEpochMilli(file.lastModified()).toString()
+        // A tool's new version (`result`) leaves the name record as it is (docs/editing-design.md section 3, as the web does):
+        // nothing is signed again, so nothing waits on whom to trust.
+        val keptName = if (result) null else replacing?.let { if (family) familyPrior(FamilySync.metadataRecord(it.node), ws) else replacedNamePrior(it) }
+        val size = plain.size.toULong()
+        val modified = Instant.ofEpochMilli(plain.modified).toString()
         val madeVersion = IdField.VERSION.mint(ws)
         val madeObject = IdField.OBJECT.mint(ws)
         val versionId = madeVersion.id
@@ -2095,11 +2191,12 @@ class Vault(internal val context: Context, val api: DriveApi) {
             nodeId = replacing.id
             // In a family folder the version goes under the ledger's writable key only, at the epoch it was opened at.
             nodeKey = if (family) writableKey(replacing) else nodes.key(replacing) ?: throw ApiError(500, "Node not opened")
+            val expectedVersion = if (expected != null) expected.versionId else replacing.node.currentVersion?.id
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
-                .put("expectedVersionId", replacing.node.currentVersion?.id ?: JSONObject.NULL)
+                .put("expectedVersionId", expectedVersion ?: JSONObject.NULL)
             metadata = replacing.metadata
         } else {
-            val parent = resolve(parentId)
+            val parent = destination()
             if (parent.node.workspaceId != ws) throw ApiError(400, "Upload it within one drive.")
             if (!family) nodes.key(parent) ?: throw ApiError(500, "Open the containing folder first.")
             val epoch = api.allocateEpoch(ws)
@@ -2162,33 +2259,39 @@ class Vault(internal val context: Context, val api: DriveApi) {
             throw error
         }
         try {
-            return uploadReserved(file, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
-                family, job, moveOf != null, progress)
+            // A result's run writes these ids down first: if it can't, nothing is sent, the reservation is aborted now (the
+            // network's to settle when that gets no answer), and it is marked idle below, so settleAll never skips it.
+            try {
+                onBegun(BegunIds(ws, begun.uploadId, nodeId))
+            } catch (error: Exception) {
+                runCatching { abortReserved(begun.uploadId, ws) }
+                madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+                throw error
+            }
+            return uploadReserved(plain, mime, ws, nodeId, nodeKey, metadata, replacing, keptName, madeKey, begun, layout, content, thumbnail, thumbnailBytes, size, modified,
+                family, job, moveOf != null, progress, result, onCompleting)
         } finally {
             Reservations.idle(begun.uploadId)
         }
     }
 
     /* The upload after its reservation is on record: parts, completion, the name of a new version. */
-    private fun uploadReserved(file: File, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
+    private fun uploadReserved(plain: Plain, mime: String?, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
                                keptName: Integrity?, madeKey: String?, begun: UploadBegun, layout: com.hushos.core.ContentLayout, content: Content,
                                thumbnail: ByteArray?, thumbnailBytes: UInt, size: ULong, modified: String, family: Boolean, job: String,
-                               moved: Boolean, progress: (Float) -> Unit): Opened {
+                               moved: Boolean, progress: (Float) -> Unit, result: Boolean = false, onCompleting: (String) -> Unit = {}): Opened {
         val urls = HashMap<Int, String>()
         for (part in begun.parts) urls[part.partNumber] = part.url
         val etags = JSONArray()
         try {
-            RandomAccessFile(file, "r").use { raf ->
+            plain.open().use { raf ->
                 for (index in 0uL until layout.chunkCount) {
                     val partNumber = index.toInt() + 1
                     if (!urls.containsKey(partNumber)) for (part in api.partUrls(begun.uploadId, ws, partNumber)) urls[part.partNumber] = part.url
                     // The file's own bytes for this chunk (none in the padding past its end); the core adds the zeros.
                     val length = chunkLength(size, index).toInt()
                     val plaintext = ByteArray(length)
-                    if (length > 0) {
-                        raf.seek((index * layout.chunkBytes).toLong())
-                        raf.readFully(plaintext)
-                    }
+                    if (length > 0) raf.read((index * layout.chunkBytes).toLong(), plaintext)
                     var sealed = chunkEncrypt(content, index, plaintext)
                     if (index == layout.chunkCount - 1uL && thumbnail != null && thumbnailBytes > 0u) sealed += thumbnailEncrypt(content, thumbnail)
                     // A part the network dropped is sent again; an expired address is fetched fresh first.
@@ -2211,8 +2314,23 @@ class Vault(internal val context: Context, val api: DriveApi) {
         // Refused: aborted, so its reserved room is released now. Unknown: asked again, never aborted blind (UploadFinish).
         // A completion the final gate refuses here (a guard owed, the folder no longer writable, the session ended) was never
         // sent: a definite answer, so the upload is aborted and its room released, and a new node's ledger key goes.
+        // Its completion goes out from here: what a save run's clean-up may then find landed. A run that stopped meanwhile
+        // refuses it: nothing is completed, and the reservation goes.
+        try {
+            onCompleting(begun.uploadId)
+        } catch (error: Exception) {
+            runCatching { abortReserved(begun.uploadId, ws) }
+            madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
+            throw error
+        }
+        // Each send after the first is asked of the run again: one that stopped during a retry's pause sends nothing more (the
+        // first send may have landed, so nothing is aborted blind either: UploadFinish throws such a refusal on).
+        var sends = 0
         var node = try {
-            UploadFinish.complete({ refusedHere { api.completeUpload(begun.uploadId, ws, etags) } }, { abortReserved(begun.uploadId, ws) })
+            UploadFinish.complete({
+                if (sends++ > 0) onCompleting(begun.uploadId)
+                refusedHere { api.completeUpload(begun.uploadId, ws, etags) }
+            }, { abortReserved(begun.uploadId, ws) })
         } catch (refused: UploadFinish.RefusedHere) {
             madeKey?.let { areaLedger.forgetNodeKey(ws, it) }
             throw refused.cause!!
@@ -2230,6 +2348,18 @@ class Vault(internal val context: Context, val api: DriveApi) {
         Reservations.completed(context, begun.uploadId)
         // A move's completion deleted its source with it: whatever fails after it (its row not kept, the family let go of
         // meanwhile) is a move that happened, never one to report as failed.
+        if (result) {
+            // A tool's result: whatever fails after its completion is a save that landed, never a race or a failure. It is
+            // answered as landed, the node the completion named with the metadata it was sealed with (as iOS answers one it
+            // can't file), so its run keeps it, counts it, and removes it with the rest when the run is stopping. Only a
+            // completion naming another item than the one written is no answer to file (checkWritten): ResultLanded.
+            return try {
+                finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, null, mime, size, modified, keepName = true)
+            } catch (error: Exception) {
+                if (node.workspaceId != ws || node.id != nodeId) throw ResultLanded(nodeId, error)
+                Opened(node, metadata)
+            }
+        }
         if (job.isEmpty() && !moved) return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
         try {
             return finishLanded(node, ws, nodeId, nodeKey, metadata, replacing, keptName, mime, size, modified)
@@ -2256,11 +2386,17 @@ class Vault(internal val context: Context, val api: DriveApi) {
 
     /* What follows a landed completion: the node checked, a new version's name signed again, the row adopted. */
     private fun finishLanded(landed: NodeView, ws: String, nodeId: String, nodeKey: ByteArray, metadata: NodeMetadata, replacing: Opened?,
-                             keptName: Integrity?, mime: String?, size: ULong, modified: String): Opened {
+                             keptName: Integrity?, mime: String?, size: ULong, modified: String, keepName: Boolean = false): Opened {
         var node = landed
         checkWritten(node, ws, nodeId)
+        // A tool's new version keeps the name record as it is: one another device changed while the version went up is the
+        // server's now, opened as it is served (its signature checked), never kept with the name this upload began from.
+        if (keepName && replacing != null && node.metadataVersion != replacing.node.metadataVersion) {
+            val served = if (isFamilyWorkspace(ws)) openListed(node) else open(node, replace = true)
+            return served.also { foldersChanged(listOf(it.node.parentId)) }
+        }
         var final = metadata
-        if (replacing != null) {
+        if (replacing != null && !keepName) {
             // The name is signed again only while the family write still stands (its reply gate, before anything is sealed).
             synchronized(familyCopiesLock) { requireWriteStands(ws) }
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
@@ -2277,6 +2413,54 @@ class Vault(internal val context: Context, val api: DriveApi) {
         return adoptWritten(node, nodeKey, final, ws, nodeId).also { foldersChanged(listOf(it.node.parentId)) }
     }
 }
+
+/*
+ * Where an upload's bytes are read from: a file on disk, or a result held in memory (the save path, SaveRuns.kt), which
+ * never touches the disk as plaintext.
+ */
+internal sealed interface Plain {
+    val size: Long
+    val modified: Long
+    fun open(): Reader
+
+    interface Reader : java.io.Closeable {
+        /* Fills `into` from `offset`; the bytes must be there. */
+        fun read(offset: Long, into: ByteArray)
+    }
+
+    class OnDisk(private val file: File) : Plain {
+        override val size get() = file.length()
+        override val modified get() = file.lastModified()
+        override fun open(): Reader = object : Reader {
+            private val raf = RandomAccessFile(file, "r")
+            override fun read(offset: Long, into: ByteArray) { raf.seek(offset); raf.readFully(into) }
+            override fun close() = raf.close()
+        }
+    }
+
+    class InMemory(private val bytes: ByteArray, override val modified: Long) : Plain {
+        override val size get() = bytes.size.toLong()
+        override fun open(): Reader = object : Reader {
+            override fun read(offset: Long, into: ByteArray) {
+                if (offset < 0 || offset + into.size > bytes.size) throw java.io.EOFException("Past the end of the result.")
+                System.arraycopy(bytes, offset.toInt(), into, 0, into.size)
+            }
+            override fun close() {}
+        }
+    }
+}
+
+/* A new version found someone else's version current (or its file gone): nothing was published (Save on top, Save as a copy, Open theirs). */
+class SaveStale(val currentVersionId: String?) : Exception("Someone else saved a newer version of this file, so this one wasn’t saved.")
+
+/* An upload refused only because a key change reached its file or folder while it went up: looked up again and sealed afresh. */
+class SaveRekeyed : Exception("This file’s keys changed while it was saving.")
+
+/*
+ * A tool's result whose completion named another item than the one written: it may have landed, but there is nothing here
+ * to file. Its run stops and cleans up from its row (a new file removed, a new version kept by its abort's answer).
+ */
+class ResultLanded(val nodeId: String, cause: Throwable) : Exception("Saved. It will show once the folder refreshes.", cause)
 
 /*
  * A file a move upload names in another of this person's workspaces (begin's `moveOf`): the server deletes it in the

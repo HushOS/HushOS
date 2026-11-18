@@ -52,6 +52,10 @@ class AccountStore(private val files: File, private val cache: File, private val
         ArchiveSessions.shared.closeAll()
         // The upload ledger under its own lock first: an upload still on its way adds nothing back after this.
         Reservations.wipe(files)
+        // The save path's runs stop at once, writing and deleting nothing more; no run writes a row again (their file goes
+        // with ACCOUNT_FILES below).
+        SaveRuns.abandonAll()
+        SaveRunJournal.endAccount(files)
         for (name in ACCOUNT_FILES) File(files, name).deleteRecursively()
         // What this process held of the account's saves (numbers given, bounds last read) goes with them.
         WriteBacks.forgetHere()
@@ -79,7 +83,7 @@ class AccountStore(private val files: File, private val cache: File, private val
          * awaiting a notification, and the upload reservations ledger: another account's session can't settle them (a
          * workspace's 404 would read as released), so they go with the account, and the server's expiry releases them.
          */
-        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, WriteBacks.NUMBERS, WriteBacks.EDITS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT, PushNotifications.SEEN, PushAsk.FILE, PromptLimit.FILE)
+        private val ACCOUNT_FILES = listOf("offline", "queue", "files-parents.json", FailedTransfers.FILE, TransferNotices.OUTCOMES, ShareSeals.FILE, PendingRotations.FILE, LandedJobs.DIR, WriteBacks.LANDINGS, WriteBacks.NUMBERS, WriteBacks.EDITS, JobNames.FILE, JobNames.STAGED, Reservations.FILE, Reservations.NEXT, PushNotifications.SEEN, PushAsk.FILE, PromptLimit.FILE, SaveRunJournal.FILE, SaveRunJournal.STAGING)
 
         fun of(context: Context): AccountStore = AccountStore(context.filesDir, context.cacheDir, context.noBackupFilesDir) {
             // Jobs queued for that account would run under the next one's session.

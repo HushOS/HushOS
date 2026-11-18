@@ -42,7 +42,12 @@ public enum FamilyWriteError: Error, LocalizedError, Equatable {
  */
 public struct UploadLanded: Error, LocalizedError {
     public let published: Vault.Published?
-    public init(published: Vault.Published? = nil) { self.published = published }
+    /* The node the completion named, with the record it was sealed with: what a caller that must answer now (a save) keeps. */
+    public let landed: Opened?
+    public init(published: Vault.Published? = nil, landed: Opened? = nil) {
+        self.published = published
+        self.landed = landed
+    }
     public var errorDescription: String? { "Uploaded. Its size and date in the list may not match the new version." }
 }
 

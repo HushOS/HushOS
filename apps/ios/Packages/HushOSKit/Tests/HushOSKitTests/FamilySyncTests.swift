@@ -1587,6 +1587,18 @@ final class FamilyServer: @unchecked Sendable {
                 }
                 return (200, ["results": results])
             }
+        case ("DELETE", let rest) where rest.count == 2 && rest[0] == "nodes":
+            // Delete forever: only what is in the Trash, a folder with everything inside it.
+            return lock.withLock {
+                guard let node = tree[rest[1]] else { return (404, ["code": "not-found", "message": "This item no longer exists."]) }
+                guard node.trashedAt != nil else { return (409, ["code": "conflict", "message": "This item isn't in the Trash."]) }
+                var queue = [node.id]
+                while let next = queue.popLast() {
+                    tree[next] = nil
+                    queue += tree.values.filter { $0.parentId == next }.map(\.id)
+                }
+                return (200, ["purged": true])
+            }
         case ("POST", ["uploads"]):
             return lock.withLock {
                 if rotatingBegins > 0 {

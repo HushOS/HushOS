@@ -396,6 +396,48 @@ fn copy_form(prior: Integrity, from_link: bool) -> CoreResult<Form> {
     reseal_form(prior)
 }
 
+/* How strong a copy of a record with this verdict is signed: the form copy_form gives it. */
+fn copy_strength(prior: Integrity) -> u8 {
+    match prior {
+        Integrity::Verified | Integrity::Seen => 2,
+        Integrity::SavedFromLink => 1,
+        _ => 0,
+    }
+}
+
+/// The verdict a result made from several sources is signed as a copy of
+/// (the save path, docs/file-tools-design.md "Signatures by source"): the
+/// weakest of its sources', record by record, so one Unverified file makes
+/// a zip of it Unverified and one saved from a link makes it saved from a
+/// link. Pass it to [`metadata_copy_sign`] or [`version_copy_sign`] (`.copy`
+/// on the phones). A source saved from a link is passed as `SavedFromLink`.
+/// A source nobody could check (`Unchecked`) makes the result `Resealed`,
+/// never vouched for and never refused, as the web signs a result
+/// (packages/drive's signatureFormFor); a plain copy of one is still refused.
+/// No sources is refused, never signed by default.
+///
+/// ```
+/// use hushos_core::*;
+/// let seed = random_bytes(32)?;
+/// let me = TrustedKeys { current: signing_public_key(seed.clone())?, retired: vec![], seen: false };
+/// let statement = MetadataStatement { workspace_id: "ws".into(), node_id: "zip".into(), kind: NodeKind::File, metadata_version: 1 };
+/// let prior = weakest_copy_prior(vec![Integrity::Verified, Integrity::UnknownSigner, Integrity::SavedFromLink])?;
+/// let signature = metadata_copy_sign(seed, prior, false, statement.clone(), b"zip".to_vec())?;
+/// assert_eq!(metadata_integrity(Some(me), statement, b"zip".to_vec(), Some(signature)), Integrity::Resealed);
+/// assert_eq!(weakest_copy_prior(vec![Integrity::Verified, Integrity::SavedFromLink])?, Integrity::SavedFromLink);
+/// assert!(weakest_copy_prior(vec![]).is_err());
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn weakest_copy_prior(priors: Vec<Integrity>) -> CoreResult<Integrity> {
+    let weakest = priors
+        .into_iter()
+        .min_by_key(|prior| copy_strength(*prior))
+        .ok_or_else(|| input("A result is signed by its sources, and there are none."))?;
+    // An unchecked source is re-sealed for a result: the copy form refuses it for a plain copy.
+    Ok(if weakest == Integrity::Unchecked { Integrity::Resealed } else { weakest })
+}
+
 /*
  * The legacy signature a rotation writes beside the rekeyed one, for readers
  * that do not know it yet (the honest form, docs/integrity-design.md,
@@ -2319,5 +2361,55 @@ mod tests {
                 "{prior:?}"
             );
         }
+    }
+
+    /*
+     * A result made from several sources, signed as the weakest of them and read back as
+     * its own writer's: every verdict that is not Verified, Seen or SavedFromLink makes it
+     * Resealed (Unverified), never Verified; a link's makes it SavedFromLink.
+     */
+    #[test]
+    fn a_result_of_several_sources_reads_as_its_weakest_source() {
+        let seed = random(32);
+        let me =
+            TrustedKeys { current: signing_public_key(seed.clone()).unwrap(), retired: vec![], seen: false };
+        let statement = VersionStatement {
+            workspace_id: "ws".into(),
+            node_id: "zip".into(),
+            version_id: "v1".into(),
+            object_id: "o1".into(),
+            content_suite: 3,
+        };
+        let envelope = b"content key".to_vec();
+        let reads = |priors: Vec<Integrity>| {
+            let prior = weakest_copy_prior(priors).unwrap();
+            let signature =
+                version_copy_sign(seed.clone(), prior, false, statement.clone(), envelope.clone()).unwrap();
+            version_integrity(Some(me.clone()), statement.clone(), envelope.clone(), Some(signature))
+        };
+        assert_eq!(reads(vec![Integrity::Verified, Integrity::Seen]), Integrity::Verified);
+        assert_eq!(reads(vec![Integrity::Verified, Integrity::SavedFromLink]), Integrity::SavedFromLink);
+        for weak in [
+            Integrity::UnknownSigner,
+            Integrity::BadSignature,
+            Integrity::Unsigned,
+            Integrity::Resealed,
+            Integrity::RetiredKey,
+        ] {
+            assert_eq!(
+                reads(vec![Integrity::Verified, weak, Integrity::SavedFromLink]),
+                Integrity::Resealed,
+                "{weak:?}"
+            );
+            assert_eq!(reads(vec![weak, Integrity::Verified]), Integrity::Resealed, "{weak:?} first");
+        }
+        // One source nobody could check: the result is re-sealed, never refused and never vouched for,
+        // while a plain copy of that record is still refused (copy_form, as packages/crypto's copyForm).
+        assert_eq!(
+            weakest_copy_prior(vec![Integrity::Verified, Integrity::Unchecked]).unwrap(),
+            Integrity::Resealed
+        );
+        assert_eq!(reads(vec![Integrity::Verified, Integrity::Unchecked]), Integrity::Resealed);
+        assert!(version_copy_sign(seed, Integrity::Unchecked, false, statement, envelope).is_err());
     }
 }

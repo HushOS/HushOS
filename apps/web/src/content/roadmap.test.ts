@@ -122,12 +122,12 @@ describe('the public roadmap', () => {
     test('a reused id, or one that is not an anchor, is caught', () => {
         expect(
             broken((copy) => {
-                section(copy, 'next').items[0]!.id = section(copy, 'shipped').items[0]!.id;
+                section(copy, 'now').items[0]!.id = section(copy, 'shipped').items[0]!.id;
             }),
         ).toContainEqual(expect.stringMatching(/used twice/));
         expect(
             broken((copy) => {
-                section(copy, 'next').items[0]!.id = 'Editing in the browser';
+                section(copy, 'now').items[0]!.id = 'Editing in the browser';
             }),
         ).toContainEqual(expect.stringMatching(/not an anchor/));
     });

@@ -14,7 +14,7 @@ import {
 } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeChange } from './api';
-import { createIndexedDbJournal, type JournalEntry } from './journal';
+import { createIndexedDbJournal, createIndexedDbRunJournal, type JournalEntry } from './journal';
 import { createIndexedDbMirror } from './mirror';
 
 /*
@@ -107,12 +107,34 @@ describe('the upload journal', () => {
 
     it('tries the open again on the next call after one failed', async () => {
         const name = `journal-${Math.random()}`;
-        await openNewer(name, 3);
+        // Newer than the journal's own version (3, since save runs' rows joined it).
+        await openNewer(name, 4);
         const journal = createIndexedDbJournal(name);
         await expect(journal.listAll()).rejects.toMatchObject({ name: 'VersionError' });
 
         expect(await deleteFromAnotherTab(name)).toBe('deleted');
         expect(await journal.listAll()).toEqual([]);
+    });
+});
+
+describe('the save runs’ journal', () => {
+    it('lets a connection that refused a read, a removal or an update go, and the next call opens a fresh one', async () => {
+        const runs = createIndexedDbRunJournal(`runs-${Math.random()}`);
+        const row = { id: 'r', workspaceId: 'ws', nodeIds: [], uploadIds: [], at: 1 };
+        await runs.put(row);
+        for (const call of [
+            () => runs.list(),
+            () => runs.remove('none'),
+            () => runs.update!('r', (held) => held),
+        ]) {
+            const before = opened.length;
+            // Closed with no close event (as WebKit closes connections on its own).
+            opened.at(-1)!.close();
+            await expect(call()).rejects.toThrow();
+            await call();
+            expect(opened.length).toBe(before + 1);
+        }
+        expect(await runs.list()).toEqual([row]);
     });
 });
 

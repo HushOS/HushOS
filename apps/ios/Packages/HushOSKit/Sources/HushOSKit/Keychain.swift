@@ -125,6 +125,25 @@ public enum SharedKeychain {
     }
 
     public static var session: Session? { read(sessionAccount, as: Session.self) }
+
+    /*
+     * The session as the keychain answers, telling no item (nobody signed in) from a read that failed (locked before
+     * the first unlock, the keychain busy): `nil` inside `.read` when there is none.
+     */
+    public enum Lookup<T: Sendable>: Sendable {
+        case read(T?)
+        case failed
+    }
+    public static var sessionLookup: Lookup<Session> {
+        var query = query(sessionAccount)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return .read(nil) }
+        guard status == errSecSuccess, let data = result as? Data, let session = try? JSONDecoder().decode(Session.self, from: data) else { return .failed }
+        return .read(session)
+    }
     public static var device: Device? { read(deviceAccount, as: Device.self) }
     public static var config: Config? { read(configAccount, as: Config.self) }
     public static var deviceIdentity: DeviceIdentity? { read(deviceIdentityAccount, as: DeviceIdentity.self) }

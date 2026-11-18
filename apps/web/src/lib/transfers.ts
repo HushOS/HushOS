@@ -1,5 +1,6 @@
 import type { DriveClient, DriveNode } from '@hushos/drive/client';
 import { createIndexedDbJournal, type JournalEntry, type QueuedEntry } from '@hushos/drive/journal';
+import { abandonRuns, resultsWaiting } from '@hushos/drive/save-runs';
 import {
     createTransferManager,
     type TransferManagerOptions,
@@ -22,6 +23,7 @@ import {
 import { driveApi } from '@/lib/drive-api';
 import { stashAvailable, uploadStash } from '@/lib/stash';
 import { backoffDelay } from '@/lib/groups/walks';
+import { holdPageWhile } from '@/lib/leave-guard';
 
 /*
  * One transfer manager for the whole app, created once and never tied to a route,
@@ -48,10 +50,10 @@ export function bindTransfersToQueries(client: QueryClient) {
  */
 const LOOK_SHARED_MS = 2_000;
 const looks = new Map<string, { at: number; listing: ReturnType<DriveClient['listFolder']> }>();
-function lookUp(workspaceId: string, folderId: string) {
+function lookUp(workspaceId: string, folderId: string, fresh = false) {
     const key = `${workspaceId}:${folderId}`;
     const held = looks.get(key);
-    if (held && Date.now() - held.at < LOOK_SHARED_MS) return held.listing;
+    if (!fresh && held && Date.now() - held.at < LOOK_SHARED_MS) return held.listing;
     // A family folder's upload is opened by that folder's client, which checks by its member list.
     const listing = clientFor(workspaceId).listFolder(folderId);
     looks.set(key, { at: Date.now(), listing });
@@ -63,9 +65,10 @@ function lookUp(workspaceId: string, folderId: string) {
     return listing;
 }
 
-async function openNodes(entry: JournalEntry | QueuedEntry) {
+async function openNodes(entry: JournalEntry | QueuedEntry, options: { fresh?: boolean } = {}) {
     const client = clientFor(entry.workspaceId);
-    const listing = await lookUp(entry.workspaceId, entry.parentId);
+    // `fresh`: the server's answer now (telling a version race from a key change), shared from then on.
+    const listing = await lookUp(entry.workspaceId, entry.parentId, options.fresh);
     if (!('uploadId' in entry)) {
         const replaces = entry.replacesId
             ? listing.children.find((child) => child.id === entry.replacesId)
@@ -142,7 +145,11 @@ export const transfers = createTransferManager({
 
 // Another tab is signing out: uploads here stop, writing nothing to the journal it deletes, and
 // release what they reserved on the server before that tab ends the session.
-onSignedOutElsewhere(() => transfers.releaseAll());
+// A tool's runs stop with them, their results let go and nothing written to the journal.
+onSignedOutElsewhere(() => {
+    abandonRuns();
+    return transfers.releaseAll();
+});
 
 /*
  * A move's copy is in place (lib/move-across.ts): the server deleted the source
@@ -198,16 +205,16 @@ export function useTransfers() {
     return useSyncExternalStore(transfers.subscribe, transfers.getState, () => EMPTY);
 }
 
-/* Leaving the page abandons in-flight uploads; ask before that happens. */
+/*
+ * Leaving the page abandons in-flight uploads; ask before that happens. A tool's
+ * results are never kept to resume (no plaintext on disk), so one still waiting
+ * to upload, even queued behind others, asks too (docs/file-tools-design.md, the
+ * owner's decision on question 4).
+ */
 let guarding = false;
 export function guardUnloadWhileUploading() {
-    if (guarding || typeof window === 'undefined') return;
+    if (guarding) return;
     guarding = true;
-    window.addEventListener('beforeunload', (event) => {
-        if (transfers.getState().active > 0) {
-            event.preventDefault();
-            // Chrome still requires returnValue to be set for the prompt to show.
-            event.returnValue = '';
-        }
-    });
+    // The one prompt a tool's unreleased results ask through too (lib/leave-guard.ts).
+    holdPageWhile(() => transfers.getState().active > 0 || resultsWaiting());
 }

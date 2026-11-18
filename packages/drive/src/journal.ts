@@ -21,7 +21,8 @@ import { cachedConnection } from './connection';
 export type JournalPart = { digest: string; etag?: string; bytes?: number };
 
 /* Where an upload's bytes came from: a file the person holds, or a copy of something shared. */
-export type UploadOrigin = 'file' | 'copy';
+/* `result`: what a tool or an editor produced (the save path), never journaled. */
+export type UploadOrigin = 'file' | 'copy' | 'result';
 
 /* The statements an upload's new metadata and version are signed with (see signatureFormFor). */
 export type UploadSignatures = {
@@ -126,28 +127,177 @@ export interface UploadJournal {
     listQueued(workspaceId?: string): Promise<QueuedEntry[]>;
     putQueued(entry: QueuedEntry): Promise<void>;
     removeQueued(id: string): Promise<void>;
-    /* Sign-out: every entry and every queued file gone, names and chunk digests with them. */
+    /* Sign-out: every entry and every queued file gone, names and chunk digests with them, and save runs' rows. */
     clear(): Promise<void>;
+}
+
+/*
+ * A save run's row (the save path, ./save-runs.ts): ids only, never a name or a
+ * byte. What a tool or an editor made in one run, so that a closed tab's next
+ * open can abort the run's open uploads and delete what it published. `nodeIds`
+ * are the run's new files and folders that would outlive it (not what sits
+ * inside a folder the run made, which goes with that folder); `uploadIds` its
+ * uploads the server may still hold open.
+ */
+export type RunRow = {
+    id: string;
+    /*
+     * The account that made it (its unlocked user id). Another account's row, or one that names
+     * none, is never offered, settled or deleted: a tab that died before its sign-out's wipe may
+     * leave one for whoever signs in next. Left alone, never written; a sign-out's wipe removes it.
+     */
+    account?: string;
+    workspaceId: string;
+    nodeIds: string[];
+    uploadIds: string[];
+    at: number;
+    /*
+     * The folders the run saves into (its targets), where every one of its `nodeIds` is made.
+     * Someone who isn't a member of the space hears "not found" for an item they can no longer
+     * reach as well as for one that isn't there: only while each of these is still found is such
+     * an answer taken for gone.
+     */
+    destinations?: string[];
+    /*
+     * The run finished (or its results were kept, or cleaned up) but its row could not be
+     * removed: never offered as interrupted, dropped by the next open.
+     */
+    done?: boolean;
+    /*
+     * Folders whose creation was sent (written with the id, before it went) and not yet known
+     * answered, with when: one a clean-up doesn't find may still be made, so the row stays until
+     * a later look finds it, or until CREATION_SETTLE_MS has passed since it was sent.
+     */
+    uncertain?: { id: string; at: number }[];
+    /*
+     * The person's answer to "Delete what was made?" when all of it was carried out but a folder
+     * that may still be made: the row then names only those folders, and later opens only look
+     * for them, quietly. One found is never deleted unasked: the answer is cleared and the row
+     * offered again, with `holds`, how many items it held when seen.
+     */
+    /*
+     * `keep`: the person kept what was made; the row stays only as a mark (`done`) so a Delete
+     * another tab chose from an older snapshot finds it kept and removes nothing.
+     */
+    chosen?: 'delete' | 'keep';
+    holds?: number;
+    /*
+     * One of those folders was found but its items couldn't be counted (it is in the Trash): it
+     * may hold more than `holds` says, so it is never offered as empty.
+     */
+    uncounted?: boolean;
+};
+
+export interface RunJournal {
+    list(): Promise<RunRow[]>;
+    put(row: RunRow): Promise<void>;
+    remove(id: string): Promise<void>;
+    /*
+     * Reads the row and writes what `change` makes of it in one transaction, so no other tab's
+     * write lands between the two: a row to put, null to remove it, undefined to leave it.
+     * True when something was written.
+     */
+    update?(
+        id: string,
+        change: (current: RunRow | undefined) => RunRow | null | undefined,
+    ): Promise<boolean>;
 }
 
 interface Schema extends DBSchema {
     uploads: { key: string; value: JournalEntry; indexes: { workspace: string } };
     queued: { key: string; value: QueuedEntry; indexes: { workspace: string } };
+    runs: { key: string; value: RunRow };
+}
+
+/* The upload journal's database: one connection for both journals, every store made at once. */
+const connections = new Map<string, ReturnType<typeof cachedConnection<Schema>>>();
+function connection(name: string) {
+    let open = connections.get(name);
+    if (!open) {
+        open = cachedConnection<Schema>(name, 3, (db) => {
+            if (!db.objectStoreNames.contains('uploads'))
+                db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
+                    'workspace',
+                    'workspaceId',
+                );
+            if (!db.objectStoreNames.contains('queued'))
+                db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
+                    'workspace',
+                    'workspaceId',
+                );
+            if (!db.objectStoreNames.contains('runs'))
+                db.createObjectStore('runs', { keyPath: 'id' });
+        });
+        connections.set(name, open);
+    }
+    return open;
+}
+
+/* Save runs' rows, beside the upload journal: cleared with it at sign-out, deleted with its database. */
+export function createIndexedDbRunJournal(name = 'hushos-drive'): RunJournal {
+    const open = connection(name);
+    // Any request refused lets its connection go (WebKit closes connections on its own): the next
+    // one, a run's write asked again included, opens a fresh one.
+    async function using<T>(work: (db: Awaited<ReturnType<typeof open>>) => Promise<T>) {
+        const opening = open();
+        try {
+            return await work(await opening);
+        } catch (error) {
+            open.forget(opening);
+            throw error;
+        }
+    }
+    return {
+        list: () => using((db) => db.getAll('runs')),
+        put: (row) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+                await tx.store.put(row);
+                await tx.done;
+            }),
+        remove: (id) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+                await tx.store.delete(id);
+                await tx.done;
+            }),
+        update: (id, change) =>
+            using(async (db) => {
+                const tx = db.transaction('runs', 'readwrite', { durability: 'strict' });
+                const next = change(await tx.store.get(id));
+                if (next === null) await tx.store.delete(id);
+                else if (next !== undefined) await tx.store.put(next);
+                await tx.done;
+                return next !== undefined;
+            }),
+    };
+}
+
+export function createMemoryRunJournal(): RunJournal & { rows: Map<string, RunRow> } {
+    const rows = new Map<string, RunRow>();
+    return {
+        rows,
+        async list() {
+            return [...rows.values()].map((row) => structuredClone(row));
+        },
+        async put(row) {
+            rows.set(row.id, structuredClone(row));
+        },
+        async remove(id) {
+            rows.delete(id);
+        },
+        async update(id, change) {
+            const held = rows.get(id);
+            const next = change(held && structuredClone(held));
+            if (next === null) rows.delete(id);
+            else if (next !== undefined) rows.set(id, structuredClone(next));
+            return next !== undefined;
+        },
+    };
 }
 
 export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
-    const open = cachedConnection<Schema>(name, 2, (db) => {
-        if (!db.objectStoreNames.contains('uploads'))
-            db.createObjectStore('uploads', { keyPath: 'id' }).createIndex(
-                'workspace',
-                'workspaceId',
-            );
-        if (!db.objectStoreNames.contains('queued'))
-            db.createObjectStore('queued', { keyPath: 'id' }).createIndex(
-                'workspace',
-                'workspaceId',
-            );
-    });
+    const open = connection(name);
     return {
         async list(workspaceId) {
             const db = await open();
@@ -196,10 +346,13 @@ export function createIndexedDbJournal(name = 'hushos-drive'): UploadJournal {
         },
         async clear() {
             const db = await open();
-            const tx = db.transaction(['uploads', 'queued'], 'readwrite', { durability: 'strict' });
+            const tx = db.transaction(['uploads', 'queued', 'runs'], 'readwrite', {
+                durability: 'strict',
+            });
             await Promise.all([
                 tx.objectStore('uploads').clear(),
                 tx.objectStore('queued').clear(),
+                tx.objectStore('runs').clear(),
             ]);
             await tx.done;
         },

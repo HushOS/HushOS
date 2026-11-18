@@ -28,7 +28,8 @@ object UploadFinish {
     fun definite(error: Throwable): Boolean = error is RefusedHere ||
         (error is ApiError && error.status in 400..499 && error.status != 408 && error.status != 429)
 
-    fun <T> complete(complete: () -> T, abort: () -> Unit, sleep: (Long) -> Unit = Thread::sleep): T {
+    /* `sleep`: how a retry waits (Resumable.pause, which a test failing the network on purpose sets to not wait). */
+    fun <T> complete(complete: () -> T, abort: () -> Unit, sleep: (Long) -> Unit = { Resumable.pause(it) }): T {
         var attempt = 0
         while (true) {
             try {

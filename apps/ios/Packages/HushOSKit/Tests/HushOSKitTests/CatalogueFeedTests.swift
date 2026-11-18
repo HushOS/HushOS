@@ -313,7 +313,21 @@ final class FeedServerProtocol: URLProtocol {
                 }
             } else {
                 guard let server = FakeDrive.current else { throw URLError(.cannotConnectToHost) }
-                let (status, reply) = try server.answer(request, body: request.httpBody)
+                // URLSession hands a protocol the body as a stream: read whole, as FakeDriveProtocol does.
+                var body = request.httpBody
+                if body == nil, let stream = request.httpBodyStream {
+                    stream.open()
+                    var data = Data()
+                    var buffer = [UInt8](repeating: 0, count: 4096)
+                    while stream.hasBytesAvailable {
+                        let read = stream.read(&buffer, maxLength: buffer.count)
+                        if read <= 0 { break }
+                        data.append(buffer, count: read)
+                    }
+                    stream.close()
+                    body = data
+                }
+                let (status, reply) = try server.answer(request, body: body)
                 deliver(status, try JSONSerialization.data(withJSONObject: reply))
             }
         } catch {
@@ -322,7 +336,9 @@ final class FeedServerProtocol: URLProtocol {
     }
 
     private func deliver(_ status: Int, _ data: Data) {
-        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        // A part's PUT answers with the ETag completion needs, as FakeDriveProtocol's does.
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json", "ETag": "\"part\""])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

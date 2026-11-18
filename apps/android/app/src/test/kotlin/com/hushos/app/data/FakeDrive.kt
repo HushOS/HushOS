@@ -298,7 +298,8 @@ class FakeDrive : AutoCloseable {
         node.keyEpoch = epoch
         val sealed = metadataSeal(MetadataContext(ws, id, node.metadataVersion.toULong()), newKey, metadata)
         node.metadataEnvelope = base64urlEncode(sealed)
-        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed, MetadataStatement(ws, id, NodeKind.FOLDER, node.metadataVersion.toULong()), sealed))
+        node.signature = base64urlEncode(metadataSign(owners.getValue(ws).keys.signingSeed,
+            MetadataStatement(ws, id, if (node.kind == "folder") NodeKind.FOLDER else NodeKind.FILE, node.metadataVersion.toULong()), sealed))
         node.signer = owners.getValue(ws).id
         bump(node)
         for (child in children(id)) {
@@ -624,6 +625,17 @@ class FakeDrive : AutoCloseable {
     /* The folders above `node`, its parent first. */
     private fun above(node: Node): List<Node> = generateSequence(node.parentId?.let { nodes[it] }) { it.parentId?.let { id -> nodes[id] } }.toList()
 
+    /* The folders a create-folders body names, made as the route makes them. */
+    private fun makeFolders(body: JSONObject): List<Node> = (0 until body.getJSONArray("folders").length()).map { i ->
+        val f = body.getJSONArray("folders").getJSONObject(i)
+        Node(f.getString("id"), body.getString("workspaceId"), f.getString("parentId"), "folder", f.getLong("keyEpoch"), f.getLong("parentKeyEpoch"),
+            f.getString("keyEnvelope"), 1L, f.getString("metadataEnvelope"), userId, f.getString("metadataSignature"), changeSeq = changeSeq++)
+            .also { nodes[it.id] = it }
+    }
+
+    /* A create-folders request the server takes up later (its answer already lost): the folders appear now. */
+    fun createFoldersLate(body: JSONObject) { synchronized(lock) { makeFolders(body) } }
+
     private fun route(method: String, path: String, query: Map<String, String>, body: JSONObject, linkToken: String?): Pair<Int, JSONObject>? {
         val segments = path.trim('/').split("/")
         extraRoutes?.invoke(method, segments, query, body)?.let { return it }
@@ -739,13 +751,11 @@ class FakeDrive : AutoCloseable {
             get && at("drive", "thumbnails") -> ok(JSONObject().put("urls", JSONArray()))
             post && at("drive", "workspaces", "*", "epochs") -> ok(JSONObject().put("from", nextEpoch++))
             post && at("drive", "folders") -> {
-                val made = (0 until body.getJSONArray("folders").length()).map { i ->
-                    val f = body.getJSONArray("folders").getJSONObject(i)
-                    Node(f.getString("id"), body.getString("workspaceId"), f.getString("parentId"), "folder", f.getLong("keyEpoch"), f.getLong("parentKeyEpoch"),
-                        f.getString("keyEnvelope"), 1L, f.getString("metadataEnvelope"), userId, f.getString("metadataSignature"), changeSeq = changeSeq++)
-                        .also { nodes[it.id] = it }
-                }
-                ok(JSONObject().put("nodes", JSONArray(made.map { it.json() })))
+                // As packages/db's createFolders: an id already there (an earlier send of the same request made it).
+                val taken = (0 until body.getJSONArray("folders").length()).map { body.getJSONArray("folders").getJSONObject(it).getString("id") }
+                    .firstOrNull { nodes.containsKey(it) }
+                if (taken != null) 409 to JSONObject().put("code", "conflict").put("message", "An item with this id already exists.").put("data", JSONObject().put("id", taken))
+                else ok(JSONObject().put("nodes", JSONArray(makeFolders(body).map { it.json() })))
             }
             post && at("drive", "nodes", "*", "metadata") -> {
                 val node = node(segments[2])
@@ -777,6 +787,12 @@ class FakeDrive : AutoCloseable {
                     if (nodes[n.getString("id")]?.keyEpoch != n.getLong("keyEpoch"))
                         return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
                 }
+                // A new file sealed under its folder's key as it is now, or `stale`.
+                body.optJSONObject("node")?.takeIf { !it.optBoolean("existing") && it.has("parentKeyEpoch") }?.let { n ->
+                    val folder = nodes[n.getString("parentId")]
+                    if (folder != null && folder.keyEpoch != n.getLong("parentKeyEpoch"))
+                        return 409 to JSONObject().put("code", "stale").put("message", "This item changed since you last saw it.")
+                }
                 // A move's source as packages/db `moveSourceAtBegin` holds it: another workspace's file, live, at the version read.
                 body.optJSONObject("moveOf")?.let { move ->
                     val source = nodes[move.getString("nodeId")]
@@ -803,7 +819,8 @@ class FakeDrive : AutoCloseable {
             // As packages/db/src/drive.ts abortUpload answers: open or aborted → 200, completed → 409, no row → 404.
             post && at("drive", "uploads", "*", "abort") -> when {
                 uploads.remove(segments[2]) != null || segments[2] in abortedUploads -> { abortedUploads.add(segments[2]); ok(JSONObject().put("aborted", true)) }
-                segments[2] in completedUploads -> 409 to JSONObject().put("message", DriveApi.ALREADY_FINISHED)
+                segments[2] in completedUploads -> 409 to JSONObject().put("message", DriveApi.ALREADY_FINISHED).put("code", "conflict")
+                    .put("data", JSONObject().put("upload", "completed"))
                 else -> 404 to JSONObject().put("message", "This upload no longer exists.")
             }
             post && at("drive", "uploads", "*", "complete") -> {
@@ -829,8 +846,15 @@ class FakeDrive : AutoCloseable {
                 val node = if (n.getBoolean("existing")) {
                     val existing = node(n.getString("id"))
                     val expected = if (n.isNull("expectedVersionId")) null else n.getString("expectedVersionId")
-                    if (existing.version?.id != expected) return conflict("A newer version is there")
+                    // As packages/db finishCompleting answers: `conflicted`, naming the version current now.
+                    // The version moved on, or the file's key did (a key change since begin): `conflicted` either way.
+                    if (existing.version?.id != expected || existing.keyEpoch != n.getLong("keyEpoch")) return 409 to JSONObject().put("code", "conflict").put("message", "A newer version is there")
+                        .put("data", JSONObject().put("conflicted", true).put("currentVersionId", existing.version?.id ?: JSONObject.NULL))
                     existing.also { bump(it) }
+                } else if (nodes[n.getString("parentId")]?.keyEpoch?.let { it != n.getLong("parentKeyEpoch") } == true) {
+                    // A new file whose folder was re-keyed since begin: `conflicted`, as packages/db finishCompleting answers.
+                    return 409 to JSONObject().put("code", "conflict").put("message", "This file changed while it was uploading.")
+                        .put("data", JSONObject().put("conflicted", true))
                 } else Node(n.getString("id"), upload.ws, n.getString("parentId"), "file", n.getLong("keyEpoch"), n.getLong("parentKeyEpoch"),
                     n.getString("keyEnvelope"), 1L, n.getString("metadataEnvelope"), userId, n.getString("metadataSignature"), changeSeq = changeSeq++)
                 node.version = version

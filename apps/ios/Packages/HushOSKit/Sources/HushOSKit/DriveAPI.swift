@@ -22,6 +22,11 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
      * which is signed again and retried.
      */
     case forbidden(String)
+    /*
+     * A family manager paused this person's changes for now (403 `held`): refused until the hold lifts, never retried
+     * meanwhile, and nothing about access ended (never taken for `forbidden`'s lost access).
+     */
+    case held(String)
 
     public var errorDescription: String? {
         switch self {
@@ -30,7 +35,7 @@ public enum DriveAPIError: Error, LocalizedError, Sendable {
         // Out of room, in the app's own words: the server's mention plans, which the app never points to
         // (App Review 3.1.3(f)). Android says the same.
         case .server(402, _), .server(413, _), .server(507, _): return Self.noRoom
-        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message), .forbidden(let message): return message
+        case .server(_, let message), .notFound(let message), .trashed(let message), .rotating(let message), .stale(let message), .conflicted(let message), .forbidden(let message), .held(let message): return message
         case .transport: return "We couldn’t reach HushOS. Check your connection, then try again."
         }
     }
@@ -146,6 +151,7 @@ public final class DriveAPI: Sendable {
             if status == 409, body?["code"] as? String == "conflict", (body?["data"] as? [String: Any])?["conflicted"] as? Bool == true {
                 throw DriveAPIError.conflicted(message ?? "This file changed while it was uploading.")
             }
+            if status == 403, DriveAPI.held(code: body?["code"] as? String, message: message) { throw DriveAPIError.held(message ?? DriveAPI.legacyHeld) }
             if status == 403, body?["code"] is String { throw DriveAPIError.forbidden(message ?? "You can’t change this.") }
             if status == 409, body?["code"] as? String == "stale" { throw DriveAPIError.stale(message ?? "This item changed since you last saw it. Refresh and try again.") }
             throw DriveAPIError.server(status, message ?? DriveAPIError.noReply)
@@ -353,6 +359,63 @@ public final class DriveAPI: Sendable {
     public func abortUpload(uploadId: String, workspaceId: String) async {
         // Best effort: the server aborts on receipt; the reply is read as what it is, never as a completion.
         _ = try? await perform(try mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]), as: UploadAborted.self)
+    }
+
+    /*
+     * The server's answer to an abort, for a clean-up that must know (the save path): aborted, gone (no
+     * such upload), finished (it landed), finishing (still completing: ask again), denied (not this
+     * person's any more), or unknown (no answer).
+     */
+    /* `held`: a family manager paused changes (403 `held`): nothing ended, asked again after the hold. */
+    /*
+     * A family manager's pause: 403 `held`, or, from a server before the code, 403 `forbidden` with these words (as the
+     * legacy abort answers are read by their words).
+     */
+    static let legacyHeld = "A group manager has paused changes to this folder."
+    static func held(code: String?, message: String?) -> Bool { code == "held" || message == legacyHeld }
+
+    public enum AbortFate: Sendable, Equatable {
+        case aborted, gone, finished, finishing, denied, held, unknown
+
+        /*
+         * Its upload's reservation may still be held: no answer, still finishing, or a family manager's pause (refused,
+         * nothing ended). Its id is kept and asked again later.
+         */
+        public var unsettled: Bool { self == .unknown || self == .finishing || self == .held }
+    }
+
+    /* An older server's abort refusals (packages/drive/src/server.ts abortUpload), before it named them in `data.upload`. */
+    static let abortFinishing = "This upload is finishing and cannot be cancelled."
+    static let abortFinished = "This upload already finished."
+
+    public func abortUploadFate(uploadId: String, workspaceId: String) async -> AbortFate {
+        guard let request = try? mutation("/uploads/\(uploadId)/abort", body: ["workspaceId": workspaceId]),
+              let (status, data) = try? await send(request) else { return .unknown }
+        switch status {
+        case 200 ..< 300: return .aborted
+        case 404: return .gone
+        // A session the server no longer knows says nothing of the upload: no answer, asked again.
+        case 401: return .unknown
+        case 403:
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            return DriveAPI.held(code: body?["code"] as? String, message: body?["message"] as? String) ? .held : .denied
+        case 409:
+            let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if let upload = (body?["data"] as? [String: Any])?["upload"] as? String {
+                switch upload {
+                case "completing": return .finishing
+                case "completed": return .finished
+                default: return .unknown
+                }
+            }
+            // A self-hosted server from before `data.upload` says which only in words.
+            switch body?["message"] as? String {
+            case Self.abortFinishing: return .finishing
+            case Self.abortFinished: return .finished
+            default: return .unknown
+            }
+        default: return .unknown
+        }
     }
 
     /* PUTs one encrypted part to its presigned URL; the ETag is what completion needs. */
