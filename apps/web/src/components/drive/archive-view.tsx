@@ -154,6 +154,12 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
     }, [versionId, attempt]);
 
     const shown = path.at(-1) ?? 0;
+    // The trail scrolled to its end whenever it changes: the crumb shown is the last.
+    const trail = useRef<HTMLOListElement>(null);
+    useEffect(() => {
+        const ol = trail.current;
+        if (ol) ol.scrollLeft = ol.scrollWidth;
+    }, [path, opened]);
     const rows = useMemo(() => (listing ? rowsOf(listing, shown) : []), [listing, shown]);
 
     function startDownload(entry: ArchiveEntry) {
@@ -274,7 +280,12 @@ export function ArchiveView({ node, onDownload }: { node: DriveNode; onDownload:
                     aria-label={archiveWords.folders}
                     className="flex min-h-12 shrink-0 items-center border-b border-rule px-3 sm:px-5"
                 >
-                    <ol className="flex min-w-0 flex-wrap items-center gap-0.5 text-sm">
+                    {/* One line however deep: it scrolls sideways (to the last crumb as the path changes), so a
+                        deep path never pushes the contents down off a narrow screen. */}
+                    <ol
+                        ref={trail}
+                        className="flex min-w-0 flex-nowrap items-center gap-0.5 overflow-x-auto text-sm [scrollbar-width:none]"
+                    >
                         <Crumb
                             label={node.name}
                             current={path.length === 0 && !opened}
@@ -400,7 +411,7 @@ function Crumb({
     onClick?: () => void;
 }) {
     return (
-        <li className="flex min-w-0 items-center gap-0.5">
+        <li className="flex shrink-0 items-center gap-0.5">
             {separated && (
                 <ChevronRightIcon
                     className="size-4 shrink-0 text-muted-foreground"
@@ -408,14 +419,17 @@ function Crumb({
                 />
             )}
             {current ? (
-                <span aria-current="page" className="truncate px-2 py-1.5 font-semibold">
+                <span
+                    aria-current="page"
+                    className="max-w-64 truncate px-2 py-1.5 font-semibold whitespace-nowrap"
+                >
                     {label}
                 </span>
             ) : (
                 <button
                     type="button"
                     onClick={onClick}
-                    className="truncate rounded-sm px-2 py-1.5 text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
+                    className="max-w-64 truncate rounded-sm px-2 py-1.5 whitespace-nowrap text-muted-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring"
                 >
                     {label}
                 </button>
@@ -594,7 +608,10 @@ function EntryPane({
     onPasswordLost: (doubt: boolean) => void;
 }) {
     const name = entry.name;
-    const node = useMemo(() => entryNode(archive, entry), [archive, entry]);
+    const node = useMemo(
+        () => entryNode(archive, entry, session.tag),
+        [archive, entry, session.tag],
+    );
     const kind = previewKind(node);
     const icon = <FileMark kind="file" name={name} size="large" />;
     // The entry has a password of its own (the one held didn't open it): asked for again.

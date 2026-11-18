@@ -13,6 +13,8 @@ import {
 } from '@zip.js/zip.js/lib/zip-core-native.js';
 import {
     checkLocalHeader,
+    localDescriptorLength,
+    SIG_DESCRIPTOR,
     findDirectory,
     hiddenCount,
     InflateCounter,
@@ -197,6 +199,20 @@ function directoryFor(entry: ZipEntry, span: number) {
 
 const utf8 = (text: string) => new TextEncoder().encode(text);
 
+/*
+ * `source` with its failures said as `unreadable`: a read that failed (the network, the store)
+ * says nothing of the archive or of a password, so it is never damage, nor a wrong password.
+ */
+function readable(source: Source): Source {
+    return {
+        size: source.size,
+        read: (offset, length) =>
+            source.read(offset, length).catch((error: unknown) => {
+                throw error instanceof ZipError ? error : new ZipError('unreadable');
+            }),
+    };
+}
+
 /* zip.js's errors, by message, as refusal codes; anything else is damage. */
 function refusalOf(error: unknown): ZipError {
     if (error instanceof ZipError) return error;
@@ -268,7 +284,8 @@ export class ZipArchive {
     }
 
     /* Reads the directory, with every cap and refusal of section 3, and lists it. */
-    static async open(source: Source) {
+    static async open(given: Source) {
+        const source = readable(given);
         const directory = await findDirectory(source.size, source.read);
         const bytes = await source.read(directory.offset, directory.size);
         const entries = readDirectory(bytes, directory);
@@ -304,7 +321,19 @@ export class ZipArchive {
     /* The local header read and checked against the directory: where the entry's data starts. */
     async dataStart(entry: ZipEntry, source: Source = this.#source) {
         const header = await source.read(entry.offset, LOCAL_HEADER_READ(entry));
-        return checkLocalHeader(entry, header);
+        const start = checkLocalHeader(entry, header);
+        // A data descriptor with its signature is 4 bytes longer: read where it would start, and
+        // hold the whole of it to the entry's bound, as the core does.
+        if ((entry.flags & 8) !== 0) {
+            const after = start + entry.packed;
+            const head = await source.read(after, 4);
+            const signed =
+                head.length === 4 &&
+                new DataView(head.buffer, head.byteOffset, 4).getUint32(0, true) === SIG_DESCRIPTOR;
+            if (signed && after + localDescriptorLength(header) + 4 > entry.bound)
+                throw new ZipError('overlap');
+        }
+        return start;
     }
 
     /*
@@ -325,7 +354,7 @@ export class ZipArchive {
             source?: Source;
         },
     ) {
-        const source = options.source ?? this.#source;
+        const source = options.source ? readable(options.source) : this.#source;
         if (source.size !== this.#source.size) throw new ZipError('damaged');
         const start = await this.dataStart(entry, source);
         if (entry.lock !== 'none' && options.password === null) throw new ZipError('password');
@@ -574,6 +603,8 @@ export class ZipArchive {
             } catch (error) {
                 const code = error instanceof ZipError ? error.code : 'damaged';
                 if (code === 'wrong-password') return false;
+                // The archive couldn't be read: said as that, never as a wrong password.
+                if (code === 'unreadable') throw error;
                 continue;
             }
             if (this.#closed) return false;

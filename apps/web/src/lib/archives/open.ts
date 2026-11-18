@@ -177,18 +177,22 @@ export function entryWhen(entry: Pick<ArchiveEntry, 'dos' | 'mtime'>) {
 /*
  * The entry as a node the viewer's renderers take: its name and size, no recorded type (the
  * archive's would say zip; the name decides), and a version id of its own, so a preview the
- * viewer remembers is the entry's and goes on lock with the rest.
+ * viewer remembers is the entry's and goes on lock with the rest. A locked entry's is the
+ * session's too (`session`, one per archive opened): what its password opened is shown again
+ * only in the session that proved that password, never from a later one where another entry's
+ * password was typed (each entry may have its own).
  */
-export function entryNode(archive: DriveNode, entry: ArchiveEntry): DriveNode {
+export function entryNode(archive: DriveNode, entry: ArchiveEntry, session: string): DriveNode {
     const name = entry.name;
     const version = archive.currentVersion!;
+    const own = entry.lock === 'none' ? `${entry.index}` : `${entry.index}@${session}`;
     return {
         ...archive,
-        id: `${archive.id}#${entry.index}`,
+        id: `${archive.id}#${own}`,
         kind: 'file',
         name,
         metadata: { name, mime: null, size: entry.size, modified: entryWhen(entry) },
         content: { plaintextSize: entry.size, thumbnailBytes: 0 },
-        currentVersion: { ...version, id: `${version.id}#${entry.index}` },
+        currentVersion: { ...version, id: `${version.id}#${own}` },
     };
 }

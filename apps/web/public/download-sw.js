@@ -40,35 +40,67 @@ function startDownload(data, port) {
     });
     if (typeof data.size === 'number' && data.size >= 0)
         headers.set('Content-Length', String(data.size));
+    /*
+     * Pulled, not pushed: the page sends a chunk only after the last was acknowledged, and a chunk
+     * is acknowledged only when the browser pulls it from this stream (highWaterMark 0: nothing is
+     * read ahead). A slow or paused download holds the page at one chunk, never a whole entry
+     * queued here.
+     */
     let controller = null;
-    const queue = [];
+    let held = null;
     let ended = false;
-    const stream = new ReadableStream({
-        start(c) {
-            controller = c;
-            for (const chunk of queue) c.enqueue(chunk);
-            queue.length = 0;
-            if (ended) c.close();
+    let wanting = null;
+    const hand = (chunk) => {
+        controller.enqueue(chunk);
+        port.postMessage({ type: 'ack' });
+    };
+    const stream = new ReadableStream(
+        {
+            start(c) {
+                controller = c;
+            },
+            pull(c) {
+                if (held) {
+                    const chunk = held;
+                    held = null;
+                    hand(chunk);
+                    return;
+                }
+                if (ended) {
+                    c.close();
+                    return;
+                }
+                // Nothing here yet: the pull waits for the page's next chunk (or its end).
+                return new Promise((resolve) => (wanting = resolve));
+            },
+            cancel() {
+                port.postMessage({ type: 'cancelled' });
+                downloads.delete(id);
+            },
         },
-        cancel() {
-            port.postMessage({ type: 'cancelled' });
-            downloads.delete(id);
-        },
-    });
+        { highWaterMark: 0 },
+    );
     port.onmessage = (message) => {
         const msg = message.data;
         if (!msg) return;
         if (msg.type === 'chunk') {
             const chunk = new Uint8Array(msg.chunk);
-            if (controller) controller.enqueue(chunk);
-            else queue.push(chunk);
-            // One chunk at a time: the page waits for this before sending the next.
-            port.postMessage({ type: 'ack' });
+            if (wanting) {
+                const pulled = wanting;
+                wanting = null;
+                hand(chunk);
+                pulled();
+            } else held = chunk;
         } else if (msg.type === 'end') {
             ended = true;
-            if (controller) controller.close();
+            if (wanting && !held) {
+                const pulled = wanting;
+                wanting = null;
+                controller.close();
+                pulled();
+            }
         } else if (msg.type === 'abort') {
-            if (controller) controller.error(new Error('Download aborted.'));
+            controller.error(new Error('Download aborted.'));
             downloads.delete(id);
         }
     };

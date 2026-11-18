@@ -423,6 +423,26 @@ describe('reading', () => {
         }
     });
 
+    it('says a read that failed as unreadable, never as a wrong password or damage', async () => {
+        const bytes = bytesOf('two-passwords.zip');
+        let failing = false;
+        const archive = await ZipArchive.open({
+            size: bytes.length,
+            read: async (offset, length) => {
+                if (failing) throw new Error('Failed to fetch');
+                return bytes.slice(offset, offset + length);
+            },
+        });
+        // The connection goes after the list was read: the right password is tried, and the read fails.
+        failing = true;
+        expect(await outcome(() => archive.unlock(table.password))).toBe('unreadable');
+        expect(archive.unlocked).toBe(false);
+        expect(await outcome(() => archive.check(0, table.password))).toBe('unreadable');
+        // Back again, the same password opens it.
+        failing = false;
+        expect(await archive.unlock(table.password)).toBe(true);
+    });
+
     it('keeps a password only once it opens something, and drops it on close', async () => {
         const archive = await open('aes.zip');
         expect(await outcome(() => archive.preview(0, 1024))).toBe('password');

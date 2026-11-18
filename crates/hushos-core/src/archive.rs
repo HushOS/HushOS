@@ -66,6 +66,7 @@ const SIG_ZIP64_EOCD: u32 = 0x0606_4b50;
 const SIG_ZIP64_LOCATOR: u32 = 0x0706_4b50;
 const SIG_CENTRAL: u32 = 0x0201_4b50;
 const SIG_LOCAL: u32 = 0x0403_4b50;
+const SIG_DESCRIPTOR: u32 = 0x0807_4b50;
 const SIG_ARCHIVE_EXTRA: u32 = 0x0806_4b50;
 const EOCD_LENGTH: u64 = 22;
 const LOCATOR_LENGTH: u64 = 20;
@@ -629,6 +630,10 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
     if entry.lock == Lock::Aes && !fields.contains_key(&0x9901) {
         return refused(Refusal::Local);
     }
+    // Its data descriptor at its real width without a signature (`data_start` adds one it finds there).
+    if flags & 8 != 0 && start + entry.packed + descriptor_length(&fields) > entry.bound {
+        return refused(Refusal::Overlap);
+    }
     if size == MAX32 || packed == MAX32 {
         let Some(wide) = fields.get(&0x0001) else { return refused(Refusal::Local) };
         let mut p = 0usize;
@@ -650,6 +655,37 @@ pub(crate) fn check_local_header(entry: &Entry, header: &[u8]) -> Result<u64> {
     let agrees = |local: u64, central: u64| local == central || (descriptor && local == 0);
     if !agrees(crc, entry.crc as u64) || !agrees(packed, entry.packed) || !agrees(size, entry.size) {
         return refused(Refusal::Local);
+    }
+    Ok(start)
+}
+
+/// A data descriptor's length without its optional signature: the CRC and two sizes, 4 bytes each,
+/// or 8 each when the local header carries ZIP64 sizes (its 0x0001 field): 12 or 20.
+fn descriptor_length(fields: &HashMap<u16, &[u8]>) -> u64 {
+    if fields.contains_key(&0x0001) {
+        20
+    } else {
+        12
+    }
+}
+
+/// The local header read and checked against the directory: where the entry's data starts. A data
+/// descriptor with its signature is 4 bytes longer: where it would start is read, and the whole of
+/// it held to the entry's bound, as on the web.
+fn data_start(source: &dyn RangeRead, entry: &Entry) -> Result<u64> {
+    let header = source.read_at(entry.offset, local_header_read(entry))?;
+    let start = check_local_header(entry, &header)?;
+    if entry.flags & 8 != 0 {
+        let after = start + entry.packed;
+        let head = source.read_at(after, 4)?;
+        let signed = head.len() == 4 && u32_at(&head, 0) == SIG_DESCRIPTOR as u64;
+        let name_length = u16_at(&header, 26) as usize;
+        let extra_length = u16_at(&header, 28) as usize;
+        let at = LOCAL_LENGTH + name_length;
+        let fields = extra_fields(&header[at..at + extra_length]);
+        if signed && after + descriptor_length(&fields) + 4 > entry.bound {
+            return refused(Refusal::Overlap);
+        }
     }
     Ok(start)
 }
@@ -1660,8 +1696,7 @@ impl Zip {
         if self.is_closed() {
             return Err(closed_error());
         }
-        let header = source.read_at(entry.offset, local_header_read(entry))?;
-        let start = check_local_header(entry, &header)?;
+        let start = data_start(source, entry)?;
         if entry.lock != Lock::None && password.is_none() {
             return refused(Refusal::Password);
         }

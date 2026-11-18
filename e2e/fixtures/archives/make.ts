@@ -216,6 +216,10 @@ export type Spec = {
     zip64?: boolean;
     /* A data descriptor (with its signature) after the data, the local header's CRC and sizes zero. */
     descriptor?: boolean;
+    /* The descriptor without its optional signature (12 or 20 bytes, not 16 or 24). */
+    descriptorSignature?: boolean;
+    /* Its sizes 8 bytes each (a ZIP64 descriptor); by default when `zip64`. Set apart, a descriptor that lies about its width. */
+    descriptorWide?: boolean;
     /* Under `password` when given, else PASSWORD; as UTF-8 bytes, as Info-ZIP and 7-Zip take one. */
     encrypt?:
         | { kind: 'aes'; version: 1 | 2; password?: string }
@@ -394,10 +398,15 @@ export function writeZip(specs: Spec[], options: ArchiveOptions = {}) {
         out.push(local.done());
         out.push(packed);
         if (spec.descriptor) {
-            out.u32(0x08074b50);
+            if (spec.descriptorSignature !== false) out.u32(0x08074b50);
             out.u32(crc);
-            out.u32(packed.length);
-            out.u32(size);
+            if (spec.descriptorWide ?? spec.zip64) {
+                out.u64(packed.length);
+                out.u64(size);
+            } else {
+                out.u32(packed.length);
+                out.u32(size);
+            }
         }
         placed.push({
             spec,
@@ -1322,6 +1331,50 @@ function nonAsciiPasswordFixture() {
     ]);
 }
 
+/*
+ * Data descriptors at each of their four widths, each entry right after the last's: 12 bytes (no
+ * signature), 16 (signed), 20 (ZIP64 sizes, no signature) and 24 (both). All fit exactly.
+ */
+function descriptorsFixture() {
+    const at = (name: string, signature: boolean, zip64: boolean) => ({
+        name,
+        data: text(
+            `A data descriptor of ${(signature ? 4 : 0) + (zip64 ? 20 : 12)} bytes after it.`,
+        ),
+        descriptor: true,
+        descriptorSignature: signature,
+        zip64,
+    });
+    return writeZip([
+        at('twelve.txt', false, false),
+        at('sixteen.txt', true, false),
+        at('twenty.txt', false, true),
+        at('twenty-four.txt', true, true),
+    ]);
+}
+
+/*
+ * ZIP64 entries whose local headers promise 8-byte descriptor sizes, followed by descriptors of
+ * 4-byte sizes, and the next entry right after: the descriptor each header promises runs 8 bytes
+ * into the next entry. Signed and unsigned.
+ */
+function descriptorOverlapFixture() {
+    const short = (name: string, signature: boolean) => ({
+        name,
+        data: text('Its descriptor is shorter than its local header promises.'),
+        descriptor: true,
+        descriptorSignature: signature,
+        descriptorWide: false,
+        zip64: true,
+    });
+    return writeZip([
+        short('signed.bin', true),
+        { name: 'after-signed.txt', data: text('Right after a signed descriptor.') },
+        short('unsigned.bin', false),
+        { name: 'after-unsigned.txt', data: text('Right after an unsigned descriptor.') },
+    ]);
+}
+
 /* The first of "wrong 0", "wrong 1", … whose decrypted check byte is `unprovenFixture`'s. */
 export const UNPROVEN_PASSWORD = (() => {
     const check = (crc32(UNPROVEN_DATA()) >>> 24) & 0xff;
@@ -1653,6 +1706,8 @@ export const FIXTURES: Fixture[] = [
     { name: 'unprovable-damaged.zip', large: false, build: unprovableDamagedFixture },
     { name: 'zipcrypto-empty-only.zip', large: false, build: zipCryptoEmptyOnlyFixture },
     { name: 'non-ascii-password.zip', large: false, build: nonAsciiPasswordFixture },
+    { name: 'descriptors.zip', large: false, build: descriptorsFixture },
+    { name: 'descriptor-overlap.zip', large: false, build: descriptorOverlapFixture },
     { name: 'front-loaded.zip', large: true, build: frontLoadedFixture },
     { name: 'wide.zip', large: true, build: wideFixture },
     { name: 'folders-2m.zip', large: true, build: folders2MFixture },

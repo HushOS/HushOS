@@ -62,7 +62,9 @@ export type ZipRefusal =
     | 'nested'
     | 'link'
     | 'directory'
-    | 'too-large';
+    | 'too-large'
+    /* The archive's bytes couldn't be read (the network, the store): nothing said of the archive or a password. */
+    | 'unreadable';
 
 export class ZipError extends Error {
     constructor(readonly code: ZipRefusal) {
@@ -107,6 +109,7 @@ const SIG_ZIP64_EOCD = 0x06064b50;
 const SIG_ZIP64_LOCATOR = 0x07064b50;
 const SIG_CENTRAL = 0x02014b50;
 const SIG_LOCAL = 0x04034b50;
+export const SIG_DESCRIPTOR = 0x08074b50;
 const SIG_ARCHIVE_EXTRA = 0x08064b50;
 const EOCD_LENGTH = 22;
 const LOCATOR_LENGTH = 20;
@@ -429,6 +432,23 @@ export function checkOverlap(entries: ZipEntry[], directoryOffset: number) {
  * and (without a data descriptor) the same CRC and sizes. Its whole span, data descriptor
  * included, must end by the entry's bound. Returns where the entry's data starts.
  */
+/*
+ * A data descriptor's length without its optional signature: the CRC and two sizes, 4 bytes each,
+ * or 8 each when the local header carries ZIP64 sizes (its 0x0001 field): 12 or 20.
+ */
+function descriptorLength(fields: Map<number, Uint8Array>) {
+    return fields.has(0x0001) ? 20 : 12;
+}
+
+/* The local header's data descriptor length without a signature: 12, or 20 with ZIP64 sizes. */
+export function localDescriptorLength(header: Uint8Array) {
+    const data = view(header);
+    const nameLength = data.getUint16(26, true);
+    const extraLength = data.getUint16(28, true);
+    const at = LOCAL_LENGTH + nameLength;
+    return descriptorLength(extraFields(header.subarray(at, at + extraLength)));
+}
+
 export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     if (header.length < LOCAL_LENGTH) throw new ZipError('damaged');
     const data = view(header);
@@ -457,6 +477,9 @@ export function checkLocalHeader(entry: ZipEntry, header: Uint8Array) {
     );
     // A WinZip AES entry says so in both places: a local header without its AES field is another entry.
     if (entry.lock === 'aes' && !fields.has(0x9901)) throw new ZipError('local');
+    // Its data descriptor at its real width without a signature (dataStart adds one it finds there).
+    if ((flags & 8) !== 0 && start + entry.packed + descriptorLength(fields) > entry.bound)
+        throw new ZipError('overlap');
     if (size === MAX32 || packed === MAX32) {
         const wide = fields.get(0x0001);
         if (!wide) throw new ZipError('local');

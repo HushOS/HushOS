@@ -450,6 +450,8 @@ export function openArchive(reader: RangeReader, worker: () => Worker) {
     return {
         listing,
         size: reader.size,
+        /* This session's own name: what a locked entry's remembered preview is kept under (entryNode). */
+        tag: crypto.randomUUID(),
 
         /* Whether `password` opens the archive's locked entries; kept in the worker if it does. */
         async unlock(password: string, entry: ArchiveEntry | null = null) {

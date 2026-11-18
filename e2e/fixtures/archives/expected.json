@@ -1186,6 +1186,58 @@
                     "wrongPassword": "wrong-password"
                 }
             ]
+        },
+        "descriptors.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "twelve.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "sixteen.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "twenty.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "twenty-four.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
+        },
+        "descriptor-overlap.zip": {
+            "listing": "ok",
+            "hidden": 0,
+            "entries": [
+                {
+                    "path": "signed.bin",
+                    "check": "overlap",
+                    "download": "overlap"
+                },
+                {
+                    "path": "after-signed.txt",
+                    "check": "ok",
+                    "download": "ok"
+                },
+                {
+                    "path": "unsigned.bin",
+                    "check": "overlap",
+                    "download": "overlap"
+                },
+                {
+                    "path": "after-unsigned.txt",
+                    "check": "ok",
+                    "download": "ok"
+                }
+            ]
         }
     }
 }

@@ -70,6 +70,7 @@ export const refusalWords: Record<string, string> = {
     'too-large': 'This item is too large to preview here. Download it to open it in another app.',
     ratio: 'This item expands far more than ordinary files do, which is how some zip bombs work. HushOS stopped reading it.',
     nested: archiveWords.nested,
+    unreadable: 'Couldn’t read this archive. Check your connection, then try again.',
 };
 
 /* An item's own refusal: "damaged" says the item is, not the archive, which still lists. */

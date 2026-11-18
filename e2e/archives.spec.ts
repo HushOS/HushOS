@@ -10,7 +10,8 @@ import { grip, newPage, registerAccount, sha256 } from './helpers';
 /*
  * Browsing zip archives in the viewer (docs/file-tools-design.md, section 7 (a)): a zip opens as
  * its list, a folder inside opens, a text entry previews, and an entry downloads to the exact
- * bytes; the 5 GiB ZIP64 fixture lists while the page fetches less than 32 MiB; the AES zip asks
+ * bytes; a 40 MiB stored archive lists while the page fetches less than 32 MiB of it; the 5 GiB
+ * ZIP64 fixture lists and asks before a download; the AES zip asks
  * for its password, refuses a wrong one and opens with the right one; a central directory of
  * 65 MiB is refused with its message; a 20 MiB compressible entry downloads whole (WebKit's
  * DecompressionStream hands back a write's whole output at once, which once broke the session);
@@ -45,6 +46,22 @@ function sideBySide(dir: string) {
     return path;
 }
 
+/* Five 8 MiB stored entries, 40 MiB on disk: more than the listing may fetch, so it can only list by range. */
+function range40(dir: string) {
+    const path = join(dir, 'range-40m.zip');
+    writeFileSync(
+        path,
+        writeZip(
+            [0, 1, 2, 3, 4].map((n) => ({
+                name: `part-${n}.bin`,
+                data: new Uint8Array(8 * 1024 * 1024).map((_, i) => (i * 131 + n * 17) & 0xff),
+                method: 0,
+            })),
+        ),
+    );
+    return path;
+}
+
 async function open(p: Page, name: string) {
     await row(p, name).locator('button').first().dblclick(grip);
     await expect(dialog(p)).toContainText(name);
@@ -67,9 +84,10 @@ test.beforeAll(async ({ browser }) => {
         writeFixture('directory-65m.zip', large),
         writeFixture('compressible.zip', large),
         sideBySide(large),
+        range40(large),
     ];
     await page.locator('input[type=file]').first().setInputFiles(files);
-    await expect(page.locator('[data-node-id]')).toHaveCount(7, { timeout: 180_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(8, { timeout: 240_000 });
     for (const name of [
         'basic.zip',
         'aes.zip',
@@ -112,25 +130,37 @@ test('a zip opens as its list, a folder inside opens, a text entry previews and 
     await close(page);
 });
 
-test('the 5 GiB ZIP64 fixture lists while the page fetches less than 32 MiB', async () => {
-    let fetched = 0;
-    const count = async (request: Request) => {
-        const url = request.url();
+test('a 40 MiB stored archive lists by range: the page fetches less than 32 MiB of it', async () => {
+    // Every response's size, waited for once the list shows: a whole read (40 MiB and its padding) fails this.
+    const sizes: Promise<number>[] = [];
+    const count = (request: Request) => {
         // The app's own code (Vite serves it module by module in development) is not the archive.
-        if (/\/(assets|@vite|@fs|@id|node_modules|src)\//.test(url)) return;
-        fetched += (await request.sizes().catch(() => ({ responseBodySize: 0 }))).responseBodySize;
+        if (/\/(assets|@vite|@fs|@id|node_modules|src)\//.test(request.url())) return;
+        sizes.push(
+            request
+                .sizes()
+                .then((size) => size.responseBodySize)
+                .catch(() => 0),
+        );
     };
     page.on('requestfinished', count);
-    await open(page, 'zip64-5g.zip');
-    await expect(items(page).getByRole('button', { name: /^zeros-5g\.bin\b/ })).toBeVisible({
+    await open(page, 'range-40m.zip');
+    await expect(items(page).getByRole('button', { name: /^part-4\.bin\b/ })).toBeVisible({
         timeout: 60_000,
     });
-    await expect(items(page).getByRole('button', { name: /^zeros-5g\.bin\b/ })).toContainText(
-        '5 GB',
-    );
     page.off('requestfinished', count);
+    const fetched = (await Promise.all(sizes)).reduce((sum, size) => sum + size, 0);
     expect(fetched).toBeGreaterThan(0);
     expect(fetched).toBeLessThan(32 * 1024 * 1024);
+    await close(page);
+});
+
+test('the 5 GiB ZIP64 fixture lists its 5 GB entry and asks before downloading it', async () => {
+    await open(page, 'zip64-5g.zip');
+    await expect(items(page).getByRole('button', { name: /^zeros-5g\.bin\b/ })).toContainText(
+        '5 GB',
+        { timeout: 60_000 },
+    );
     // Downloading it would ask first: 5 GiB from about 5 MB.
     await items(page).getByRole('button', { name: 'Download zeros-5g.bin' }).click();
     await expect(page.getByRole('alertdialog')).toContainText(/This item expands to 5 GB from/);
