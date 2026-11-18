@@ -75,11 +75,11 @@ function CopyTile({
         <ContextMenuItem
             closeOnClick={false}
             onClick={() => onCopy(asset)}
-            className="group/tile flex-col items-stretch gap-0 p-0 focus:bg-transparent"
+            className="group/tile flex-col items-stretch gap-0 p-0 outline-none! focus:bg-transparent"
         >
             <span
                 className={cn(
-                    'relative flex h-16 items-center justify-center overflow-hidden rounded-md border border-rule text-foreground transition-colors duration-150 group-focus/tile:bg-muted',
+                    'relative flex h-16 items-center justify-center overflow-hidden rounded-md border border-rule text-foreground transition-colors duration-150 group-focus/tile:bg-muted in-data-[moved=keyboard]:group-focus/tile:focus-ring hc:group-focus/tile:focus-ring',
                     done && 'bg-success-soft text-success',
                 )}
             >
