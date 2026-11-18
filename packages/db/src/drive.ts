@@ -1878,7 +1878,12 @@ async function beginUploadOnce(input: UploadBegin) {
                 chain.node.kind !== 'file'
             )
                 return { status: 'not-found' as const };
-            if (chain.trashed) return { status: 'trashed' as const };
+            // An editor's save (held to a folder) finds a trashed file, or one in a trashed folder,
+            // gone from where it looked: stale, so it offers the moved-or-deleted choices.
+            if (chain.trashed)
+                return input.node.expectedParentId
+                    ? { status: 'stale' as const }
+                    : { status: 'trashed' as const };
             // A new version goes under the file's own key: one the walk has not reached is a key
             // a removed member may hold (the same rule as for a new node's parent).
             if (await underUnrotatedParent(tx, input.workspaceId, chain))
@@ -2391,7 +2396,11 @@ async function finishCompletingOnce(
         } else if (node.currentVersionId !== row.expectedVersionId) conflicted = true;
         // Moved since the editor looked, under the lock: nothing is published there. Answered as
         // conflicted naming no current version, which a client takes for a file gone from its folder.
-        const moved = row.expectedParentId !== null && node.parentId !== row.expectedParentId;
+        // Trashing (the file or a folder above it) moves nothing and changes no version: for a
+        // save held to a folder, a file in the trash is gone from it too.
+        const moved =
+            row.expectedParentId !== null &&
+            (node.parentId !== row.expectedParentId || chain.trashed);
         if (conflicted || moved) {
             await tx
                 .update(driveUploads)
@@ -2605,8 +2614,11 @@ async function attachUploadOnce(
                 .from(driveNodes)
                 .where(eq(driveNodes.id, row.nodeId));
             if (!node) return { status: 'not-found' as const };
-            // Moved since the editor looked: never attached there either.
-            if (row.expectedParentId !== null && node.parentId !== row.expectedParentId)
+            // Moved or trashed since the editor looked: never attached there either.
+            if (
+                row.expectedParentId !== null &&
+                (node.parentId !== row.expectedParentId || chain.trashed)
+            )
                 return { status: 'conflicted' as const, currentVersionId: null };
             if (row.newNode || node.currentVersionId !== row.expectedVersionId)
                 return { status: 'conflicted' as const, currentVersionId: node.currentVersionId };

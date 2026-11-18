@@ -2138,11 +2138,19 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
-    /* `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there. */
+    /*
+     * `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there, the folder
+     * included (gone, or in the trash: a file there is gone from where it was saved too).
+     */
     private fun servedNode(folderId: String, workspaceId: String, id: String): NodeView? {
         var after: String? = null
         do {
-            val page = api.children(folderId, workspaceId, after)
+            val page = try {
+                api.children(folderId, workspaceId, after)
+            } catch (error: ApiError) {
+                if (error.status == 404 || (error.status == 409 && error.code == "trashed")) return null
+                throw error
+            }
             page.children.firstOrNull { it.id == id }?.let { return it }
             after = page.nextCursor
         } while (after != null)

@@ -17,6 +17,8 @@ struct TextEditorScreen: View {
     let item: Opened
     /* Moved on by the viewer when something asks it to go: closed at once without changes, asked about with them. */
     var leaveAsked = 0
+    /* The person kept editing (Keep editing, or a save a close waited on didn't land): a link held for the editor goes. */
+    var onStay: () -> Void = {}
     /* A save landed a new version of the file the viewer shows: the viewer shows it from now on. */
     var onSaved: (Opened) -> Void = { _ in }
 
@@ -38,6 +40,8 @@ struct TextEditorScreen: View {
      * else's version) never stands in for it.
      */
     @State private var source: Opened?
+    /* The workspace and folder the file was opened in (EditDestination): every save and copy lists and writes there. */
+    @State private var destination: EditDestination?
     @State private var edited = false
     @State private var saving = false
     @State private var status: String?
@@ -88,7 +92,7 @@ struct TextEditorScreen: View {
             guard !now, closing else { return }
             closing = false
             // Not landed (it failed, or someone else's version is current): the editor stays, saying why.
-            guard failure == nil, stale == nil else { return }
+            guard failure == nil, stale == nil else { return onStay() }
             if edited { confirmLeave = true } else { close() }
         }
         .onDisappear {
@@ -123,7 +127,7 @@ struct TextEditorScreen: View {
         }
         .confirmationDialog(EditorWords.discardTitle, isPresented: $confirmLeave, titleVisibility: .visible) {
             Button(EditorWords.discard, role: .destructive) { close() }
-            Button(EditorWords.keepEditing, role: .cancel) {}
+            Button(EditorWords.keepEditing, role: .cancel) { onStay() }
         } message: {
             Text(EditorWords.leaveText(shown.name))
         }
@@ -207,7 +211,9 @@ struct TextEditorScreen: View {
         do {
             // The row in the file's own folder and workspace, and its bytes read for that row's version in that
             // workspace (never a kept copy of whatever version, never another drive's row of the same id).
-            let (_, listed) = try await vault.editTarget(from)
+            // The folder it opens in is where it writes from now on: fixed here, at the first open, never from a later row.
+            let at = destination ?? EditDestination(of: from)
+            let (_, listed) = try await vault.editTarget(from, at: at)
             guard session.live(token, current: store.vault) else { return }
             guard let file = listed else {
                 phase = .failed
@@ -222,6 +228,7 @@ struct TextEditorScreen: View {
             target = file
             startedFrom = file.node.currentVersion?.id
             source = file
+            destination = at
             edited = false
             switch TextEditing.open(data) {
             case .editable(let text):
@@ -257,7 +264,7 @@ struct TextEditorScreen: View {
         status = nil
         defer { saving = false }
         do {
-            let (folder, listed) = try await vault.editTarget(file)
+            let (folder, listed) = try await vault.editTarget(file, at: destination)
             guard stillOn(token) else { return }
             guard let listed else {
                 stale = StaleVersion(currentVersionId: nil)
@@ -270,11 +277,14 @@ struct TextEditorScreen: View {
             case .stale(let current):
                 stale = StaleVersion(currentVersionId: current)
             case .saved(let landed, let versionId):
-                target = landed
                 // The version this save published, never the reply row's (which may already be someone else's):
-                // unknown, the next save asks the stale question.
-                startedFrom = versionId
-                onSaved(landed)
+                // unknown, the next save asks the stale question. Only a row still in the editor's folder sets it: one
+                // that shows the file moved since it landed leaves the next save to find it gone from here.
+                if destination?.holds(landed) == true {
+                    target = landed
+                    startedFrom = versionId
+                    onSaved(landed)
+                }
                 // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
                 edited = !TextEditing.same(editor.text, text)
                 status = EditorWords.saved
@@ -294,7 +304,7 @@ struct TextEditorScreen: View {
         failure = nil
         defer { saving = false }
         do {
-            let (folder, _) = try await vault.editTarget(file)
+            let (folder, _) = try await vault.editTarget(file, at: destination)
             let sources = try await vault.copySources(of: from)
             guard stillOn(token) else { return }
             let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
@@ -302,8 +312,10 @@ struct TextEditorScreen: View {
             guard stillOn(token) else { return }
             // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
             // stays theirs.
+            // The copy went into the editor's folder: a row answered from elsewhere sets no version to go on from, and
+            // the next save finds it gone from here.
             target = made.file
-            startedFrom = made.versionId
+            startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
             edited = !TextEditing.same(editor.text, text)
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)

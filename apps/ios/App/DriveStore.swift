@@ -104,8 +104,37 @@ final class DriveStore {
     @ObservationIgnored private lazy var sharingLoads = SharingRefresh { [weak self] in await self?.loadSharing() }
     /* What the session-ended error says; the shell turns it into "You’ve been signed out". */
     static let sessionEnded = "Your session ended. Sign in again."
-    /* A link the shell handed over, for the tab it opened to act on and clear. */
-    var route: AppLink?
+    /*
+     * A link the shell handed over, for the tab it opened to act on and clear. While a text editor is open
+     * (`editorOpen`) a new one is held instead, never routed: routing replaces the stack that presents the
+     * editor, and its unsaved text with it. The editor is asked to leave (`editorLeaveAsked`); the link goes
+     * on once it has closed (`releaseRoute`), and is dropped if the person keeps editing (`dropRoute`).
+     */
+    var route: AppLink? {
+        get { routing }
+        set {
+            if editorOpen, let newValue {
+                heldRoute = newValue
+                editorLeaveAsked += 1
+                return
+            }
+            routing = newValue
+        }
+    }
+    private var routing: AppLink?
+    @ObservationIgnored private var heldRoute: AppLink?
+    @ObservationIgnored var editorOpen = false
+    var editorLeaveAsked = 0
+
+    /* The editor closed: a link held meanwhile goes on now. */
+    func releaseRoute() {
+        guard let held = heldRoute else { return }
+        heldRoute = nil
+        routing = held
+    }
+
+    /* The person kept editing: a link held meanwhile is let go. */
+    func dropRoute() { heldRoute = nil }
     /* A family to push onto Account's stack (a join that finished in the invitation sheet, "Open <family>"): Account clears it. */
     var familyToOpen: String?
     /* A file a link asked to open in the viewer, and the files beside it. */

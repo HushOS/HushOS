@@ -651,6 +651,87 @@ describe('an editor’s new version, held to the folder it checked', () => {
         expect((await current(file.id)).currentVersionId).not.toBe(file.currentVersionId);
     });
 
+    async function trash(nodeId: string) {
+        const trashed = await drive.trashNode({ workspaceId: account.workspaceId, nodeId });
+        expect(trashed.status).toBe('ok');
+    }
+    /* A save of `file` held to `parentId`, begun. */
+    async function saving(
+        file: { id: string; keyEpoch: number; currentVersionId: string | null },
+        parentId: string,
+    ) {
+        const saved = await begin(1n * MiB, {
+            nodeId: file.id,
+            keyEpoch: file.keyEpoch,
+            expectedVersionId: file.currentVersionId,
+            expectedParentId: parentId,
+        });
+        if (saved.result.status !== 'ok') throw new Error(saved.result.status);
+        return { uploadId: saved.result.uploadId, ciphertext: saved.ciphertext };
+    }
+    async function refused(
+        file: { id: string; currentVersionId: string | null; keyEpoch: number },
+        upload: { uploadId: string; ciphertext: bigint },
+    ) {
+        const started = await drive.startCompleting(account.workspaceId, upload.uploadId);
+        expect(started.status).toBe('ok');
+        const finished = await drive.finishCompleting(
+            account.workspaceId,
+            upload.uploadId,
+            upload.ciphertext,
+        );
+        expect(finished).toEqual({ status: 'conflicted', currentVersionId: null });
+        const attached = await signed.attachUpload(account.workspaceId, upload.uploadId, {
+            mode: 'same-node',
+            userId: account.userId,
+            keyEpoch: file.keyEpoch,
+            contentKeyEnvelope: keyEnvelope(),
+        });
+        expect(attached).toEqual({ status: 'conflicted', currentVersionId: null });
+        expect((await current(file.id)).currentVersionId).toBe(file.currentVersionId);
+    }
+
+    test('a file trashed between begin and complete is refused, and nothing lands in the trash', async () => {
+        const { file } = await fileAndFolder();
+        const upload = await saving(file, rootId);
+        await trash(file.id);
+        await refused(file, upload);
+    });
+
+    test('a file whose folder was trashed between begin and complete is refused too', async () => {
+        const { file, folderId } = await fileAndFolder();
+        await move(file.id, folderId);
+        const there = await current(file.id);
+        const upload = await saving(there, folderId);
+        await trash(folderId);
+        await refused(there, upload);
+    });
+
+    test('a file already in the trash when the save begins is stale, not a new version there', async () => {
+        const { file } = await fileAndFolder();
+        await trash(file.id);
+        const saved = await begin(1n * MiB, {
+            nodeId: file.id,
+            keyEpoch: file.keyEpoch,
+            expectedVersionId: file.currentVersionId,
+            expectedParentId: rootId,
+        });
+        expect(saved.result.status).toBe('stale');
+    });
+
+    test('a file trashed and restored before complete is saved as usual', async () => {
+        const { file } = await fileAndFolder();
+        const upload = await saving(file, rootId);
+        await trash(file.id);
+        const restored = await drive.restoreNode({
+            workspaceId: account.workspaceId,
+            nodeId: file.id,
+        });
+        expect(restored.status).toBe('ok');
+        expect((await publish(upload.uploadId, upload.ciphertext)).status).toBe('published');
+        expect((await current(file.id)).currentVersionId).not.toBe(file.currentVersionId);
+    });
+
     test('without the precondition, a save behaves as before: a move does not stop it', async () => {
         const { file, folderId } = await fileAndFolder();
         const saved = await begin(1n * MiB, {

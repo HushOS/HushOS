@@ -2206,6 +2206,50 @@ class SaveResultTest {
     }
 
     /*
+     * A save whose file's folder went to the trash while its bytes went up: nothing lands in the trash, and the save is the
+     * moved-or-deleted case (stale, naming no version), never a failure. Fails if it publishes, or if the trashed folder's
+     * refusal to list is taken for an error.
+     */
+    @Test
+    fun aNewVersionWhoseFolderWasTrashedMeanwhileIsStaleAndPublishesNothing() {
+        val folder = server.folder(server.root, "Notes")
+        val id = server.file(folder, "doc.txt", "first".toByteArray())
+        vault.listChildren(server.root)
+        val doc = vault.listChildren(folder).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path -> if (method == "POST" && path.endsWith("/complete")) server.trash(folder) }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, folder, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+        assertTrue(server.requests.any { it.contains("/abort") })
+    }
+
+    /*
+     * The editor's folder is the one it opened the file in, never one a later row names: a landed row that shows the file
+     * moved elsewhere sets nothing, and looking the file up for the next save lists the editor's folder, where it is gone
+     * (the moved-file case). Fails if a moved row's folder becomes where the next save writes.
+     */
+    @Test
+    fun anEditorLooksForItsFileInTheFolderItOpenedNeverWhereALaterRowSays() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val destination = TextEditing.Destination.of(doc)!!
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        assertEquals(id, writer.editTarget(doc, destination).second?.id)
+        server.moveAs(id, elsewhere)
+        // The row as this device hears of it now (a completion answered again, a feed): in the other folder.
+        val landed = vault.listChildren(elsewhere).single { it.id == id }
+        assertFalse(destination.holds(landed))
+        val (folder, found) = writer.editTarget(landed, destination)
+        assertEquals(server.root, folder.id)
+        assertNull(found)
+    }
+
+    /*
      * A tool's new version leaves the file's name record as it is (docs/editing-design.md section 3, as the web does):
      * nothing is signed again (so nothing waits on whom to trust). Fails if the record is sealed or signed again.
      */

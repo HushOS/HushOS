@@ -49,7 +49,8 @@ import { holdPageWhile } from '@/lib/leave-guard';
 import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
-import { parseFailure, parseWarning, preloadParsers, structuredKind } from '@/lib/text-parse';
+import { startCheck, type Check } from '@/lib/text-check';
+import { parseWarning, preloadParsers, structuredKind } from '@/lib/text-parse';
 import {
     editTargetOf,
     openedTarget,
@@ -75,9 +76,14 @@ import {
  * The session's way out, shared with the viewer. `discarded`: the person chose to discard, so
  * nothing asks again. `finishing`: while a save or a copy is on its way (it may still publish), a
  * close waits on it instead of offering Discard: the promise says whether it landed, and the
- * editor says it is finishing meanwhile; null when nothing is on its way.
+ * editor says it is finishing meanwhile; null when nothing is on its way. `deciding`: "Discard
+ * your changes?" is open: nothing starts a save until it is answered (Keep editing).
  */
-export type EditGuard = { discarded: boolean; finishing?: () => Promise<boolean> | null };
+export type EditGuard = {
+    discarded: boolean;
+    deciding?: boolean;
+    finishing?: () => Promise<boolean> | null;
+};
 type SessionToken = { opening: number; account: number };
 
 /*
@@ -468,22 +474,33 @@ export function TextEditor({
         };
     }, [shownText, editable, language, loadFrom.name, markDirty]);
 
-    // The structured-text check, a moment after typing stops. It never stops a save.
+    // The structured-text check, a moment after typing stops, off the main thread (lib/text-check.ts).
+    // It never stops a save; a newer edit or a close ends a check still running, worker and all.
     useEffect(() => {
         const current = view.current;
         if (!checks || !current || !editable) return;
+        let check: Check | null = null;
         const timer = window.setTimeout(() => {
             const doc = current.state.doc;
             if (doc.length > CHECK_LIMIT) {
                 setWarning(null);
                 return;
             }
-            void parseFailure(checks, doc.toString()).then((failed) => {
-                if (view.current !== current) return;
+            const running = startCheck(checks, doc.toString());
+            check = running;
+            void running.result.then((failed) => {
+                if (view.current !== current || check !== running) return;
+                // Not checked (ended, or too large to check without a worker): no warning either way.
+                if (failed === 'skipped') return setWarning(null);
                 setWarning(failed ? parseWarning(checks, failed.line) : null);
             });
         }, 500);
-        return () => window.clearTimeout(timer);
+        return () => {
+            window.clearTimeout(timer);
+            const running = check;
+            check = null;
+            running?.cancel();
+        };
     }, [edits, checks, editable]);
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
@@ -607,10 +624,18 @@ export function TextEditor({
         [queryClient, markDirty],
     );
 
+    /* "Discard your changes?" is open, or was answered Discard: nothing starts a save. */
+    const askedToLeave = useCallback(
+        () => guard.current.deciding === true || guard.current.discarded,
+        [guard],
+    );
+
     const save = useCallback(
         async (onTopOf?: string) => {
             const current = view.current;
             if (!current || saving || savingNow.current || !editable || ended || reloading) return;
+            // Asked whether to discard (or discarded): a save started now could publish what is thrown away.
+            if (askedToLeave()) return;
             const taken = token();
             const doc = current.state.doc;
             const { file, startedFrom } = target.current;
@@ -667,12 +692,13 @@ export function TextEditor({
             live,
             beginSaving,
             endSaving,
+            askedToLeave,
         ],
     );
 
     const copy = useCallback(async () => {
         const current = view.current;
-        if (!current || reloading || savingNow.current) return;
+        if (!current || reloading || savingNow.current || askedToLeave()) return;
         const taken = token();
         const doc = current.state.doc;
         const { file, source } = target.current;
@@ -738,6 +764,7 @@ export function TextEditor({
         live,
         beginSaving,
         endSaving,
+        askedToLeave,
     ]);
 
     /* Their version, as listed now, opened in place of this text. */
@@ -780,7 +807,8 @@ export function TextEditor({
                 !endedNow.current &&
                 !savingNow.current &&
                 !staleNow.current &&
-                !reloadingNow.current
+                !reloadingNow.current &&
+                !askedToLeave()
             )
                 void save();
         },

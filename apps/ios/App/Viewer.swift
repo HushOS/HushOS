@@ -66,7 +66,11 @@ struct FileViewer: View {
                 // Text and code, for whoever may change the file: an owner, an editor of the share, a
                 // family folder this phone may write. Never an earlier version.
                 if editable {
-                    Button { editing = current } label: { HeaderIcon(symbol: "pencil") }
+                    Button {
+                        // From here a link waits for the editor (DriveStore.route) instead of replacing the screens under it.
+                        store.editorOpen = true
+                        editing = current
+                    } label: { HeaderIcon(symbol: "pencil") }
                         .accessibilityLabel(EditorWords.edit)
                 }
                 if store.role(of: current) == .owner {
@@ -146,19 +150,21 @@ struct FileViewer: View {
         .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
         .fullScreenCover(item: $editing) { file in
-            TextEditorScreen(item: file, leaveAsked: leaveAsked, onSaved: { landed in
+            TextEditorScreen(item: file, leaveAsked: leaveAsked, onStay: { store.dropRoute() }, onSaved: { landed in
                 // Saved over the file on screen: the viewer shows that version, read again.
                 guard landed.id == current.id, landed.ref == current.ref else { return }
                 current = landed
                 attempt += 1
             }).environment(store)
         }
-        // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
-        // Somewhere else was asked for (a link, a notification): get out of its way. An open editor is asked first
-        // (with changes, Discard or Keep editing); the viewer goes once it has closed, the link still waiting.
+        // Somewhere else was asked for (a link, a notification, Info's Folder row): get out of its way.
         .onChange(of: store.route) { _, link in
-            guard link != nil else { return }
-            if editing != nil { leaveAsked += 1 } else { dismiss() }
+            if link != nil, editing == nil { dismiss() }
+        }
+        // While the editor is open a link is held at the store (DriveStore.route) and the editor asked first (with
+        // changes, Discard or Keep editing); the viewer goes once it has closed, the link released then.
+        .onChange(of: store.editorLeaveAsked) { _, _ in
+            if editing != nil { leaveAsked += 1 } else { store.releaseRoute() }
         }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
         // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
@@ -197,7 +203,17 @@ struct FileViewer: View {
             dismiss()
         }
         .onChange(of: editing == nil) { _, closed in
-            if closed, removed || store.route != nil { dismiss() }
+            store.editorOpen = !closed
+            guard closed else { return }
+            store.releaseRoute()
+            if removed || store.route != nil { dismiss() }
+        }
+        // Gone some other way with the editor open: nothing stays held for it.
+        .onDisappear {
+            if store.editorOpen, editing != nil {
+                store.editorOpen = false
+                store.releaseRoute()
+            }
         }
     }
 

@@ -135,6 +135,8 @@ test('the editor, its grammars and its parsers come with the post-unlock preload
         /lang[-_]rust/,
         /legacy[-_]modes/,
         /smol[-_]toml/,
+        // The structured-text check's worker, started and let go.
+        /text-check\.worker/,
     ])
         expect(
             fetched.some((url) => name.test(url)),
@@ -291,6 +293,21 @@ test('leaving with changes asks first', async () => {
     expect((await downloaded(page, 'notes.txt')).toString()).toBe(
         'Grüße ✓\nline two\nno final newline!',
     );
+});
+
+test('Ctrl or Cmd+S while Discard is being asked saves nothing', async () => {
+    const before = (await downloaded(page, 'notes.txt')).toString();
+    await openEditor(page, 'notes.txt');
+    await retype(page, 'thrown away');
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    const ask = page.getByRole('alertdialog');
+    await expect(ask).toContainText('Discard your changes?');
+    await page.keyboard.press('ControlOrMeta+s');
+    await ask.getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    // Long enough for a save started by the keypress to have landed.
+    await page.waitForTimeout(4_000);
+    expect((await downloaded(page, 'notes.txt')).toString()).toBe(before);
 });
 
 test('leaving for a page outside the app asks first too', async () => {

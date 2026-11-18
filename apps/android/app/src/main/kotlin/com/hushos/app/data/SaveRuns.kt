@@ -1525,22 +1525,23 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
      * The text editor's target (TextEditing.kt): the file's folder and the file as the server lists them now, in the file's
      * own workspace (never the own drive's row of the same id); the file null when it is no longer in its folder.
      */
-    fun editTarget(file: Opened): Pair<Opened, Opened?> {
-        val parent = file.node.parentId ?: throw NotFound("This file isn’t in a folder.")
+    /* `file` (by id) as listed in `destination` (its own folder when none is given) and that folder, both as opened. */
+    fun editTarget(file: Opened, destination: TextEditing.Destination? = TextEditing.Destination.of(file)): Pair<Opened, Opened?> {
+        val at = destination ?: throw NotFound("This file isn’t in a folder.")
         var after: String? = null
         var folder: Opened? = null
         var found: Opened? = null
         do {
-            val page = vault.api.children(parent, file.node.workspaceId, after)
-            // Held to the file's own folder and workspace (TextEditing.target): a listing answering for another is refused.
-            val (folderRow, row) = TextEditing.target(page.folder, page.children, file)
+            val page = vault.api.children(at.parentId, at.workspaceId, after)
+            // Held to the editor's folder and workspace (TextEditing.target): a listing answering for another is refused.
+            val (folderRow, row) = TextEditing.target(page.folder, page.children, file, at)
             if (folder == null) {
                 // The chain above first, so the folder opens under its parent's key as served now.
                 for (above in page.ancestors) runCatching { openServed(above) }
-                folder = TextEditing.held(openServed(folderRow), null, file).first
+                folder = TextEditing.held(openServed(folderRow), null, file, at).first
             }
             // Checked again as opened: opening may hand back a newer row this process holds (moved since), never the listing's.
-            row?.let { found = TextEditing.held(folder!!, openServed(it), file).second }
+            row?.let { found = TextEditing.held(folder!!, openServed(it), file, at).second }
             after = if (found == null) page.nextCursor else null
         } while (after != null)
         return folder!! to found

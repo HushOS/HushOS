@@ -80,9 +80,24 @@ object TextEditing {
      * The folder and file as the vault opened them, held to the editor's file again: the folder must be the file's own (else
      * WrongFolder); a file row the vault swapped for one elsewhere (moved since) is absent from this folder, never adopted.
      */
-    fun held(folder: Opened, file: Opened?, original: Opened): Pair<Opened, Opened?> {
-        val parent = original.node.parentId
-        val ws = original.node.workspaceId
+    /*
+     * Where an editor writes: the workspace and folder it opened its file in, fixed at open (a copy goes into that same
+     * folder). Never taken from a row a save or a copy answers with afterwards: a completion answered again, or a row this
+     * device adopts, may already show the file moved elsewhere, and the next save then finds it gone from here (the
+     * moved-file case), never writes where it went.
+     */
+    data class Destination(val workspaceId: String, val parentId: String) {
+        /* Whether `row` is a file in this folder of this workspace: only then may it set the version a save goes on from. */
+        fun holds(row: Opened): Boolean = !row.isFolder && row.node.workspaceId.equals(workspaceId, ignoreCase = true) && row.node.parentId == parentId
+
+        companion object {
+            fun of(file: Opened): Destination? = file.node.parentId?.let { Destination(file.node.workspaceId, it) }
+        }
+    }
+
+    fun held(folder: Opened, file: Opened?, original: Opened, at: Destination? = Destination.of(original)): Pair<Opened, Opened?> {
+        val parent = at?.parentId
+        val ws = at?.workspaceId ?: original.node.workspaceId
         if (parent == null || folder.id != parent || !folder.isFolder || !folder.node.workspaceId.equals(ws, ignoreCase = true))
             throw WrongFolder()
         val same = file != null && file.id == original.id && !file.isFolder && file.node.workspaceId.equals(ws, ignoreCase = true) &&
@@ -90,12 +105,13 @@ object TextEditing {
         return folder to (if (same) file else null)
     }
 
-    fun target(folder: NodeView, children: List<NodeView>, file: Opened): Pair<NodeView, NodeView?> {
-        val parent = file.node.parentId
-        if (parent == null || folder.id != parent || folder.kind != "folder" || !folder.workspaceId.equals(file.node.workspaceId, ignoreCase = true))
+    fun target(folder: NodeView, children: List<NodeView>, file: Opened, at: Destination? = Destination.of(file)): Pair<NodeView, NodeView?> {
+        val parent = at?.parentId
+        val ws = at?.workspaceId ?: file.node.workspaceId
+        if (parent == null || folder.id != parent || folder.kind != "folder" || !folder.workspaceId.equals(ws, ignoreCase = true))
             throw WrongFolder()
         val row = children.firstOrNull {
-            it.id == file.id && it.workspaceId.equals(file.node.workspaceId, ignoreCase = true) && it.parentId == parent && it.kind == "file"
+            it.id == file.id && it.workspaceId.equals(ws, ignoreCase = true) && it.parentId == parent && it.kind == "file"
         }
         return folder to row
     }

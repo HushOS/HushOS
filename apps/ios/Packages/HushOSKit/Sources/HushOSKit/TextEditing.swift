@@ -116,23 +116,49 @@ public enum TextEditing {
      * file's own (else WrongFolder); a file row the vault swapped for one elsewhere (moved since) is absent
      * from this folder, never adopted.
      */
-    public static func held(folder: Opened, file: Opened?, for original: Opened) throws -> (folder: Opened, file: Opened?) {
-        let workspace = original.node.workspaceId.lowercased()
-        guard let parent = original.node.parentId, folder.id == parent, folder.isFolder,
+    public static func held(folder: Opened, file: Opened?, for original: Opened,
+                            at destination: EditDestination? = nil) throws -> (folder: Opened, file: Opened?) {
+        let at = destination ?? EditDestination(of: original)
+        let workspace = at?.workspaceId ?? original.node.workspaceId.lowercased()
+        guard let parent = at?.parentId, folder.id == parent, folder.isFolder,
               folder.node.workspaceId.lowercased() == workspace else { throw WrongFolder() }
         guard let file, file.id == original.id, !file.isFolder, file.node.workspaceId.lowercased() == workspace,
               file.node.parentId == parent else { return (folder, nil) }
         return (folder, file)
     }
 
-    public static func target(in listing: Listing, for file: Opened) throws -> (folder: NodeView, file: NodeView?) {
-        let workspace = file.node.workspaceId.lowercased()
-        guard let parent = file.node.parentId, listing.folder.id == parent, listing.folder.isFolder,
+    public static func target(in listing: Listing, for file: Opened,
+                              at destination: EditDestination? = nil) throws -> (folder: NodeView, file: NodeView?) {
+        let at = destination ?? EditDestination(of: file)
+        let workspace = at?.workspaceId ?? file.node.workspaceId.lowercased()
+        guard let parent = at?.parentId, listing.folder.id == parent, listing.folder.isFolder,
               listing.folder.workspaceId.lowercased() == workspace else { throw WrongFolder() }
         let row = listing.children.first {
             $0.id == file.id && $0.workspaceId.lowercased() == workspace && $0.parentId == parent && !$0.isFolder
         }
         return (listing.folder, row)
+    }
+}
+
+/*
+ * Where an editor writes: the workspace and folder it opened its file in, fixed at open (a copy goes into
+ * that same folder). Never taken from a row a save or a copy answers with afterwards: a completion
+ * answered again, or a row this device adopts, may already show the file moved elsewhere, and the next
+ * save then finds it gone from here (the moved-file case), never writes where it went.
+ */
+public struct EditDestination: Equatable, Sendable {
+    public let workspaceId: String
+    public let parentId: String
+
+    public init?(of file: Opened) {
+        guard let parent = file.node.parentId else { return nil }
+        workspaceId = file.node.workspaceId.lowercased()
+        parentId = parent
+    }
+
+    /* Whether `row` is a file in this folder of this workspace: only then may it set the version a save goes on from. */
+    public func holds(_ row: Opened) -> Bool {
+        !row.isFolder && row.node.workspaceId.lowercased() == workspaceId && row.node.parentId == parentId
     }
 }
 
@@ -307,12 +333,14 @@ extension Vault {
      * folder (TextEditing.target refuses a listing that answers for another): what a save writes into,
      * and the version that is current. The file is nil when it is no longer in its folder.
      */
-    public func editTarget(_ file: Opened) async throws -> (folder: Opened, file: Opened?) {
-        guard let parent = file.node.parentId else { throw DriveAPIError.notFound("This file isn’t in a folder.") }
-        let listing = try await listChildren(of: parent, in: file.node.workspaceId)
-        let (folder, row) = try TextEditing.target(in: listing, for: file)
+    /* `file` (by id) as listed in `destination` (its own folder when none is given) and that folder, both as opened. */
+    public func editTarget(_ file: Opened, at destination: EditDestination? = nil) async throws -> (folder: Opened, file: Opened?) {
+        guard let at = destination ?? EditDestination(of: file) else { throw DriveAPIError.notFound("This file isn’t in a folder.") }
+        let listing = try await listChildren(of: at.parentId, in: at.workspaceId)
+        let (folder, row) = try TextEditing.target(in: listing, for: file, at: at)
         // Checked again as opened: opening may hand back a newer row this vault holds (one moved since), never the listing's.
-        return try TextEditing.held(folder: try open(folder, replacing: true), file: try row.map { try open($0, replacing: true) }, for: file)
+        return try TextEditing.held(folder: try open(folder, replacing: true), file: try row.map { try open($0, replacing: true) },
+                                    for: file, at: at)
     }
 
     /*

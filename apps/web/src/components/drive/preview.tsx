@@ -239,7 +239,10 @@ export function Preview({
     const askDiscard = useCallback(
         () =>
             new Promise<boolean>((resolve) => {
+                // Awaiting the answer: the editor starts no save meanwhile (Ctrl or Cmd+S included).
+                guard.current.deciding = true;
                 setAsking(() => (discard: boolean) => {
+                    guard.current.deciding = false;
                     setAsking(null);
                     resolve(discard);
                 });

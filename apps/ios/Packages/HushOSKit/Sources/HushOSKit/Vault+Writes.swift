@@ -1088,8 +1088,14 @@ extension Vault {
             // stale (never a new file where it was); the same version is only its key having moved, sealed
             // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
             // From the server itself, never the catalogue, which may not have heard of another device's save yet.
-            let listed = try await listChildren(of: parentId, in: replacing.node.workspaceId)
-            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
+            // The folder itself gone or in the trash: the file is gone from where it was saved too.
+            let listed: [NodeView]
+            do {
+                listed = try await listChildren(of: parentId, in: replacing.node.workspaceId).children
+            } catch DriveAPIError.trashed(_), DriveAPIError.notFound(_) {
+                throw SaveStale(currentVersionId: nil, unreleased: unreleased)
+            }
+            guard let fresh = listed.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
             let current = fresh.currentVersion?.id
             if current != startedFrom { throw SaveStale(currentVersionId: current, unreleased: unreleased) }
             throw SaveRekeyed(unreleased: unreleased)

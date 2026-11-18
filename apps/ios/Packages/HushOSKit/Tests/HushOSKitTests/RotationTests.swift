@@ -344,6 +344,9 @@ final class FakeDrive: @unchecked Sendable {
     var onPart: ((Data) -> Void)?
     /* Runs as a completion arrives, before it is answered (another device saving first). */
     var beforeComplete: (() -> Void)?
+    /* Nodes in the trash: nothing under one is listed (409 `trashed`), and a save held to a folder finds it gone. */
+    var trashed: Set<String> = []
+    private func inTrash(_ id: String) -> Bool { trashed.contains(id) || ancestors(of: id).contains { trashed.contains($0.id) } }
     /* A completion refused only because a key change re-keyed the file meanwhile (its version unchanged). */
     var rekeyAtComplete = false
     /* A new file's completion filed under this envelope suite (one the device can't open), when set. */
@@ -576,8 +579,8 @@ final class FakeDrive: @unchecked Sendable {
             if let epoch = (wire["keyEpoch"] as? NSNumber)?.uint64Value, epoch != nodes[nodeId]?.keyEpoch {
                 return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
             }
-            // Held to the folder its save checked (`expectedParentId`): `stale` once the file moved out of it.
-            if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent {
+            // Held to the folder its save checked (`expectedParentId`): `stale` once the file moved out of it, or is in the trash.
+            if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent || inTrash(nodeId) {
                 return (409, ["code": "stale", "message": "This item changed since you last saw it. Refresh and try again."])
             }
             let suite = (sent["contentSuite"] as? NSNumber)?.uint32Value ?? 0
@@ -647,8 +650,8 @@ final class FakeDrive: @unchecked Sendable {
                     return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
                                   "data": ["conflicted": true, "currentVersionId": current as Any? ?? NSNull()]])
                 }
-                // Moved out of the folder its save checked since begin: `conflicted`, naming no version.
-                if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent {
+                // Moved out of the folder its save checked since begin, or trashed: `conflicted`, naming no version.
+                if let parent = wire["expectedParentId"] as? String, nodes[nodeId]?.parentId != parent || inTrash(nodeId) {
                     return (409, ["code": "conflict", "message": "This file changed while it was uploading.",
                                   "data": ["conflicted": true, "currentVersionId": NSNull()]])
                 }
@@ -731,7 +734,8 @@ final class FakeDrive: @unchecked Sendable {
         switch (request.httpMethod ?? "GET", Array(parts.dropFirst(4))) {
         case ("GET", ["children"]):
             guard let folder = nodes[id] else { return (404, ["message": "Not here"]) }
-            let children = nodes.values.filter { $0.parentId == id }.sorted { $0.id < $1.id }
+            if inTrash(id) { return (409, ["code": "trashed", "message": "This item is in the trash. Restore it first."]) }
+            let children = nodes.values.filter { $0.parentId == id && !trashed.contains($0.id) }.sorted { $0.id < $1.id }
             return (200, ["folder": try json(folder), "ancestors": try ancestors(of: id).map(json), "children": try children.map(json)])
         case ("POST", ["parent"]):
             // A move: the node takes its new parent and envelope, unless the test made moves fail.

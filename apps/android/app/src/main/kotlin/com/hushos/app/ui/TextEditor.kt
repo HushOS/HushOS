@@ -123,6 +123,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
      * version) never stands in for it.
      */
     private var source: Opened = item
+    /* The workspace and folder the file was opened in (TextEditing.Destination): every save and copy lists and writes there. */
+    private val destination = TextEditing.Destination.of(item)
     /* The text, edited in place by the EditText: never copied per keystroke, never put in a Bundle. */
     val buffer = SpannableStringBuilder()
     var edited by mutableStateOf(false); private set
@@ -182,7 +184,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 runCatching {
                     // The row in the file's own folder and workspace, and its bytes read for that row's version, in memory:
                     // nothing decrypted is written to disk for a killed process to leave behind.
-                    val file = writer(vault).editTarget(from).second ?: return@runCatching null
+                    val file = writer(vault).editTarget(from, destination).second ?: return@runCatching null
                     if ((file.size ?: 0L) > TextEditing.LIMIT) return@runCatching file to TextEditing.Open.ReadOnly(TextReadOnly.TOO_LARGE, null)
                     file to TextEditing.open(TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control))
                 }.getOrNull()
@@ -222,7 +224,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val writer = writer(vault)
-                    val (folder, listed) = writer.editTarget(file)
+                    val (folder, listed) = writer.editTarget(file, destination)
                     if (listed == null) TextSaved.Stale(null)
                     else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
@@ -233,10 +235,13 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 when (done) {
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
                     is TextSaved.Saved -> {
-                        target = done.item
                         // The version this save published, never the reply row's (which may already be someone else's):
-                        // unknown, the next save asks the stale question.
-                        startedFrom = done.versionId
+                        // unknown, the next save asks the stale question. Only a row still in the editor's folder sets it:
+                        // one answered from elsewhere (moved since it landed) leaves the next save to find the file gone.
+                        if (destination?.holds(done.item) == true) {
+                            target = done.item
+                            startedFrom = done.versionId
+                        }
                         // Typed while it saved: still changed.
                         edited = !TextEditing.same(buffer, text)
                         status = EditorWords.SAVED
@@ -262,7 +267,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val writer = writer(vault)
-                    val (folder, _) = writer.editTarget(file)
+                    val (folder, _) = writer.editTarget(file, destination)
                     TextSave.copy(text, file, folder, writer.copySources(from), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
@@ -270,9 +275,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             if (!session.live(token)) return@launch
             result.onSuccess { made ->
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
-                // stays theirs.
+                // stays theirs. The copy went into the editor's folder: a row answered from elsewhere sets no version to go
+                // on from, and the next save finds it gone from here.
                 target = made.file
-                startedFrom = made.versionId
+                startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
                 edited = !TextEditing.same(buffer, text)
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
