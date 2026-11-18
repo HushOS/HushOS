@@ -76,6 +76,24 @@ function followScroller(list: HTMLElement, onChange: (scroller: Scroller) => voi
 
 type ListVirtualizer = Virtualizer<HTMLElement, HTMLElement>;
 
+/* What a person scrolls with: a wheel or trackpad, a finger, the keys, the scrollbar. */
+const SCROLL_INPUTS = ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'] as const;
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+
+/**
+ * Whether an input can scroll: a wheel or a touch, a key that scrolls, or a press on the
+ * scroller itself (its scrollbar). A click on a button or a shortcut key (I for Info) that
+ * changes the layout under the list is not one.
+ */
+function scrolls(event: Event, scroller: Scroller) {
+    if (event instanceof KeyboardEvent) return SCROLL_KEYS.has(event.key);
+    if (event.type === 'pointerdown')
+        return scroller instanceof Window
+            ? event.target === document.documentElement
+            : event.target === scroller;
+    return true;
+}
+
 function observeOffset(
     instance: ListVirtualizer,
     cb: (offset: number, scrolling: boolean) => void,
@@ -83,29 +101,55 @@ function observeOffset(
     const list = instance.scrollElement;
     if (!list) return;
     let timer: number | undefined;
-    const report = (scrolling: boolean) => cb(offsetOf(list, follow.current()), scrolling);
+    /*
+     * Whether the person is scrolling: scroll events within 150 ms of each other, begun within a
+     * second of their own input (a fling runs on past its last touch). A scroll the browser makes
+     * itself (pulling the scroll in as the list gets shorter, a jump by script) is not theirs,
+     * and nothing else that reports (the list resizing) ends one. The list keeps its hands off
+     * the scroll while they scroll (useKeepInPlace).
+     */
+    let scrolling = false;
+    let input = -Infinity;
+    const onInput = (event: Event) => {
+        if (scrolls(event, follow.current())) input = performance.now();
+    };
+    const report = () => cb(offsetOf(list, follow.current()), scrolling);
     const onScroll = () => {
-        report(true);
+        scrolling = scrolling || performance.now() - input < 1000;
+        report();
         window.clearTimeout(timer);
-        timer = window.setTimeout(() => report(false), 150);
+        timer = window.setTimeout(() => {
+            scrolling = false;
+            report();
+        }, 150);
+    };
+    const listen = (scroller: Scroller) => {
+        scroller.addEventListener('scroll', onScroll, { passive: true });
+        for (const type of SCROLL_INPUTS)
+            scroller.addEventListener(type, onInput, { passive: true, capture: true });
+    };
+    const unlisten = (scroller: Scroller) => {
+        scroller.removeEventListener('scroll', onScroll);
+        for (const type of SCROLL_INPUTS)
+            scroller.removeEventListener(type, onInput, { capture: true });
     };
     const follow = followScroller(list, (scroller) => {
-        previous.removeEventListener('scroll', onScroll);
+        unlisten(previous);
         previous = scroller;
-        scroller.addEventListener('scroll', onScroll, { passive: true });
-        report(false);
+        listen(scroller);
+        report();
     });
     let previous = follow.current();
-    previous.addEventListener('scroll', onScroll, { passive: true });
+    listen(previous);
     // The list moves without a scroll as it is shown (the drive's first paint) or grows. When
     // something above it comes or goes, the next scroll reads the new place; the rows drawn
     // past each edge of the screen cover the difference until then.
-    const observer = new ResizeObserver(() => report(false));
+    const observer = new ResizeObserver(report);
     observer.observe(list);
-    report(false);
+    report();
     return () => {
         window.clearTimeout(timer);
-        previous.removeEventListener('scroll', onScroll);
+        unlisten(previous);
         follow.stop();
         observer.disconnect();
     };
@@ -303,13 +347,18 @@ function useDrawnSize<T>(
     element: HTMLElement | null,
     read: (element: HTMLElement) => T | null,
     initial: T,
-    key: (value: T) => string,
+    same: (a: T, b: T) => boolean,
 ) {
     const [size, setSize] = useState(initial);
+    // The first reading replaces the estimate whatever it is; later ones only past `same`.
+    const measuredOnce = useRef(false);
     const measure = useCallback(() => {
         const next = element && read(element);
-        if (next !== null) setSize((current) => (key(current) === key(next) ? current : next));
-        // `read` and `key` are fixed for a list's life.
+        if (next === null) return;
+        const first = !measuredOnce.current;
+        measuredOnce.current = true;
+        setSize((current) => (!first && same(current, next) ? current : next));
+        // `read` and `same` are fixed for a list's life.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [element]);
     useLayoutEffect(() => {
@@ -328,10 +377,27 @@ function useDrawnSize<T>(
     return size;
 }
 
-/* The height of a drawn row: borders and any rounding included. */
+/*
+ * The distance from one row to the next, borders included. Read across the longest run of
+ * drawn rows that follow each other, not from one row: WebKit snaps each table row to whole
+ * pixels where it falls, so a single row reads 56 or 57 by its position, and a size that
+ * changed with every scroll would have the list move the scroll with it. Kept to 1/64 px.
+ */
 function rowHeight(body: HTMLElement) {
-    const height = body.querySelector('[data-node-id]')?.getBoundingClientRect().height ?? 0;
-    return height > 0 ? height : null;
+    const drawn = [...body.querySelectorAll<HTMLElement>('[data-node-id]')];
+    let best: [HTMLElement, HTMLElement, number] | null = null;
+    for (let start = 0; start < drawn.length;) {
+        let end = start;
+        const at = (row: HTMLElement) => Number(row.getAttribute('aria-rowindex'));
+        while (end + 1 < drawn.length && at(drawn[end + 1]!) === at(drawn[end]!) + 1) end++;
+        if (end > start && (!best || end - start > best[2]))
+            best = [drawn[start]!, drawn[end]!, end - start];
+        start = end + 1;
+    }
+    const pitch = best
+        ? (best[1].getBoundingClientRect().top - best[0].getBoundingClientRect().top) / best[2]
+        : (drawn[0]?.getBoundingClientRect().height ?? 0);
+    return pitch > 0 ? Math.round(pitch * 64) / 64 : null;
 }
 
 /*
@@ -354,7 +420,10 @@ export function VirtualTableBody({
     row: (index: number, stagger: number) => ReactNode;
 }) {
     const [body, setBody] = useState<HTMLTableSectionElement | null>(null);
-    const size = useDrawnSize(body, rowHeight, estimate, String);
+    // Within a pixel is the same size: WebKit's rows read a little differently by where they
+    // fall, and a size that changed with the reading would move every row below the screen
+    // (and the browser's scroll with them) on every scroll.
+    const size = useDrawnSize(body, rowHeight, estimate, (a, b) => Math.abs(a - b) < 1);
     const { placed, after, first } = useVirtualRows({
         count: ids.length,
         size,
@@ -418,7 +487,7 @@ export function VirtualGrid({
         grid,
         gridShape,
         { columns: 2, height: 180, gap: 8 },
-        (shape) => `${shape.columns} ${shape.height} ${shape.gap}`,
+        (a, b) => a.columns === b.columns && a.gap === b.gap && Math.abs(a.height - b.height) < 1,
     );
     const count = ids.length;
     const lines = Math.ceil(count / columns);

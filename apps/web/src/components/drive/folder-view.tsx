@@ -16,7 +16,6 @@ import {
     CornerCheck,
     EmptyState,
     HiddenSortToggle,
-    LIST_COLUMN,
     MarqueeBox,
     ROW_FOCUS,
     ROW_FOCUS_WITHIN,
@@ -28,6 +27,7 @@ import {
     TILE_FOCUS,
     TILE_FOCUS_WITHIN,
     useHiddenColumn,
+    useListColumns,
     useListSelection,
     type Modifiers,
 } from '@/components/drive/file-list';
@@ -316,8 +316,8 @@ const ListRow = memo(function ListRow({
     canTag: boolean;
     access: Access | undefined;
     inherited: boolean;
-    /* Whether the list has a Who can open column (one's own folders). */
-    accessColumn: boolean;
+    /* The Who can open column's class (useListColumns), or null without one (family and shared folders). */
+    accessColumn: string | null;
     changedColumn: string;
     sizeColumn: string;
     menu: NodeMenuHandle;
@@ -377,8 +377,8 @@ const ListRow = memo(function ListRow({
                     }
                 />
             </td>
-            {accessColumn && (
-                <td className={cn(LIST_COLUMN.access, 'min-w-0 pr-4')}>
+            {accessColumn !== null && (
+                <td className={cn(accessColumn, 'min-w-0 pr-4')}>
                     <AccessCell access={access} inherited={inherited} />
                 </td>
             )}
@@ -845,8 +845,11 @@ export function FolderView({ folderId }: { folderId: string }) {
             : crumb.name;
     const shared = crumbs.length > 0 && crumbs[0]!.workspaceId !== workspaceId;
     // Without a Who can open column (a family or shared folder), Changed and Size keep their room longer.
-    const changedColumn = !shared && !area ? LIST_COLUMN.changed : LIST_COLUMN.changedAlone;
-    const sizeColumn = !shared && !area ? LIST_COLUMN.size : LIST_COLUMN.sizeAlone;
+    // The column the list sits in, whose width decides its columns (useListColumns).
+    const [listBox, setListBox] = useState<HTMLDivElement | null>(null);
+    const columns = useListColumns(listBox, shared || area !== null);
+    const changedColumn = columns.changed;
+    const sizeColumn = columns.size;
     /*
      * Whether things may be added here: one's own folder, or a family folder this device may
      * write. While a key change has yet to reach it, uploads wait in the queue (D9); anything
@@ -1501,7 +1504,8 @@ export function FolderView({ folderId }: { folderId: string }) {
                 <ContextMenu open={contextOpen && !rowGone} onOpenChange={setContextOpen}>
                     <ContextMenuTrigger
                         render={<div />}
-                        className="@container/list flex min-h-0 min-w-0 flex-1 flex-col"
+                        ref={setListBox}
+                        className="flex min-h-0 min-w-0 flex-1 flex-col"
                         onContextMenuCapture={aimRowMenu}
                         onTouchStartCapture={aimMenu}
                     >
@@ -1609,7 +1613,7 @@ export function FolderView({ folderId }: { folderId: string }) {
                                             <th
                                                 scope="col"
                                                 className={cn(
-                                                    LIST_COLUMN.access,
+                                                    columns.access,
                                                     'w-44 text-left text-xs font-semibold text-muted-foreground',
                                                 )}
                                             >
@@ -1660,7 +1664,9 @@ export function FolderView({ folderId }: { folderId: string }) {
                                                 canTag={node.workspaceId === workspaceId}
                                                 access={access.get(node.id)}
                                                 inherited={inheritedFrom !== null}
-                                                accessColumn={!shared && !area}
+                                                accessColumn={
+                                                    !shared && !area ? columns.access : null
+                                                }
                                                 changedColumn={changedColumn}
                                                 sizeColumn={sizeColumn}
                                                 menu={moreMenu}

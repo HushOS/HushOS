@@ -2,6 +2,7 @@ import { ArrowDownIcon, ArrowUpIcon, CheckIcon, XIcon, type LucideIcon } from 'l
 import { cn } from 'cn';
 import {
     useCallback,
+    useContext,
     useEffect,
     useLayoutEffect,
     useRef,
@@ -15,7 +16,7 @@ import {
     type RefObject,
 } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
-import { useHoldFirstPaint } from '@/components/drive/first-paint';
+import { FirstPaintContext, useHoldFirstPaint } from '@/components/drive/first-paint';
 import { UnverifiedMark } from '@/components/drive/unverified-mark';
 import { Spinner } from '@/components/motion';
 import { Button } from '@/components/ui/button';
@@ -846,6 +847,49 @@ export const LIST_COLUMN = {
     changedAlone: 'hidden @min-[34rem]/list:table-cell',
     sizeAlone: 'hidden @min-[41rem]/list:table-cell',
 } as const;
+
+/*
+ * The same columns as LIST_COLUMN, for a list that draws only the rows near the screen,
+ * decided from the list's width here rather than by a CSS size container. In WebKit, a size
+ * container (`@container`) around rows with inline SVG marks that are drawn again as the list
+ * scrolls throws the scroll back, to where it was or to the top (Safari's engine 27.2, and
+ * Playwright's WebKit): a list that redraws on every scroll can't sit in one. The other lists
+ * never redraw on scroll and keep LIST_COLUMN. `alone`: no Who can open column (a family or
+ * shared folder), so Changed and Size keep their room longer. Each value is a class for the
+ * column's header and cells.
+ */
+export function useListColumns(element: HTMLElement | null, alone: boolean) {
+    const [rem, setRem] = useState<number | null>(null);
+    const measure = useCallback(() => {
+        const width = element?.getBoundingClientRect().width ?? 0;
+        // Hidden (the drive's first paint): keep what was known.
+        if (width <= 0) return;
+        const root = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+        // Whole rem: the columns change at whole-rem widths, and a pixel's move is no news.
+        setRem(Math.floor(width / root));
+    }, [element]);
+    useLayoutEffect(() => {
+        if (!element) return;
+        // oxlint-disable-next-line react/set-state-in-effect -- the width is the DOM's, read after layout
+        measure();
+        const observer = new ResizeObserver(measure);
+        observer.observe(element);
+        return () => observer.disconnect();
+    }, [element, measure]);
+    // Again as the drive's first paint shows the page, before that frame is drawn.
+    const shown = useContext(FirstPaintContext) === null;
+    useLayoutEffect(() => {
+        // oxlint-disable-next-line react/set-state-in-effect -- the width is the DOM's, read after layout
+        if (shown) measure();
+    }, [shown, measure]);
+    // Until the list is measured, every column: the first frame of a desk-sized list.
+    const from = (min: number) => (rem === null || rem >= min ? '' : 'hidden');
+    return {
+        access: from(35),
+        changed: from(alone ? 34 : 45),
+        size: from(alone ? 41 : 52),
+    };
+}
 
 /*
  * Whether a list's column is hidden for room right now, read from its header
