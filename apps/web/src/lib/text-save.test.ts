@@ -331,3 +331,36 @@ test('a save whose editor session ended before its run starts uploads nothing', 
     expect(b.files.get(id)!.versions).toHaveLength(1);
     expect(b.files.size).toBe(1);
 });
+
+test('a save whose editor session ends while its run starts uploads nothing and retires the empty run', async () => {
+    const b = bench();
+    const id = b.add('notes.txt', 'a');
+    const file = b.asNode(id);
+    // On while the folder was found; ended (Discard) while the run waited for room, its lock and its record.
+    let on = true;
+    const start = async (plan: Parameters<typeof b.start>[0]) => {
+        const run = await b.start(plan);
+        on = false;
+        return run;
+    };
+    await expect(
+        saveVersion(
+            start,
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'b' },
+            { stillOn: () => on },
+        ),
+    ).rejects.toBeInstanceOf(SessionEnded);
+    expect(b.files.get(id)!.versions).toHaveLength(1);
+    expect(b.ends.finishes).toBe(1);
+    on = true;
+    const startCopy = async (plan: Parameters<typeof b.start>[0]) => {
+        const run = await b.start(plan);
+        on = false;
+        return run;
+    };
+    await expect(
+        saveCopy(startCopy, { file, folder: b.folder, text: 'b' }, { stillOn: () => on }),
+    ).rejects.toBeInstanceOf(SessionEnded);
+    expect(b.files.size).toBe(1);
+    expect(b.ends.finishes).toBe(2);
+});

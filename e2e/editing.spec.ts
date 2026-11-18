@@ -210,6 +210,20 @@ test('a file the viewer found to be text by reading it offers Edit', async () =>
     await close(page);
 });
 
+test('with no answer for its folder, the editor never opens the row the viewer held', async () => {
+    await row(page, 'notes.txt').getByRole('link', { name: 'notes.txt', exact: true }).click();
+    await page.route('**/nodes/*/children*', (route) => route.abort());
+    await dialog(page).getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(dialog(page).getByText('This file couldn’t be opened for editing.')).toBeVisible({
+        timeout: 60_000,
+    });
+    await expect(editor(page)).toHaveCount(0);
+    await page.unroute('**/nodes/*/children*');
+    await dialog(page).getByRole('button', { name: 'Try again' }).click();
+    await expect(editor(page)).toBeVisible({ timeout: 60_000 });
+    await close(page);
+});
+
 test('files the editor can’t keep exactly open read-only with a note', async () => {
     for (const [name, note] of [
         ['windows.txt', 'This file uses Windows line endings, which HushOS can’t edit yet.'],

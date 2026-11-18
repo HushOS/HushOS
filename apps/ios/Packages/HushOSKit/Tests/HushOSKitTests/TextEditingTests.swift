@@ -128,6 +128,19 @@ private func word(_ reason: TextReadOnly) -> String {
         #expect(try TextEditing.target(in: Listing(folder: folder, ancestors: [], children: [twin, moved], nextCursor: nil), for: file).file == nil)
     }
 
+    /* Opening may hand back a newer row the vault holds: one moved since is absent from this folder, never adopted. */
+    @Test func aRowTheVaultSwappedForOneElsewhereIsNotTheFile() throws {
+        let file = opened("doc", parent: "f", version: "v1")
+        let folder = opened("f")
+        #expect(try TextEditing.held(folder: folder, file: file, for: file).file?.id == "doc")
+        let moved = opened("doc", parent: "g", version: "v2")
+        #expect(try TextEditing.held(folder: folder, file: moved, for: file).file == nil)
+        let twin = opened("doc", parent: "f", version: "v1", workspace: "other")
+        #expect(try TextEditing.held(folder: folder, file: twin, for: file).file == nil)
+        #expect(throws: TextEditing.WrongFolder.self) { try TextEditing.held(folder: opened("g"), file: file, for: file) }
+        #expect(throws: TextEditing.WrongFolder.self) { try TextEditing.held(folder: opened("f", workspace: "other"), file: file, for: file) }
+    }
+
     @Test func editRightsComeFromTheMountCoveringTheItem() {
         let parents = ["doc": "inner", "inner": "viewed", "viewed": "edited", "edited": "top"]
         let parent = { (id: String) in parents[id] }
@@ -136,6 +149,10 @@ private func word(_ reason: TextReadOnly) -> String {
         #expect(EditRights.mayEditShared(itemId: "doc", roots: ["edited": "editor"], parent: parent))
         // A file shared on its own, even to edit: its folder can't be listed.
         #expect(!EditRights.mayEditShared(itemId: "doc", roots: ["doc": "editor"], parent: parent))
+        // Shared to edit itself, inside a folder shared to edit (or to view): its role is its own, and the folder lists.
+        #expect(EditRights.mayEditShared(itemId: "doc", roots: ["doc": "editor", "edited": "editor"], parent: parent))
+        #expect(EditRights.mayEditShared(itemId: "doc", roots: ["doc": "editor", "viewed": "viewer"], parent: parent))
+        #expect(!EditRights.mayEditShared(itemId: "doc", roots: ["doc": "viewer", "edited": "editor"], parent: parent))
         // No mount found up its folders: not editable.
         #expect(!EditRights.mayEditShared(itemId: "doc", roots: [:], parent: parent))
     }
@@ -299,6 +316,31 @@ actor TextBench: SaveRunWriter {
         #expect(await bench.names.count == 1)
     }
 
+    /* Discarded while the run started (the room check, its record): nothing is handed to the run, and its row goes. */
+    @Test func aSaveWhoseSessionEndsWhileItsRunStartsUploadsNothing() async throws {
+        let bench = TextBench()
+        let file = await bench.add("notes.txt", "a")
+        let on = SessionFlag()
+        let rows = journal()
+        let start: TextSave.Start = { targets, results in
+            let run = try await SaveRun.start(writer: bench, targets: targets, results: results, journal: rows)
+            on.off()
+            return run
+        }
+        await #expect(throws: TextEditing.SessionEnded.self) {
+            _ = try await TextSave.version("b", of: file, in: opened("f"), startedFrom: file.node.currentVersion?.id, start: start,
+                                           stillOn: { on.isOn }, pause: { _ in })
+        }
+        #expect(await bench.versions[file.id]?.count == 1)
+        #expect(rows.list().isEmpty)
+        on.on()
+        await #expect(throws: TextEditing.SessionEnded.self) {
+            _ = try await TextSave.copy("b", of: file, in: opened("f"), sources: .ownWriting, start: start, stillOn: { on.isOn }, pause: { _ in })
+        }
+        #expect(await bench.names.count == 1)
+        #expect(rows.list().isEmpty)
+    }
+
     @Test func aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() async throws {
         let bench = TextBench()
         let file = await bench.add("notes.txt", "start\n")
@@ -384,5 +426,23 @@ actor PlannedBox {
         let large = dir.appendingPathComponent("BIG")
         try Data(repeating: UInt8(ascii: "a"), count: Int(TextEditing.limit) + 2).write(to: large)
         #expect(!TextEditing.readsAsText(fileAt: large))
+    }
+}
+
+final class SessionFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = true
+    var isOn: Bool { lock.withLock { value } }
+    func on() { lock.withLock { value = true } }
+    func off() { lock.withLock { value = false } }
+}
+
+@Suite struct EmptySniffTests {
+    @Test func anEmptyExtensionlessFileReadsAsText() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("empty-\(UUID().uuidString)")
+        try Data().write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(TextEditing.readsAsText(fileAt: url))
+        #expect(!TextEditing.readsAsText(fileAt: url.appendingPathExtension("missing")))
     }
 }

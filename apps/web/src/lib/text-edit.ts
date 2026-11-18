@@ -126,21 +126,26 @@ export type Grant = { workspaceId: string; nodeId: string; role: 'viewer' | 'edi
 
 /*
  * Whether this person may change a file in someone else's folder: as the server decides it
- * (packages/db accessFor), the grant nearest the file wins, the file's own first, then each folder
- * up. A viewer's grant there wins over an editor's further up (two grants on one node: the viewer's).
- * A grant on the file itself never lets it be edited: its folder can't be listed, and a save needs it.
- * `chain`: the file, then its folders up to the top, nearest first; matched by workspace and id.
+ * (packages/db accessFor), the grant nearest the file decides the role, the file's own first, then
+ * each folder up (two grants on one node: the viewer's). It must be an editor's, and a grant on a
+ * folder above it must exist too: a save lists the file's folder, which a grant on the file alone
+ * doesn't open. `chain`: the file, then its folders up to the top, nearest first; matched by
+ * workspace and id.
  */
 export function editableThroughShares(
     chain: readonly { id: string; workspaceId: string }[],
     grants: readonly Grant[],
 ) {
+    let role: 'viewer' | 'editor' | null = null;
+    let folderAbove = false;
     for (const [index, node] of chain.entries()) {
         const here = grants.filter(
             (grant) => grant.nodeId === node.id && grant.workspaceId === node.workspaceId,
         );
         if (!here.length) continue;
-        return index > 0 && here.every((grant) => grant.role === 'editor');
+        role ??= here.every((grant) => grant.role === 'editor') ? 'editor' : 'viewer';
+        if (index > 0) folderAbove = true;
+        if (folderAbove) break;
     }
-    return false;
+    return role === 'editor' && folderAbove;
 }

@@ -76,6 +76,20 @@ object TextEditing {
      * listing answers for another: a save never goes into a folder the editor didn't open the file from. The file is the
      * row with its id in that same workspace and folder, or null when it is not on this page.
      */
+    /*
+     * The folder and file as the vault opened them, held to the editor's file again: the folder must be the file's own (else
+     * WrongFolder); a file row the vault swapped for one elsewhere (moved since) is absent from this folder, never adopted.
+     */
+    fun held(folder: Opened, file: Opened?, original: Opened): Pair<Opened, Opened?> {
+        val parent = original.node.parentId
+        val ws = original.node.workspaceId
+        if (parent == null || folder.id != parent || !folder.isFolder || !folder.node.workspaceId.equals(ws, ignoreCase = true))
+            throw WrongFolder()
+        val same = file != null && file.id == original.id && !file.isFolder && file.node.workspaceId.equals(ws, ignoreCase = true) &&
+            file.node.parentId == parent
+        return folder to (if (same) file else null)
+    }
+
     fun target(folder: NodeView, children: List<NodeView>, file: Opened): Pair<NodeView, NodeView?> {
         val parent = file.node.parentId
         if (parent == null || folder.id != parent || folder.kind != "folder" || !folder.workspaceId.equals(file.node.workspaceId, ignoreCase = true))
@@ -149,6 +163,11 @@ object TextSave {
         // Asked last thing before the run starts: a save whose session ended uploads nothing.
         if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(file), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
+        // Starting waited (the room check, the run's record): asked again before any byte goes; the empty run retired.
+        if (!stillOn()) {
+            end(run, pause = pause)
+            throw TextEditing.SessionEnded()
+        }
         val saved = run.version(bytes, file, folder, startedFrom, SaveSources.OwnWriting, file.metadata.mime)
         // Its only result is in, saved or not: the row goes.
         end(run, pause = pause)
@@ -164,6 +183,10 @@ object TextSave {
         val bytes = TextEditing.encode(text)
         if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(folder), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
+        if (!stillOn()) {
+            end(run, pause = pause)
+            throw TextEditing.SessionEnded()
+        }
         val minted = java.util.concurrent.atomic.AtomicReference<String?>(null)
         val made = run.file(bytes, file.name, file.metadata.mime, sources, folder = folder, minted = minted)
         end(run, pause = pause)
@@ -195,11 +218,28 @@ object EditRights {
         return null
     }
 
-    /* `covering`: the mount the item came through, as its role and whether its root is the item itself; null when none. */
-    fun mayEdit(itemWorkspace: String, ownWorkspace: String?, covering: Pair<String, Boolean>?): Boolean {
-        if (ownWorkspace != null && ownWorkspace.equals(itemWorkspace, ignoreCase = true)) return true
-        val (role, rootIsItem) = covering ?: return false
-        return role == "editor" && !rootIsItem
+    /*
+     * Whether this person may change an item that isn't a family folder's: their own once their own workspace is known and is
+     * the item's; otherwise through shares, as the server decides it (packages/db accessFor): the grant nearest the item (its
+     * own first) decides the role (two on one node: the viewer's), and a grant on a folder above must exist too, or its
+     * folder can't be listed for a save. `mounts`: each received share's root and role; `parent`: an item's parent in its
+     * own workspace.
+     */
+    fun mayEdit(item: Opened, ownWorkspace: String?, mounts: List<Pair<Opened, String>>, parent: (Opened) -> Opened?): Boolean {
+        if (ownWorkspace != null && ownWorkspace.equals(item.node.workspaceId, ignoreCase = true)) return true
+        var role: String? = null
+        var cursor: Opened? = item
+        var steps = 0
+        while (cursor != null && steps++ < 256) {
+            val at = cursor
+            val here = mounts.filter { (root, _) -> root.id == at.id && root.node.workspaceId.equals(at.node.workspaceId, ignoreCase = true) }
+            if (here.isNotEmpty()) {
+                role = role ?: if (here.all { it.second == "editor" }) "editor" else "viewer"
+                if (at !== item && at.id != item.id) return role == "editor"
+            }
+            cursor = parent(at)
+        }
+        return false
     }
 }
 

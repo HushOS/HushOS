@@ -94,6 +94,7 @@ export const editorWords = {
     savedCopyEndedLater:
         'Saved as a copy, without what you typed while it saved. Copy that text before you close.',
     failed: 'This file couldn’t be opened for editing.',
+    movedAway: 'This file was moved or deleted, so it can’t be opened here.',
     tryAgain: 'Try again',
     staleTitle: 'This file changed',
     staleText:
@@ -353,7 +354,16 @@ export function TextEditor({
             // in the stale choices at once.
             const listed = await targetOf(queryClient, loadFrom).catch(() => null);
             if (!still()) return;
-            const file = listed?.file ?? loadFrom;
+            // Never the row the viewer held: it may be a version behind (or no longer where it was). No
+            // answer: Try again; no such file in its folder any more: it was moved or deleted.
+            if (!listed?.file) {
+                setPhase({
+                    kind: 'failed',
+                    message: listed ? editorWords.movedAway : editorWords.failed,
+                });
+                return;
+            }
+            const file = listed.file;
             if (file !== loadFrom) onTarget(file);
             const size = nodeSize(file);
             if (size !== null && size > TEXT_EDIT_LIMIT) {

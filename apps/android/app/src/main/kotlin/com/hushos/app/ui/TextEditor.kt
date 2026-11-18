@@ -124,6 +124,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var stale by mutableStateOf<Stale?>(null)
     private var work: Job? = null
     private var reading: RunControl? = null
+    /* The save on its way: cancelled with the session (its run start and upload also ask the session themselves). */
+    private var saveJob: Job? = null
 
     private fun writer(vault: Vault) = VaultSaveWriter(vault, storage = { Auth.storage(context) })
     private fun start(vault: Vault) = TextSave.runs(writer(vault), SaveRunJournal.of(context))
@@ -181,7 +183,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saving = true
         failure = null
         status = null
-        scope.launch {
+        saveJob?.cancel()
+        saveJob = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val writer = writer(vault)
@@ -218,7 +221,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         val file = target
         saving = true
         failure = null
-        scope.launch {
+        saveJob?.cancel()
+        saveJob = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val writer = writer(vault)
@@ -257,6 +261,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun end() {
         session.close()
         work?.cancel()
+        saveJob?.cancel()
         reading?.cancel()
         buffer.clear()
         buffer.clearSpans()

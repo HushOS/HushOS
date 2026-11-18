@@ -90,6 +90,11 @@ export async function saveVersion(
         targets: [edit.file],
         results: [{ size: bytes.byteLength, thumbnail: false }],
     });
+    // Starting waited (the room check, the run's lock, its record): asked again before any byte goes.
+    if (!stillOn()) {
+        await endRun(run, pause ? { pause } : {});
+        throw new SessionEnded();
+    }
     const saved = await run.version({
         file: edit.file,
         folder: edit.folder,
@@ -122,6 +127,10 @@ export async function saveCopy(
         targets: [edit.folder],
         results: [{ size: bytes.byteLength, thumbnail: false }],
     });
+    if (!stillOn()) {
+        await endRun(run, pause ? { pause } : {});
+        throw new SessionEnded();
+    }
     let versionId: string | null = null;
     const made = await run.file({
         name: edit.file.name,

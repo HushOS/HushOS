@@ -137,8 +137,9 @@ enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, 
 fun mayEditText(model: DriveViewModel, state: DriveState, item: Opened): Boolean {
     if (model.families.isFamilyItem(item)) return model.families.writable(item)
     val own = state.rootId?.let { model.item(it) }?.node?.workspaceId
-    val mount = receivedVia(model, state, item)
-    return com.hushos.app.data.EditRights.mayEdit(item.node.workspaceId, own, mount?.let { it.share.role to (it.root?.id == item.id) })
+    val mounts = state.shares.orEmpty().mapNotNull { mount -> mount.root?.let { it to mount.share.role } }
+    // A parent is in its child's workspace: looked up there, never by id alone.
+    return EditRights.mayEdit(item, own, mounts) { it.node.parentId?.let { id -> model.itemIn(it.node.workspaceId, id) } }
 }
 
 /* A file the text editor opens: text by its name and type, no larger than the editor takes (TextEditing). */

@@ -33,7 +33,11 @@ public enum TextEditing {
     public static func readsAsText(fileAt url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
-        guard let bytes = try? handle.read(upToCount: Int(limit) + 1), UInt64(bytes.count) <= limit else { return false }
+        // nil is a clean end of file (an empty file); a read that fails is no answer, and says no. (Not `try?`, which would
+        // fold the two together.)
+        let bytes: Data
+        do { bytes = try handle.read(upToCount: Int(limit) + 1) ?? Data() } catch { return false }
+        guard UInt64(bytes.count) <= limit else { return false }
         return readsAsText(bytes)
     }
 
@@ -107,6 +111,20 @@ public enum TextEditing {
      * didn't open the file from. The file is the row with its id in that same workspace and folder,
      * or nil when it is no longer there.
      */
+    /*
+     * The folder and file as the vault opened them, held to the editor's file again: the folder must be the
+     * file's own (else WrongFolder); a file row the vault swapped for one elsewhere (moved since) is absent
+     * from this folder, never adopted.
+     */
+    public static func held(folder: Opened, file: Opened?, for original: Opened) throws -> (folder: Opened, file: Opened?) {
+        let workspace = original.node.workspaceId.lowercased()
+        guard let parent = original.node.parentId, folder.id == parent, folder.isFolder,
+              folder.node.workspaceId.lowercased() == workspace else { throw WrongFolder() }
+        guard let file, file.id == original.id, !file.isFolder, file.node.workspaceId.lowercased() == workspace,
+              file.node.parentId == parent else { return (folder, nil) }
+        return (folder, file)
+    }
+
     public static func target(in listing: Listing, for file: Opened) throws -> (folder: NodeView, file: NodeView?) {
         let workspace = file.node.workspaceId.lowercased()
         guard let parent = file.node.parentId, listing.folder.id == parent, listing.folder.isFolder,
@@ -212,6 +230,11 @@ public enum TextSave {
         // Asked last thing before the run starts: a save whose session ended uploads nothing.
         guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([file], [.known(size: UInt64(bytes.count), thumbnail: false)])
+        // Starting waited (the room check, the run's record): asked again before any byte goes; the empty run retired.
+        guard await stillOn() else {
+            if let pause { await end(run, pause: pause) } else { await end(run) }
+            throw TextEditing.SessionEnded()
+        }
         let saved = try await run.version(bytes, of: file, in: folder, startedFrom: startedFrom, sources: .ownWriting, mime: file.metadata.mime)
         if let pause { await end(run, pause: pause) } else { await end(run) }
         switch saved {
@@ -227,6 +250,10 @@ public enum TextSave {
         let bytes = TextEditing.encode(text)
         guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([folder], [.known(size: UInt64(bytes.count), thumbnail: false)])
+        guard await stillOn() else {
+            if let pause { await end(run, pause: pause) } else { await end(run) }
+            throw TextEditing.SessionEnded()
+        }
         let minted = MintedVersion()
         let made = try await run.file(bytes, name: file.name, mime: file.metadata.mime, sources: sources, in: folder, minted: minted)
         if let pause { await end(run, pause: pause) } else { await end(run) }
@@ -256,14 +283,21 @@ public enum EditRights {
      * is a folder above the item.
      */
     public static func mayEditShared(itemId: String, roots: [String: String], parent: (String) -> String?) -> Bool {
+        // The nearest grant decides the role (the item's own first); a grant on a folder above must exist too, or its
+        // folder can't be listed for a save.
+        var role: String?
+        var folderAbove = false
         var cursor: String? = itemId
         var steps = 0
         while let id = cursor, steps < 256 {
-            if let role = roots[id] { return role == "editor" && id != itemId }
+            if let here = roots[id] {
+                role = role ?? here
+                if id != itemId { folderAbove = true; break }
+            }
             cursor = parent(id)
             steps += 1
         }
-        return false
+        return role == "editor" && folderAbove
     }
 }
 
@@ -277,7 +311,8 @@ extension Vault {
         guard let parent = file.node.parentId else { throw DriveAPIError.notFound("This file isn’t in a folder.") }
         let listing = try await listChildren(of: parent, in: file.node.workspaceId)
         let (folder, row) = try TextEditing.target(in: listing, for: file)
-        return (try open(folder, replacing: true), try row.map { try open($0, replacing: true) })
+        // Checked again as opened: opening may hand back a newer row this vault holds (one moved since), never the listing's.
+        return try TextEditing.held(folder: try open(folder, replacing: true), file: try row.map { try open($0, replacing: true) }, for: file)
     }
 
     /*

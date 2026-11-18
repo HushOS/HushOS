@@ -25,6 +25,8 @@ struct FileViewer: View {
     @State private var action: NodeAction?
     /* The text editor over the file on screen (TextEditorScreen). */
     @State private var editing: Opened?
+    /* Moved on when something asks the viewer to go (a link): the editor asks about its changes, then closes. */
+    @State private var leaveAsked = 0
     /* The file on screen (id and version) read as text although its name says nothing: offered Edit too. */
     @State private var readAsText: String?
     /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
@@ -144,7 +146,7 @@ struct FileViewer: View {
         .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
         .fullScreenCover(item: $editing) { file in
-            TextEditorScreen(item: file, onSaved: { landed in
+            TextEditorScreen(item: file, leaveAsked: leaveAsked, onSaved: { landed in
                 // Saved over the file on screen: the viewer shows that version, read again.
                 guard landed.id == current.id, landed.ref == current.ref else { return }
                 current = landed
@@ -152,7 +154,12 @@ struct FileViewer: View {
             }).environment(store)
         }
         // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
-        .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
+        // Somewhere else was asked for (a link, a notification): get out of its way. An open editor is asked first
+        // (with changes, Discard or Keep editing); the viewer goes once it has closed, the link still waiting.
+        .onChange(of: store.route) { _, link in
+            guard link != nil else { return }
+            if editing != nil { leaveAsked += 1 } else { dismiss() }
+        }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
         // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
         .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
@@ -179,13 +186,18 @@ struct FileViewer: View {
         .onChange(of: listedHere, initial: true) { _, id in
             if let id { seenListed = id }
         }
-        .onChange(of: removed) { _, gone in
-            // An editor with the person's text stays over a file someone moved or deleted (Save as a copy keeps it);
-            // a family's removal takes everything with it.
-            if gone, editing == nil || familyGone { dismiss() }
+        // Moved or deleted elsewhere: an editor with the person's text stays over it (Save as a copy keeps it).
+        .onChange(of: movedAway) { _, gone in
+            if gone, editing == nil { dismiss() }
+        }
+        // A family's removal takes everything with it, an open editor and its text included, whatever moved before.
+        .onChange(of: familyGone) { _, gone in
+            guard gone else { return }
+            editing = nil
+            dismiss()
         }
         .onChange(of: editing == nil) { _, closed in
-            if closed, removed { dismiss() }
+            if closed, removed || store.route != nil { dismiss() }
         }
     }
 

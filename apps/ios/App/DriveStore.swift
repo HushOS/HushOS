@@ -659,15 +659,27 @@ final class DriveStore {
         var roots: [String: String] = [:]
         for mount in mounts where mount.share.workspaceId.lowercased() == workspace {
             guard let root = mount.root else { continue }
-            // The widest of two mounts of the same folder.
-            if roots[root.id] != "editor" { roots[root.id] = mount.share.role }
+            // Two grants on one folder: the viewer's, as the server picks between them.
+            roots[root.id] = roots[root.id] == "viewer" ? "viewer" : mount.share.role
         }
         // Own only once the own workspace is known: before it loads, a received share's file is never taken for one's own.
         return EditRights.mayEdit(itemId: item.id, workspaceId: item.node.workspaceId, own: myWorkspace, roots: roots) { id in
-            let row = id == item.id ? item : self.known(id)
-            guard let row, row.node.workspaceId.lowercased() == workspace else { return nil }
-            return row.node.parentId
+            let row = id == item.id ? item : self.known(id, in: workspace)
+            return row?.node.parentId
         }
+    }
+
+    /*
+     * A row by workspace and id, from what this phone holds: a folder's listing, a mount's root, the catalogue (the own
+     * drive's only). Never a row of the same id in another workspace (a personal folder sharing a share's folder's id).
+     */
+    func known(_ id: String, in workspace: String) -> Opened? {
+        let ws = workspace.lowercased()
+        let matches = { (row: Opened) in row.id == id && row.node.workspaceId.lowercased() == ws }
+        if let row = catalogue[id], matches(row) { return row }
+        for list in folders.values { if let row = list.first(where: matches) { return row } }
+        for mount in mounts { if let root = mount.root, matches(root) { return root } }
+        return latest.first(where: matches) ?? recents.first(where: matches)
     }
 
     func refreshMounts() async {

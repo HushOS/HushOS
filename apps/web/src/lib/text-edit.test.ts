@@ -186,6 +186,20 @@ describe('editing in someone else’s folder', () => {
         ).toBe(true);
     });
 
+    test('a file shared to edit inside a folder shared to edit is edited: its folder can be listed', () => {
+        expect(editableThroughShares(chain, [grant('top', 'editor'), grant('doc', 'editor')])).toBe(
+            true,
+        );
+        // Its own grant to view still decides, whatever the folder's.
+        expect(editableThroughShares(chain, [grant('top', 'viewer'), grant('doc', 'viewer')])).toBe(
+            false,
+        );
+        // Shared to edit on its own, under a folder shared to view: the role is the file's, and the folder can be listed.
+        expect(editableThroughShares(chain, [grant('top', 'viewer'), grant('doc', 'editor')])).toBe(
+            true,
+        );
+    });
+
     test('a file shared on its own is never edited, and grants match by workspace too', () => {
         expect(editableThroughShares(chain, [grant('doc', 'editor')])).toBe(false);
         expect(editableThroughShares(chain, [grant('top', 'editor', 'other')])).toBe(false);

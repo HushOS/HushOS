@@ -15,6 +15,8 @@ struct TextEditorScreen: View {
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     let item: Opened
+    /* Moved on by the viewer when something asks it to go: closed at once without changes, asked about with them. */
+    var leaveAsked = 0
     /* A save landed a new version of the file the viewer shows: the viewer shows it from now on. */
     var onSaved: (Opened) -> Void = { _ in }
 
@@ -68,6 +70,9 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             dismiss()
+        }
+        .onChange(of: leaveAsked) { _, _ in
+            if edited { confirmLeave = true } else { close() }
         }
         .onDisappear {
             // A save still on its way belongs to this screen's session: it stops with it.

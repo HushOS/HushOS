@@ -1537,9 +1537,10 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
             if (folder == null) {
                 // The chain above first, so the folder opens under its parent's key as served now.
                 for (above in page.ancestors) runCatching { openServed(above) }
-                folder = openServed(folderRow)
+                folder = TextEditing.held(openServed(folderRow), null, file).first
             }
-            row?.let { found = openServed(it) }
+            // Checked again as opened: opening may hand back a newer row this process holds (moved since), never the listing's.
+            row?.let { found = TextEditing.held(folder!!, openServed(it), file).second }
             after = if (found == null) page.nextCursor else null
         } while (after != null)
         return folder!! to found

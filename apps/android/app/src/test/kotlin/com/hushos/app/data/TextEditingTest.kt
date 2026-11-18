@@ -274,16 +274,73 @@ class TextEditingTest {
         assertTrue(TextEditing.same(StringBuilder("caf\u00e9"), "caf\u00e9"))
     }
 
+    private fun node(id: String, ws: String, parent: String?, kind: String = "folder") =
+        Opened(NodeView(id, ws, parent, kind, 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(id, null, null, null, emptyMap()))
+
     @Test fun ownershipIsNeverAssumedBeforeTheOwnWorkspaceIsKnown() {
-        // Not loaded yet: a viewer's share, or no share found, is not one's own.
-        assertTrue(!EditRights.mayEdit("theirs", null, "viewer" to false))
-        assertTrue(!EditRights.mayEdit("theirs", null, null))
+        val doc = node("doc", "theirs", "inner", "file")
+        val inner = node("inner", "theirs", "top")
+        val top = node("top", "theirs", null)
+        val tree = mapOf("inner" to inner, "top" to top)
+        val parent = { item: Opened -> item.node.parentId?.let { tree[it] } }
+        // Not loaded yet: a viewer's share, or none found, is not one's own.
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(top to "viewer"), parent))
+        assertTrue(!EditRights.mayEdit(doc, null, emptyList(), parent))
         // An editor's folder covering it counts; a file shared on its own doesn't.
-        assertTrue(EditRights.mayEdit("theirs", null, "editor" to false))
-        assertTrue(!EditRights.mayEdit("theirs", null, "editor" to true))
+        assertTrue(EditRights.mayEdit(doc, null, listOf(top to "editor"), parent))
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(doc to "editor"), parent))
         // Known and the item's: one's own.
-        assertTrue(EditRights.mayEdit("MINE", "mine", null))
-        assertTrue(!EditRights.mayEdit("theirs", "mine", null))
+        assertTrue(EditRights.mayEdit(node("doc", "MINE", "x", "file"), "mine", emptyList(), parent))
+        assertTrue(!EditRights.mayEdit(doc, "mine", emptyList(), parent))
+    }
+
+    @Test fun theNearestGrantDecidesAndAFolderAboveMustBeShared() {
+        val doc = node("doc", "theirs", "inner", "file")
+        val inner = node("inner", "theirs", "top")
+        val top = node("top", "theirs", null)
+        val tree = mapOf("inner" to inner, "top" to top)
+        val parent = { item: Opened -> item.node.parentId?.let { tree[it] } }
+        // A viewer's grant nearer than an editor's wins; an editor's nearer than a viewer's wins.
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(top to "editor", inner to "viewer"), parent))
+        assertTrue(EditRights.mayEdit(doc, null, listOf(top to "viewer", inner to "editor"), parent))
+        // The file shared to edit too, inside a folder shared to edit: editable (its folder lists).
+        assertTrue(EditRights.mayEdit(doc, null, listOf(top to "editor", doc to "editor"), parent))
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(top to "editor", doc to "viewer"), parent))
+        // Two grants on one folder: the viewer's.
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(top to "editor", top to "viewer"), parent))
+        // Another workspace's node with the folder's id is no grant here.
+        assertTrue(!EditRights.mayEdit(doc, null, listOf(node("top", "elsewhere", null) to "editor"), parent))
+    }
+
+    /* Opening may hand back a newer row this process holds: one moved since is absent from this folder, never adopted. */
+    @Test fun aRowTheVaultSwappedForOneElsewhereIsNotTheFile() {
+        val file = node("doc", "ws", "f", "file")
+        val folder = node("f", "ws", "root")
+        assertEquals(file, TextEditing.held(folder, file, file).second)
+        assertEquals(null, TextEditing.held(folder, node("doc", "ws", "g", "file"), file).second)
+        assertEquals(null, TextEditing.held(folder, node("doc", "other", "f", "file"), file).second)
+        assertThrows(TextEditing.WrongFolder::class.java) { TextEditing.held(node("g", "ws", "root"), file, file) }
+        assertThrows(TextEditing.WrongFolder::class.java) { TextEditing.held(node("f", "other", "root"), file, file) }
+    }
+
+    /* Discarded while the run started (the room check, its record): nothing is handed to the run, and its row goes. */
+    @Test fun aSaveWhoseSessionEndsWhileItsRunStartsUploadsNothing() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        val journal = SaveRunJournal(Files.createTempDirectory("text-save").resolve(SaveRunJournal.FILE).toFile(), SaveRunJournal.Epoch())
+        var on = true
+        val start = TextSave.Start { targets, results -> SaveRun.start(bench, targets, results, journal).also { on = false } }
+        assertThrows(TextEditing.SessionEnded::class.java) {
+            TextSave.version("b", file, folder, file.node.currentVersion?.id, start, stillOn = { on }, pause = {})
+        }
+        assertEquals(1, bench.versions.getValue(file.id).size)
+        assertTrue(journal.list().isEmpty())
+        on = true
+        assertThrows(TextEditing.SessionEnded::class.java) {
+            TextSave.copy("b", file, folder, SaveSources.OwnWriting, start, stillOn = { on }, pause = {})
+        }
+        assertEquals(1, bench.names.size)
+        assertTrue(journal.list().isEmpty())
     }
 
     /* Work taken under an editor's session stops publishing once it closes, a sign-in replaces its vault, or another text opens. */
