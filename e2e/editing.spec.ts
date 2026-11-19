@@ -46,6 +46,15 @@ async function openEditor(p: Page, name: string) {
     await expect(editor(p)).toBeVisible({ timeout: 60_000 });
 }
 
+/*
+ * One of the app's modules as the browser fetches it: by its source path from the development
+ * server (`/src/components/drive/pdf-viewer.tsx`), or as its chunk from a production build
+ * (`/assets/pdf-viewer-<hash>.js`), which is what CI runs this suite against.
+ */
+const appModule = (name: string) => new RegExp(`/(${name}\\.tsx|${name}-[\\w-]+\\.js)(\\?|$)`);
+/* The Rust grammar's fetch: Shiki's package in development, its own chunk in a production build. */
+const RUST_GRAMMAR = /shikijs[_/]langs|\/assets\/rust-[\w-]+\.js(\?|$)/;
+
 /* Replaces the whole text, as a person selecting everything and typing would. */
 async function retype(p: Page, text: string) {
     await editor(p).click();
@@ -197,19 +206,20 @@ test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no
 test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async () => {
     // The preload held at its first step (the PDF viewer), so no grammar has come yet.
     const held: Route[] = [];
-    await page.route('**/components/drive/pdf-viewer.tsx*', (route) => {
+    const pdfViewer = appModule('pdf-viewer');
+    await page.route(pdfViewer, (route) => {
         held.push(route);
     });
     const grammars: string[] = [];
     const listen = (request: Request) => {
-        if (/shikijs[_/]langs/.test(request.url())) grammars.push(request.url());
+        if (RUST_GRAMMAR.test(request.url())) grammars.push(request.url());
     };
     page.on('request', listen);
     await page.reload();
     await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
     // Every editor fetches the preview's renderer with its other assets, a JSON file's too: an Edit
     // before the preload never fetches it for Markdown only.
-    const previewModule = page.waitForRequest(/\/components\/drive\/editor-preview/);
+    const previewModule = page.waitForRequest(appModule('editor-preview'));
     await openEditor(page, 'config.json');
     await previewModule;
     await close(page);
@@ -226,7 +236,7 @@ test('a fenced block typed in the Markdown preview before the preload finishes f
     await expect(preview.locator('[style*="--shiki-light"]')).toHaveCount(0);
     // Once the preload has fetched every grammar, in its own order, the fence is coloured.
     page.off('request', listen);
-    await page.unroute('**/components/drive/pdf-viewer.tsx*');
+    await page.unroute(pdfViewer);
     for (const route of held) await route.continue().catch(() => {});
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
@@ -454,9 +464,8 @@ test('past 32K characters the preview follows typing only on Refresh preview', a
 test('a preview whose renderer can’t load says so, and the text typed beside it still saves', async () => {
     // Only the editor's preview module fails to load: the viewer, which renders the same file with
     // the same renderer before Edit is pressed, is untouched, so the failure is met in the editor.
-    await page.route('**/components/drive/editor-preview.tsx*', (route) =>
-        route.fulfill({ status: 500, body: '' }),
-    );
+    const editorPreview = appModule('editor-preview');
+    await page.route(editorPreview, (route) => route.fulfill({ status: 500, body: '' }));
     await page.reload();
     await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
     await openEditor(page, 'preview.md');
@@ -474,7 +483,7 @@ test('a preview whose renderer can’t load says so, and the text typed beside i
     expect(saved.startsWith('# Notes\n')).toBe(true);
     expect(saved).toContain('\nTyped beside a failed preview\n');
     // A fresh page for the tests after: nothing failing.
-    await page.unroute('**/components/drive/editor-preview.tsx*');
+    await page.unroute(editorPreview);
     await page.reload();
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
@@ -804,6 +813,9 @@ test('a viewer gets no Edit; an editor of the share edits', async ({ browser }) 
     await guest.context().close();
 
     await openFolder(page, 'Editing');
+    // The owner learns of the editor's save from the change feed (every 8 s, lib/feed.ts), as a
+    // person would: Download fetches the version the listing shows, so wait for the new one's size.
+    await expect(row(page, 'Editing.txt')).toContainText('20 B', { timeout: 30_000 });
     expect((await downloaded(page, 'Editing.txt')).toString()).toBe('edited by the editor');
 });
 
