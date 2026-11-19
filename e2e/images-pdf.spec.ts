@@ -106,7 +106,7 @@ test.afterAll(async () => {
     removeMade(downloads);
 });
 
-test('three images reordered make a three-page PDF in that order', async () => {
+test('three images reordered make a three-page PDF in that order', async ({ browserName }) => {
     await onePdf(page, ['page-1.jpg', 'page-2.jpg', 'page-3.jpg']);
     const form = dialog(page);
     await expect(form).toContainText('Location, camera and other photo details are left out.');
@@ -127,7 +127,8 @@ test('three images reordered make a three-page PDF in that order', async () => {
     // The list's own shortcuts sleep while the dialog is open: Delete here never trashes the images behind it.
     await form.getByRole('button', { name: 'Fit to each image' }).focus();
     await page.keyboard.press('Delete');
-    await page.keyboard.press('Backspace');
+    // Playwright's WebKit goes back a page on a Backspace nobody handled (Safari doesn't).
+    if (browserName !== 'webkit') await page.keyboard.press('Backspace');
     await form.getByRole('button', { name: 'Make PDF' }).click();
     await expect(form).toHaveCount(0);
     await expect(transfers(page)).toContainText('Making page-3.pdf');
