@@ -35,6 +35,7 @@ struct EditorPreviewPane: View {
             }
         }
         .scrollPosition($position)
+        .barStaysOnScroll()
         .onScrollPhaseChange { _, phase in scroll.previewHeld = phase == .tracking || phase == .interacting || phase == .decelerating }
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, top in
             scroll.previewScrolled(to: top)
@@ -166,4 +167,19 @@ struct EditorPreviewPane: View {
     var previewTop: CGFloat = 0
     /* A narrow switch's line, until the pane switched to can be put there. */
     var kept: Double?
+}
+
+extension View {
+    /*
+     * Close and Save stay where they are while the preview scrolls. iOS 27 minimizes a navigation bar as its screen's
+     * scroll view scrolls (toolbarMinimizationBehavior's automatic), and on the iPhone Duo's inner display that took the
+     * editor's bar, Close and Save with it, away until the preview was back at its top.
+     */
+    @ViewBuilder func barStaysOnScroll() -> some View {
+        if #available(iOS 27.0, *) {
+            toolbarMinimizationBehavior(.never, for: .navigationBar)
+        } else {
+            self
+        }
+    }
 }

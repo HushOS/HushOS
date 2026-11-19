@@ -128,6 +128,11 @@ final class DriveStore {
     @ObservationIgnored private var heldIntent: (@MainActor () -> Void)?
     @ObservationIgnored private var intentDropped: (@MainActor () -> Void)?
     @ObservationIgnored var editorOpen = false
+    /*
+     * The open editor's work (EditorWork: its text view, baseline and state), held here rather than by the screens: an
+     * unfold or a resize that tears the screens down leaves it, and the viewer presented again presents the editor with it.
+     */
+    @ObservationIgnored let editorWork = EditorParking<Vault, EditorWork>()
     var editorLeaveAsked = 0
 
     /* A move a notification asked for (another tab, a sheet): now, or once the editor has closed (never under it). */
@@ -439,6 +444,8 @@ final class DriveStore {
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
+        // An open editor's text belonged to the last session: emptied, not handed to this one.
+        editorWork.drop()?.box.drop()
         // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
         if error == Self.sessionEnded { error = nil }
         // The new session's vault has its own area ledger: families are checked again under it, and nothing the

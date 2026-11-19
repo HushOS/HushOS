@@ -103,6 +103,8 @@ struct TextEditorScreen: View {
     @State private var work: Task<Void, Never>?
     /* This editor's session: the vault it opened under and the opened text; every path checks it (EditSession). */
     @State private var session = EditSession<Vault>()
+    /* Ending on purpose (Close, Discard, another session): its work is let go. Otherwise the store keeps it for a rebuild. */
+    @State private var ending = false
 
     private struct StaleVersion: Identifiable, Equatable {
         let currentVersionId: String?
@@ -138,6 +140,8 @@ struct TextEditorScreen: View {
         .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
         // Another session (a sign-out and in, another account): this text was the last one's.
         .onChange(of: ObjectIdentifier(store.vault)) { _, _ in
+            ending = true
+            store.editorWork.release(key: item.ref)
             session.close()
             work?.cancel()
             editor.drop()
@@ -147,6 +151,8 @@ struct TextEditorScreen: View {
             dismiss()
         }
         .onChange(of: leaveAsked) { _, _ in requestClose() }
+        // What the editor holds, kept current in the store's EditorWork, so a rebuild (an unfold, a resize) loses none of it.
+        .onChange(of: remembered) { _, _ in remember() }
         // Side by side (unfolded, or the window widened): the preview renders the text now and follows from here.
         .onChange(of: sideBySide, initial: true) { _, now in
             scroll.linked = now
@@ -178,7 +184,8 @@ struct TextEditorScreen: View {
             // A save still on its way belongs to this screen's session: it stops with it.
             session.close()
             work?.cancel()
-            editor.drop()
+            // The text stays only while the store holds it for this editor presented again (a rebuild, not a close).
+            if ending || store.editorWork.held(key: item.ref, owner: store.vault)?.box !== editor { editor.drop() }
             savedText = ""
             saveState = nil
             pieces = nil
@@ -437,6 +444,8 @@ struct TextEditorScreen: View {
      * the screen goes (onDisappear stays the fallback).
      */
     private func close() {
+        ending = true
+        store.editorWork.release(key: item.ref)
         session.close()
         work?.cancel()
         editor.drop()
@@ -447,8 +456,60 @@ struct TextEditorScreen: View {
         dismiss()
     }
 
+    /* What changes the state the store keeps for this editor (EditorWork.state). */
+    private var remembered: String {
+        "\(phase)|\(edited)|\(pane)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)"
+    }
+
+    /* The editor's state, held by the store with its text view (DriveStore.editorWork), for the editor presented again. */
+    private func remember() {
+        guard !ending, let target, let destination else { return }
+        let held: EditorState.Held
+        switch phase {
+        case .editing: held = .editing
+        case .readOnly(let reason, let text): held = .readOnly(reason, text)
+        case .loading, .failed: return
+        }
+        let state = EditorState(held: held, loadFrom: loadFrom, target: target, startedFrom: startedFrom, source: source,
+                                destination: destination, marked: marked, savedText: savedText, saveState: saveState,
+                                format: format, edited: edited, status: status, previewing: pane == .preview)
+        let work = store.editorWork.held(key: item.ref, owner: store.vault).flatMap { $0.box === editor ? $0 : nil } ?? EditorWork(box: editor)
+        work.state = state
+        store.editorWork.hold(work, key: item.ref, owner: store.vault)
+    }
+
+    /* Presented again after a rebuild: the same text view (its text, cursor, scroll and undo) and the state it had. */
+    private func adopt(_ work: EditorWork, _ state: EditorState) {
+        editor = work.box
+        scroll.box = work.box
+        loadFrom = state.loadFrom
+        target = state.target
+        startedFrom = state.startedFrom
+        source = state.source
+        destination = state.destination
+        marked = state.marked
+        savedText = state.savedText
+        saveState = state.saveState
+        format = state.format
+        edited = state.edited
+        status = state.status
+        pane = state.previewing ? .preview : .source
+        scroll.revision += 1
+        switch state.held {
+        case .editing: phase = .editing
+        case .readOnly(let reason, let text): phase = .readOnly(reason, text)
+        }
+        if sideBySide || pane == .preview { render() }
+    }
+
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
     private func load() async {
+        // Presented again after a rebuild: the work the store held, never a fresh read (which would drop what was typed).
+        if loadFrom == nil, phase == .loading, let work = store.editorWork.held(key: item.ref, owner: store.vault),
+           work.box !== editor, let state = work.state {
+            adopt(work, state)
+            return
+        }
         let from = loadFrom ?? item
         // Read under the vault this editor opened with, and shown only while its session lasts.
         guard let token = session.take(store.vault) else { return }
@@ -650,6 +711,39 @@ struct TextEditorScreen: View {
     }
 }
 
+/* An open editor's work, held by the store (DriveStore.editorWork) so a rebuild of the screens loses none of it. */
+@MainActor final class EditorWork {
+    /* The text view's box: the view itself, with its text, cursor, scroll and undo, is handed to the editor presented again. */
+    let box: TextBox
+    var state: EditorState?
+
+    init(box: TextBox) {
+        self.box = box
+    }
+}
+
+/* What an editor knows besides its text: the file, the version its text started from, the baseline and the format. */
+struct EditorState {
+    enum Held {
+        case editing
+        case readOnly(TextReadOnly, String?)
+    }
+
+    let held: Held
+    let loadFrom: Opened?
+    let target: Opened
+    let startedFrom: String?
+    let source: Opened?
+    let destination: EditDestination
+    let marked: Opened?
+    let savedText: String
+    let saveState: TextEditing.SaveState?
+    let format: TextFormat?
+    let edited: Bool
+    let status: String?
+    let previewing: Bool
+}
+
 /* The editor's words, the web's (text-editor.tsx editorWords). */
 enum EditorWords {
     static let edit = "Edit"
@@ -693,7 +787,19 @@ private extension View {
  * keystroke (an 8 MiB file would be copied each time). `drop` empties it, so no text outlives the screen.
  */
 @MainActor final class TextBox {
-    weak var view: UITextView?
+    /*
+     * Held strongly while the editor is open: when a rebuild tears the screen down (EditorWork), the editor presented
+     * again takes this very view back, with its text, cursor, scroll and undo. Let go by drop.
+     */
+    var view: UITextView?
+    /* The keyboard is up in it. */
+    var focused = false
+    /* When editing last ended. A rebuild's dismissal ends it a moment before the editor is presented again. */
+    var endedEditing: Date?
+    /* Whether the keyboard was up when the screens were torn down: up, or put away by the teardown itself just now. */
+    var keyboardWasUp: Bool {
+        focused || endedEditing.map { Date().timeIntervalSince($0) < 1 } ?? false
+    }
     /* The text the view opens with, until it has one. */
     private(set) var opening = ""
 
@@ -708,6 +814,9 @@ private extension View {
         opening = ""
         view?.text = ""
         view?.undoManager?.removeAllActions()
+        view = nil
+        focused = false
+        endedEditing = nil
     }
 
     /* The keyboard goes (the preview takes nothing typed). */
@@ -733,6 +842,16 @@ struct PlainTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, onScroll: onScroll) }
 
     func makeUIView(context: Context) -> UITextView {
+        // The editor presented again after a rebuild: the same view, moved here, as it was.
+        if let held = box.view {
+            held.removeFromSuperview()
+            held.delegate = context.coordinator
+            held.isEditable = editable
+            context.coordinator.box = box
+            // The cursor stays where it was (the view keeps its selection); the keyboard comes back once it is on screen.
+            (held as? EditorTextView)?.focusOnWindow = box.keyboardWasUp
+            return held
+        }
         let view = EditorTextView(usingTextLayoutManager: true)
         view.font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .regular))
         view.adjustsFontForContentSizeCategory = true
@@ -756,6 +875,7 @@ struct PlainTextView: UIViewRepresentable {
         view.delegate = context.coordinator
         view.accessibilityLabel = editable ? "Text" : "Text, read only"
         box.view = view
+        context.coordinator.box = box
         return view
     }
 
@@ -769,6 +889,7 @@ struct PlainTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var onChange: () -> Void
         var onScroll: (UIScrollView) -> Void
+        weak var box: TextBox?
         init(onChange: @escaping () -> Void, onScroll: @escaping (UIScrollView) -> Void) {
             self.onChange = onChange
             self.onScroll = onScroll
@@ -777,6 +898,14 @@ struct PlainTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) { onChange() }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) { onScroll(scrollView) }
+
+        func textViewDidBeginEditing(_ textView: UITextView) { box?.focused = true }
+
+        // A rebuild's dismissal ends editing first, a moment before the view comes back: see TextBox.keyboardWasUp.
+        func textViewDidEndEditing(_ textView: UITextView) {
+            box?.focused = false
+            box?.endedEditing = Date()
+        }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
             guard TextEditing.hasCarriageReturn(text) else { return true }
@@ -795,6 +924,20 @@ struct PlainTextView: UIViewRepresentable {
  * makes is (not Universal Clipboard, not every app that reads the board later).
  */
 final class EditorTextView: UITextView {
+    /* Moved into the editor presented again after a rebuild with the keyboard up: up again once in its window. */
+    var focusOnWindow = false
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, focusOnWindow else { return }
+        focusOnWindow = false
+        // After the presentation settles: asked while the cover is still sliding in, UIKit refuses it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.window != nil else { return }
+            self.becomeFirstResponder()
+        }
+    }
+
     override func copy(_ sender: Any?) {
         guard let range = selectedTextRange, let text = text(in: range), !text.isEmpty else { return }
         UIPasteboard.general.setItems([["public.utf8-plain-text": text]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])

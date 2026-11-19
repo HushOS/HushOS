@@ -58,7 +58,11 @@ struct FileViewer: View {
     /* The system's bars: Done, the name and where you are, Share and More above; who can open it and Send a copy below. */
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button { dismiss() } label: { HeaderWord(text: "Done") }
+            Button {
+                // An editor work left without its screen (DriveStore.editorWork) goes with the viewer.
+                store.editorWork.release(key: current.ref)?.box.drop()
+                dismiss()
+            } label: { HeaderWord(text: "Done") }
         }
         ToolbarItem(placement: .principal) { title }
         if version == nil {
@@ -199,8 +203,17 @@ struct FileViewer: View {
         // A family's removal takes everything with it, an open editor and its text included, whatever moved before.
         .onChange(of: familyGone) { _, gone in
             guard gone else { return }
+            store.editorWork.release(key: current.ref)?.box.drop()
             editing = nil
             dismiss()
+        }
+        // Presented again after an unfold or a resize tore the screens down (DriveStore.editorWork): the editor that was
+        // open over this file comes back with its text, cursor and scroll.
+        .onAppear {
+            if editing == nil, store.editorWork.held(key: current.ref, owner: store.vault) != nil {
+                store.editorOpen = true
+                editing = current
+            }
         }
         // What the editor held goes on when its own screen has gone (TextEditorScreen's onDisappear), never when
         // this viewer is covered by it: a link released then reaches .onChange(of: store.route) above.
