@@ -2549,6 +2549,13 @@ To roll back to the previous release:
 - The schema can stay: the previous release writes none of the new kinds, the wider check refuses nothing it writes, and it never looks at `two_step_key_readers`. This release's worker exits without the migration, and the previous worker does not look for it.
 - Keep `TWO_STEP_KEY` and `TWO_STEP_PREVIOUS_KEY` as they are. Secrets the worker moved to the current key stay readable, since the previous release reads under the same keys. It does not read the `_FILE` forms: put the keys in the variables before rolling back, or it seals under the derived key and cannot open what is under yours.
 
+#### Editor saves held to their folder (`20261118201135_upload_expected_parent`)
+
+- Adds one nullable column with no default, `drive_uploads.expected_parent_id`, so nothing is rewritten or scanned. The `ALTER` holds an exclusive lock on `drive_uploads` (every upload's begin and completion) until drizzle's transaction commits: milliseconds.
+- A new version saved from the text editor or a file tool names the folder it checked. Begin and completion refuse it once the file has moved out of that folder, and nothing is published.
+- Containers of the previous release beside the new ones drop the field from a request (unknown fields are stripped) and never read the column. An upload one of them begins or completes is published without that check, as before. Roll quickly.
+- This release's worker exits without the migration. To roll back, the column can stay: the previous release never reads or writes it.
+
 #### Approve on another device release (`20261114020537_two_step_device`)
 
 This release adds approving on another device as a second step ([Two-step sign-in](#two-step-sign-in)). Nothing changes for an account until it turns the method on. No new setting is needed.

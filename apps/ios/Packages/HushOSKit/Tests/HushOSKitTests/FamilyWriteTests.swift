@@ -1215,6 +1215,37 @@ extension OnFakeDrive {
          * waits (the ledger's "older workspace key"), checks the family again in the pause, and goes
          * under the new top folder key. Fails if that refusal fails the upload instead of waiting.
          */
+        /*
+         * A new version of a family file this phone already knows was moved (into Docs) since the row it replaces was
+         * read (in the top folder): the request names the folder that row was in, never the one the vault's newer row
+         * names, so the server refuses it rather than landing it in the folder the file went to. Fails if the family's
+         * look again swaps the moved row's folder into the request.
+         */
+        @Test func aFamilyReplacementNamesTheFolderOfTheRowItReplacesNotWhereTheFileMovedSince() async throws {
+            let family = try FamilyFixture()
+            let server = family.server(chain: [family.r1, family.r2], pin: try family.pin(through: [family.r1, family.r2]))
+            let phone = try await family.phone(server)
+            defer { phone.done() }
+            guard case .accepted = await phone.sync.sync(family.summary) else { Issue.record("not accepted"); return }
+            let vault = phone.vault
+            _ = try await vault.children(of: family.rootId)
+            let replaced = try #require(await vault.item(family.fileId))
+            #expect(replaced.node.parentId == family.rootId)
+            // Moved into Docs by someone else, and this phone has listed Docs since: the vault holds the moved row.
+            let moved = try FamilyFixture.node(id: family.fileId, in: family.workspaceId, parent: family.docs.id, parentKey: family.docsKey,
+                                               key: family.fileKey, kind: .file, name: "Recipes.txt", writer: family.creator, parentKeyEpoch: 2,
+                                               attributes: FamilyFixture.attributes)
+            server.put(family.docs, moved)
+            _ = try await vault.children(of: family.rootId)
+            _ = try await vault.children(of: family.docs.id)
+            #expect(await vault.item(family.fileId)?.node.parentId == family.docs.id)
+            server.clearRequests()
+            _ = try? await vault.upload(fileURL: try temporaryFile("Recipes.txt", Data("v2".utf8)), name: "Recipes.txt", mime: "text/plain",
+                                        in: family.rootId, replacing: replaced)
+            let node = try #require(server.allBegins.last?.body["node"] as? [String: Any])
+            #expect(node["expectedParentId"] as? String == family.rootId)
+        }
+
         @Test func anUploadIntoTheTopFolderRightAfterAKeyChangeWaitsForTheFamilyCheck() async throws {
             let family = try FamilyFixture()
             let rotation = try FamilyRotation(family)

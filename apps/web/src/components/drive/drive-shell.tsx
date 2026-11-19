@@ -33,7 +33,8 @@ import { preloadViewers } from '@/lib/preload';
 import { resumePendingRotation } from '@/lib/rotation';
 import { prepareDownloads } from '@/lib/downloads';
 import { forgetPreviews } from '@/lib/previews';
-import { lockSaveRuns } from '@/lib/save-runs';
+// The live runs only: the save path's engine comes in with the first editor or tool that saves.
+import { lockRuns as lockSaveRuns } from '@hushos/drive/save-runs-live';
 import { cancelAllToolRuns } from '@/lib/tools/active';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';

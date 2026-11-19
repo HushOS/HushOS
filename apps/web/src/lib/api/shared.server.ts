@@ -434,6 +434,8 @@ export const uploadNodeSchema = t.Union([
         id: uuidSchema,
         keyEpoch: epochSchema,
         expectedVersionId: t.Nullable(uuidSchema),
+        // An editor's save: the folder the file was in when it was checked (begin and complete refuse a move).
+        expectedParentId: t.Optional(t.Nullable(uuidSchema)),
     }),
 ]);
 export const partSchema = t.Object({

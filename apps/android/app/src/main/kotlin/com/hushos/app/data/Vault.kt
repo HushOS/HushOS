@@ -1018,6 +1018,9 @@ class Vault(internal val context: Context, val api: DriveApi) {
      * How a moved record is signed, as a copy is: out of a family folder as its member list judges it (a former member's file
      * is re-sealed as the mover's), out of one's own files by the trust set. Without either, nothing moves.
      */
+    /* How a copy of `source` is signed (the text editor's Save as a copy): as a move or a copy takes its records. */
+    fun copyPrior(source: Opened): Prior = movePrior(source)
+
     private fun movePrior(source: Opened): Prior {
         val ws = source.node.workspaceId
         if (!isFamilyWorkspace(ws)) return Prior.of(source.node, trustForWrite())
@@ -2097,7 +2100,8 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /* The ids a result's upload was begun under, for its run's row (SaveRuns.kt). */
-    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String)
+    /* `versionId`: the version this upload publishes, as minted (a completion answered from a listing may show a newer one by then). */
+    data class BegunIds(val workspaceId: String, val uploadId: String, val nodeId: String, val versionId: String? = null)
 
     /*
      * A result a tool or an editor produced (the save path, SaveRuns.kt), uploaded from memory: its plaintext is never
@@ -2134,11 +2138,22 @@ class Vault(internal val context: Context, val api: DriveApi) {
         }
     }
 
-    /* `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there. */
+    /*
+     * `id` as the server lists it in `folderId` now, never the catalogue's copy; null when it is not there, the folder
+     * included (gone, or in the trash: a file there is gone from where it was saved too).
+     */
     private fun servedNode(folderId: String, workspaceId: String, id: String): NodeView? {
         var after: String? = null
         do {
-            val page = api.children(folderId, workspaceId, after)
+            val page = try {
+                api.children(folderId, workspaceId, after)
+            } catch (gone: NotFound) {
+                // DriveApi answers a 404 so, never as an ApiError.
+                return null
+            } catch (error: ApiError) {
+                if (error.status == 409 && error.code == "trashed") return null
+                throw error
+            }
             page.children.firstOrNull { it.id == id }?.let { return it }
             after = page.nextCursor
         } while (after != null)
@@ -2194,6 +2209,10 @@ class Vault(internal val context: Context, val api: DriveApi) {
             val expectedVersion = if (expected != null) expected.versionId else replacing.node.currentVersion?.id
             nodeInput = JSONObject().put("existing", true).put("id", nodeId).put("keyEpoch", replacing.node.keyEpoch.toLong())
                 .put("expectedVersionId", expectedVersion ?: JSONObject.NULL)
+            // Every new version is held to the folder it was written into (a save’s checked `held`, else the folder the file is in): a file
+            // moved away since, at begin or before completion, publishes nothing (stale, or conflicted with no version). An
+            // editor's save and an ordinary replacement send the same, so the server can't tell them apart.
+            nodeInput.put("expectedParentId", held?.id ?: replacing.node.parentId ?: parentId)
             metadata = replacing.metadata
         } else {
             val parent = destination()
@@ -2262,7 +2281,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
             // A result's run writes these ids down first: if it can't, nothing is sent, the reservation is aborted now (the
             // network's to settle when that gets no answer), and it is marked idle below, so settleAll never skips it.
             try {
-                onBegun(BegunIds(ws, begun.uploadId, nodeId))
+                onBegun(BegunIds(ws, begun.uploadId, nodeId, versionId))
             } catch (error: Exception) {
                 runCatching { abortReserved(begun.uploadId, ws) }
                 madeKey?.let { areaLedger.forgetNodeKey(ws, it) }

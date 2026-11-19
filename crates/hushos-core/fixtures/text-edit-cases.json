@@ -1,0 +1,401 @@
+{
+    "_about": "Text editability (Editing 1a): whether bytes open for editing (`reason` null) or read-only and why, and whether a name and recorded type open in the editor at all. Hand-written outcomes, read by apps/web/src/lib/text-edit.test.ts and crates/hushos-core/tests/text_edit.rs. Each `bytes` is its parts joined, each part `hex` repeated `repeat` times (once when absent).",
+    "bytes": [
+        {
+            "name": "empty",
+            "bytes": [],
+            "reason": null
+        },
+        {
+            "name": "plain with final newline",
+            "bytes": [
+                {
+                    "hex": "68656c6c6f0a776f726c640a"
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "no final newline",
+            "bytes": [
+                {
+                    "hex": "68656c6c6f0a776f726c64"
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "multibyte, emoji and line separator",
+            "bytes": [
+                {
+                    "hex": "68c3a96c6c6f20e29c9320f09f9880e280a8646f6e650a"
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "tab and form feed are text",
+            "bytes": [
+                {
+                    "hex": "6109620c630a"
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "utf-8 byte order mark",
+            "bytes": [
+                {
+                    "hex": "efbbbf"
+                },
+                {
+                    "hex": "68690a"
+                }
+            ],
+            "reason": "byte-order-mark"
+        },
+        {
+            "name": "byte order mark before CRLF",
+            "bytes": [
+                {
+                    "hex": "efbbbf"
+                },
+                {
+                    "hex": "68690d0a"
+                }
+            ],
+            "reason": "byte-order-mark"
+        },
+        {
+            "name": "utf-16 little endian",
+            "bytes": [
+                {
+                    "hex": "fffe68006900"
+                }
+            ],
+            "reason": "utf-16"
+        },
+        {
+            "name": "utf-16 big endian",
+            "bytes": [
+                {
+                    "hex": "feff00680069"
+                }
+            ],
+            "reason": "utf-16"
+        },
+        {
+            "name": "latin-1",
+            "bytes": [
+                {
+                    "hex": "636166e90a"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "latin-1 with CRLF",
+            "bytes": [
+                {
+                    "hex": "636166e90d0a"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "overlong slash",
+            "bytes": [
+                {
+                    "hex": "61c0af"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "encoded surrogate",
+            "bytes": [
+                {
+                    "hex": "61eda080"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "cut multibyte at the end",
+            "bytes": [
+                {
+                    "hex": "61e282"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "NUL",
+            "bytes": [
+                {
+                    "hex": "610062"
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "NUL past the sniff",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 9000
+                },
+                {
+                    "hex": "00"
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "control characters over two percent",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 190
+                },
+                {
+                    "hex": "01",
+                    "repeat": 10
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "control characters at two percent",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 980
+                },
+                {
+                    "hex": "01",
+                    "repeat": 20
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "control characters past the sniff",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 8192
+                },
+                {
+                    "hex": "01",
+                    "repeat": 1000
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "CRLF",
+            "bytes": [
+                {
+                    "hex": "610d0a620d0a"
+                }
+            ],
+            "reason": "line-endings"
+        },
+        {
+            "name": "lone CR",
+            "bytes": [
+                {
+                    "hex": "610d62"
+                }
+            ],
+            "reason": "line-endings"
+        },
+        {
+            "name": "one CRLF among LF",
+            "bytes": [
+                {
+                    "hex": "610a620d0a630a"
+                }
+            ],
+            "reason": "line-endings"
+        },
+        {
+            "name": "at the limit",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 8388608
+                }
+            ],
+            "reason": null
+        },
+        {
+            "name": "past the limit",
+            "bytes": [
+                {
+                    "hex": "61",
+                    "repeat": 8388609
+                }
+            ],
+            "reason": "too-large"
+        }
+    ],
+    "names": [
+        {
+            "name": "notes.txt",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "README.md",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "post.mdx",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "data.json",
+            "mime": "application/json",
+            "editable": true
+        },
+        {
+            "name": "config.json5",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "config.yaml",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "Cargo.toml",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "main.ts",
+            "mime": "video/mp2t",
+            "editable": true
+        },
+        {
+            "name": "Dockerfile",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "Makefile",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": ".env",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "notes",
+            "mime": "text/plain",
+            "editable": true
+        },
+        {
+            "name": "script",
+            "mime": "text/x-python; charset=utf-8",
+            "editable": true
+        },
+        {
+            "name": "data",
+            "mime": "application/json",
+            "editable": true
+        },
+        {
+            "name": "logo.svg",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "logo",
+            "mime": "image/svg+xml",
+            "editable": true
+        },
+        {
+            "name": "table.csv",
+            "mime": null,
+            "editable": true
+        },
+        {
+            "name": "table.tsv",
+            "mime": "text/tab-separated-values",
+            "editable": true
+        },
+        {
+            "name": "export",
+            "mime": "text/csv; charset=utf-8",
+            "editable": true
+        },
+        {
+            "name": "photo.jpg",
+            "mime": "text/plain",
+            "editable": false
+        },
+        {
+            "name": "photo.heic",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "photo",
+            "mime": "image/png",
+            "editable": false
+        },
+        {
+            "name": "report.pdf",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "letter.docx",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "budget.xlsx",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "archive.zip",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "clip.mp4",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "clip",
+            "mime": "video/mp4",
+            "editable": false
+        },
+        {
+            "name": "song.mp3",
+            "mime": null,
+            "editable": false
+        },
+        {
+            "name": "data.bin",
+            "mime": "application/octet-stream",
+            "editable": false
+        },
+        {
+            "name": "blob",
+            "mime": null,
+            "editable": false
+        }
+    ]
+}

@@ -350,7 +350,14 @@ export class DriveApiError extends Error {
  */
 export type UploadNodeInput =
     | ({ existing: false; id: string; idSeed: string; parentId: string } & NodeEnvelopes)
-    | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
+    | {
+          existing: true;
+          id: string;
+          keyEpoch: number;
+          expectedVersionId: string | null;
+          /* An editor's save: the folder it checked the file in. The server refuses the version once the file moved. */
+          expectedParentId?: string | null;
+      };
 
 /* Either way a fresh envelope, signed over the version where it lands (the sibling's id, if so). */
 export type UploadAttachInput =

@@ -427,6 +427,25 @@ func whileRunning<T: Sendable>(_ control: RunControl, _ work: @escaping @Sendabl
     return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
 }
 
+/*
+ * The first session refusal (a 401) met under a reader's own fetches: the core turns any failure of
+ * its source into its own error, so the refusal is kept here for the caller to report for the
+ * session that made the request (DriveStore.report), never lost as a read failure.
+ */
+public final class SessionRefusals: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: Error?
+
+    public init() {}
+
+    public var refused: Error? { lock.withLock { first } }
+
+    func note(_ error: Error) {
+        guard endsSession(error) else { return }
+        lock.withLock { if first == nil { first = error } }
+    }
+}
+
 public enum ToolReaders {
     /*
      * A reader over `opened` for a run under `control`: each chunk's range fetched through `api`,
@@ -434,7 +453,8 @@ public enum ToolReaders {
      * run ends (a wait between tries, an offline wait, or a request in flight).
      */
     public static func reader(
-        api: DriveAPI, opened: OpenedVersion, workspaceId: String, control: RunControl, drains: PaddingDrains = .shared
+        api: DriveAPI, opened: OpenedVersion, workspaceId: String, control: RunControl, drains: PaddingDrains = .shared,
+        refusals: SessionRefusals? = nil
     ) async throws -> VersionReader {
         // The account's drains as the reader is made (before any request): what it owes after a
         // sign-out is not drained.
@@ -462,8 +482,14 @@ public enum ToolReaders {
         let source = StoreSource(control: control, drainLater: { ranges in
             drains.enqueue(ranges, born: born, metered: NetworkWatch.shared.metered, fetch: drainOnce)
         }) { range in
-            try await Resumable.run(onExpired: { try await address.refresh() }) {
-                try await api.range(await address.current, range)
+            do {
+                return try await Resumable.run(onExpired: { try await address.refresh() }) {
+                    try await api.range(await address.current, range)
+                }
+            } catch {
+                // A 401 renewing the address: kept, since the core says only that its read failed.
+                refusals?.note(error)
+                throw error
             }
         }
         return try VersionReader(source: source, content: opened.content, control: control)
@@ -472,7 +498,9 @@ public enum ToolReaders {
 
 extension Vault {
     /* A seekable, decrypting reader over a file's version for a tool run under `control` (ToolReaders.reader). */
-    public func toolReader(_ item: Opened, version: VersionListView? = nil, control: RunControl) async throws -> VersionReader {
-        try await ToolReaders.reader(api: api, opened: try openVersion(item, version: version), workspaceId: item.node.workspaceId, control: control)
+    public func toolReader(_ item: Opened, version: VersionListView? = nil, control: RunControl,
+                           refusals: SessionRefusals? = nil) async throws -> VersionReader {
+        try await ToolReaders.reader(api: api, opened: try openVersion(item, version: version), workspaceId: item.node.workspaceId, control: control,
+                                     refusals: refusals)
     }
 }

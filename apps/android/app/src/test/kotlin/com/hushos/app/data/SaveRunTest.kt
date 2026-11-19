@@ -17,6 +17,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -2170,6 +2171,153 @@ class SaveResultTest {
         assertEquals(theirs, raced.currentVersionId)
         assertTrue(theirs != startedFrom)
         assertTrue(server.requests.any { it.contains("/abort") })
+    }
+
+    /*
+     * An editor's or a tool's new version is held to the folder its save checked: a file moved elsewhere while the bytes went
+     * up publishes nothing there (stale, naming no version), its room released; moved before begin, nothing is begun.
+     * Fails if the version lands on a file that is no longer in the folder the save looked in.
+     */
+    @Test
+    fun aNewVersionOfAFileMovedAwayMeanwhilePublishesNothing() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path -> if (method == "POST" && path.endsWith("/complete")) server.moveAs(id, elsewhere) }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+        assertEquals(server.root, server.begins.last().getJSONObject("node").getString("expectedParentId"))
+        assertTrue(server.requests.any { it.contains("/abort") })
+        // Already elsewhere when the save begins: refused at begin (asked, never taken), nothing published.
+        val begun = server.begins.size
+        val asked = server.requests.count { it.endsWith("drive/uploads") }
+        val early = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, server.root, doc, startedFrom, copy = null)
+        }
+        assertNull(early.currentVersionId)
+        assertEquals(asked + 1, server.requests.count { it.endsWith("drive/uploads") })
+        assertEquals(begun, server.begins.size)
+        assertEquals(startedFrom, server.node(id).version?.id)
+    }
+
+    /*
+     * A save whose file's folder went to the trash while its bytes went up: nothing lands in the trash, and the save is the
+     * moved-or-deleted case (stale, naming no version), never a failure. Fails if it publishes, or if the trashed folder's
+     * refusal to list is taken for an error.
+     */
+    @Test
+    fun aNewVersionWhoseFolderWasTrashedMeanwhileIsStaleAndPublishesNothing() {
+        val folder = server.folder(server.root, "Notes")
+        val id = server.file(folder, "doc.txt", "first".toByteArray())
+        vault.listChildren(server.root)
+        val doc = vault.listChildren(folder).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path -> if (method == "POST" && path.endsWith("/complete")) server.trash(folder) }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, folder, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+        assertTrue(server.requests.any { it.contains("/abort") })
+    }
+
+    /*
+     * A save whose file moved away while its folder was then deleted outright: the folder's listing answers 404, which is
+     * the file gone from where it was saved (stale, naming no version), never a failure. Fails if the 404 escapes as an
+     * error instead of the moved-or-deleted choices.
+     */
+    @Test
+    fun aNewVersionWhoseFolderWasDeletedMeanwhileIsStale() {
+        val folder = server.folder(server.root, "Notes")
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val id = server.file(folder, "doc.txt", "first".toByteArray())
+        vault.listChildren(server.root)
+        val doc = vault.listChildren(folder).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path ->
+            if (method == "POST" && path.endsWith("/complete")) {
+                server.moveAs(id, elsewhere)
+                server.purgeAs(folder)
+            }
+        }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, folder, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+    }
+
+    /*
+     * Save as a copy takes its name and type from the row the editor writes to (a save adopted since, perhaps renamed by
+     * someone whose name record doesn't check) and its text from the version read: the copy is signed as the weakest of
+     * both, each checked now. Fails if the renamed row's Unverified name is signed as the verified original's.
+     */
+    @Test
+    fun aCopyNamedFromARenamedRowIsNeverSignedAsTheVerifiedSource() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val alone = SaveRuns.signing(writer.copySources(doc))!!
+        assertEquals(Integrity.VERIFIED, alone.metadata)
+        // The same file, renamed under a signature this phone can't check.
+        val renamed = Opened(doc.node.copy(metadataSigner = Signer(java.util.UUID.randomUUID().toString()), metadataSignature = "AAAA"),
+            doc.metadata.copy(name = "renamed.txt"))
+        val both = SaveRuns.signing(writer.copySources(doc, named = renamed))!!
+        assertTrue("the renamed row's name was signed as verified", both.metadata != Integrity.VERIFIED)
+        assertEquals(alone.version, both.version)
+    }
+
+    /*
+     * The editor's folder is the one it opened the file in, never one a later row names: a landed row that shows the file
+     * moved elsewhere sets nothing, and looking the file up for the next save lists the editor's folder, where it is gone
+     * (the moved-file case). Fails if a moved row's folder becomes where the next save writes.
+     */
+    @Test
+    fun anEditorLooksForItsFileInTheFolderItOpenedNeverWhereALaterRowSays() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val destination = TextEditing.Destination.of(doc)!!
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        assertEquals(id, writer.editTarget(doc, destination).second?.id)
+        server.moveAs(id, elsewhere)
+        // The row as this device hears of it now (a completion answered again, a feed): in the other folder.
+        val landed = vault.listChildren(elsewhere).single { it.id == id }
+        assertFalse(destination.holds(landed))
+        val (folder, found) = writer.editTarget(landed, destination)
+        assertEquals(server.root, folder.id)
+        assertNull(found)
+    }
+
+    /*
+     * An editor's save and an ordinary replacement begin alike: both name the folder the file is in, with the same fields,
+     * so nothing in the request tells the server a file was edited in the app. Fails if either leaves the folder out or
+     * the two differ in shape.
+     */
+    @Test
+    fun anEditorsSaveAndAnOrdinaryReplacementBeginAlike() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        var doc = vault.listChildren(server.root).single { it.id == id }
+        vault.uploadResult("edited".toByteArray(), doc.name, null, server.root, doc, doc.node.currentVersion!!.id, copy = null)
+        val edited = server.begins.last().getJSONObject("node")
+        doc = vault.listChildren(server.root).single { it.id == id }
+        val replacement = java.io.File.createTempFile("replace", ".txt").apply { writeText("replaced") }
+        try {
+            vault.upload(replacement, doc.name, null, server.root, doc)
+        } finally {
+            replacement.delete()
+        }
+        val ordinary = server.begins.last().getJSONObject("node")
+        assertEquals(server.root, edited.getString("expectedParentId"))
+        assertEquals(server.root, ordinary.getString("expectedParentId"))
+        assertEquals(edited.keys().asSequence().toSortedSet(), ordinary.keys().asSequence().toSortedSet())
     }
 
     /*

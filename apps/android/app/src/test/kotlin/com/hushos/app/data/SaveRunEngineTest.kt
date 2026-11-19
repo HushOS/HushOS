@@ -27,7 +27,7 @@ import java.util.concurrent.Executors
  * no network, a lost answer, a refusal, an outage, a cancel, a crash just after the server acted, or the process dying.
  * After each: everything the run published is named by a surviving row or said to remain, nothing a finished save made
  * is offered for deletion, a finished save's results are all there under names no other child of their folder has, and
- * `stale` means a real race.
+ * `stale` means a real race (or, naming no version, a file gone from this person's view: a share that ended).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
@@ -335,7 +335,11 @@ class SaveRunEngineTest {
         } else if (outcome is Outcome.Finished && offered.isEmpty()) {
             for (id in outcome.made.nodes) if (id !in published) found += "a saved result $id isn't there"
             if (versions(s) < outcome.made.saved) found += "a saved version isn't there"
-            for (current in outcome.made.stale) if (s.server.node(s.doc.id).version?.id == s.docVersion) found += "said stale (naming $current), but nobody else saved"
+            // A share that ended is the file gone for this person (its folder answers 404): stale naming no version, as a
+            // deleted folder is, is the truth there too.
+            for (current in outcome.made.stale)
+                if (s.server.node(s.doc.id).version?.id == s.docVersion && !(current == null && s.world.revoked))
+                    found += "said stale (naming $current), but nobody else saved"
             // No two children of a folder share a name: a result takes the next free one.
             val names = s.server.children(s.f.id).filter { it.trashedAt == null }.map { s.server.record(it.id).name.lowercase() }
             if (names.size != names.toSet().size) found += "two children of the folder share a name: ${names.sorted()}"

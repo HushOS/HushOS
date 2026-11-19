@@ -95,7 +95,8 @@ struct HomeView: View {
             // A tap on "“Lisbon” is on this phone".
             .navigationDestination(isPresented: $showingPhone) { OnThisPhoneView() }
             .onChange(of: TransferNotices.shared.opening, initial: true) { _, target in
-                guard target == .phone else { return }
+                // Never under an open editor: the shell holds it until the editor answers (MainView, DriveStore.whenEditorAllows).
+                guard target == .phone, !store.editorOpen else { return }
                 TransferNotices.shared.opening = nil
                 showingPhone = true
             }

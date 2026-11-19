@@ -23,6 +23,12 @@ struct FileViewer: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var action: NodeAction?
+    /* The text editor over the file on screen (TextEditorScreen). */
+    @State private var editing: Opened?
+    /* Moved on when something asks the viewer to go (a link): the editor asks about its changes, then closes. */
+    @State private var leaveAsked = 0
+    /* The file on screen (id and version) read as text although its name says nothing: offered Edit too. */
+    @State private var readAsText: String?
     /* The file on screen, once a loaded listing of its folder showed it: only then can that listing say it's gone. */
     @State private var seenListed: String?
 
@@ -57,6 +63,16 @@ struct FileViewer: View {
         ToolbarItem(placement: .principal) { title }
         if version == nil {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                // Text and code, for whoever may change the file: an owner, an editor of the share, a
+                // family folder this phone may write. Never an earlier version.
+                if editable {
+                    Button {
+                        // From here a link waits for the editor (DriveStore.route) instead of replacing the screens under it.
+                        store.editorOpen = true
+                        editing = current
+                    } label: { HeaderIcon(symbol: "pencil") }
+                        .accessibilityLabel(EditorWords.edit)
+                }
                 if store.role(of: current) == .owner {
                     Button { action = .share(current) } label: { HeaderIcon(symbol: "person.badge.plus") }
                         .accessibilityLabel("Share")
@@ -133,8 +149,23 @@ struct FileViewer: View {
         // the space it leaves showed the cover's own white until the page grew back (the band under the password card).
         .background(Alpine.ground.ignoresSafeArea())
         .nodeActionSheets(action: $action, store: store, beside: false)
-        // Somewhere else was asked for (a link, Info's Folder row): get out of its way.
-        .onChange(of: store.route) { _, link in if link != nil { dismiss() } }
+        .fullScreenCover(item: $editing) { file in
+            TextEditorScreen(item: file, leaveAsked: leaveAsked, onStay: { store.dropRoute() }, onSaved: { landed in
+                // Saved over the file on screen: the viewer shows that version, read again.
+                guard landed.id == current.id, landed.ref == current.ref else { return }
+                current = landed
+                attempt += 1
+            }).environment(store)
+        }
+        // Somewhere else was asked for (a link, a notification, Info's Folder row): get out of its way.
+        .onChange(of: store.route) { _, link in
+            if link != nil, editing == nil { dismiss() }
+        }
+        // While the editor is open a link is held at the store (DriveStore.route) and the editor asked first (with
+        // changes, Discard or Keep editing); the viewer goes once it has closed, the link released then.
+        .onChange(of: store.editorLeaveAsked) { _, _ in
+            if editing != nil { leaveAsked += 1 }
+        }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
         // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
         .task(id: "\(current.id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") {
@@ -143,6 +174,14 @@ struct FileViewer: View {
             // Paged past before it came down: the next page's task is the one that counts. A newer version the vault learned
             // comes down instead, and the viewer shows that row.
             do { url = try await store.fetch(current, version: version, adopted: { current = $0 }) } catch where !ErrorWords.isCancellation(error) { failed = true } catch {}
+            // A file of no kind it knows whose bytes read as text (an extensionless README): offered Edit, as the web's
+            // viewer does after its sniff. The editor reads and checks it again for itself.
+            if let url, version == nil, !TextEditing.opens(current), ItemKind.of(current) == nil, (current.size ?? 0) <= TextEditing.limit {
+                let key = sniffKey(current)
+                // Read no further than the editor would take, whatever size the row says (or doesn't).
+                let text = await Task.detached { TextEditing.readsAsText(fileAt: url) }.value
+                if text, sniffKey(current) == key { readAsText = key }
+            }
         }
         // A family's file that failed while its family wasn't open yet (a new session's vault, before the family is checked
         // again): asked again once the family has been shown anew. The fetch lists the file's folder itself when the vault
@@ -153,9 +192,29 @@ struct FileViewer: View {
         .onChange(of: listedHere, initial: true) { _, id in
             if let id { seenListed = id }
         }
-        .onChange(of: removed) { _, gone in
-            if gone { dismiss() }
+        // Moved or deleted elsewhere: an editor with the person's text stays over it (Save as a copy keeps it).
+        .onChange(of: movedAway) { _, gone in
+            if gone, editing == nil { dismiss() }
         }
+        // A family's removal takes everything with it, an open editor and its text included, whatever moved before.
+        .onChange(of: familyGone) { _, gone in
+            guard gone else { return }
+            editing = nil
+            dismiss()
+        }
+        // What the editor held goes on when its own screen has gone (TextEditorScreen's onDisappear), never when
+        // this viewer is covered by it: a link released then reaches .onChange(of: store.route) above.
+        .onChange(of: editing == nil) { _, closed in
+            if closed, removed || store.route != nil { dismiss() }
+        }
+    }
+
+    private func sniffKey(_ item: Opened) -> String { "\(item.id)-\(item.node.currentVersion?.id ?? "")" }
+
+    /* Whether the file on screen offers Edit: text by its name and type, small enough, and this person may change it. */
+    private var editable: Bool {
+        version == nil && (TextEditing.opens(current) || readAsText == sniffKey(current)) && (current.size ?? 0) <= TextEditing.limit
+            && store.mayEdit(current)
     }
 
     /* How many times the file's family was shown (FamilySync's checks): nil for a file in no family. */
@@ -177,9 +236,17 @@ struct FileViewer: View {
      * listing older than the file, paged to) says nothing, nor does a folder whose listing was merely
      * let go of (a rotation's failure clears them), nor a family whose state isn't known yet.
      */
-    private var removed: Bool {
+    private var removed: Bool { movedAway || familyGone }
+
+    /* Moved or deleted by someone (its folder's listing no longer shows it): the editor, if open, keeps its text. */
+    private var movedAway: Bool {
         guard version == nil else { return false }
-        if seenListed == current.id, store.folders[current.node.parentId ?? ""] != nil, listedHere == nil { return true }
+        return seenListed == current.id && store.folders[current.node.parentId ?? ""] != nil && listedHere == nil
+    }
+
+    /* Its family removed, forked or refused: nothing of it stays on screen, an editor's text included. */
+    private var familyGone: Bool {
+        guard version == nil else { return false }
         guard store.isFamily(current), let groupId = store.familyAreaGroups[current.node.workspaceId.lowercased()],
               let state = store.familyStates[groupId] else { return false }
         switch state {

@@ -372,13 +372,19 @@ class SaveRefused(val reason: Reason, message: String, val needed: ULong? = null
  * Why a run stopped after it started, what its clean-up did, how many new versions had landed and were kept, and how many
  * may have (no answer to their abort, or still finishing: they may land yet).
  */
-class SaveRunStopped(val reason: Reason, message: String, val cleanup: SaveCleanup, val keptVersions: Int = 0, val uncertainVersions: Int = 0) :
+/* `sessionRefused`: stopped by a 401 (the session it ran under is over), for the app's session check rather than a line. */
+class SaveRunStopped(val reason: Reason, message: String, val cleanup: SaveCleanup, val keptVersions: Int = 0, val uncertainVersions: Int = 0,
+                     val sessionRefused: Boolean = false) :
     Exception(message) {
     enum class Reason { CANCELLED, NO_ROOM, FAILED, SIGNED_OUT }
 }
 
 sealed class VersionSaved {
-    data class Saved(val item: Opened) : VersionSaved()
+    /*
+     * `versionId`: the version this save published, as minted at begin; null when that isn't known. Never the reply row's
+     * current version, which a completion answered from a listing may show newer.
+     */
+    data class Saved(val item: Opened, val versionId: String? = null) : VersionSaved()
     data class Stale(val currentVersionId: String?) : VersionSaved()
 }
 
@@ -1031,8 +1037,8 @@ class SaveRun private constructor(
         synchronized(lock) { stopping }?.let { return it.get().also { keepInterrupt(error) } }
         // Interrupted on its way (a pause, a wait cut short): it stops and cleans up as any failure does, then the interrupt
         // is kept for the thread's owner.
-        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else SaveRuns.reason(error))
-            .also { keepInterrupt(error) }
+        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else SaveRuns.reason(error),
+            refused = error is NotAuthenticated).also { keepInterrupt(error) }
     }
 
     /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
@@ -1055,7 +1061,19 @@ class SaveRun private constructor(
     }
 
     /* A completion is about to be sent; once the run stopped it is not sent (the vault aborts the upload). */
+    /*
+     * Whether whoever started the run is still there to take its results (the text editor's session): asked right before
+     * each completion is sent, so nothing lands once it has gone. A coroutine's cancel can't stop a blocking upload; this
+     * stops its completion, and the run's stop aborts it.
+     */
+    @Volatile private var holds: () -> Boolean = { true }
+
+    fun holdTo(stillOn: () -> Boolean) {
+        holds = stillOn
+    }
+
     private fun completingNow(uploadId: String) = synchronized(lock) {
+        if (!holds()) throw IllegalStateException("This was closed before the save finished.")
         if (sealed) throw IllegalStateException("This save run is stopping.")
         completing += uploadId
         nodeOfUpload[uploadId]?.let { published += it }
@@ -1179,7 +1197,8 @@ class SaveRun private constructor(
     }
 
     /* A new file under the next free name in its folder; never replaces anything. */
-    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null): Opened = onItsWay {
+    fun file(bytes: ByteArray, name: String, mime: String?, sources: SaveSources, thumbnail: ByteArray? = null, folder: Opened? = null,
+             minted: java.util.concurrent.atomic.AtomicReference<String?>? = null): Opened = onItsWay {
         val into = folder ?: first
         inRun(into)
         open()
@@ -1188,7 +1207,7 @@ class SaveRun private constructor(
         val given = try { claim(name, into) } catch (error: Exception) { throw failed(error) }
         open()
         val tracked = synchronized(lock) { into.id !in madeFolders }
-        upload(bytes, given, mime, into, null, null, copy, thumb, tracked)
+        upload(bytes, given, mime, into, null, null, copy, thumb, tracked, minted)
     }
 
     /* A new version of `file` (in `folder`), unless someone else saved since the work started from `startedFrom`. */
@@ -1199,7 +1218,9 @@ class SaveRun private constructor(
         val copy = SaveRuns.signing(sources)
         val thumb = takeThumbnail(thumbnail)
         try {
-            VersionSaved.Saved(upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false))
+            val minted = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val landed = upload(bytes, file.name, mime ?: file.metadata.mime, folder, file, startedFrom, copy, thumb, tracked = false, minted = minted)
+            VersionSaved.Saved(landed, minted.get())
         } catch (stale: SaveStale) {
             // Nothing was published: its thumbnail's room is the next try's (Save on top, Save as a copy).
             if (thumb != null) synchronized(lock) { thumbnails++ }
@@ -1208,7 +1229,7 @@ class SaveRun private constructor(
     }
 
     private fun upload(bytes: ByteArray, name: String, mime: String?, folder: Opened, given: Opened?, startedFrom: String?, copy: Prior?,
-                       thumbnail: ByteArray?, tracked: Boolean): Opened {
+                       thumbnail: ByteArray?, tracked: Boolean, minted: java.util.concurrent.atomic.AtomicReference<String?>? = null): Opened {
         // On its way as its file() or version() call (onItsWay).
         var replacing = given
         var folderNow = folder
@@ -1240,6 +1261,7 @@ class SaveRun private constructor(
                 }
                 // Landed, but the row naming it wasn't written: the run stops and removes it with the rest.
                 if (!recorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
+                minted?.set(started?.versionId)
                 return landed
             } catch (stale: SaveStale) {
                 runCatching { settled(started, null, false) }
@@ -1281,18 +1303,20 @@ class SaveRun private constructor(
                 started?.let { runCatching { noteBegun(it, tracked, version) } }
                 if (error is SaveUnrecorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
                 val noRoom = SaveRuns.isNoRoom(error)
-                throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else SaveRuns.reason(error))
+                throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else SaveRuns.reason(error),
+                    refused = error is NotAuthenticated)
             }
         }
     }
 
     /* Stops the run once: the first caller cleans up (outside the lock), every other one waits for its outcome. */
-    private fun stop(reason: SaveRunStopped.Reason, failure: String? = null): SaveRunStopped {
+    private fun stop(reason: SaveRunStopped.Reason, failure: String? = null, refused: Boolean = false): SaveRunStopped {
         val (future, owner) = synchronized(lock) {
             stopping?.let { return@synchronized it to false }
             // Finished in the meantime (a cancel that checked just before finish took the lock): it was saved, and stays.
             if (finished) return SaveRunStopped(reason,
-                if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions)
+                if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions,
+                sessionRefused = refused)
             val made = CompletableFuture<SaveRunStopped>()
             stopping = made
             sealed = true
@@ -1320,7 +1344,7 @@ class SaveRun private constructor(
             val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe, stillOn)
             val total = keptBefore + cleaned.kept
             done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held),
-                cleaned.cleanup, total, cleaned.uncertain)
+                cleaned.cleanup, total, cleaned.uncertain, sessionRefused = refused)
             return done
         } catch (interrupted: InterruptedException) {
             // Interrupted while it waited (apps/android/AGENTS.md, threads): the interrupt is kept for the caller, and the
@@ -1512,6 +1536,41 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
         } while (after != null)
         return null
     }
+
+    /*
+     * The text editor's target (TextEditing.kt): the file's folder and the file as the server lists them now, in the file's
+     * own workspace (never the own drive's row of the same id); the file null when it is no longer in its folder.
+     */
+    /* `file` (by id) as listed in `destination` (its own folder when none is given) and that folder, both as opened. */
+    fun editTarget(file: Opened, destination: TextEditing.Destination? = TextEditing.Destination.of(file)): Pair<Opened, Opened?> {
+        val at = destination ?: throw NotFound("This file isn’t in a folder.")
+        var after: String? = null
+        var folder: Opened? = null
+        var found: Opened? = null
+        do {
+            val page = vault.api.children(at.parentId, at.workspaceId, after)
+            // Held to the editor's folder and workspace (TextEditing.target): a listing answering for another is refused.
+            val (folderRow, row) = TextEditing.target(page.folder, page.children, file, at)
+            if (folder == null) {
+                // The chain above first, so the folder opens under its parent's key as served now.
+                for (above in page.ancestors) runCatching { openServed(above) }
+                folder = TextEditing.held(openServed(folderRow), null, file, at).first
+            }
+            // Checked again as opened: opening may hand back a newer row this process holds (moved since), never the listing's.
+            row?.let { found = TextEditing.held(folder!!, openServed(it), file, at).second }
+            after = if (found == null) page.nextCursor else null
+        } while (after != null)
+        return folder!! to found
+    }
+
+    /* What a copy of `file` is signed with: its records' verdicts as a copy takes them, so an Unverified file's copy stays so. */
+    /*
+     * What a copy of `file` (the row the text was read from) is signed with, its records checked now against the trust and
+     * members as they are at the copy; with `named`'s records too when the copy takes its name and type from that row (a
+     * save adopted since, perhaps renamed): the copy is signed as the weakest of them (signing).
+     */
+    fun copySources(file: Opened, named: Opened? = null): SaveSources =
+        SaveSources.From(listOfNotNull(file, named?.takeIf { it.node != file.node }).map { SaveSource.of(vault.copyPrior(it)) })
 
     override fun refreshFolder(folder: Opened): Opened {
         resync(folder.node.workspaceId)

@@ -154,13 +154,29 @@ public struct FamilyVerdictBook: Sendable {
     private var rows: [NodeRef: Entry] = [:]
     private var generations: [String: UInt64] = [:]
     private var epoch: UInt64 = 0
+    /*
+     * The exact row the text editor holds and its own verdict: kept apart from the listing's row, so another device's newer
+     * version judged meanwhile never takes the mark off the text on screen. Dropped with its family's trust like any
+     * other, and judged again then.
+     */
+    private var held: (ref: NodeRef, node: NodeView)?
+    private var heldEntry: Entry?
 
     public init() {}
 
     /* The verdict for this row as it is now; nil when not judged, or judged for another version of it. */
     public func verdict(of ref: NodeRef, node: NodeView) -> FamilyVerdict? {
-        guard let entry = rows[ref], entry.node == node else { return nil }
-        return entry.verdict
+        if let entry = rows[ref], entry.node == node { return entry.verdict }
+        if let held, held.ref == ref, held.node == node { return heldEntry?.verdict }
+        return nil
+    }
+
+    /* The row the editor shows (nil: none): its verdict is kept for it whatever the listing judges since. */
+    public mutating func hold(_ ref: NodeRef?, node: NodeView?) {
+        guard let ref, let node else { held = nil; heldEntry = nil; return }
+        if let held, held.ref == ref, held.node == node { return }
+        held = (ref, node)
+        heldEntry = nil
     }
 
     /* Whether a row holds any verdict (judged once per version of a row). */
@@ -175,9 +191,11 @@ public struct FamilyVerdictBook: Sendable {
             let id = groupId.lowercased()
             generations[id, default: 0] += 1
             rows = rows.filter { $0.value.groupId != id }
+            if heldEntry?.groupId == id { heldEntry = nil }
         } else {
             epoch += 1
             rows = [:]
+            heldEntry = nil
         }
     }
 
@@ -190,8 +208,11 @@ public struct FamilyVerdictBook: Sendable {
     public mutating func publish(_ groupId: String, trust: Trust, _ judged: [(ref: NodeRef, node: NodeView, verdict: FamilyVerdict)]) -> Bool {
         guard trust == capture(groupId) else { return false }
         for row in judged {
-            if let held = rows[row.ref]?.node, row.node.isOlder(than: held) { continue }
-            rows[row.ref] = Entry(node: row.node, verdict: row.verdict, groupId: groupId.lowercased())
+            let entry = Entry(node: row.node, verdict: row.verdict, groupId: groupId.lowercased())
+            // The editor's own row keeps its verdict, older than the listing's or not.
+            if let held, held.ref == row.ref, held.node == row.node { heldEntry = entry }
+            if let newest = rows[row.ref]?.node, row.node.isOlder(than: newest) { continue }
+            rows[row.ref] = entry
         }
         return true
     }
@@ -210,6 +231,8 @@ public struct FamilyVerdictBook: Sendable {
     public mutating func reset() {
         epoch += 1
         rows = [:]
+        held = nil
+        heldEntry = nil
     }
 }
 

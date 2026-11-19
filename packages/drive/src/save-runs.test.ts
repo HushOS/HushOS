@@ -37,6 +37,7 @@ import {
     CREATION_SETTLE_MS,
     abortFateOf,
     askAbort,
+    endRun,
     cleanUpInterrupted,
     deniedWhole,
     heldNow,
@@ -575,6 +576,13 @@ function world(
             nodeId,
         });
     }
+    /* Published with the node and version id the queue reports (a lost answer: no node). */
+    function landAs(id: string, item: Pick<UploadItem, 'node' | 'versionId'>) {
+        const held = queued.get(id)!;
+        held.item.status = 'done';
+        Object.assign(held.item, item);
+        emit({ type: 'done', item: held.item });
+    }
     function land(id: string, nodeId: string, uploadId?: string) {
         const held = queued.get(id)!;
         if (uploadId) {
@@ -610,6 +618,7 @@ function world(
         server,
         madeFolders,
         begin,
+        landAs,
         land,
         failWith,
         lock,
@@ -836,6 +845,26 @@ describe('a save run', () => {
         expect(parts[0]!.buffer).not.toBe(parts[1]!.buffer);
         expect(parts[0]!.buffer).not.toBe(whole.buffer);
         await run.cancel();
+    });
+
+    test('a saved version names the version it published, never what its file shows by then', async () => {
+        const w = world();
+        const doc = { ...folder('doc'), kind: 'file', parentId: 'f' } as DriveNode;
+        const run = await startRun(w.deps, { targets: [doc], results: [] });
+        const saved = run.version({
+            file: doc,
+            folder: folder('f'),
+            startedFrom: 'v1',
+            bytes: bytes(),
+            ...own,
+        });
+        await tick();
+        const [id] = w.ids();
+        w.begin(id!, 'up-v', 'doc');
+        // The completion's answer was lost: published, with no node to read a version from.
+        w.landAs(id!, { node: null, versionId: 'v-mine' });
+        expect(await saved).toEqual({ status: 'saved', node: null, versionId: 'v-mine' });
+        await run.finish();
     });
 
     test('a stale version gives back its thumbnail’s room: Save on top or Save as a copy may carry the same thumbnail', async () => {
@@ -2856,6 +2885,92 @@ describe('a save run', () => {
         // As it was (with this Delete's claim, which a sign-out leaves for the cleared journal), never `done`.
         expect(v.runs.rows.get('left')).toMatchObject(left);
         expect(v.runs.rows.get('left')!.done).toBeUndefined();
+    });
+
+    test('a finished run whose record won’t retire is let go of: its lock is free again, what it saved stays', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        await expect(run.finish()).rejects.toBeInstanceOf(RecordNotUpdated);
+        expect(w.locks.held.has(run.id)).toBe(true);
+        // A cancel of a finished run never let it go.
+        await run.cancel();
+        expect(w.locks.held.has(run.id)).toBe(true);
+        run.release();
+        expect(w.locks.held.has(run.id)).toBe(false);
+        // Another tab can take the lock now, and the file it saved is still there.
+        expect(await w.deps.exclusive(run.id, async () => 'taken')).toBe('taken');
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(w.server.trash.has('node-a')).toBe(false);
+        expect(w.runs.rows.has(run.id)).toBe(true);
+    });
+
+    test('ending an editor’s run frees its lock even when its record won’t retire, and keeps what it saved', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const saved = run.file({ name: 'a', bytes: bytes(), mime: null, ...own });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.land(w.ids()[0]!, 'node-a', 'up-a');
+        await saved;
+        w.runs.put = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        w.runs.remove = () => Promise.reject(new DOMException('full', 'QuotaExceededError'));
+        expect(await endRun(run, { pause: async () => {} })).toBe(false);
+        expect(w.locks.held.has(run.id)).toBe(false);
+        expect(await w.deps.exclusive(run.id, async () => 'taken')).toBe('taken');
+        expect(w.server.live.has('node-a')).toBe(true);
+        expect(w.server.trash.has('node-a')).toBe(false);
+    });
+
+    test('ending an editor’s run retires it when its record can be updated on a later try', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        const put = w.runs.put.bind(w.runs);
+        const remove = w.runs.remove.bind(w.runs);
+        w.runs.put = () => Promise.reject(new DOMException('busy', 'AbortError'));
+        w.runs.remove = () => Promise.reject(new DOMException('busy', 'AbortError'));
+        // The journal answers again by the second try.
+        const pause = async () => {
+            w.runs.put = put;
+            w.runs.remove = remove;
+        };
+        expect(await endRun(run, { pause })).toBe(true);
+        expect(w.runs.rows.size).toBe(0);
+        expect(w.locks.held.has(run.id)).toBe(false);
+    });
+
+    test('a new file says which version it published, as minted', async () => {
+        const w = world();
+        const run = await startRun(w.deps, { targets: [folder('f')], results: [] });
+        let heard: string | null | undefined;
+        const saved = run.file({
+            name: 'a',
+            bytes: bytes(),
+            mime: null,
+            ...own,
+            onVersion: (versionId) => {
+                heard = versionId;
+            },
+        });
+        await tick();
+        w.begin(w.ids()[0]!, 'up-a', 'node-a');
+        w.landAs(w.ids()[0]!, {
+            node: {
+                id: 'node-a',
+                workspaceId: 'ws-own',
+                currentVersion: { id: 'v-newer' },
+            } as NodeView,
+            versionId: 'v-mine',
+        });
+        await saved;
+        expect(heard).toBe('v-mine');
+        await run.finish();
     });
 
     test('a finish whose record the journal won’t update says so, stays live, and can be asked again', async () => {

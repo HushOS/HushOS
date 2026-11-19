@@ -140,6 +140,13 @@ Each fails on a defect a person would notice (see AGENTS.md):
 - Images: saved output carries no GPS or camera EXIF and keeps the ICC profile; a 48 MP JPEG saves on iPhone-sized limits; redaction defaults to a new file; replace-and-purge leaves no earlier version.
 - Integrity: an edit of an Unverified file signs the new version as the editor's and leaves the name's mark.
 
+## As built: Editing 1a (2026-11-18)
+
+- **Where:** the web (CodeMirror 6, with every language and the YAML and TOML parsers fetched in the post-unlock preload, brought forward from 1b), iPhone (`UITextView`) and Android (`EditText`), no colouring on the phones. Edit is offered for text, Markdown, CSV and TSV (as text) and SVG (as text) to owners, editors of a share and family members while the folder is writable on the device; never to viewers or link visitors, never on an earlier version, and not on a file shared on its own (its folder isn't the editor's to list).
+- **What opens for editing:** UTF-8 without a byte order mark, LF line endings only, not binary, up to 8 MiB (`crates/hushos-core/src/text_edit.rs` and `apps/web/src/lib/text-edit.ts`, held to `fixtures/text-edit-cases.json`). Byte order marks, UTF-16, CRLF, other encodings and larger files open read-only with a note until Editing 1b. A missing final newline is kept as it is, and a line break typed or pasted is LF on every client.
+- **Saving:** each save is a new version through the save path's version mode (`startedFrom` the version the editor read), signed as the person's own writing; Save as a copy is signed as its source, so an Unverified file's copy stays Unverified. The stale check is the client-side one of file-tools-design.md question 10 until milestone 2's `versionOf`.
+- **Not yet:** drafts (1c), the Markdown preview beside the source, encodings and line endings (1b), the large-file card's "edit anyway" above 8 MiB.
+
 ## 8. Milestones
 
 1. **Text editor:** CodeMirror with languages, Markdown preview, encodings and line endings, drafts, explicit save as a new version, stale refusal. Preload added.

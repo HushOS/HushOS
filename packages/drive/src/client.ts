@@ -2378,6 +2378,12 @@ export function createDriveClient(rpc: Rpc, api: DriveApi, options: DriveClientO
         openNode,
         exportKeys,
         listFolder,
+        /*
+         * Who wrote these rows' records, checked now against the trust (or the family's members) as
+         * it is at this moment, never the verdict a row carried from when it was listed: what a copy
+         * written from them is signed as (the text editor's Save as a copy).
+         */
+        checkNow: (nodes: NodeView[]) => verify(nodes),
         createFolderPath,
         rename,
         recolour,

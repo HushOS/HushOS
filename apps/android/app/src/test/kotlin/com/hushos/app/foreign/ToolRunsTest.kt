@@ -343,10 +343,20 @@ class ToolRunsTest {
         @Volatile var trickleAddress: Int? = null
         /* Which store requests are refused as expired, by address number and the range's start. */
         @Volatile var refuse: (Int, Int) -> Boolean = { n, _ -> n == 1 }
+        /* When set, asking for this address (by number) or a later one is refused 401: the session ended. */
+        @Volatile var signedOutFrom: Int? = null
 
         init {
             server.createContext("/api/drive/versions/") { exchange ->
                 val n = addresses.incrementAndGet()
+                signedOutFrom?.let { from ->
+                    if (n >= from) {
+                        val refusal = """{"message":"Sign in"}""".toByteArray()
+                        exchange.sendResponseHeaders(401, refusal.size.toLong())
+                        exchange.responseBody.use { it.write(refusal) }
+                        return@createContext
+                    }
+                }
                 val body = """{"url":"$origin/store/o?n=$n","urlExpiresAt":null}""".toByteArray()
                 exchange.responseHeaders.add("Content-Type", "application/json")
                 if (n == trickleAddress) {
@@ -464,6 +474,24 @@ class ToolRunsTest {
             assertEquals(1, server.refused.get())
             assertEquals(2, server.addresses.get())
             assertEquals(2, server.ranges.size)
+        }
+    }
+
+    /*
+     * The session ends while a read renews its expired address: the core says only that its read failed, so the 401 is kept
+     * beside it for the caller's session check. Fails if the refusal is lost as a read failure.
+     */
+    @Test fun aSessionRefusedWhileRenewingTheAddressIsKeptForTheCaller() {
+        val size = chunk + 5000
+        val (content, stored, _) = sealed(size)
+        Server(stored).use { server ->
+            server.signedOutFrom = 2
+            val api = DriveApi(Shared.Session(server.origin, "token", "user"))
+            val control = RunControl(toolWatchdogMillis(), null)
+            val refused = java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.NotAuthenticated?>(null)
+            val reader = toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control, refused = refused)
+            assertTrue(runCatching { reader.readAt(0uL, 20uL) }.isFailure)
+            assertTrue("the 401 was lost under the core's read failure", refused.get() != null)
         }
     }
 

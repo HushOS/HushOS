@@ -88,6 +88,12 @@ export type UploadItem = {
     finishedAt: number | null;
     node: NodeView | null;
     /*
+     * Once done: the version this upload published, by the id it was minted with. A completion
+     * whose answer was lost (reconciled as published) has no `node`, and a listing read after it may
+     * already show someone else's newer version; this id is the upload's own.
+     */
+    versionId?: string | null;
+    /*
      * Came back from the journal and has no file yet; `attachFile` continues it.
      * On a failed upload: there is no file to retry with (a lost copy).
      */
@@ -1284,6 +1290,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                         id: u.replaces.id,
                         keyEpoch: u.replaces.keyEpoch,
                         expectedVersionId: expectedOf(u),
+                        // Held to the folder it was queued into: the server refuses it once the file
+                        // moved, at begin and at completion. Every replacement says so, an editor's
+                        // save and an ordinary one alike, so the server can't tell them apart.
+                        expectedParentId: parent.id,
                     };
                     u.keyEpoch = u.replaces.keyEpoch;
                 } else {
@@ -1576,7 +1586,13 @@ export function createTransferManager(options: TransferManagerOptions) {
         await journalForget(u);
         // A cancel bumps the generation: one that came while the rows were forgotten wins.
         if (u.generation !== generation) return;
-        set(u, { status: 'done', node: result.node, finishedAt: now(), loaded: u.item.total });
+        set(u, {
+            status: 'done',
+            node: result.node,
+            versionId: u.versionId || null,
+            finishedAt: now(),
+            loaded: u.item.total,
+        });
         options.onEvent?.({ type: 'done', item: u.item });
         if (result.node) options.onPublished?.(result.node, u.item.parentId);
         await rpc('driveUploadForget', { objectId: u.objectId }).catch(() => {});

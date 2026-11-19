@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-18';
+export const updated = '2026-11-19';
 
 export const sections: RoadmapSection[] = [
     {
@@ -288,7 +288,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Drive',
                 title: 'Editing in the browser',
-                body: 'Edit text files, Markdown and CSV tables, and edit images, removing location data or redacting part of a picture. Everything happens on your device, and each editing session saves one new encrypted version.',
+                body: 'Text and code files can now be edited on the web, iPhone and Android: everything happens on your device, and each Save keeps a new encrypted version. Next: Markdown and CSV tables, editing images (removing location data or redacting part of a picture), and one new version for each editing session rather than each Save.',
                 links: [{ kind: 'docs', path: 'docs/editing-design.md', label: 'Read the design' }],
             },
             {

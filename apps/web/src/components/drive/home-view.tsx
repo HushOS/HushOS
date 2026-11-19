@@ -752,6 +752,7 @@ export function HomeView() {
                 access={(node) => (
                     <AccessCell access={access.get(node.id)} inherited={inherited(node)} />
                 )}
+                editable={(node) => node.workspaceId === workspaceId}
             />
         </div>
     );

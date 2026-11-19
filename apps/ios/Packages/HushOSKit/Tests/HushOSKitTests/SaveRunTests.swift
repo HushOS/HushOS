@@ -1879,6 +1879,138 @@ extension OnFakeDrive {
             #expect(try chunkDecrypt(content: content, index: 0, ciphertext: part) == bytes)
         }
 
+        /*
+         * An editor's or a tool's new version is held to the folder its save checked: G moved out of B while its bytes went
+         * up publishes nothing (stale, naming no version), its upload aborted; moved before begin, refused at begin. Fails
+         * if the version lands on a file no longer in the folder the save looked in.
+         */
+        @Test func aNewVersionOfAFileMovedAwayMeanwhilePublishesNothing() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let current = g.node.currentVersion!.id
+            server.beforeComplete = { [unowned server] in self.moveG(server, to: server.root) }
+            await #expect(throws: SaveStale(currentVersionId: nil)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: current, signing: (.own, .own))
+            }
+            server.beforeComplete = nil
+            #expect((server.begins.last?["node"] as? [String: Any])?["expectedParentId"] as? String == b.id)
+            #expect(server.completed.isEmpty)
+            #expect(server.aborted.count == 1)
+            #expect(server.nodes[server.g]?.currentVersion?.id == current)
+
+            // Already elsewhere at begin: refused there, nothing begun.
+            let begun = server.begins.count
+            await #expect(throws: SaveStale(currentVersionId: nil)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: current, signing: (.own, .own))
+            }
+            #expect(server.begins.count == begun)
+            #expect(server.completed.isEmpty)
+            #expect(server.nodes[server.g]?.currentVersion?.id == current)
+        }
+
+        /*
+         * G's folder B trashed while its bytes went up: nothing lands in the trash, and the save is the moved-or-deleted
+         * case (stale, naming no version), never a failure. Fails if it publishes, or if the trashed folder's refusal to
+         * list is taken for an error.
+         */
+        @Test func aNewVersionWhoseFolderWasTrashedMeanwhileIsStaleAndPublishesNothing() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let current = g.node.currentVersion!.id
+            server.beforeComplete = { [unowned server] in server.trashed.insert(server.b) }
+            await #expect(throws: SaveStale(currentVersionId: nil)) {
+                _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: current, signing: (.own, .own))
+            }
+            server.beforeComplete = nil
+            #expect(server.completed.isEmpty)
+            #expect(server.aborted.count == 1)
+            #expect(server.nodes[server.g]?.currentVersion?.id == current)
+        }
+
+        /*
+         * The editor's folder is the one it opened the file in, never one a later row names: a row that shows G moved
+         * elsewhere sets nothing, and looking G up for the next save lists B, where it is gone (the moved-file case).
+         * Fails if a moved row's folder becomes where the next save writes.
+         */
+        @Test func anEditorLooksForItsFileInTheFolderItOpenedNeverWhereALaterRowSays() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let destination = try #require(EditDestination(of: g))
+            #expect(try await vault.editTarget(g, at: destination).file?.id == server.g)
+            moveG(server, to: server.root)
+            // The row as a completion answered again would carry it now: in the root.
+            let landed = Opened(node: try #require(server.nodes[server.g]), metadata: g.metadata, nodeKey: nil)
+            #expect(!destination.holds(landed))
+            let (folder, found) = try await vault.editTarget(landed, at: destination)
+            #expect(folder.id == server.b)
+            #expect(found == nil)
+        }
+
+        /*
+         * An editor's save and an ordinary replacement begin alike: both name the folder the file is in, with the same
+         * fields, so nothing in the request tells the server a file was edited in the app. Fails if either leaves the
+         * folder out or the two differ in shape.
+         */
+        @Test func anEditorsSaveAndAnOrdinaryReplacementBeginAlike() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            var g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: g.node.currentVersion!.id,
+                                             signing: (.own, .own))
+            let edited = try #require(server.begins.last?["node"] as? [String: Any])
+            g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try Data([2]).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+            _ = try await vault.upload(fileURL: file, name: g.name, mime: nil, in: b.id, replacing: g)
+            let ordinary = try #require(server.begins.last?["node"] as? [String: Any])
+            #expect(edited["expectedParentId"] as? String == server.b)
+            #expect(ordinary["expectedParentId"] as? String == server.b)
+            #expect(Set(edited.keys) == Set(ordinary.keys))
+        }
+
+        /*
+         * Save as a copy takes its name and type from the row the editor writes to (a save adopted since, perhaps renamed
+         * by someone whose name record doesn't check) and its text from the version read: the copy is signed as the
+         * weakest of both, each checked now. Fails if the renamed row's Unverified name is signed as the verified
+         * original's.
+         */
+        @Test func aCopyNamedFromARenamedRowIsNeverSignedAsTheVerifiedSource() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let alone = try SaveRuns.signing(try await vault.copySources(of: g))
+            #expect(alone.metadata == .copy(.verified))
+            // The same file, renamed under a signature this phone can't check.
+            var node = g.node
+            node.metadataSigner = Signer(id: UUID().uuidString.lowercased())
+            node.metadataSignature = "AAAA"
+            let renamed = Opened(node: node, metadata: NodeMetadata(name: "renamed.txt", mime: g.metadata.mime, size: nil, modified: nil,
+                                                                   attributes: [:]), nodeKey: nil)
+            let both = try SaveRuns.signing(try await vault.copySources(of: g, named: renamed))
+            #expect(both.metadata != .copy(.verified))
+            #expect(both.version == alone.version)
+        }
+
+        func moveG(_ server: FakeDrive, to parent: String) {
+            let old = server.nodes[server.g]!
+            var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: parent, kind: old.kind, keyEpoch: old.keyEpoch,
+                                   parentKeyEpoch: old.parentKeyEpoch, keyEnvelope: old.keyEnvelope, metadataVersion: old.metadataVersion,
+                                   metadataEnvelope: old.metadataEnvelope, currentVersion: old.currentVersion, trashedAt: nil,
+                                   changeSeq: (old.changeSeq ?? 0) + 1, createdAt: nil, updatedAt: nil)
+            updated.metadataSigner = old.metadataSigner
+            updated.metadataSignature = old.metadataSignature
+            server.nodes[server.g] = updated
+        }
+
         func newer(_ server: FakeDrive) -> VersionView {
             VersionView(id: UUID().uuidString.lowercased(), objectId: "o", contentKeyEnvelope: server.nodes[server.g]!.currentVersion!.contentKeyEnvelope,
                         status: "ready", contentSuite: 3, chunkCount: 1, contentNonce: "", plaintextSize: nil, ciphertextSize: nil, readyAt: nil)

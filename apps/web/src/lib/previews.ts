@@ -99,8 +99,13 @@ export function extensionOf(name: string) {
 /* What a file can be shown as, from its recorded type and, failing that, its name. */
 export function previewKind(node: DriveNode): PreviewKind {
     if (node.kind !== 'file' || !node.currentVersion) return 'none';
-    const mime = (node.metadata?.mime ?? '').toLowerCase();
-    const ext = extensionOf(node.name);
+    return previewKindOf(node.name, node.metadata?.mime);
+}
+
+/* What a file of this name and recorded type can be shown as (previewKind, for a file with a version). */
+export function previewKindOf(name: string, recorded: string | null | undefined): PreviewKind {
+    const mime = (recorded ?? '').toLowerCase();
+    const ext = extensionOf(name);
     if (mime.startsWith('image/') || IMAGE_EXT.has(ext)) return 'image';
     if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
     if ((mime.startsWith('video/') && !TRANSPORT_STREAM.has(mime)) || VIDEO_EXT.has(ext))
@@ -108,7 +113,7 @@ export function previewKind(node: DriveNode): PreviewKind {
     if (mime.startsWith('audio/') || AUDIO_EXT.has(ext)) return 'audio';
     if (mime === 'text/markdown' || ext === 'md' || ext === 'markdown' || ext === 'mdx')
         return 'markdown';
-    if (officeKind(node.name, mime)) return 'office';
+    if (officeKind(name, mime)) return 'office';
     if (mime === 'application/zip' || mime === 'application/x-zip-compressed' || ext === 'zip')
         return 'archive';
     if (
@@ -120,7 +125,7 @@ export function previewKind(node: DriveNode): PreviewKind {
         mime === 'application/toml' ||
         mime === 'application/yaml' ||
         TEXT_EXT.has(ext) ||
-        languageFor(node.name) !== null
+        languageFor(name) !== null
     )
         return 'text';
     return 'none';

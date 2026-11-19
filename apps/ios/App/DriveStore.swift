@@ -104,8 +104,61 @@ final class DriveStore {
     @ObservationIgnored private lazy var sharingLoads = SharingRefresh { [weak self] in await self?.loadSharing() }
     /* What the session-ended error says; the shell turns it into "You’ve been signed out". */
     static let sessionEnded = "Your session ended. Sign in again."
-    /* A link the shell handed over, for the tab it opened to act on and clear. */
-    var route: AppLink?
+    /*
+     * A link the shell handed over, for the tab it opened to act on and clear. While a text editor is open
+     * (`editorOpen`, set while the editor's own screen is up) a new one is held instead, never routed:
+     * routing replaces the stack that presents the editor, and its unsaved text with it. So is a tapped
+     * notification's move to another tab (`whenEditorAllows`). The editor is asked to leave
+     * (`editorLeaveAsked`); what was held goes on once, when the editor's screen has gone (`editorClosed`),
+     * and is dropped if the person keeps editing (`dropRoute`).
+     */
+    var route: AppLink? {
+        get { routing }
+        set {
+            if editorOpen, let newValue {
+                heldRoute = newValue
+                editorLeaveAsked += 1
+                return
+            }
+            routing = newValue
+        }
+    }
+    private var routing: AppLink?
+    @ObservationIgnored private var heldRoute: AppLink?
+    @ObservationIgnored private var heldIntent: (@MainActor () -> Void)?
+    @ObservationIgnored private var intentDropped: (@MainActor () -> Void)?
+    @ObservationIgnored var editorOpen = false
+    var editorLeaveAsked = 0
+
+    /* A move a notification asked for (another tab, a sheet): now, or once the editor has closed (never under it). */
+    /* `dropped`: what undoing it takes when the person keeps editing (a notice's target it left set for a screen). */
+    func whenEditorAllows(_ intent: @escaping @MainActor () -> Void, dropped: (@MainActor () -> Void)? = nil) {
+        guard editorOpen else { return intent() }
+        intentDropped?()
+        heldIntent = intent
+        intentDropped = dropped
+        editorLeaveAsked += 1
+    }
+
+    /* The editor's screen has gone (Discard, saved, nothing to lose, or its session ended): what was held goes on, once. */
+    func editorClosed() {
+        editorOpen = false
+        let (link, intent) = (heldRoute, heldIntent)
+        heldRoute = nil
+        heldIntent = nil
+        intentDropped = nil
+        if let link { routing = link }
+        intent?()
+    }
+
+    /* The person kept editing: what was held meanwhile is let go. */
+    func dropRoute() {
+        heldRoute = nil
+        heldIntent = nil
+        let undo = intentDropped
+        intentDropped = nil
+        undo?()
+    }
     /* A family to push onto Account's stack (a join that finished in the invitation sheet, "Open <family>"): Account clears it. */
     var familyToOpen: String?
     /* A file a link asked to open in the viewer, and the files beside it. */
@@ -645,6 +698,41 @@ final class DriveStore {
         // Shares are per workspace in practice; the widest one this account holds there decides.
         let roles = mounts.filter { $0.share.workspaceId == item.node.workspaceId }.map(\.share.role)
         return roles.contains("editor") ? .editor : .viewer
+    }
+
+    /*
+     * Whether this person may change `item`'s content here (the text editor): their own, a family folder's
+     * while this phone may write it, or a share's through the mount that covers it (the nearest one up the
+     * item's own folders, never the widest role in the workspace) when that mount is an editor's folder.
+     * A file shared on its own is never edited: its folder can't be listed, and a save needs it.
+     */
+    func mayEdit(_ item: Opened) -> Bool {
+        if isFamily(item) { return familyWritable(item) }
+        let workspace = item.node.workspaceId.lowercased()
+        var roots: [String: String] = [:]
+        for mount in mounts where mount.share.workspaceId.lowercased() == workspace {
+            guard let root = mount.root else { continue }
+            // Two grants on one folder: the viewer's, as the server picks between them.
+            roots[root.id] = roots[root.id] == "viewer" ? "viewer" : mount.share.role
+        }
+        // Own only once the own workspace is known: before it loads, a received share's file is never taken for one's own.
+        return EditRights.mayEdit(itemId: item.id, workspaceId: item.node.workspaceId, own: myWorkspace, roots: roots) { id in
+            let row = id == item.id ? item : self.known(id, in: workspace)
+            return row?.node.parentId
+        }
+    }
+
+    /*
+     * A row by workspace and id, from what this phone holds: a folder's listing, a mount's root, the catalogue (the own
+     * drive's only). Never a row of the same id in another workspace (a personal folder sharing a share's folder's id).
+     */
+    func known(_ id: String, in workspace: String) -> Opened? {
+        let ws = workspace.lowercased()
+        let matches = { (row: Opened) in row.id == id && row.node.workspaceId.lowercased() == ws }
+        if let row = catalogue[id], matches(row) { return row }
+        for list in folders.values { if let row = list.first(where: matches) { return row } }
+        for mount in mounts { if let root = mount.root, matches(root) { return root } }
+        return latest.first(where: matches) ?? recents.first(where: matches)
     }
 
     func refreshMounts() async {

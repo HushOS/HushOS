@@ -460,11 +460,16 @@ describe('journal and restore', () => {
         const { id, second } = await interrupted();
         // The complete request got through after the page went: the server holds it finished.
         second.server.uploads.get('up-1')!.status = 'completed';
+        const minted = [...second.journal.entries.values()][0]!.versionId;
         await second.manager.restore('ws');
         const result = await second.manager.attachFile(id, fakeFile(6 * CHUNK, 'movie.mp4'));
         expect(result).toEqual({ ok: true, resumed: true });
         await settle(500);
         expect(second.item(id).status).toBe('done');
+        // No node came back, but the version it published is still named, by the id it was minted with.
+        expect(second.item(id).node).toBeNull();
+        expect(minted).toBeTruthy();
+        expect(second.item(id).versionId).toBe(minted);
         expect(second.calls.filter((c) => c === 'driveUploadSend')).toHaveLength(0);
         expect(second.server.aborted).toEqual([]);
         expect(second.server.uploads.size).toBe(1);
@@ -2059,6 +2064,44 @@ describe('produced results', () => {
     /* The file as the server lists it now, for the engine's look before an attach. */
     const listedAt = (version: () => string) => ({
         openNodes: async () => ({ parent: node('root', null), replaces: fileAt(version()) }),
+    });
+
+    test('an editor’s version and an ordinary replacement both name the folder: the server can’t tell them apart', async () => {
+        const h = harness({ serverVersion: () => 'v1', ...listedAt(() => 'v1') });
+        h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        h.manager.enqueue([
+            { file: memory('doc.txt'), parent: node('root', null), replaces: fileAt('v1') },
+        ]);
+        await settle(5_000);
+        const nodes = h.server.begins.map((begin) => begin.node);
+        expect(nodes).toHaveLength(2);
+        expect(nodes[0]).toMatchObject({ existing: true, expectedParentId: 'root' });
+        expect(nodes[1]).toMatchObject({ existing: true, expectedParentId: 'root' });
+        // The same fields, the same shape: nothing in an editor's begin marks it as one.
+        expect(Object.keys(nodes[0] ?? {}).sort()).toEqual(Object.keys(nodes[1] ?? {}).sort());
+    });
+
+    test('a file moved between begin and completion is stale with no version: no copy, nothing attached', async () => {
+        const h = harness({ moved: true, ...listedAt(() => 'v1') });
+        const [id] = h.manager.enqueue([
+            {
+                file: memory('doc.txt'),
+                parent: node('root', null),
+                replaces: fileAt('v1'),
+                produced: { startedFrom: 'v1' },
+            },
+        ]);
+        await settle(5_000);
+        expect(h.item(id!).errorCode).toBe('stale');
+        expect(h.item(id!).stale).toMatchObject({ currentVersionId: null });
+        expect(h.server.attached).toEqual([]);
     });
 
     test('a version race at completion is stale, naming the winner: no conflict copy, the upload aborted', async () => {

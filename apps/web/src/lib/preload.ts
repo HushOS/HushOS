@@ -27,6 +27,8 @@ export function preloadViewers() {
                 // The archive reader opens like a viewer (docs/file-tools-design.md, "Dependencies").
                 () => import('@/components/drive/archive-view').then((m) => m.preloadArchive()),
                 () => import('@/lib/highlight').then((m) => m.preloadGrammars()),
+                // The text editor, every language it colours and the structured-text parsers (editing-design.md section 4).
+                () => import('@/components/drive/text-editor').then((m) => m.preloadEditor()),
                 () => import('@/lib/thumbnails').then((m) => m.preloadThumbnailer()),
             ];
             for (const step of steps) await step().catch(() => {});

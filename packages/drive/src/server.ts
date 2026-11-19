@@ -1359,7 +1359,13 @@ export async function listTrash(userId: string, workspaceId: string, after?: str
 export type UploadBeginInput = {
     node:
         | ({ existing: false; id: string; idSeed?: string; parentId: string } & NodeEnvelopesInput)
-        | { existing: true; id: string; keyEpoch: number; expectedVersionId: string | null };
+        | {
+              existing: true;
+              id: string;
+              keyEpoch: number;
+              expectedVersionId: string | null;
+              expectedParentId?: string | null;
+          };
     versionId: string;
     versionIdSeed?: string;
     objectId: string;
@@ -1522,6 +1528,9 @@ export async function beginUpload(userId: string, workspaceId: string, input: Up
                   id: input.node.id,
                   keyEpoch: input.node.keyEpoch,
                   expectedVersionId: input.node.expectedVersionId,
+                  ...(input.node.expectedParentId && {
+                      expectedParentId: input.node.expectedParentId,
+                  }),
               }
             : {
                   existing: false,
@@ -1694,6 +1703,8 @@ export async function completeUpload(
             );
         case 'move-stale':
             throw moveStale();
+        case 'parent-trashed':
+            throw parentTrashed();
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
         case 'not-completing':

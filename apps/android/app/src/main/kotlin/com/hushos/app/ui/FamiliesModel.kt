@@ -825,6 +825,9 @@ class FamiliesModel(private val model: FamilyHost, private val now: () -> Long =
     /* The family's verdict for an item as it is now; null while it is being judged. */
     fun verdict(item: Opened): FamilyVerdict? = verdicts.of(item)
 
+    /* The text editor's row (null: closed): its verdict is kept for it, apart from the listing's (FamilyVerdicts.hold). */
+    fun holdForEditor(item: Opened?) = verdicts.hold(item)
+
     /*
      * Whether this device may write in the family folder `workspaceId` (iOS's familyWritable, the web's `writable`): its
      * family accepted here, the folder's keys checked at its latest version and its top folder opened. The vault asks the
@@ -1383,10 +1386,26 @@ class FamilyVerdicts(private val groupOfWorkspace: (String) -> String?) {
     private val byRow = mutableStateMapOf<String, Pair<NodeView, FamilyVerdict>>()
     private val generations = HashMap<String, Long>()
     private var epoch = 0L
+    /*
+     * The exact row the text editor holds (its key and records) and its own verdict: kept apart from the listing's row, so
+     * another device's newer version judged meanwhile never takes the mark off the text on screen. Dropped with its family's
+     * trust like any other, and judged again then.
+     */
+    private var held: Pair<String, NodeView>? = null
+    private var heldVerdict by androidx.compose.runtime.mutableStateOf<FamilyVerdict?>(null)
 
     private fun key(item: Opened) = item.node.workspaceId.lowercase() + "|" + item.id
 
     fun of(item: Opened): FamilyVerdict? = byRow[key(item)]?.takeIf { it.first == item.node }?.second
+        ?: heldVerdict?.takeIf { held == key(item) to item.node }
+
+    /* The row the editor shows (null: none): its verdict is kept for it whatever the listing judges since. */
+    fun hold(item: Opened?) {
+        val next = item?.let { key(it) to it.node }
+        if (next == held) return
+        held = next
+        heldVerdict = null
+    }
 
     fun capture(groupId: String): Trust = Trust(epoch, generations[groupId] ?: 0L)
 
@@ -1394,6 +1413,7 @@ class FamilyVerdicts(private val groupOfWorkspace: (String) -> String?) {
     fun moved(groupId: String?) {
         if (groupId == null) epoch++ else generations[groupId] = (generations[groupId] ?: 0L) + 1
         byRow.keys.filter { groupId == null || groupOfWorkspace(it.substringBefore('|')) == groupId }.forEach { byRow.remove(it) }
+        held?.let { (key, _) -> if (groupId == null || groupOfWorkspace(key.substringBefore('|')) == groupId) heldVerdict = null }
     }
 
     /*
@@ -1403,8 +1423,10 @@ class FamilyVerdicts(private val groupOfWorkspace: (String) -> String?) {
     fun publish(groupId: String, trust: Trust, judged: List<Pair<Opened, FamilyVerdict>>): Boolean {
         if (trust != capture(groupId)) return false
         for ((item, verdict) in judged) {
-            val held = byRow[key(item)]?.first
-            if (held != null && item.node.olderThan(held)) continue
+            // The editor's own row keeps its verdict, older than the listing's or not.
+            if (held == key(item) to item.node) heldVerdict = verdict
+            val newest = byRow[key(item)]?.first
+            if (newest != null && item.node.olderThan(newest)) continue
             byRow[key(item)] = item.node to verdict
         }
         return true
@@ -1414,6 +1436,8 @@ class FamilyVerdicts(private val groupOfWorkspace: (String) -> String?) {
     fun reset() {
         epoch++
         byRow.clear()
+        held = null
+        heldVerdict = null
     }
 }
 

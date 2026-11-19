@@ -643,6 +643,8 @@ extension Vault {
         /* The metadata to show once it lands: a replacement's own, with the new size and date. */
         let final: NodeMetadata
         let replacing: Bool
+        /* The version this upload publishes, as minted. */
+        let versionId: String
         /* A tool's new version (the save path): the file's name record is left as it is, never signed again. */
         let keepName: Bool
         /* What a replacement's name record may be re-signed against once it lands (`Landing`). */
@@ -723,6 +725,10 @@ extension Vault {
                        moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false, held: NodeRef? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
+        // The folder the replaced file was written into, as the caller named it: taken before a family's look again
+        // swaps in the row this vault holds now, which may already show the file moved (the request would then name
+        // the folder it went to, and the version land there).
+        let expectedParent = held?.nodeId ?? given?.node.parentId ?? parentId
         // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
         // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
         func destination() async throws -> Opened {
@@ -779,6 +785,10 @@ extension Vault {
             let expectedVersion = expected ?? replacing.node.currentVersion?.id
             nodeInput = ["existing": true, "id": nodeId, "keyEpoch": replacing.node.keyEpoch,
                          "expectedVersionId": expectedVersion ?? NSNull()]
+            // Every new version is held to the folder it was written into (a save’s checked `held`, else the folder the file is in): a
+            // file moved away since, at begin or before completion, publishes nothing (stale, or conflicted with no version).
+            // An editor's save and an ordinary replacement send the same, so the server can't tell them apart.
+            nodeInput["expectedParentId"] = expectedParent
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = keepName ? replacing.metadata
                 : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,
@@ -832,7 +842,7 @@ extension Vault {
         return Begun(
             workspaceId: workspace.workspaceId, uploadId: begun.upload.id, nodeId: nodeId, parentId: parentId, nodeKey: nodeKey,
             content: content, chunkCount: layout.chunkCount, chunkBytes: layout.chunkBytes, plaintextSize: plaintextSize,
-            urls: urls, final: final, replacing: replacing != nil, keepName: keepName,
+            urls: urls, final: final, replacing: replacing != nil, versionId: versionId, keepName: keepName,
             landing: replacing.map { Landing(versionId: versionId, metadataVersion: $0.node.metadataVersion) }
         )
     }
@@ -943,6 +953,8 @@ extension Vault {
         public let workspaceId: String
         public let uploadId: String
         public let nodeId: String
+        /* The version this upload publishes, as minted: a completion answered from a listing may show a newer one by then. */
+        public var versionId: String? = nil
     }
 
     private func upload(
@@ -957,7 +969,7 @@ extension Vault {
                                         expected: expected, keepName: keepName, held: held)
             // A result's run writes these ids down first: if it can't, nothing is sent and the reservation goes.
             do {
-                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId))
+                try onBegun(BegunIds(workspaceId: begun.workspaceId, uploadId: begun.uploadId, nodeId: begun.nodeId, versionId: begun.versionId))
             } catch {
                 await api.abortUpload(uploadId: begun.uploadId, workspaceId: begun.workspaceId)
                 throw error
@@ -1081,8 +1093,14 @@ extension Vault {
             // stale (never a new file where it was); the same version is only its key having moved, sealed
             // afresh under the keys found (SaveRekeyed), as the queue does (FamilyUploads.finish).
             // From the server itself, never the catalogue, which may not have heard of another device's save yet.
-            let listed = try await listChildren(of: parentId, in: replacing.node.workspaceId)
-            guard let fresh = listed.children.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
+            // The folder itself gone or in the trash: the file is gone from where it was saved too.
+            let listed: [NodeView]
+            do {
+                listed = try await listChildren(of: parentId, in: replacing.node.workspaceId).children
+            } catch DriveAPIError.trashed(_), DriveAPIError.notFound(_) {
+                throw SaveStale(currentVersionId: nil, unreleased: unreleased)
+            }
+            guard let fresh = listed.first(where: { $0.id == replacing.id }) else { throw SaveStale(currentVersionId: nil, unreleased: unreleased) }
             let current = fresh.currentVersion?.id
             if current != startedFrom { throw SaveStale(currentVersionId: current, unreleased: unreleased) }
             throw SaveRekeyed(unreleased: unreleased)

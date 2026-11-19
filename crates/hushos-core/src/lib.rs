@@ -48,6 +48,7 @@ mod shares;
 mod signatures;
 mod signup;
 mod succession_path;
+mod text_edit;
 mod tools;
 mod two_step;
 
@@ -87,6 +88,7 @@ pub use rotation_records::*;
 pub use shares::*;
 pub use signatures::*;
 pub use signup::*;
+pub use text_edit::{text_edit_limit, text_editable_kind, text_read_only, TextReadOnly, TEXT_EDIT_LIMIT};
 pub use tools::*;
 pub use two_step::*;
 

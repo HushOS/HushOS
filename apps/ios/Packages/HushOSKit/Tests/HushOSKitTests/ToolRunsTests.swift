@@ -261,6 +261,28 @@ import Testing
         #expect(StoreStub.state.ranges.count == 2)
     }
 
+    /*
+     * The session ends while a read renews its expired address: the core says only that its read failed, so the 401 is
+     * kept beside it, naming the session that asked, for the app's session check. Fails if the refusal is lost.
+     */
+    @Test func aSessionRefusedWhileRenewingTheAddressIsKeptForTheCaller() async throws {
+        let size = Self.chunk + 5000
+        let (content, object, _) = try Self.sealed(size)
+        let api = Self.stubbedAPI(object)
+        StoreStub.state.refuseAddressFrom = 2
+        let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
+        let refusals = SessionRefusals()
+        let reader = try await ToolReaders.reader(api: api, opened: OpenedVersion(content: content, versionId: "v1"), workspaceId: "ws", control: control,
+                                                  refusals: refusals)
+        let failed = await Task.detached { () -> Bool in
+            do { _ = try reader.readAt(offset: 0, length: 20); return false } catch { return true }
+        }.value
+        #expect(failed)
+        let refused = try #require(refusals.refused)
+        #expect(endsSession(refused))
+        #expect(refusedSession(refused) == api.session.tag)
+    }
+
     @Test func aRunCancelledAsTheTailComesStillFetchesThePadding() async throws {
         // Just under a chunk with a 2000-byte thumbnail: the tail, then a chunk of padding alone.
         let size = Self.chunk - 100
@@ -539,6 +561,8 @@ final class StoreStubState: @unchecked Sendable {
     var asked: [String] = []
     /* When set, the answer for this address (by number) never comes. */
     var stallAddress: Int?
+    /* When set, asking for this address (by number) or a later one is refused 401: the session ended. */
+    var refuseAddressFrom: Int?
     var stopped = 0
 }
 
@@ -566,6 +590,10 @@ final class StoreStub: URLProtocol {
         if url.host == "drive.test" {
             Self.lock.lock(); state.addresses += 1; let n = state.addresses; Self.lock.unlock()
             if n == state.stallAddress { return }
+            if let from = state.refuseAddressFrom, n >= from {
+                answer(401, Data("{\"message\":\"Sign in\"}".utf8), headers: ["Content-Type": "application/json"])
+                return
+            }
             answer(200, Data("{\"url\":\"https://store.test/o?n=\(n)\",\"urlExpiresAt\":null}".utf8), headers: ["Content-Type": "application/json"])
             return
         }
