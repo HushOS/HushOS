@@ -362,3 +362,19 @@
     color: var(--muted-foreground);
     font-style: italic;
 }
+/* A Mermaid diagram, drawn as an image (lib/mermaid.ts): as wide as it was drawn, never wider than the page. */
+.rt-diagram {
+    margin: 0;
+    max-width: 100%;
+    overflow-x: auto;
+}
+.rt-diagram img {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+.rt-diagram-note {
+    margin: 0.5rem 0 0;
+    font-size: 0.8125rem;
+    color: var(--muted-foreground);
+}

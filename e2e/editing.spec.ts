@@ -102,7 +102,7 @@ const utf16le = (text: string) =>
 /* Requests for the Markdown file's image, on the app's own origin (so no policy would stop a fetch). */
 let probes = 0;
 /* How many files beforeAll uploads. */
-const FILES = 15;
+const FILES = 16;
 
 /*
  * A long Markdown file for scrolling: parts of different lengths (a long paragraph wraps over many
@@ -135,6 +135,7 @@ test.beforeAll(async ({ browser }) => {
     page.on('request', (request) => {
         if (request.url().includes('editing-preview-probe')) probes++;
     });
+    const diagramProbe = `${new URL(page.url()).origin}/editing-diagram-probe`;
     await page
         .locator('input[type=file]')
         .first()
@@ -166,6 +167,12 @@ test.beforeAll(async ({ browser }) => {
             write('main.rs', 'fn main() {\n    println!("hi");\n}\n'),
             write('Cargo.toml', '[package]\nname = "hushos"\n'),
             write('scroll.md', scrollText()),
+            // A flowchart whose node links to the app's own origin (so no policy would stop a fetch),
+            // and a type outside the twelve pele is fetched with.
+            write(
+                'diagram.md',
+                `# Diagram\n\n\`\`\`mermaid\nflowchart LR\n  A[Start] --> B{Choice}\n  click A href "${diagramProbe}"\n  click B "${diagramProbe}?b"\n\`\`\`\n\n\`\`\`mermaid\nsankey-beta\nA,B,1\n\`\`\`\n`,
+            ),
         ]);
     await expect(page.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 90_000 });
 });
@@ -254,6 +261,53 @@ test('the editor’s code comes whole with the first Edit, the same for every ki
     if (browserName === 'webkit')
         expect(markdownFirst.filter((url) => !first.includes(url))).toEqual([]);
     else expect([...markdownFirst].sort()).toEqual([...first].sort());
+});
+
+test('a Mermaid fence is drawn as an image in the viewer and the preview, fetching nothing it names', async ({
+    browserName,
+}) => {
+    const named: string[] = [];
+    const listen = (request: Request) => {
+        if (request.url().includes('editing-diagram-probe')) named.push(request.url());
+    };
+    page.on('request', listen);
+    // pele and its twelve types came with the viewers' preload, in the diagram worker's one file.
+    const preloaded = await freshDrive(page);
+    if (browserName !== 'webkit')
+        expect([...preloaded].filter((url) => appModule('mermaid.worker').test(url))).toHaveLength(
+            1,
+        );
+    const opened = await scriptsDuring(page, async () => {
+        await row(page, 'diagram.md')
+            .getByRole('link', { name: 'diagram.md', exact: true })
+            .click();
+        const diagram = dialog(page).getByRole('img', { name: 'Diagram' });
+        await expect(diagram).toBeVisible({ timeout: 30_000 });
+    });
+    // Opening a file with a diagram fetches no code the preload didn't: nothing per type.
+    expect([...opened].filter((url) => !preloaded.has(url))).toEqual([]);
+    const diagram = dialog(page).getByRole('img', { name: 'Diagram' });
+    // An image from a blob, never the SVG as live elements.
+    expect(await diagram.getAttribute('src')).toMatch(/^blob:/);
+    await expect(dialog(page).locator('.rt-markdown svg.pele')).toHaveCount(0);
+    // A type outside the twelve stays code, with one sentence.
+    await expect(dialog(page).getByText('This kind of diagram isn’t drawn here.')).toBeVisible();
+    await expect(dialog(page).getByText('sankey-beta')).toBeVisible();
+    // Drawn again in the other colours when the theme changes.
+    const light = await diagram.getAttribute('src');
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(() => diagram.getAttribute('src')).not.toBe(light);
+    await page.emulateMedia({ colorScheme: 'light' });
+    // The editor's preview draws it too.
+    await dialog(page).getByRole('button', { name: 'Edit', exact: true }).click();
+    await expect(editor(page)).toBeVisible({ timeout: 60_000 });
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByRole('img', { name: 'Diagram' })).toBeVisible({ timeout: 30_000 });
+    // Long enough for anything the diagram names to have been fetched, had it been.
+    await page.waitForTimeout(1_500);
+    page.off('request', listen);
+    expect(named).toEqual([]);
+    await close(page);
 });
 
 test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async () => {

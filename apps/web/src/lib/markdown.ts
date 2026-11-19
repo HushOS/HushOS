@@ -53,6 +53,31 @@ const SOURCE_BLOCKS = new Set([
     'hr',
 ]);
 
+/* A fence's language, from its code element's class (language-mermaid). */
+function fenceLanguage(pre: Element) {
+    const code = pre.children.find(
+        (child): child is Element => child.type === 'element' && child.tagName === 'code',
+    );
+    const classes = code?.properties.className;
+    const name = Array.isArray(classes)
+        ? classes.find((entry) => String(entry).startsWith('language-'))
+        : undefined;
+    return name ? String(name).slice('language-'.length).toLowerCase() : null;
+}
+
+/*
+ * Each Mermaid fence's place among the file's diagrams (`data-diagram`, from 0), so the renderer draws
+ * only the first DIAGRAMS_PER_DOCUMENT (lib/mermaid-svg.ts).
+ */
+function markDiagrams(node: Root | Element, count = { next: 0 }) {
+    for (const child of node.children) {
+        if (child.type !== 'element') continue;
+        if (child.tagName === 'pre' && fenceLanguage(child) === 'mermaid')
+            child.properties.dataDiagram = count.next++;
+        else markDiagrams(child, count);
+    }
+}
+
 function markSourceLines(node: Root | Element) {
     for (const child of node.children) {
         if (child.type !== 'element') continue;
@@ -66,7 +91,10 @@ function markSourceLines(node: Root | Element) {
     }
 }
 
-const sourceLines = () => (tree: Root) => markSourceLines(tree);
+const sourceLines = () => (tree: Root) => {
+    markSourceLines(tree);
+    markDiagrams(tree);
+};
 
 const processor = unified()
     .use(remarkParse)

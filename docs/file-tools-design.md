@@ -344,6 +344,7 @@ After a closed tab, steps 3 and 4 happen on the next open from the run's journal
 | `fflate`                          | MIT                                                                                 | Gzip fallback for multi-member tar.gz     | Existing                     |
 | `client-zip`                      | MIT                                                                                 | Store-only zips for downloads (unchanged) | Existing, 2.5.0              |
 | Tar parser                        | AGPL-3.0 (ours)                                                                     | tar and pax headers                       | New (g)                      |
+| `pele`                            | MIT                                                                                 | Mermaid diagrams in Markdown (web only)   | New (editing), 1.13.0        |
 
 All are compatible with AGPL-3.0:
 

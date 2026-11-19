@@ -27,6 +27,8 @@ export function preloadViewers() {
                 () => import('@/components/drive/pdf-viewer').then((m) => m.preloadPdf()),
                 () => import('@/components/drive/office-viewer').then((m) => m.preloadOffice()),
                 () => import('@/components/drive/rich-text'),
+                // pele and its twelve diagram types, one worker file (lib/mermaid.ts), never per type.
+                () => import('@/lib/mermaid').then((m) => m.preloadMermaid()),
                 () => import('@/components/drive/json-view').then((m) => m.preloadJsonView()),
                 // The archive reader opens like a viewer (docs/file-tools-design.md, "Dependencies").
                 () => import('@/components/drive/archive-view').then((m) => m.preloadArchive()),
