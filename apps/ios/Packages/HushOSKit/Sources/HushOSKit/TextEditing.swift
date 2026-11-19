@@ -82,11 +82,37 @@ public enum TextEditing {
     }
 
     /*
-     * What a save writes for `text` when the editor opened (or last saved) `original`: `original` itself while the text
-     * is still what it opened as, otherwise the text in the file's encoding, byte order mark and line breaks (the core's
-     * text_save). Nil when `original` isn't editable.
+     * One editing session's saves, as on the web (lib/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
+     * format found when the file opened, kept for the whole session (a save that removed every line break still writes CRLF
+     * for the next one typed; a text grown past the limit still saves), and the text and bytes last opened or saved, which
+     * only answer "nothing changed".
      */
-    public static func bytes(for text: String, from original: Data) -> Data? { textSave(original: original, text: text) }
+    public struct SaveState: Equatable, Sendable {
+        public let format: TextFormat
+        public private(set) var text: String
+        public private(set) var bytes: Data
+
+        /* The session of bytes that open for editing; nil when they open read-only. */
+        public init?(opening data: Data) {
+            guard case .editable(let text, let format) = TextEditing.open(data) else { return nil }
+            self.format = format
+            self.text = text
+            bytes = data
+        }
+
+        /* What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the session's format. */
+        public func bytes(for text: String) -> Data {
+            TextEditing.same(text, self.text) ? bytes : textEncode(format: format, text: text)
+        }
+
+        /* After a save of `text` landed as `bytes`: what the next one compares with. */
+        public func saved(_ text: String, as bytes: Data) -> SaveState {
+            var next = self
+            next.text = text
+            next.bytes = bytes
+            return next
+        }
+    }
 
     /*
      * A line break typed or pasted into the system's text view, as the editor keeps it: CRLF and a
@@ -263,7 +289,7 @@ public enum TextSave {
     }
 
     /*
-     * Save, and Save on top: a new version of `file` holding `bytes` (TextEditing.bytes), unless the file
+     * Save, and Save on top: a new version of `file` holding `bytes` (SaveState.bytes), unless the file
      * moved on from `startedFrom` (Save on top passes the version current now). Planned as those bytes
      * with no thumbnail, signed as the person's own writing.
      */

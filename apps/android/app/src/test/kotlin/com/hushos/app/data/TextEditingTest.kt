@@ -39,6 +39,9 @@ class TextEditingTest {
         return out.toByteArray()
     }
 
+    /* What a save of `text` writes from an editor just opened on `original`; null when it opened read-only. */
+    private fun saved(text: CharSequence, original: ByteArray) = TextEditing.SaveState.opening(original)?.bytes(text)
+
     private fun word(reason: TextReadOnly) = when (reason) {
         TextReadOnly.TOO_LARGE -> "too-large"
         TextReadOnly.ENCODING -> "encoding"
@@ -89,9 +92,9 @@ class TextEditingTest {
             val original = bytes(case.getJSONArray("bytes"))
             val text = case.getString("text")
             val expected = if (case.isNull("saved")) null.also { refused++ } else bytes(case.getJSONArray("saved"))
-            assertArrayEquals(name, expected, TextEditing.bytes(text, original))
+            assertArrayEquals(name, expected, saved(text, original))
             // As the EditText holds a paste (its filter makes every break LF): the same bytes.
-            assertArrayEquals(name, expected, TextEditing.bytes(TextEditing.lineFeeds(text), original))
+            assertArrayEquals(name, expected, saved(TextEditing.lineFeeds(text), original))
         }
         assertTrue(refused > 0)
     }
@@ -113,21 +116,40 @@ class TextEditingTest {
             if (!case.isNull("reason")) continue
             val data = bytes(case.getJSONArray("bytes"))
             val opened = TextEditing.open(data) as TextEditing.Open.Editable
-            assertArrayEquals(case.getString("name"), data, TextEditing.bytes(opened.text, data))
+            assertArrayEquals(case.getString("name"), data, saved(opened.text, data))
             // StringBuilder stands in for the EditText's SpannableStringBuilder (both a CharSequence of the same chars).
-            assertArrayEquals(case.getString("name"), data, TextEditing.bytes(StringBuilder(opened.text), data))
+            assertArrayEquals(case.getString("name"), data, saved(StringBuilder(opened.text), data))
+        }
+    }
+
+    /* Every save of one session, the format kept from the open: past the limit and back, a CRLF file emptied and typed into. */
+    @Test fun everySaveOfASessionWritesWhatTheWebWrites() {
+        val list = cases.getJSONArray("sessions")
+        assertTrue(list.length() >= 5)
+        for (i in 0 until list.length()) {
+            val case = list.getJSONObject(i)
+            var state = TextEditing.SaveState.opening(bytes(case.getJSONArray("bytes")))!!
+            val saves = case.getJSONArray("saves")
+            for (at in 0 until saves.length()) {
+                val save = saves.getJSONObject(at)
+                val parts = save.getJSONArray("text")
+                val text = (0 until parts.length()).joinToString("") { parts.getJSONObject(it).let { part -> part.getString("text").repeat(part.optInt("repeat", 1)) } }
+                val written = state.bytes(text)
+                assertArrayEquals("${case.getString("name")}, save ${at + 1}", bytes(save.getJSONArray("saved")), written)
+                state = state.saved(text, written)
+            }
         }
     }
 
     @Test fun anEditInMultibyteTextChangesOnlyThoseBytes() {
         val original = "Grüße 👋\nzweite Zeile noch\nohne Zeilenende"
         val opened = TextEditing.open(original.encodeToByteArray()) as TextEditing.Open.Editable
-        val saved = TextEditing.bytes(opened.text.replace("zweite", "dritte ✓"), original.encodeToByteArray())!!
+        val written = saved(opened.text.replace("zweite", "dritte ✓"), original.encodeToByteArray())!!
         val at = "Grüße 👋\n".encodeToByteArray().size
         val bytes = original.encodeToByteArray()
         val expected = bytes.copyOfRange(0, at) + "dritte ✓".encodeToByteArray() + bytes.copyOfRange(at + 6, bytes.size)
-        assertArrayEquals(expected, saved)
-        assertEquals('e'.code.toByte(), saved.last())
+        assertArrayEquals(expected, written)
+        assertEquals('e'.code.toByte(), written.last())
     }
 
     @Test fun aLineBreakTypedOrPastedIsLineFeed() {
@@ -142,7 +164,7 @@ class TextEditingTest {
         assertEquals("This file uses an encoding HushOS can’t edit without changing it.", TextEditing.words(TextReadOnly.ENCODING))
         assertEquals(8L * 1024 * 1024, TextEditing.LIMIT)
         // Nothing is written for a file the editor can't keep exactly.
-        assertNull(TextEditing.bytes("cafe", byteArrayOf(0x63, 0x61, 0x66, -0x17)))
+        assertNull(saved("cafe", byteArrayOf(0x63, 0x61, 0x66, -0x17)))
     }
 
     @Test fun aMixedFileSaysWhichLineBreakASaveWrites() {

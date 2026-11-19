@@ -26,3 +26,8 @@ export function useIsTablet() {
         `(min-width: ${MOBILE_BREAKPOINT}px) and (max-width: ${DESKTOP_BREAKPOINT - 1}px)`,
     );
 }
+
+/* A desk's width, 1024px and up: Tailwind's `lg`. */
+export function useIsDesktop() {
+    return useMediaQuery(`(min-width: ${DESKTOP_BREAKPOINT}px)`);
+}

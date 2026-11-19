@@ -11,16 +11,23 @@ struct MarkdownView: View {
     /* A file the viewer fetched, or bytes held in memory (an archive's entry, never written to a file). */
     private let url: URL?
     private let data: Data?
+    /*
+     * Whether its words can be selected and copied with the system's Copy. Off in the editor's preview: a copy there would
+     * skip the editor's local-only, expiring one (EditorTextView) and could reach Universal Clipboard.
+     */
+    private let selectable: Bool
     @State private var blocks: [MarkdownBlock]?
 
     init(url: URL) {
         self.url = url
         data = nil
+        selectable = true
     }
 
-    init(data: Data) {
+    init(data: Data, selectable: Bool = true) {
         url = nil
         self.data = data
+        self.selectable = selectable
     }
 
     var body: some View {
@@ -35,7 +42,7 @@ struct MarkdownView: View {
                 .padding(.vertical, Alpine.Space.s6)
                 .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity)
-                .textSelection(.enabled)
+                .selectable(selectable)
             } else {
                 ProgressView().tint(Alpine.primary).padding(.top, Alpine.Space.s12)
             }
@@ -55,6 +62,13 @@ struct MarkdownView: View {
             guard !Task.isCancelled else { return }
             blocks = parsed
         }
+    }
+}
+
+private extension View {
+    /* The system's text selection, on or off. */
+    @ViewBuilder func selectable(_ on: Bool) -> some View {
+        if on { textSelection(.enabled) } else { textSelection(.disabled) }
     }
 }
 

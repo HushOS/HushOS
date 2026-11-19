@@ -23,8 +23,16 @@ private struct ByteCase: Decodable {
     let encoding: String?; let lineEnding: String?; let mixed: Bool?; let text: String?
 }
 private struct EditCase: Decodable { let name: String; let bytes: [Part]; let text: String; let saved: [Part]? }
+private struct TextPart: Decodable { let text: String; let repeatCount: Int?
+    enum CodingKeys: String, CodingKey { case text; case repeatCount = "repeat" }
+}
+private struct SessionSave: Decodable { let text: [TextPart]; let saved: [Part] }
+private struct SessionCase: Decodable { let name: String; let bytes: [Part]; let saves: [SessionSave] }
 private struct NameCase: Decodable { let name: String; let mime: String?; let editable: Bool }
-private struct Cases: Decodable { let bytes: [ByteCase]; let edits: [EditCase]; let names: [NameCase] }
+private struct Cases: Decodable { let bytes: [ByteCase]; let edits: [EditCase]; let sessions: [SessionCase]; let names: [NameCase] }
+
+/* What a save of `text` writes from an editor just opened on `original`; nil when it opened read-only. */
+private func saved(_ text: String, from original: Data) -> Data? { TextEditing.SaveState(opening: original)?.bytes(for: text) }
 
 private let cases: Cases = {
     // This file, then Tests/HushOSKitTests up to the repository root: seven steps.
@@ -96,9 +104,9 @@ private func word(_ ending: LineEnding) -> String {
         #expect(cases.edits.contains { $0.saved == nil })
         for c in cases.edits {
             let original = bytes(c.bytes)
-            #expect(TextEditing.bytes(for: c.text, from: original) == c.saved.map(bytes), "\(c.name)")
+            #expect(saved(c.text, from: original) == c.saved.map(bytes), "\(c.name)")
             // As the text view holds a paste (TextEditing.lineFeeds, every break LF): the same bytes.
-            #expect(TextEditing.bytes(for: TextEditing.lineFeeds(c.text), from: original) == c.saved.map(bytes), "\(c.name) as typed")
+            #expect(saved(TextEditing.lineFeeds(c.text), from: original) == c.saved.map(bytes), "\(c.name) as typed")
         }
     }
 
@@ -111,14 +119,28 @@ private func word(_ ending: LineEnding) -> String {
         for c in cases.bytes where c.reason == nil {
             let data = bytes(c.bytes)
             guard case .editable(let text, _) = TextEditing.open(data) else { Issue.record("\(c.name) should open"); continue }
-            #expect(TextEditing.bytes(for: text, from: data) == data, "\(c.name)")
+            #expect(saved(text, from: data) == data, "\(c.name)")
             #if canImport(UIKit)
             // As UITextView holds it: an NSTextStorage, read back as its string.
             if data.count < 100_000 {
                 let storage = NSTextStorage(string: text)
-                #expect(TextEditing.bytes(for: storage.string, from: data) == data, "\(c.name) through NSTextStorage")
+                #expect(saved(storage.string, from: data) == data, "\(c.name) through NSTextStorage")
             }
             #endif
+        }
+    }
+
+    /* Every save of one session, the format kept from the open: past the limit and back, a CRLF file emptied and typed into. */
+    @Test func everySaveOfASessionWritesWhatTheWebWrites() throws {
+        #expect(cases.sessions.count >= 5)
+        for c in cases.sessions {
+            var state = try #require(TextEditing.SaveState(opening: bytes(c.bytes)), "\(c.name)")
+            for (at, save) in c.saves.enumerated() {
+                let text = save.text.map { String(repeating: $0.text, count: $0.repeatCount ?? 1) }.joined()
+                let written = state.bytes(for: text)
+                #expect(written == bytes(save.saved), "\(c.name), save \(at + 1)")
+                state = state.saved(text, as: written)
+            }
         }
     }
 
@@ -126,12 +148,12 @@ private func word(_ ending: LineEnding) -> String {
         let original = "Grüße 👋\nzweite Zeile\u{2028}noch\nohne Zeilenende"
         guard case .editable(let text, _) = TextEditing.open(Data(original.utf8)) else { Issue.record("should open"); return }
         let edited = text.replacingOccurrences(of: "zweite", with: "dritte ✓")
-        let saved = try #require(TextEditing.bytes(for: edited, from: Data(original.utf8)))
+        let written = try #require(saved(edited, from: Data(original.utf8)))
         let at = Data("Grüße 👋\n".utf8).count
         var expected = Data(original.utf8)
         expected.replaceSubrange(at ..< at + 6, with: Data("dritte ✓".utf8))
-        #expect(saved == expected)
-        #expect(saved.last == UInt8(ascii: "e"))
+        #expect(written == expected)
+        #expect(written.last == UInt8(ascii: "e"))
     }
 
     @Test func aLineBreakTypedOrPastedIsLineFeed() {
@@ -231,7 +253,7 @@ private func word(_ ending: LineEnding) -> String {
         #expect(TextEditing.words(.encoding) == "This file uses an encoding HushOS can’t edit without changing it.")
         #expect(TextEditing.limit == 8 * 1024 * 1024)
         // Nothing is written for a file the editor can't keep exactly.
-        #expect(TextEditing.bytes(for: "cafe", from: Data([0x63, 0x61, 0x66, 0xE9])) == nil)
+        #expect(saved("cafe", from: Data([0x63, 0x61, 0x66, 0xE9])) == nil)
     }
 
     @Test func aMixedFileSaysWhichLineBreakASaveWrites() {

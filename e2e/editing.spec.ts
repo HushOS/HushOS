@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, type Page, type Request } from '@playwright/test';
+import { expect, test, type Page, type Request, type Route } from '@playwright/test';
 import {
     addContact,
     grip,
@@ -187,6 +187,45 @@ test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no
             name,
         ).toEqual([]);
     }
+});
+
+test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async () => {
+    // The preload held at its first step (the PDF viewer), so no grammar has come yet.
+    const held: Route[] = [];
+    await page.route('**/components/drive/pdf-viewer.tsx*', (route) => {
+        held.push(route);
+    });
+    const grammars: string[] = [];
+    const listen = (request: Request) => {
+        if (/shikijs[_/]langs/.test(request.url())) grammars.push(request.url());
+    };
+    page.on('request', listen);
+    await page.reload();
+    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
+    await openEditor(page, 'preview.md');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('\n```rust\nfn main() {}\n```\n');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByText('fn main() {}')).toBeVisible();
+    // Long enough for a highlight to have asked for its grammar.
+    await page.waitForTimeout(1_500);
+    expect(grammars).toEqual([]);
+    await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(0);
+    await expect(preview.locator('[style*="--shiki-light"]')).toHaveCount(0);
+    // Once the preload has fetched every grammar, in its own order, the fence is coloured.
+    page.off('request', listen);
+    await page.unroute('**/components/drive/pdf-viewer.tsx*');
+    for (const route of held) await route.continue().catch(() => {});
+    await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
+        timeout: 90_000,
+    });
+    await expect(preview.locator('[style*="--shiki-light"]').first()).toBeVisible({
+        timeout: 30_000,
+    });
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
 test('a save is a new version that changes only the edited bytes', async () => {

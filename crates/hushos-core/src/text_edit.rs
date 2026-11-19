@@ -117,26 +117,22 @@ pub fn text_open(bytes: Vec<u8>) -> TextOpened {
     open(&bytes)
 }
 
-/// What a save writes for `text`, the editor's words, when it opened `original`:
-/// `original` itself while the text is still what it opened as (a file opened and
-/// saved without an edit is byte for byte the same, a mixed one included);
-/// otherwise the text in the file's encoding, with its byte order mark, and every
-/// line break (LF, CRLF or a lone CR typed or pasted) as the file's. `None` when
-/// `original` isn't editable.
+/// The editor's text written in `format`, the one `text_open` found when the file
+/// opened: the file's encoding with its byte order mark first, and every line
+/// break (LF, CRLF or a lone CR typed or pasted) as the file's. The format stays
+/// the session's whatever was saved since (a save that removed every line break
+/// still writes CRLF for the next one typed; a text past the limit still saves),
+/// and a client writes the bytes it last opened or saved instead while the text
+/// is still that one (every client's save state, held to the fixture's `sessions`).
 ///
 /// ```
-/// use hushos_core::text_save;
-/// let mixed = b"a\r\nb\nc\r\n".to_vec();
-/// assert_eq!(text_save(mixed.clone(), "a\nb\nc\n".into()), Some(mixed));
-/// assert_eq!(text_save(b"a\r\nb\nc\r\n".to_vec(), "a\nb\nc!\n".into()), Some(b"a\r\nb\r\nc!\r\n".to_vec()));
+/// use hushos_core::{text_encode, LineEnding, TextEncoding, TextFormat};
+/// let format = TextFormat { encoding: TextEncoding::Utf8, line_ending: LineEnding::Crlf, mixed: true };
+/// assert_eq!(text_encode(format, "a\nb\r\nc".into()), b"a\r\nb\r\nc".to_vec());
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
-pub fn text_save(original: Vec<u8>, text: String) -> Option<Vec<u8>> {
-    match open(&original) {
-        TextOpened::Editable { text: opened, .. } if opened == text => Some(original),
-        TextOpened::Editable { format, .. } => Some(encode(format, &text)),
-        TextOpened::ReadOnly { .. } => None,
-    }
+pub fn text_encode(format: TextFormat, text: String) -> Vec<u8> {
+    encode(format, &text)
 }
 
 fn open(bytes: &[u8]) -> TextOpened {
@@ -187,11 +183,11 @@ fn decode_utf16(payload: &[u8], encoding: TextEncoding) -> Option<String> {
     if !payload.len().is_multiple_of(2) {
         return None;
     }
-    let units = payload.chunks_exact(2).map(|pair| unit(pair, encoding));
+    let units = payload.as_chunks::<2>().0.iter().map(|pair| unit(pair, encoding));
     char::decode_utf16(units).collect::<Result<String, _>>().ok()
 }
 
-fn unit(pair: &[u8], encoding: TextEncoding) -> u16 {
+fn unit(pair: &[u8; 2], encoding: TextEncoding) -> u16 {
     match encoding {
         TextEncoding::Utf16Be => u16::from_be_bytes([pair[0], pair[1]]),
         _ => u16::from_le_bytes([pair[0], pair[1]]),
@@ -240,12 +236,16 @@ fn binary(payload: &[u8], encoding: TextEncoding) -> bool {
             !sample.is_empty() && control * 50 > sample.len()
         }
         TextEncoding::Utf16Le | TextEncoding::Utf16Be => {
-            if payload.chunks_exact(2).any(|pair| unit(pair, encoding) == 0) {
+            if payload.as_chunks::<2>().0.iter().any(|pair| unit(pair, encoding) == 0) {
                 return true;
             }
             let units = sample.len() / 2;
-            let control =
-                sample.chunks_exact(2).filter(|pair| is_control(u32::from(unit(pair, encoding)))).count();
+            let control = sample
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .filter(|pair| is_control(u32::from(unit(pair, encoding))))
+                .count();
             units > 0 && control * 50 > units
         }
     }

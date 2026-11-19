@@ -304,7 +304,23 @@ export async function highlight(code: string, language: string): Promise<Root> {
 export async function preloadGrammars() {
     await highlighter();
     for (const loader of new Set(Object.values(LANGUAGES))) await loader();
+    grammarsFetched();
 }
+
+let grammarsFetched: () => void = () => {};
+/*
+ * Settles once preloadGrammars has fetched every grammar, and fetches nothing itself: what waits on
+ * it (the editor's Markdown preview) colours code only when no grammar fetch can say which it was.
+ */
+export const grammarsPreloaded = new Promise<void>((resolve) => {
+    grammarsFetched = resolve;
+});
+let preloaded = false;
+void grammarsPreloaded.then(() => {
+    preloaded = true;
+});
+/* Whether grammarsPreloaded has settled, asked during render. */
+export const grammarsReady = () => preloaded;
 
 export function canHighlight(language: string | null): language is string {
     return language !== null && language in LANGUAGES;

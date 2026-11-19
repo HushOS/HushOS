@@ -8,12 +8,16 @@ import {
     editableFile,
     editableKind,
     mixedNote,
+    openedState,
     openText,
     readOnlyReason,
     saveBytes,
+    savedState,
     TEXT_EDIT_LIMIT,
+    utf8Length,
     viewText,
     type ReadOnlyReason,
+    type SaveState,
 } from '@/lib/text-edit';
 
 /*
@@ -41,6 +45,11 @@ const cases = JSON.parse(
         text?: string;
     }[];
     edits: { name: string; bytes: Part[]; text: string; saved: Part[] | null }[];
+    sessions: {
+        name: string;
+        bytes: Part[];
+        saves: { text: { text: string; repeat?: number }[]; saved: Part[] }[];
+    }[];
     names: { name: string; mime: string | null; editable: boolean }[];
 };
 
@@ -68,6 +77,17 @@ const same = (a: Uint8Array | null, b: Uint8Array) =>
 const utf8 = (text: string) => new TextEncoder().encode(text);
 /* The text as CodeMirror's own document holds it, as the editor reads it back at a save. */
 const throughEditor = (text: string) => EditorState.create({ doc: text }).doc.toString();
+/* A session over bytes that must open for editing. */
+const session = (bytes: Uint8Array): SaveState => {
+    const state = openedState(bytes);
+    if (!state) throw new Error('should open');
+    return state;
+};
+/* What a save of `text` writes from an editor just opened on `bytes`, or null when it opened read-only. */
+const savedFrom = (bytes: Uint8Array, text: string) => {
+    const state = openedState(bytes);
+    return state && saveBytes(state, text);
+};
 
 describe('which bytes open for editing', () => {
     test.each(cases.bytes.map((c) => [c.name, c] as const))('%s', (_, c) => {
@@ -112,17 +132,27 @@ describe('a save changes only the edited bytes', () => {
             const bytes = bytesOf(c.bytes);
             const opened = openText(bytes);
             if (!opened.editable) throw new Error(`${c.name} should open`);
-            expect(same(saveBytes(bytes, throughEditor(opened.text)), bytes), c.name).toBe(true);
+            expect(same(savedFrom(bytes, throughEditor(opened.text)), bytes), c.name).toBe(true);
         }
     });
 
     test.each(cases.edits.map((c) => [c.name, c] as const))('%s', (_, c) => {
         const bytes = bytesOf(c.bytes);
-        const saved = saveBytes(bytes, c.text);
+        const saved = savedFrom(bytes, c.text);
         if (c.saved === null) return expect(saved).toBeNull();
         expect(plain(saved!)).toEqual(plain(bytesOf(c.saved)));
         // Typed or pasted into CodeMirror, whose document keeps every line break as LF: the same bytes.
-        expect(plain(saveBytes(bytes, throughEditor(c.text))!)).toEqual(plain(bytesOf(c.saved)));
+        expect(plain(savedFrom(bytes, throughEditor(c.text))!)).toEqual(plain(bytesOf(c.saved)));
+    });
+
+    test.each(cases.sessions.map((c) => [c.name, c] as const))('%s', (_, c) => {
+        let state = session(bytesOf(c.bytes));
+        for (const [at, save] of c.saves.entries()) {
+            const text = save.text.map((part) => part.text.repeat(part.repeat ?? 1)).join('');
+            const bytes = saveBytes(state, throughEditor(text));
+            expect(same(bytes, bytesOf(save.saved)), `save ${at + 1}`).toBe(true);
+            state = savedState(state, throughEditor(text), bytes);
+        }
     });
 
     test('an edit in the middle of multibyte text changes only those bytes', () => {
@@ -134,7 +164,7 @@ describe('a save changes only the edited bytes', () => {
         const state = EditorState.create({ doc: opened.text });
         const edited = state.update({ changes: { from: at, to: at + 6, insert: 'dritte ✓' } }).state
             .doc;
-        const saved = saveBytes(bytes, edited.toString())!;
+        const saved = savedFrom(bytes, edited.toString())!;
         // The same edit made on the bytes: the UTF-8 offset of the replaced word, everything else untouched.
         const byteAt = utf8(original.slice(0, at)).length;
         const expected = [
@@ -157,7 +187,7 @@ describe('a save changes only the edited bytes', () => {
             // Typed or pasted as CRLF, it is one line break in CodeMirror's document either way.
             const doc = state.update({ changes: { from: end, insert: state.toText('\r\nb') } })
                 .state.doc;
-            return plain(saveBytes(bytes, doc.toString())!);
+            return plain(savedFrom(bytes, doc.toString())!);
         };
         expect(typed(utf8('a'))).toEqual(plain(utf8('a\nb')));
         expect(typed(utf8('a\r\n'))).toEqual(plain(utf8('a\r\n\r\nb')));
@@ -204,6 +234,13 @@ describe('read-only files', () => {
             reason: 'encoding',
             text: null,
         });
+    });
+});
+
+describe('the size of a text in UTF-8', () => {
+    test('is what TextEncoder writes, without encoding it', () => {
+        for (const text of ['', 'ascii', 'Grüße', '✓ ✗', '👋 and 😀', '\ud83d alone', 'end \udc00'])
+            expect(utf8Length(text), text).toBe(new TextEncoder().encode(text).length);
     });
 });
 

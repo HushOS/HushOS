@@ -1,5 +1,5 @@
 {
-    "_about": "Text editing (Editing 1a and 1b): whether bytes open for editing (`reason` null, with the `encoding`, the `lineEnding` a save writes, whether the file is `mixed`, and the editor's `text` where given) or read-only and why; what a save writes for an edited text (`edits`: `saved` null when nothing may be written); and whether a name and recorded type open in the editor at all. Every editable case saved without an edit is its own bytes again. Hand-written outcomes, read by apps/web/src/lib/text-edit.test.ts, crates/hushos-core/tests/text_edit.rs, HushOSKit's TextEditingTests and Android's TextEditingTest. Each `bytes` is its parts joined, each part `hex` repeated `repeat` times (once when absent).",
+    "_about": "Text editing (Editing 1a and 1b): whether bytes open for editing (`reason` null, with the `encoding`, the `lineEnding` a save writes, whether the file is `mixed`, and the editor's `text` where given) or read-only and why; what a save writes for an edited text (`edits`: `saved` null when nothing may be written); what each save of one editing session writes (`sessions`: each save’s `text` is its parts joined, each `text` repeated `repeat` times; a save writes the bytes it last wrote while the text is unchanged, otherwise the text in the format found when the file opened, never one found from what was saved since); and whether a name and recorded type open in the editor at all. Every editable case saved without an edit is its own bytes again. Hand-written outcomes, read by apps/web/src/lib/text-edit.test.ts, crates/hushos-core/tests/text_edit.rs, HushOSKit's TextEditingTests and Android's TextEditingTest. Each `bytes` is its parts joined, each part `hex` repeated `repeat` times (once when absent).",
     "bytes": [
         {
             "name": "empty",
@@ -799,6 +799,226 @@
             ],
             "text": "a\nb",
             "saved": null
+        }
+    ],
+    "sessions": [
+        {
+            "name": "a CRLF file saved with no line break, then one typed, is CRLF again",
+            "bytes": [
+                {
+                    "hex": "610d0a62"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": "ab"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "6162"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "a\nb"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a62"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "saved past the limit, then shrunk, still saves",
+            "bytes": [
+                {
+                    "hex": "610a"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": "a",
+                            "repeat": 8388609
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "61",
+                            "repeat": 8388609
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "short\n"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "73686f72740a"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "a UTF-16 CRLF file emptied, then typed into, keeps its mark and CRLF",
+            "bytes": [
+                {
+                    "hex": "fffe61000d000a00"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": ""
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "fffe"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "b\nc"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "fffe62000d000a006300"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "a UTF-8 file with a mark emptied, then typed into, keeps its mark",
+            "bytes": [
+                {
+                    "hex": "efbbbf78"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": ""
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "efbbbf"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "y"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "efbbbf79"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "a mixed file saved unchanged, then edited, then saved again unchanged",
+            "bytes": [
+                {
+                    "hex": "610d0a620d0a630a"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": "a\nb\nc\n"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a620d0a630a"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "a\nb\nc\nd"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a620d0a630d0a64"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "a\nb\nc\nd"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a620d0a630d0a64"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "a mixed file edited, saved, then put back as it opened, is written in its majority",
+            "bytes": [
+                {
+                    "hex": "610d0a620a630d0a"
+                }
+            ],
+            "saves": [
+                {
+                    "text": [
+                        {
+                            "text": "a\nb\nc\nd"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a620d0a630d0a64"
+                        }
+                    ]
+                },
+                {
+                    "text": [
+                        {
+                            "text": "a\nb\nc\n"
+                        }
+                    ],
+                    "saved": [
+                        {
+                            "hex": "610d0a620d0a630d0a"
+                        }
+                    ]
+                }
+            ]
         }
     ],
     "names": [

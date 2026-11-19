@@ -199,8 +199,11 @@ export function readOnlyReason(bytes: Uint8Array): ReadOnlyReason | null {
     return opened.editable ? null : opened.reason;
 }
 
-/* The editor's text written in `format`: every CRLF, lone CR or LF as the file's line break, then encoded, the byte order mark first. */
-function encodeIn(format: TextFormat, text: string) {
+/*
+ * The editor's text written in `format`, the one openText found when the file opened: every CRLF,
+ * lone CR or LF as the file's line break, then encoded, the byte order mark first.
+ */
+export function encodeText(format: TextFormat, text: string) {
     const lines = text.replace(/\r\n?|\n/g, format.lineEnding === 'crlf' ? '\r\n' : '\n');
     if (format.encoding === 'utf-8' || format.encoding === 'utf-8-bom') {
         const body = new TextEncoder().encode(lines);
@@ -223,17 +226,31 @@ function encodeIn(format: TextFormat, text: string) {
 }
 
 /*
- * What a save writes for `text`, the editor's words, when it opened `original`: `original` itself
- * while the text is still what it opened as (a file opened and saved without an edit is byte for
- * byte the same, a mixed one included); otherwise the text in the file's encoding with its byte
- * order mark, every line break (LF, CRLF or a lone CR pasted) as the file's. Null when `original`
- * isn't editable.
+ * One editing session's saves: the format found when the file opened, kept for the whole session
+ * (a save that removed every line break still writes CRLF for the next one typed; a text grown
+ * past the limit still saves), and the text and bytes last opened or saved, which only answer
+ * "nothing changed". The core's twin rule is held to the same fixture (`sessions`).
  */
-export function saveBytes(original: Uint8Array, text: string): Uint8Array | null {
-    const opened = openText(original);
-    if (!opened.editable) return null;
-    if (opened.text === text) return original;
-    return encodeIn(opened.format, text);
+export type SaveState = { format: TextFormat; text: string; bytes: Uint8Array };
+
+/* The session of bytes that open for editing, or null when they open read-only. */
+export function openedState(bytes: Uint8Array): SaveState | null {
+    const opened = openText(bytes);
+    return opened.editable ? { format: opened.format, text: opened.text, bytes } : null;
+}
+
+/*
+ * What a save writes for `text`: the bytes last opened or saved while the text is still theirs (a
+ * file opened and saved without an edit is byte for byte the same, a mixed one included),
+ * otherwise the text in the session's format.
+ */
+export function saveBytes(state: SaveState, text: string): Uint8Array {
+    return text === state.text ? state.bytes : encodeText(state.format, text);
+}
+
+/* After a save of `text` landed as `bytes`: what the next one compares with. */
+export function savedState(state: SaveState, text: string, bytes: Uint8Array): SaveState {
+    return { ...state, text, bytes };
 }
 
 /*
@@ -301,4 +318,26 @@ export function editableThroughShares(
         if (folderAbove) break;
     }
     return role === 'editor' && folderAbove;
+}
+
+/*
+ * How many bytes `text` takes in UTF-8, counted without encoding it (what a size limit measures,
+ * asked on every pause in typing). A surrogate without its pair counts as the three bytes of the
+ * replacement character TextEncoder writes for it.
+ */
+export function utf8Length(text: string) {
+    let bytes = 0;
+    for (let at = 0; at < text.length; at++) {
+        const unit = text.charCodeAt(at);
+        if (unit < 0x80) bytes += 1;
+        else if (unit < 0x800) bytes += 2;
+        else if (unit >= 0xd800 && unit <= 0xdbff) {
+            const next = text.charCodeAt(at + 1);
+            if (next >= 0xdc00 && next <= 0xdfff) {
+                bytes += 4;
+                at++;
+            } else bytes += 3;
+        } else bytes += 3;
+    }
+    return bytes;
 }

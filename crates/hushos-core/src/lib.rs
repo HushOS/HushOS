@@ -89,7 +89,7 @@ pub use shares::*;
 pub use signatures::*;
 pub use signup::*;
 pub use text_edit::{
-    text_edit_limit, text_editable_kind, text_open, text_read_only, text_save, LineEnding, TextEncoding,
+    text_edit_limit, text_editable_kind, text_encode, text_open, text_read_only, LineEnding, TextEncoding,
     TextFormat, TextOpened, TextReadOnly, TEXT_EDIT_LIMIT,
 };
 pub use tools::*;

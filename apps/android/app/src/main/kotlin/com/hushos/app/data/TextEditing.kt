@@ -10,7 +10,7 @@ import com.hushos.core.toolWatchdogMillis
 import com.hushos.core.textEditLimit
 import com.hushos.core.textEditableKind
 import com.hushos.core.textOpen
-import com.hushos.core.textSave
+import com.hushos.core.textEncode
 
 /*
  * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts and lib/text-save.ts,
@@ -57,11 +57,23 @@ object TextEditing {
     }
 
     /*
-     * What a save writes for `text` when the editor opened (or last saved) `original`: `original` itself while the text is
-     * still what it opened as, otherwise the text in the file's encoding, byte order mark and line breaks (the core's
-     * text_save). Null when `original` isn't editable.
+     * One editing session's saves, as on the web (lib/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
+     * format found when the file opened, kept for the whole session (a save that removed every line break still writes CRLF
+     * for the next one typed; a text grown past the limit still saves), and the text and bytes last opened or saved, which
+     * only answer "nothing changed".
      */
-    fun bytes(text: CharSequence, original: ByteArray): ByteArray? = textSave(original, text.toString())
+    class SaveState private constructor(val format: TextFormat, val text: String, val bytes: ByteArray) {
+        /* What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the session's format. */
+        fun bytes(text: CharSequence): ByteArray = if (same(text, this.text)) bytes else textEncode(format, text.toString())
+
+        /* After a save of `text` landed as `bytes`: what the next one compares with. */
+        fun saved(text: String, bytes: ByteArray) = SaveState(format, text, bytes)
+
+        companion object {
+            /* The session of bytes that open for editing; null when they open read-only. */
+            fun opening(bytes: ByteArray): SaveState? = (open(bytes) as? Open.Editable)?.let { SaveState(it.format, it.text, bytes) }
+        }
+    }
 
     /*
      * A line break typed or pasted into the system's text view, as the editor keeps it: CRLF and a lone CR become LF, as
@@ -193,7 +205,7 @@ object TextSave {
     fun runs(writer: SaveRunWriter, journal: SaveRunJournal) = Start { targets, results -> SaveRun.start(writer, targets, results, journal) }
 
     /*
-     * Save, and Save on top: a new version of `file` holding `bytes` (TextEditing.bytes), unless the file moved on from
+     * Save, and Save on top: a new version of `file` holding `bytes` (SaveState.bytes), unless the file moved on from
      * `startedFrom` (Save on top passes the version current now). Planned as those bytes with no thumbnail, signed as the
      * person's own writing.
      */

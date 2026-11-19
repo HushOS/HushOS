@@ -22,6 +22,8 @@ import {
     canHighlight,
     type ColouredLine,
     colourLines,
+    grammarsPreloaded,
+    grammarsReady,
     HIGHLIGHT_LIMIT,
     highlight,
     themeInk,
@@ -113,6 +115,25 @@ function FencedCode({ node, children }: { node?: Element; children?: ReactNode }
     return <pre className="rt-plain">{children}</pre>;
 }
 
+/*
+ * A fenced block that stays plain until the post-unlock preload has fetched every grammar (the
+ * editor's preview, where the text is someone's unsaved typing): coloured before that, the one
+ * grammar it fetched would say which language was typed.
+ */
+function FencedCodeAfterPreload(props: { node?: Element; children?: ReactNode }) {
+    const [ready, setReady] = useState(grammarsReady);
+    useEffect(() => {
+        if (ready) return;
+        let active = true;
+        void grammarsPreloaded.then(() => active && setReady(true));
+        return () => {
+            active = false;
+        };
+    }, [ready]);
+    if (!ready) return <pre className="rt-plain">{props.children}</pre>;
+    return <FencedCode {...props} />;
+}
+
 /* Markdown fence names people actually write, to the grammar ids we ship. */
 function normaliseLanguage(language: string | null) {
     if (!language) return null;
@@ -148,6 +169,10 @@ const markdownComponents: Partial<Components> = {
     table: ScrollingTable as Components['table'],
 };
 const codeComponents: Partial<Components> = {};
+const afterPreloadComponents: Partial<Components> = {
+    ...markdownComponents,
+    pre: FencedCodeAfterPreload as Components['pre'],
+};
 
 /* A hast tree as React elements. */
 export function HastView({
@@ -716,12 +741,26 @@ const Gutter = memo(function Gutter({
     );
 });
 
-/* Markdown rendered from its tree, built during render so nothing raw ever shows. */
-export function MarkdownView({ text }: { text: string }) {
+/*
+ * Markdown rendered from its tree, built during render so nothing raw ever shows. `fences`:
+ * "after-preload" keeps code fences plain until every grammar is fetched (the editor's preview).
+ */
+export function MarkdownView({
+    text,
+    fences = 'highlight',
+}: {
+    text: string;
+    fences?: 'highlight' | 'after-preload';
+}) {
     const tree = useMemo(() => markdownToHast(text), [text]);
     return (
         <article className="rt-markdown">
-            <HastView tree={tree} />
+            <HastView
+                tree={tree}
+                components={
+                    fences === 'after-preload' ? afterPreloadComponents : markdownComponents
+                }
+            />
         </article>
     );
 }

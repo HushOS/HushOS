@@ -41,6 +41,7 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { useIsDesktop } from '@/hooks/use-mobile';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
 import { unlockedNow } from '@/lib/auth-view';
 import { deviceSession } from '@/lib/device-session';
@@ -67,8 +68,11 @@ import {
     openText,
     READ_ONLY_WORDS,
     saveBytes,
+    savedState,
     TEXT_EDIT_LIMIT,
+    utf8Length,
     type ReadOnlyReason,
+    type SaveState,
     type TextFormat,
 } from '@/lib/text-edit';
 import { startCheck, type Check } from '@/lib/text-check';
@@ -319,6 +323,22 @@ function saveFailure(error: unknown) {
     return driveError(error);
 }
 
+/*
+ * Whether the text is past what the Markdown renderer takes (MARKDOWN_LIMIT, in UTF-8 bytes), counted
+ * only when its length can't already tell: UTF-8 never takes fewer bytes than UTF-16 units, nor more
+ * than three for one.
+ */
+function tooLongToPreview(doc: Text) {
+    if (doc.length > MARKDOWN_LIMIT) return true;
+    if (doc.length * 3 <= MARKDOWN_LIMIT) return false;
+    let bytes = 0;
+    for (const lines = doc.iter(); !lines.next().done;) {
+        bytes += utf8Length(lines.value);
+        if (bytes > MARKDOWN_LIMIT) return true;
+    }
+    return false;
+}
+
 /* Large text isn't checked as it changes: parsing megabytes of YAML on every pause would stall typing. */
 const CHECK_LIMIT = 2 * 1024 * 1024;
 
@@ -380,11 +400,11 @@ export function TextEditor({
     const editability = useRef(new Compartment());
     const saved = useRef<Text | null>(null);
     /*
-     * The bytes the text opened as, or last saved as: a save writes from them (saveBytes), so the
-     * file keeps its encoding, byte order mark and line breaks, and a text still as it was is them
-     * again. Null while nothing editable is open.
+     * The session's saves (lib/text-edit.ts SaveState): the format found when the file opened, kept
+     * whatever is saved since, and the text and bytes last opened or saved, so a text still as it
+     * was writes those bytes again. Null while nothing editable is open.
      */
-    const original = useRef<Uint8Array | null>(null);
+    const saveState = useRef<SaveState | null>(null);
     /* The open file's encoding and line breaks: a mixed file says which a save writes. */
     const [textFormat, setTextFormat] = useState<TextFormat | null>(null);
     const [dirty, setDirty] = useState(false);
@@ -418,7 +438,9 @@ export function TextEditor({
     const markdown = previewKindOf(loadFrom.name, loadFrom.metadata?.mime) === 'markdown';
     const [pane, setPane] = useState<'source' | 'preview'>('source');
     const [preview, setPreview] = useState<{ text: string } | 'too-long' | null>(null);
-    const previewed = useRef(false);
+    /* Rendered only while it can be seen: beside the source on a wide screen, or chosen on a narrow one. */
+    const wide = useIsDesktop();
+    const previewShown = markdown && (wide || pane === 'preview');
     // By the name's language, or the recorded type when the name gives none (an extensionless JSON file).
     const checks = structuredKindOf(language, loadFrom.metadata?.mime);
 
@@ -474,7 +496,9 @@ export function TextEditor({
                 const text = openText(bytes);
                 target.current = openedTarget(file);
                 // A copy of its own: what a save writes unchanged is exactly these bytes, nothing around them.
-                original.current = text.editable ? bytes.slice() : null;
+                saveState.current = text.editable
+                    ? { format: text.format, text: text.text, bytes: bytes.slice() }
+                    : null;
                 setTextFormat(text.editable ? text.format : null);
                 onRead(file.currentVersion?.id ?? null, file);
                 setPhase(
@@ -581,20 +605,26 @@ export function TextEditor({
 
     // The Markdown preview, a moment after typing stops: the viewer's renderer, sanitized the same
     // way (images and links named, never fetched). Past the renderer's limit it says so instead.
+    // Nothing is scheduled or mounted while it can't be seen; it shows the text as it is now when it can.
+    const previewing = useRef(false);
     useEffect(() => {
         const current = view.current;
-        if (!markdown || !current) return;
-        // The first one at once, so the preview never opens empty.
+        if (!previewShown || !current) {
+            previewing.current = false;
+            setPreview(null);
+            return;
+        }
+        // At once when it comes into view, so it never opens empty or on older text.
         const timer = window.setTimeout(
             () => {
-                previewed.current = true;
+                previewing.current = true;
                 const doc = current.state.doc;
-                setPreview(doc.length > MARKDOWN_LIMIT ? 'too-long' : { text: doc.toString() });
+                setPreview(tooLongToPreview(doc) ? 'too-long' : { text: doc.toString() });
             },
-            previewed.current ? 250 : 0,
+            previewing.current ? 250 : 0,
         );
         return () => window.clearTimeout(timer);
-    }, [edits, markdown]);
+    }, [edits, previewShown]);
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
     useEffect(
@@ -706,9 +736,12 @@ export function TextEditor({
     /* After a save landed: the editor's text is the file's now, from that version on, as `bytes`. */
     const settled = useCallback(
         (doc: Text, file: DriveNode, versionId: string | null, bytes: Uint8Array) => {
-            // Written in one line break from here on, unless the save sent the bytes it opened as.
-            if (bytes !== original.current) setTextFormat((was) => was && { ...was, mixed: false });
-            original.current = bytes;
+            const state = saveState.current;
+            if (state) {
+                // Written in one line break from here on, unless the save sent the bytes it had.
+                if (bytes !== state.bytes) setTextFormat((was) => was && { ...was, mixed: false });
+                saveState.current = savedState(state, doc.toString(), bytes);
+            }
             // The version this save published, never one read from a listing afterwards (which may
             // already be someone else's). Unknown, the next save asks the stale question. A copy
             // is still signed from the version the text was read from, never this row.
@@ -738,11 +771,10 @@ export function TextEditor({
             const taken = token();
             const doc = current.state.doc;
             const { file, startedFrom } = target.current;
-            const opened = original.current;
-            if (!opened) return;
-            // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
-            const bytes = saveBytes(opened, doc.toString());
-            if (!bytes) return;
+            const state = saveState.current;
+            if (!state) return;
+            // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it had.
+            const bytes = saveBytes(state, doc.toString());
             let landed = false;
             beginSaving();
             setStatus(null);
@@ -806,11 +838,10 @@ export function TextEditor({
         const taken = token();
         const doc = current.state.doc;
         const { file, source } = target.current;
-        const opened = original.current;
-        if (!opened) return;
+        const state = saveState.current;
+        if (!state) return;
         // The copy keeps the file's encoding and line breaks too.
-        const bytes = saveBytes(opened, doc.toString());
-        if (!bytes) return;
+        const bytes = saveBytes(state, doc.toString());
         let landed = false;
         beginSaving();
         setStatus(null);
@@ -933,7 +964,7 @@ export function TextEditor({
     const header = actions
         ? createPortal(
               <div className="flex min-w-0 items-center gap-3">
-                  {markdown && shown && (
+                  {markdown && shownText !== null && (
                       // A narrow screen shows one at a time; a wide one shows both side by side.
                       <fieldset
                           className={cn(
@@ -1049,15 +1080,12 @@ export function TextEditor({
                             markdown && pane === 'preview' && 'max-lg:hidden',
                         )}
                     />
-                    {markdown && (
+                    {previewShown && (
                         // Beside the source on a wide screen; in its place on a narrow one, when chosen.
                         <section
                             aria-label={editorWords.preview}
                             data-markdown-preview
-                            className={cn(
-                                'min-h-0 min-w-0 flex-1 overflow-auto border-rule lg:border-l',
-                                pane === 'source' && 'max-lg:hidden',
-                            )}
+                            className="min-h-0 min-w-0 flex-1 overflow-auto border-rule lg:border-l"
                         >
                             {preview === 'too-long' ? (
                                 <p className="px-6 py-10 text-center text-sm text-muted-foreground">
@@ -1066,7 +1094,8 @@ export function TextEditor({
                             ) : (
                                 preview && (
                                     <Suspense fallback={null}>
-                                        <MarkdownView text={preview.text} />
+                                        {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
+                                        <MarkdownView text={preview.text} fences="after-preload" />
                                     </Suspense>
                                 )
                             )}

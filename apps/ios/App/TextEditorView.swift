@@ -6,7 +6,7 @@ import UIKit
  * The text editor (Editing 1a and 1b; docs/editing-design.md sections 1 and 3, the web's
  * text-editor.tsx): the system's text view over the file's current version, read again from the
  * server. Saving is explicit (Save), a new version through the save path (TextSave over SaveRuns), in
- * the file's own encoding, byte order mark and line breaks (TextEditing.bytes), with the stale choices
+ * the file's own encoding, byte order mark and line breaks (TextEditing.SaveState), with the stale choices
  * when someone else saved first: Save on top, Save as a copy, Open theirs after a confirmation. A file
  * it can't save byte for byte opens read-only with a note. Markdown offers Source or Preview, the
  * viewer's rendering (MarkdownView: images named, never fetched). No colouring on the phone. Its text
@@ -52,16 +52,19 @@ struct TextEditorScreen: View {
     /* The text as last opened or saved: typing then undoing it is no change (Save sends nothing, Close asks nothing). */
     @State private var savedText = ""
     /*
-     * The bytes the text opened as, or last saved as: a save writes from them (TextEditing.bytes), so the file keeps its
-     * encoding, byte order mark and line breaks, and a text still as it was is them again. Nil while nothing editable is open.
+     * The session's saves (TextEditing.SaveState): the format found when the file opened, kept whatever is saved since, and
+     * the text and bytes last opened or saved, so a text still as it was writes those bytes again. Nil while nothing
+     * editable is open.
      */
-    @State private var original: Data?
+    @State private var saveState: TextEditing.SaveState?
     /* The open file's encoding and line breaks: a mixed file says which a save writes. */
     @State private var format: TextFormat?
     /* Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. */
     @State private var pane = Pane.source
     @State private var previewText = ""
     @State private var previewRevision = 0
+    /* The text was past what the preview renders when Preview was chosen: it stayed on Source and says so. */
+    @State private var previewTooLong = false
 
     private enum Pane: Hashable { case source, preview }
     @State private var edited = false
@@ -117,7 +120,7 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             savedText = ""
-            original = nil
+            saveState = nil
             previewText = ""
             dismiss()
         }
@@ -141,7 +144,7 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             savedText = ""
-            original = nil
+            saveState = nil
             previewText = ""
             // Gone: what waited for it goes on, once; its family row's verdict is the listing's again.
             store.holdForEditor(nil)
@@ -235,6 +238,7 @@ struct TextEditorScreen: View {
         case .readOnly(let reason, let text):
             VStack(spacing: 0) {
                 if text != nil, isMarkdown { panes }
+                if previewTooLong { note(EditorWords.previewTooLong) }
                 note(TextEditing.words(reason))
                 if let text {
                     ZStack {
@@ -246,6 +250,7 @@ struct TextEditorScreen: View {
         case .editing:
             VStack(spacing: 0) {
                 if isMarkdown { panes }
+                if previewTooLong { note(EditorWords.previewTooLong) }
                 if let line = closing ? EditorWords.finishing : failure ?? (edited ? nil : status) {
                     note(line, failed: !closing && failure != nil)
                 }
@@ -275,16 +280,27 @@ struct TextEditorScreen: View {
         .padding(.vertical, Alpine.Space.s2)
         .onChange(of: pane) { _, now in
             guard now == .preview else { return }
+            let text = editor.text
+            // Past what the viewer renders (MarkdownDocument.limit, in UTF-8 bytes): Source stays, and says why.
+            if text.utf8.count > MarkdownDocument.limit {
+                previewTooLong = true
+                pane = .source
+                return
+            }
+            previewTooLong = false
             // The words as they are now; the keyboard goes, since nothing is typed into a preview.
             editor.endEditing()
-            previewText = editor.text
+            previewText = text
             previewRevision += 1
         }
     }
 
-    /* The viewer's rendering: raw HTML dropped, links only on a tap, images named and never fetched. */
+    /*
+     * The viewer's rendering: raw HTML dropped, links only on a tap, images named and never fetched. Not selectable: a copy
+     * from here would skip the editor's local-only, expiring one.
+     */
     private var preview: some View {
-        MarkdownView(data: Data(previewText.utf8)).id(previewRevision)
+        MarkdownView(data: Data(previewText.utf8), selectable: false).id(previewRevision)
     }
 
     private func note(_ text: String, failed: Bool = false) -> some View {
@@ -321,7 +337,7 @@ struct TextEditorScreen: View {
         work?.cancel()
         editor.drop()
         savedText = ""
-        original = nil
+        saveState = nil
         previewText = ""
         edited = false
         dismiss()
@@ -360,11 +376,11 @@ struct TextEditorScreen: View {
             case .editable(let text, let opened):
                 editor.open(text)
                 savedText = text
-                original = data
+                saveState = TextEditing.SaveState(opening: data)
                 format = opened
                 phase = .editing
             case .readOnly(let reason, let text):
-                original = nil
+                saveState = nil
                 format = nil
                 editor.open(text ?? "")
                 phase = .readOnly(reason, text)
@@ -406,7 +422,7 @@ struct TextEditorScreen: View {
         let vault = token.owner
         let text = editor.text
         // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
-        guard let opened = original, let bytes = TextEditing.bytes(for: text, from: opened) else { return }
+        guard let bytes = saveState?.bytes(for: text) else { return }
         saving = true
         failure = nil
         status = nil
@@ -437,7 +453,7 @@ struct TextEditorScreen: View {
                 }
                 if TextEditing.speaksFor(landed, versionId: versionId, at: destination) { marked = landed }
                 savedText = text
-                settle(bytes)
+                settle(text, as: bytes)
                 // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
                 edited = !TextEditing.same(editor.text, text)
                 status = EditorWords.saved
@@ -455,7 +471,7 @@ struct TextEditorScreen: View {
         let vault = token.owner
         let text = editor.text
         // The copy keeps the file's encoding and line breaks too.
-        guard let opened = original, let bytes = TextEditing.bytes(for: text, from: opened) else { return }
+        guard let bytes = saveState?.bytes(for: text) else { return }
         saving = true
         failure = nil
         defer { saving = false }
@@ -474,7 +490,7 @@ struct TextEditorScreen: View {
             startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
             if TextEditing.speaksFor(made.file, versionId: made.versionId, at: destination) { marked = made.file }
             savedText = text
-            settle(bytes)
+            settle(text, as: bytes)
             edited = !TextEditing.same(editor.text, text)
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
@@ -485,10 +501,11 @@ struct TextEditorScreen: View {
         }
     }
 
-    /* A save or a copy landed as `bytes`: the next one writes from them, in one line break from here unless it sent the bytes it opened as. */
-    private func settle(_ bytes: Data) {
-        if bytes != original { format?.mixed = false }
-        original = bytes
+    /* A save or a copy of `text` landed as `bytes`: in one line break from here, unless it sent the bytes it had. */
+    private func settle(_ text: String, as bytes: Data) {
+        guard let state = saveState else { return }
+        if bytes != state.bytes { format?.mixed = false }
+        saveState = state.saved(text, as: bytes)
     }
 
     private func openTheirs() async {
@@ -498,7 +515,11 @@ struct TextEditorScreen: View {
         work?.cancel()
         editor.drop()
         savedText = ""
-        original = nil
+        saveState = nil
+        // Their text opens on Source: the preview showed the text just discarded.
+        pane = .source
+        previewText = ""
+        previewTooLong = false
         edited = false
         status = nil
         failure = nil
@@ -536,6 +557,7 @@ enum EditorWords {
     static let show = "Show"
     static let source = "Source"
     static let preview = "Preview"
+    static let previewTooLong = "This file is too long to preview while you edit."
 }
 
 private extension View {
