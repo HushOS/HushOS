@@ -19,6 +19,9 @@
     "dependencies": {
         "@atlaskit/pragmatic-drag-and-drop": "4.0.0",
         "@atlaskit/pragmatic-drag-and-drop-hitbox": "3.0.0",
+        "@aws-sdk/client-s3": "3.1172.0",
+        "@aws-sdk/client-sesv2": "3.1172.0",
+        "@aws-sdk/s3-request-presigner": "3.1172.0",
         "@base-ui/react": "1.9.0",
         "@codemirror/commands": "6.11.1",
         "@codemirror/lang-cpp": "6.0.3",
