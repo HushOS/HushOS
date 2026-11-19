@@ -25,6 +25,7 @@ const KNOWN = [
     /\/json\.worker-/,
     /\/thumbnail\.worker-/,
     /\/archive\.tool-worker-/,
+    /\/images-pdf\.tool-worker-/,
     /\/pdf\.worker\.min-/,
     /^\/download-sw\.js$/,
     /^\/push-sw\.js$/,

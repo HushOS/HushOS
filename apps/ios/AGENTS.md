@@ -710,7 +710,7 @@ See `docs/identity-pq-design.md`.
 
 ### File tools harness
 
-- `HushOSKit/ToolRuns.swift`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `HushOSKit/ToolRuns.swift`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
 - `ToolRuns.run` takes one run at a time (a second waits, told `waiting(behind:)`), runs the work on a `Thread` of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling task is cancelled.
 - A thread can't be killed: cancel and the watchdog end the run for the caller at once, a request in flight is cancelled (`StoreSource` waits in slices), and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
 - Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
@@ -723,6 +723,15 @@ See `docs/identity-pq-design.md`.
 - The watchdog's clock is injectable (`clock:`); tests use one that moves a second per read.
 - `Vault.toolReader` (`ToolReaders.reader`) gives the core's `VersionReader` over a version, fetching each chunk's range through `StoreSource` (blocking the run's thread, never a cooperative one) with the downloads' retries and address renewal.
 - Tests: `ToolRunsTests`.
+
+### One PDF (images to PDF)
+
+- Convert, then One PDF: `NodeMenu` (a `Convert` submenu on an image, for anyone but a viewer) and the selection bar's More (`Convert` submenu, enabled only when every item is an image a PDF takes). Both set `NodeAction.onePdf`, which opens `App/ImagesPdfSheet.swift`.
+- The sheet: a `Form` whose Order section is always in edit mode (drag handles), each row with VoiceOver actions Move earlier and Move later; Page size and Margins pickers; the name (the first image's with `.pdf` until typed); "Location and camera details are left out." Making it keeps the sheet up with its progress and Stop (asks first); the sheet can't be swiped away while it runs.
+- `HushOSKit/ImagesPdf.swift`: `ImagesPdf.make` starts a `SaveRun` (room first), reads each image in a `ToolRuns` run (the reader's address is awaited on the run's own thread, `blocking`), builds the PDF with the core's `ImagesPdfWriter`, counts it in `ToolRuns.budget` until the save has it, and saves it as a new file. Any failure or Stop cancels the save run, which removes what it made. `ToolRuns` turns a work's errors into `ToolFailed`, so a refusal is kept beside it (`Refusal`) and thrown as `ImagesPdfRefused` with the image's name.
+- Decoding (`ImagesPdfImages`): a JPEG is never decoded (the core cuts its metadata); anything else through ImageIO, upright (`kCGImageSourceCreateThumbnailWithTransform`), refused past `ImagesPdf.maxPixels` (the core's `imagesPdfMaxPixels(physical memory)`) from its header. A PNG or an image with a transparent pixel goes in as premultiplied RGBA; the rest as JPEG at 0.92. HEIC reads here.
+- Not yet: a row in the transfers list, and the interrupted-run prompt (`SaveRuns.interrupted` has no screen).
+- Tests: `ImagesPdfTests` (PDFKit reads the PDF back; an ImageIO-made HEIC with orientation 6; the shared fixtures in `e2e/fixtures/images`).
 
 ### Archives
 

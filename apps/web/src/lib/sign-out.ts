@@ -247,6 +247,9 @@ async function forgetOpened() {
         // Tool runs too, finished ones included: workers stop, and every result not yet released
         // to the upload is dropped from memory and the budget.
         import('@/lib/tools/active').then(({ cancelAllToolRuns }) => cancelAllToolRuns()),
+        // And their rows in the transfers panel, which name the files they were made from.
+        import('@/lib/tool-run-rows').then(({ toolRunRows }) => toolRunRows.forget()),
+        import('@/lib/interrupted-runs').then(({ forgetInterrupted }) => forgetInterrupted()),
     ];
     const results = await Promise.allSettled(parts);
     // Only now that nothing open can pull the feed into it.

@@ -563,6 +563,8 @@ export type ProducedFile = {
      * couldn't say), before the file is answered: a reply row may already show a newer one.
      */
     onVersion?: (versionId: string | null) => void;
+    /* Hears its upload's id in the transfer manager once it is queued, for a run's row to show and pause it. */
+    onQueued?: (transferId: string) => void;
 };
 
 export type ProducedVersion = {
@@ -997,6 +999,7 @@ function createRun(
             replaces?: DriveNode;
             startedFrom?: string | null;
             onVersion?: (versionId: string | null) => void;
+            onQueued?: (transferId: string) => void;
         },
     ) {
         const output: Pending = {
@@ -1080,6 +1083,7 @@ function createRun(
             deps.from,
         );
         pending.set(id!, output);
+        extra.onQueued?.(id!);
         return settledPromise;
     }
 
@@ -1360,6 +1364,7 @@ function createRun(
                 await open();
                 return (await enqueue('file', file, into, result.sources, {
                     onVersion: result.onVersion,
+                    onQueued: result.onQueued,
                 })) as NodeView | null;
             });
         },

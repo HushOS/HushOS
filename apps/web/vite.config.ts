@@ -188,6 +188,41 @@ function zipJsWithoutCodecImport(): Plugin {
     };
 }
 
+/*
+ * pdf-lib (@cantoo/pdf-lib) runs in the PDF tools worker, which no policy lets run dynamic code;
+ * check-worker-code.ts fails the build on any use of `Function` as a value, called or not. pdf-lib
+ * uses it only as a type tag in its argument checks (`[Function]`, and `type === Function` in
+ * isType), never calling it. The tag becomes the string 'function', checked with typeof, which
+ * accepts what `instanceof Function` did. The match is on the exact text: if an upgrade changes
+ * the check, this plugin stops the build, and any other use still fails check-worker-code.ts.
+ */
+function pdfLibWithoutFunctionTag(): Plugin {
+    const library = /@cantoo[\\/]pdf-lib[\\/]es[\\/]/;
+    const validators = /@cantoo[\\/]pdf-lib[\\/]es[\\/]utils[\\/]validators\.js$/;
+    const check = 'if (type === Function)\n        return value instanceof Function;';
+    return {
+        name: 'hushos:pdf-lib-without-function-tag',
+        enforce: 'pre',
+        transform(code, id) {
+            const path = id.split('?')[0]!;
+            if (!library.test(path)) return null;
+            let out = code;
+            if (validators.test(path)) {
+                if (!out.includes(check))
+                    this.error(
+                        'pdf-lib no longer checks for functions where expected: check validators.js.',
+                    );
+                out = out.replace(
+                    check,
+                    "if (type === 'function')\n        return typeof value === 'function';",
+                );
+            }
+            out = out.replaceAll('[Function]', "['function']");
+            return out === code ? null : out;
+        },
+    };
+}
+
 export default defineConfig({
     server: {
         host: '0.0.0.0',
@@ -197,7 +232,7 @@ export default defineConfig({
     },
     resolve: { tsconfigPaths: true },
     // Worker bundles take only these plugins in a build (the list below applies to them in dev).
-    worker: { plugins: () => [zipJsWithoutCodecImport()] },
+    worker: { plugins: () => [zipJsWithoutCodecImport(), pdfLibWithoutFunctionTag()] },
     // Loaded by the runtime from the output's node_modules, never bundled: their dependencies
     // need their own load order (nitro.config.ts, `traceDeps`).
     ssr: {
@@ -231,6 +266,7 @@ export default defineConfig({
         oneRequestPerConnectionInCI(),
         playgroundOutOfBuild(),
         zipJsWithoutCodecImport(),
+        pdfLibWithoutFunctionTag(),
         pdfjsAssets(),
         mdxMeta(),
         {

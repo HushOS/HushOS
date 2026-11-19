@@ -2587,6 +2587,56 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         _state.update { it.copy(editing = item.id) }
     }
 
+    /*
+     * Convert, then One PDF (data/ImagesPdf.kt): the PDF of `images` beside the first of them, as `name` (the next free one
+     * there). Null once saved, else what to say; a cancel of the calling coroutine stops it and cleans up what was made.
+     */
+    suspend fun makeImagesPdf(images: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean, name: String,
+                              progress: (Int, Int) -> Unit): String? {
+        val opening = vault ?: return com.hushos.core.toolFailedMessage()
+        // The account session this run began under: a 401 ends it only while it is still the one in use.
+        val signedIn = Shared.session(context)
+        val memory = android.app.ActivityManager.MemoryInfo().also {
+            (context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(it)
+        }.totalMem
+        var stopped: com.hushos.app.data.SaveRunStopped? = null
+        val result = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val writer = com.hushos.app.data.VaultSaveWriter(opening, storage = { Auth.storage(context) })
+                val (folder, _) = writer.editTarget(images.first())
+                val saved = com.hushos.app.data.ImagesPdf.make(writer, opening, com.hushos.app.data.SaveRunJournal.of(context), images, folder,
+                    size, margin, name, memory, progress, stopped = { stopped = it })
+                folder to saved
+            }
+        }
+        result.onSuccess { (folder, saved) ->
+            refresh(folder.id)
+            notify("Saved “${saved.name}”.")
+            return null
+        }
+        val error = result.exceptionOrNull()!!
+        if (sessionGone(error, signedIn)) return null
+        // Stopped (Stop, or the sheet going): how the run's clean-up ended, in its words.
+        if (error is kotlinx.coroutines.CancellationException) return stopped?.message ?: com.hushos.app.data.SaveRuns.CANCELLED
+        return (error as? com.hushos.app.data.ImagesPdfRefused)?.message
+            ?: com.hushos.app.data.SaveRuns.reason(error)
+            ?: (error as? com.hushos.app.data.ToolFailed)?.message
+            ?: com.hushos.core.toolFailedMessage()
+    }
+
+    /* A sign-out or a refused session under a run: the session check says it, not the run. */
+    private fun sessionGone(error: Throwable, signedIn: Shared.Session?): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is NotAuthenticated || (cause is com.hushos.app.data.SaveRunStopped && cause.sessionRefused)) {
+                archiveRefused(signedIn)
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
+    }
+
     fun closeEditor() {
         endTextEdit()
         _state.update { it.copy(editing = null) }

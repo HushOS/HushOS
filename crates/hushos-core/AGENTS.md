@@ -103,6 +103,7 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 | `roster_calls/removal.rs` | `groupStage` kinds `remove`, `markLeft`, `rotate`, `retire`; `groupRestage`; `groupPreviousRoot`                    | Calls that rotate folders                                                    |
 | `ledger_settings.rs`      | `settingsOpenFor` in `packages/crypto/src/settings-marks.ts`                                                        | Settings and family checks in the ledger                                     |
 | `area_open.rs`            | The worker's `groupOpenArea`, `grantAreaKey`/`openAreaSelfGrant`, `rewrapAreaSelfGrant`                             | Opening a family folder, self-grants                                         |
+| `images_pdf.rs`           | `apps/web/src/lib/images-pdf/jpeg.ts`, `geometry.ts` (held to `e2e/fixtures/images`)                                | The JPEG segment cutter, page geometry, `ImagesPdfWriter` for the phones     |
 
 ## Primitives
 

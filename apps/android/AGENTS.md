@@ -662,7 +662,7 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 
 ### File tools harness
 
-- `data/ToolRuns.kt`: what file tools will run on (docs/file-tools-design.md, section 6). No screen uses it yet.
+- `data/ToolRuns.kt`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
 - `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
 - A thread can't be killed: cancel and the watchdog end the run for the caller at once, a connection in flight is disconnected and a retry's wait cut short, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns; a caller cancelled before the thread starts gives the slot back itself.
 - Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
@@ -679,6 +679,14 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 - Tests that run code on `Dispatchers.Unconfined` take their scope from `UnconfinedScopes` and cancel it after each test.
 - `Vault.toolReader` (`toolReaderOf`) gives the core's `VersionReader` over a version, each chunk's range fetched through `StoreSource` with the downloads' retries and address renewal (`DriveApi.range`'s `guard` hands it the `RangeCall` to cut off).
 - Tests: `ToolRunsTest`.
+
+### One PDF (images to PDF)
+
+- Convert, then One PDF: the item sheet's `Convert` row (`ItemSheet.CONVERT`, then `ONE_PDF`) and the selection's ⋮ `Convert` (enabled when every item is an image a PDF takes); Convert opens `ConvertSheet`, whose one row opens `ui/ImagesPdfSheet.kt`.
+- The sheet: rows to reorder by long-pressing the handle and dragging, or by each row's Move earlier and Move later buttons (also TalkBack actions); segmented Page size and Margins; the name; "Location and camera details are left out."; progress and Stop (asks first). `DriveViewModel.makeImagesPdf` runs it on `Dispatchers.IO` and hands back the words to show (null once saved); a cancel's words are the save run's own (`stopped`).
+- `data/ImagesPdf.kt`: `ImagesPdf.make` starts a `SaveRun`, builds in a `ToolRuns` run (`vault.toolReader(...).readAt`, never `TextEditing.bytesOf`, which finishes the control), counts the PDF in `ToolRuns.budget` until saved, and saves it as a new file; any failure or cancel cancels the save run. Decoding: a JPEG never decoded; anything else through `ImageDecoder` (orientation applied, unpremultiplied, software allocator), refused from its header past `imagesPdfMaxPixels(totalMem)`. A PNG or an image with a transparent pixel goes in as RGBA; the rest as JPEG at 92. HEIC reads here.
+- Not yet: a row in the transfers sheet, and the interrupted-run prompt.
+- Tests: `data/ImagesPdfTest` on the JVM (the JPEG path, which never decodes) and `ImagesPdfDeviceTest` on the emulator (`PdfRenderer` reads the PDF back; PNG transparency, WebP as JPEG, the pixel cap): `ANDROID_SERIAL=emulator-5560 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.hushos.app.ImagesPdfDeviceTest`.
 
 ### Archives
 

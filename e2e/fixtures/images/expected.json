@@ -1,0 +1,355 @@
+{
+    "canaries": {
+        "text": [
+            "HushCanaryCam",
+            "HUSHOS-CANARY-XMP-7d41",
+            "HUSHOS-CANARY-IPTC-2c90",
+            "HUSHOS-CANARY-COM-913a",
+            "HUSHOS-CANARY-MPF-4e07"
+        ],
+        "gpsLatitudeHex": [
+            "33000000010000001e000000010000005a0a000064000000",
+            "00000033000000010000001e0000000100000a5a00000064"
+        ]
+    },
+    "cut": [
+        {
+            "file": "plain.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "JFIF only: unchanged"
+        },
+        {
+            "file": "gps.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "EXIF with GPS, Make and Model: dropped"
+        },
+        {
+            "file": "xmp.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "XMP and extended XMP: dropped"
+        },
+        {
+            "file": "iptc.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "IPTC in Photoshop APP13: dropped"
+        },
+        {
+            "file": "icc.jpg",
+            "outcome": "ok",
+            "sha256": "c017c78a79f6254abacbcae3fe8b964ec75b362282cf7c2dcab6a0de561730d8",
+            "length": 3307,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "ICC profile kept, EXIF dropped"
+        },
+        {
+            "file": "adobe-cmyk.jpg",
+            "outcome": "ok",
+            "sha256": "3f6ea244e49c82472aad7d949c8892bb2d660c086568364442fb88019349d161",
+            "length": 3543,
+            "width": 200,
+            "height": 120,
+            "components": 4,
+            "orientation": 1,
+            "adobe": true,
+            "note": "CMYK with the Adobe marker kept, EXIF dropped"
+        },
+        {
+            "file": "grey.jpg",
+            "outcome": "ok",
+            "sha256": "0a9aa1e408a34770fd6952b0aeb69cf67c5797929cdc7c20be8749adac5febf6",
+            "length": 1047,
+            "width": 120,
+            "height": 90,
+            "components": 1,
+            "orientation": 1,
+            "adobe": false,
+            "note": "one component"
+        },
+        {
+            "file": "progressive.jpg",
+            "outcome": "ok",
+            "sha256": "f17504b638d8839924786cc2e0591dfdd07f7f05f1c61feb9bbad2520549b0b0",
+            "length": 1809,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "progressive, EXIF, XMP and a comment dropped"
+        },
+        {
+            "file": "between-scans.jpg",
+            "outcome": "ok",
+            "sha256": "f17504b638d8839924786cc2e0591dfdd07f7f05f1c61feb9bbad2520549b0b0",
+            "length": 1809,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "EXIF and a comment between scans: dropped"
+        },
+        {
+            "file": "orientation-1.jpg",
+            "outcome": "ok",
+            "sha256": "910a78af896179dc693761dee04d15b9fa10eb09f662a3e6aa19307ded3f7e4b",
+            "length": 1158,
+            "width": 60,
+            "height": 40,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-2.jpg",
+            "outcome": "ok",
+            "sha256": "6ded4b52df8297b049a701fbd7a27c2e21db5594feabf822b93bcec2b4388179",
+            "length": 1125,
+            "width": 60,
+            "height": 40,
+            "components": 3,
+            "orientation": 2,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-3.jpg",
+            "outcome": "ok",
+            "sha256": "f7be727889576ff00d1546b275478e96c404b4881e56f7147d16799abcceae02",
+            "length": 1098,
+            "width": 60,
+            "height": 40,
+            "components": 3,
+            "orientation": 3,
+            "adobe": false,
+            "note": "big-endian TIFF"
+        },
+        {
+            "file": "orientation-4.jpg",
+            "outcome": "ok",
+            "sha256": "40f21a12538ebb1d790c63ce9d852be8c018928fb3d67c9de8d8b4cb0c60cbd5",
+            "length": 1132,
+            "width": 60,
+            "height": 40,
+            "components": 3,
+            "orientation": 4,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-5.jpg",
+            "outcome": "ok",
+            "sha256": "754502a29164835c5799d4f5733b18dd18b81a89a9abe090f08efea9c97949a6",
+            "length": 1158,
+            "width": 40,
+            "height": 60,
+            "components": 3,
+            "orientation": 5,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-6.jpg",
+            "outcome": "ok",
+            "sha256": "d6dbcbb3547d9d5cac1224d8d9e2ac816a5175b1a0357cdad429d3aaa7fcf763",
+            "length": 1125,
+            "width": 40,
+            "height": 60,
+            "components": 3,
+            "orientation": 6,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-7.jpg",
+            "outcome": "ok",
+            "sha256": "5ed525fa68c40683146bc5e24714ca9bc42254c7c1793ca1aa755ca15d8f7245",
+            "length": 1096,
+            "width": 40,
+            "height": 60,
+            "components": 3,
+            "orientation": 7,
+            "adobe": false,
+            "note": ""
+        },
+        {
+            "file": "orientation-8.jpg",
+            "outcome": "ok",
+            "sha256": "bb5a5ba194edfcd66de66ce5a833ed8a9b92878f4b2c249acf003a5ec8c96510",
+            "length": 1142,
+            "width": 40,
+            "height": 60,
+            "components": 3,
+            "orientation": 8,
+            "adobe": false,
+            "note": "big-endian TIFF"
+        },
+        {
+            "file": "phone-rotated.jpg",
+            "outcome": "ok",
+            "sha256": "777619ad4e6de2162c297c4bf0c1c40a470b0dc0acf7885b47326a52dc96dca9",
+            "length": 5399,
+            "width": 300,
+            "height": 400,
+            "components": 3,
+            "orientation": 6,
+            "adobe": false,
+            "note": "a phone photo held upright: stored sideways, orientation 6, with GPS"
+        },
+        {
+            "file": "two-exif.jpg",
+            "outcome": "ok",
+            "sha256": "d6dbcbb3547d9d5cac1224d8d9e2ac816a5175b1a0357cdad429d3aaa7fcf763",
+            "length": 1125,
+            "width": 40,
+            "height": 60,
+            "components": 3,
+            "orientation": 6,
+            "adobe": false,
+            "note": "the first EXIF block's orientation, both dropped"
+        },
+        {
+            "file": "mpf-trailer.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "MPF in APP2 and a second image after the end: dropped"
+        },
+        {
+            "file": "other-segments.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "APP3, APP12, APP15, JFXX, a comment and fill bytes: dropped"
+        },
+        {
+            "file": "restart.jpg",
+            "outcome": "ok",
+            "sha256": "42b07daed2ce67f3becbfe95e3355417469009b862a0145ecb3954026d61f4c0",
+            "length": 2194,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "restart markers inside the scans"
+        },
+        {
+            "file": "truncated-segment.jpg",
+            "outcome": "damaged",
+            "note": "ends inside the EXIF segment"
+        },
+        {
+            "file": "truncated-scan.jpg",
+            "outcome": "ok",
+            "sha256": "d5ae3825b70aba07a032419c4ce0c9a705cf8c535cb4cee19fbd7f97bb6ad7c0",
+            "length": 1657,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "ends inside the image data: kept, end marker added"
+        },
+        {
+            "file": "arithmetic.jpg",
+            "outcome": "unsupported",
+            "note": "arithmetic coding (SOF9)"
+        },
+        {
+            "file": "empty.jpg",
+            "outcome": "damaged",
+            "note": "no bytes"
+        },
+        {
+            "file": "soi-eoi.jpg",
+            "outcome": "damaged",
+            "note": "no picture"
+        },
+        {
+            "file": "garbage.jpg",
+            "outcome": "damaged",
+            "note": "random bytes"
+        },
+        {
+            "file": "garbage-after-soi.jpg",
+            "outcome": "damaged",
+            "note": ""
+        },
+        {
+            "file": "png-named-jpg.jpg",
+            "outcome": "damaged",
+            "note": "a PNG"
+        },
+        {
+            "file": "bad-length.jpg",
+            "outcome": "damaged",
+            "note": "a segment length of 1"
+        },
+        {
+            "file": "no-frame.jpg",
+            "outcome": "damaged",
+            "note": "a scan before any frame header"
+        },
+        {
+            "file": "zero-height.jpg",
+            "outcome": "unsupported",
+            "note": "height 0 (set later by DNL)"
+        },
+        {
+            "file": "exif-garbled.jpg",
+            "outcome": "ok",
+            "sha256": "5193d7b4134642cb8b416741335f205ef626283807d74b39abda65da07537562",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "unreadable EXIF: orientation 1, dropped"
+        }
+    ]
+}

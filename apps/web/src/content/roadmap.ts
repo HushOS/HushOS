@@ -289,7 +289,7 @@ export const sections: RoadmapSection[] = [
                 status: 'now',
                 area: 'Drive',
                 title: 'File tools',
-                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device. Zip archives already open as a list you can browse, preview and download from, on the web, iPhone and Android.',
+                body: 'Open zip and tar archives without downloading them, extract them, or compress files into one. Turn photos into a PDF, merge or split PDFs, and convert images, HEIC included, all on your device. Zip archives already open as a list you can browse, preview and download from, and a selection of photos already becomes one PDF, with location and camera details left out, on the web, iPhone and Android.',
                 links: [
                     { kind: 'docs', path: 'docs/file-tools-design.md', label: 'Read the design' },
                 ],
