@@ -1,0 +1,63 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_2696ce4cb7cd49 375-377,1040-1041,1294-1295,1301,1306-1307,1335
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_5aed911c57ed70 2209-2212
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_37eeb0f1c08fca 2582-2584
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_bc07dcb2957fd6 49,52,105-125,212,214,216-217,221,257-260,303-306
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_d9b1ffd728f803 2252-2275
+apps/android/app/src/test/kotlin/com/hushos/app/data/TextEditingTest.kt
+  s_c60e24772e04af::t_98b0afbeb37926 115-116,147,195-207
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_aab6d077726fec 109-113,128-129,133-146,148-151,154-161
+apps/ios/App/MainView.swift
+  s_c60e24772e04af::t_89a11cb90e5212 128,140-141,145,148,155-157,167,247,249
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_b85e3d14c548c2 98-99,105-106,245,250-260,310,340
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_6fa998b87376a2 167,205-206,208
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/SaveRuns.swift
+  s_c60e24772e04af::t_017e108cd61866 525-526,528-539,1398-1399,1636,1643-1644,1652,1682
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_169118a90607a6 784-787
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_ffe6b0870ea9a3 1955-1978
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TextEditingTests.swift
+  s_c60e24772e04af::t_77c4b3eb81c2a8 205-207,241,296-314
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_008716871ce0ee 30,114-115,200-204,232-237,309-314,376,393-394,546
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_39837c5dfd70ff 291,308-312,419,433,627,632
+apps/web/src/lib/editor-marks.test.ts
+  s_c60e24772e04af::t_d3285fe170c772 1-42
+apps/web/src/lib/editor-marks.ts
+  s_c60e24772e04af::t_60499cdffad53f 1-34
+packages/db/src/drive.ts
+  s_c60e24772e04af::t_2ec15f480f6e0a 2383-2389
+packages/db/src/drive.uploads.test.ts
+  s_c60e24772e04af::t_74305dbf35ed9f 60-61,84,87,737-814
+packages/drive/src/server.ts
+  s_c60e24772e04af::t_0704a13c4c297e 1706-1707
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_c58e5810107376 2069,2086-2088
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_92beaf538eb3ca 1293-1296
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "96e639f9fc0c88f5bde11b3953b387e04484e382",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
