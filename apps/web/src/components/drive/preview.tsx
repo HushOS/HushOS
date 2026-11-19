@@ -72,7 +72,7 @@ import {
     TEXT_CEILING,
 } from '@/lib/previews';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
-import { editableFile, TEXT_EDIT_LIMIT } from '@/lib/text-edit';
+import { editableFile, TEXT_EDIT_LIMIT, viewText } from '@/lib/text-edit';
 
 /*
  * The viewer: one file at a time over the folder, with the neighbours a key
@@ -1074,7 +1074,8 @@ function TextPreview({
                     setState({ binary: true });
                     return;
                 }
-                const text = new TextDecoder().decode(bytes);
+                // UTF-16 with a byte order mark reads as itself; anything else as UTF-8.
+                const text = viewText(bytes);
                 if (versionId)
                     rememberPreview(versionId, {
                         kind: 'text',

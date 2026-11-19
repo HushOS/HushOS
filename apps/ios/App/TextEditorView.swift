@@ -3,13 +3,15 @@ import SwiftUI
 import UIKit
 
 /*
- * The text editor (Editing 1a; docs/editing-design.md sections 1 and 3, the web's text-editor.tsx):
- * the system's text view over the file's current version, read again from the server. Saving is
- * explicit (Save), a new version through the save path (TextSave over SaveRuns), with the stale
- * choices when someone else saved first: Save on top, Save as a copy, Open theirs after a
- * confirmation. A file it can't save byte for byte opens read-only with a note. No colouring on the
- * phone. Its text lives in this screen only: leaving it, a sign-out or another session drops it, and
- * nothing is kept on the phone (drafts are Editing 1c).
+ * The text editor (Editing 1a and 1b; docs/editing-design.md sections 1 and 3, the web's
+ * text-editor.tsx): the system's text view over the file's current version, read again from the
+ * server. Saving is explicit (Save), a new version through the save path (TextSave over SaveRuns), in
+ * the file's own encoding, byte order mark and line breaks (TextEditing.bytes), with the stale choices
+ * when someone else saved first: Save on top, Save as a copy, Open theirs after a confirmation. A file
+ * it can't save byte for byte opens read-only with a note. Markdown offers Source or Preview, the
+ * viewer's rendering (MarkdownView: images named, never fetched). No colouring on the phone. Its text
+ * lives in this screen only: leaving it, a sign-out or another session drops it, and nothing is kept
+ * on the phone (drafts are Editing 1c).
  */
 struct TextEditorScreen: View {
     @Environment(DriveStore.self) private var store
@@ -49,6 +51,19 @@ struct TextEditorScreen: View {
     @State private var marked: Opened?
     /* The text as last opened or saved: typing then undoing it is no change (Save sends nothing, Close asks nothing). */
     @State private var savedText = ""
+    /*
+     * The bytes the text opened as, or last saved as: a save writes from them (TextEditing.bytes), so the file keeps its
+     * encoding, byte order mark and line breaks, and a text still as it was is them again. Nil while nothing editable is open.
+     */
+    @State private var original: Data?
+    /* The open file's encoding and line breaks: a mixed file says which a save writes. */
+    @State private var format: TextFormat?
+    /* Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. */
+    @State private var pane = Pane.source
+    @State private var previewText = ""
+    @State private var previewRevision = 0
+
+    private enum Pane: Hashable { case source, preview }
     @State private var edited = false
     @State private var saving = false
     @State private var status: String?
@@ -82,6 +97,9 @@ struct TextEditorScreen: View {
 
     private var shown: Opened { target ?? item }
 
+    private var isMarkdown: Bool { MarkdownDocument.handles(name: shown.name, mime: shown.metadata.mime) }
+    private var previewing: Bool { isMarkdown && pane == .preview }
+
     var body: some View {
         NavigationStack {
             content
@@ -99,6 +117,8 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             savedText = ""
+            original = nil
+            previewText = ""
             dismiss()
         }
         .onChange(of: leaveAsked) { _, _ in requestClose() }
@@ -121,6 +141,8 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             savedText = ""
+            original = nil
+            previewText = ""
             // Gone: what waited for it goes on, once; its family row's verdict is the listing's again.
             store.holdForEditor(nil)
             store.editorClosed()
@@ -212,20 +234,57 @@ struct TextEditorScreen: View {
             .frame(maxHeight: .infinity)
         case .readOnly(let reason, let text):
             VStack(spacing: 0) {
+                if text != nil, isMarkdown { panes }
                 note(TextEditing.words(reason))
-                if let text { PlainTextView(box: editor, text: text, editable: false, onChange: {}) } else { Spacer() }
+                if let text {
+                    ZStack {
+                        PlainTextView(box: editor, text: text, editable: false, onChange: {}).hiddenWhile(previewing)
+                        if previewing { preview }
+                    }
+                } else { Spacer() }
             }
         case .editing:
             VStack(spacing: 0) {
+                if isMarkdown { panes }
                 if let line = closing ? EditorWords.finishing : failure ?? (edited ? nil : status) {
                     note(line, failed: !closing && failure != nil)
                 }
-                PlainTextView(box: editor, text: editor.opening, editable: true) {
-                    if !edited { edited = true }
-                    status = nil
+                if let mixed = format.flatMap(TextEditing.mixedNote) { note(mixed) }
+                // The text view stays while the preview shows: it holds the text and its undo.
+                ZStack {
+                    PlainTextView(box: editor, text: editor.opening, editable: true) {
+                        if !edited { edited = true }
+                        status = nil
+                    }
+                    .hiddenWhile(previewing)
+                    if previewing { preview }
                 }
             }
         }
+    }
+
+    /* Source or Preview, the system's segmented control. */
+    private var panes: some View {
+        Picker(EditorWords.show, selection: $pane) {
+            Text(EditorWords.source).tag(Pane.source)
+            Text(EditorWords.preview).tag(Pane.preview)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, Alpine.Space.s4)
+        .padding(.vertical, Alpine.Space.s2)
+        .onChange(of: pane) { _, now in
+            guard now == .preview else { return }
+            // The words as they are now; the keyboard goes, since nothing is typed into a preview.
+            editor.endEditing()
+            previewText = editor.text
+            previewRevision += 1
+        }
+    }
+
+    /* The viewer's rendering: raw HTML dropped, links only on a tap, images named and never fetched. */
+    private var preview: some View {
+        MarkdownView(data: Data(previewText.utf8)).id(previewRevision)
     }
 
     private func note(_ text: String, failed: Bool = false) -> some View {
@@ -262,6 +321,8 @@ struct TextEditorScreen: View {
         work?.cancel()
         editor.drop()
         savedText = ""
+        original = nil
+        previewText = ""
         edited = false
         dismiss()
     }
@@ -296,11 +357,16 @@ struct TextEditorScreen: View {
             marked = file
             edited = false
             switch TextEditing.open(data) {
-            case .editable(let text):
+            case .editable(let text, let opened):
                 editor.open(text)
                 savedText = text
+                original = data
+                format = opened
                 phase = .editing
             case .readOnly(let reason, let text):
+                original = nil
+                format = nil
+                editor.open(text ?? "")
                 phase = .readOnly(reason, text)
             }
         } catch where !ErrorWords.isCancellation(error) {
@@ -339,6 +405,8 @@ struct TextEditorScreen: View {
         guard let token = session.take(store.vault) else { return }
         let vault = token.owner
         let text = editor.text
+        // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
+        guard let opened = original, let bytes = TextEditing.bytes(for: text, from: opened) else { return }
         saving = true
         failure = nil
         status = nil
@@ -351,7 +419,7 @@ struct TextEditorScreen: View {
                 choosing = true
                 return
             }
-            let saved = try await TextSave.version(text, of: listed, in: folder, startedFrom: onTopOf ?? startedFrom,
+            let saved = try await TextSave.version(bytes, of: listed, in: folder, startedFrom: onTopOf ?? startedFrom,
                                                    start: TextSave.runs(vault), stillOn: { @MainActor in stillOn(token) })
             guard stillOn(token) else { return }
             switch saved {
@@ -369,6 +437,7 @@ struct TextEditorScreen: View {
                 }
                 if TextEditing.speaksFor(landed, versionId: versionId, at: destination) { marked = landed }
                 savedText = text
+                settle(bytes)
                 // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
                 edited = !TextEditing.same(editor.text, text)
                 status = EditorWords.saved
@@ -385,6 +454,8 @@ struct TextEditorScreen: View {
         guard let file = target, let from = source, let token = session.take(store.vault) else { return }
         let vault = token.owner
         let text = editor.text
+        // The copy keeps the file's encoding and line breaks too.
+        guard let opened = original, let bytes = TextEditing.bytes(for: text, from: opened) else { return }
         saving = true
         failure = nil
         defer { saving = false }
@@ -392,7 +463,7 @@ struct TextEditorScreen: View {
             let (folder, _) = try await vault.editTarget(file, at: destination)
             let sources = try await vault.copySources(of: from, named: file)
             guard stillOn(token) else { return }
-            let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
+            let made = try await TextSave.copy(bytes, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
                                                stillOn: { @MainActor in stillOn(token) })
             guard stillOn(token) else { return }
             // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
@@ -403,6 +474,7 @@ struct TextEditorScreen: View {
             startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
             if TextEditing.speaksFor(made.file, versionId: made.versionId, at: destination) { marked = made.file }
             savedText = text
+            settle(bytes)
             edited = !TextEditing.same(editor.text, text)
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
@@ -413,6 +485,12 @@ struct TextEditorScreen: View {
         }
     }
 
+    /* A save or a copy landed as `bytes`: the next one writes from them, in one line break from here unless it sent the bytes it opened as. */
+    private func settle(_ bytes: Data) {
+        if bytes != original { format?.mixed = false }
+        original = bytes
+    }
+
     private func openTheirs() async {
         guard let file = target else { return }
         // Another text opens: nothing begun on this one publishes over it.
@@ -420,6 +498,7 @@ struct TextEditorScreen: View {
         work?.cancel()
         editor.drop()
         savedText = ""
+        original = nil
         edited = false
         status = nil
         failure = nil
@@ -454,6 +533,16 @@ enum EditorWords {
     static let discard = "Discard changes"
     static let finishing = "Finishing your save, then closing"
     static let keepEditing = "Keep editing"
+    static let show = "Show"
+    static let source = "Source"
+    static let preview = "Preview"
+}
+
+private extension View {
+    /* Kept in place but out of sight, touch and VoiceOver (the text view under the preview keeps its text and undo). */
+    func hiddenWhile(_ hidden: Bool) -> some View {
+        opacity(hidden ? 0 : 1).allowsHitTesting(!hidden).accessibilityHidden(hidden)
+    }
 }
 
 /*
@@ -477,12 +566,18 @@ enum EditorWords {
         view?.text = ""
         view?.undoManager?.removeAllActions()
     }
+
+    /* The keyboard goes (the preview takes nothing typed). */
+    func endEditing() {
+        view?.resignFirstResponder()
+    }
 }
 
 /*
  * UITextView as a SwiftUI view: monospaced at the reader's text size, wrapped, no autocorrection,
  * capitals, smart punctuation, predictions or Writing Tools (each would change what the person
- * didn't type, or send their words to a model). A line break typed or pasted goes in as LF.
+ * didn't type, or send their words to a model). A line break typed or pasted goes in as LF; a save
+ * writes each as the file's own line break.
  */
 struct PlainTextView: UIViewRepresentable {
     let box: TextBox

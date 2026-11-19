@@ -11,7 +11,6 @@ import {
     type SaveRun,
 } from '@hushos/drive/save-runs';
 import { describe, expect, test } from 'vitest';
-import { encodeText } from '@/lib/text-edit';
 import {
     editTargetOf,
     openedTarget,
@@ -20,6 +19,8 @@ import {
     saveVersion,
     SessionEnded,
 } from '@/lib/text-save';
+
+const utf8 = (text: string) => new TextEncoder().encode(text);
 
 /*
  * The editor's save and its stale choices, over a stand-in for the save path
@@ -42,7 +43,7 @@ function bench(room = Infinity, finishFailures = 0) {
     const folder = { id: 'folder', kind: 'folder', workspaceId: 'w' } as DriveNode;
     const add = (name: string, text: string) => {
         const id = `n${++ids}`;
-        files.set(id, { id, name, versions: [{ id: `v${++ids}`, bytes: [...encodeText(text)] }] });
+        files.set(id, { id, name, versions: [{ id: `v${++ids}`, bytes: [...utf8(text)] }] });
         return id;
     };
     const current = (id: string) => files.get(id)!.versions.at(-1)!.id;
@@ -101,7 +102,7 @@ function bench(room = Infinity, finishFailures = 0) {
     };
     /* Someone else's save from another device. */
     const theirs = (id: string, text: string) => {
-        files.get(id)!.versions.push({ id: `v${++ids}`, bytes: [...encodeText(text)] });
+        files.get(id)!.versions.push({ id: `v${++ids}`, bytes: [...utf8(text)] });
         return current(id);
     };
     const text = (id: string, at = -1) =>
@@ -118,7 +119,7 @@ describe('saving an edit', () => {
             file,
             folder: b.folder,
             startedFrom: file.currentVersion!.id,
-            text: 'café ✓\n',
+            bytes: utf8('café ✓\n'),
         });
         expect(saved).toEqual({ status: 'saved', versionId: b.current(id) });
         expect(b.files.get(id)!.versions).toHaveLength(2);
@@ -135,14 +136,14 @@ describe('saving an edit', () => {
             file,
             folder: b.folder,
             startedFrom: file.currentVersion!.id,
-            text: 'ab',
+            bytes: utf8('ab'),
         });
         if (first.status !== 'saved') throw new Error('first save');
         const second = await saveVersion(b.start, {
             file,
             folder: b.folder,
             startedFrom: first.versionId,
-            text: 'abc',
+            bytes: utf8('abc'),
         });
         expect(second.status).toBe('saved');
         expect(
@@ -159,7 +160,7 @@ describe('saving an edit', () => {
                 file,
                 folder: b.folder,
                 startedFrom: file.currentVersion!.id,
-                text: 'more than three',
+                bytes: utf8('more than three'),
             }),
         ).rejects.toBeInstanceOf(SaveRefused);
         expect(b.files.get(id)!.versions).toHaveLength(1);
@@ -176,7 +177,7 @@ describe('when someone else saved first', () => {
             file,
             folder: b.folder,
             startedFrom: file.currentVersion!.id,
-            text: 'mine\n',
+            bytes: utf8('mine\n'),
         });
         return { b, id, file, theirs, saved };
     }
@@ -196,7 +197,7 @@ describe('when someone else saved first', () => {
             file,
             folder: b.folder,
             startedFrom: saved.currentVersionId,
-            text: 'mine\n',
+            bytes: utf8('mine\n'),
         });
         expect(onTop.status).toBe('saved');
         const versions = b.files.get(id)!.versions;
@@ -212,7 +213,7 @@ describe('when someone else saved first', () => {
             file,
             source: file,
             folder: b.folder,
-            text: 'mine\n',
+            bytes: utf8('mine\n'),
         });
         const copy = b.files.get(made.node!.id)!;
         expect(made.versionId).toBe(copy.versions[0]!.id);
@@ -238,7 +239,7 @@ describe('when someone else saved first', () => {
             file: first.file,
             source: first.source,
             folder: b.folder,
-            text: 'mine',
+            bytes: utf8('mine'),
         });
         // Before the editor finds its copy, someone replaces it with a version that checks as verified.
         const theirs = b.theirs(made.node!.id, 'theirs');
@@ -254,7 +255,7 @@ describe('when someone else saved first', () => {
             file: next.file,
             source: next.source,
             folder: b.folder,
-            text: 'mine again',
+            bytes: utf8('mine again'),
         });
         // Both copies carry the Unverified file's form: re-sealed, never the person's ordinary word.
         for (const sources of b.sources)
@@ -282,7 +283,7 @@ describe('when someone else saved first', () => {
             new Map(nodes.map((node) => [node.id, node.integrity] as const));
         await saveCopy(
             b.start,
-            { file: renamed, source, folder: b.folder, text: 'mine' },
+            { file: renamed, source, folder: b.folder, bytes: utf8('mine') },
             { check },
         );
         // The copy's name record is never vouched for: re-sealed, Unverified as the name it took.
@@ -307,7 +308,7 @@ describe('when someone else saved first', () => {
             ) as Map<string, NodeIntegrity | null>;
         await saveCopy(
             b.start,
-            { file: opened, source: opened, folder: b.folder, text: 'mine' },
+            { file: opened, source: opened, folder: b.folder, bytes: utf8('mine') },
             { check },
         );
         expect(resultSignatures(b.sources.at(-1) as ResultSources)).toEqual({
@@ -317,7 +318,7 @@ describe('when someone else saved first', () => {
         // A check that can't run re-seals too.
         await saveCopy(
             b.start,
-            { file: opened, source: opened, folder: b.folder, text: 'mine again' },
+            { file: opened, source: opened, folder: b.folder, bytes: utf8('mine again') },
             { check: () => Promise.reject(new Error('offline')) },
         );
         expect(resultSignatures(b.sources.at(-1) as ResultSources).version).toBe('resealed');
@@ -332,7 +333,7 @@ describe('when someone else saved first', () => {
             file,
             folder: b.folder,
             startedFrom: file.currentVersion!.id,
-            text: 'mine',
+            bytes: utf8('mine'),
         });
         expect(saved).toEqual({ status: 'stale', currentVersionId: null });
     });
@@ -347,7 +348,7 @@ describe('ending the run', () => {
         const file = b.asNode(id);
         const saved = await saveVersion(
             b.start,
-            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, bytes: utf8('ab') },
             { pause: noPause },
         );
         expect(saved.status).toBe('saved');
@@ -361,7 +362,7 @@ describe('ending the run', () => {
         const file = b.asNode(id);
         const saved = await saveVersion(
             b.start,
-            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'ab' },
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, bytes: utf8('ab') },
             { pause: noPause },
         );
         expect(saved).toEqual({ status: 'saved', versionId: b.current(id) });
@@ -420,7 +421,7 @@ test('a save names the version it published, not the one its reply row shows by 
         file,
         folder: { id: 'folder', kind: 'folder', workspaceId: 'w' } as DriveNode,
         startedFrom: 'v1',
-        text: 'x',
+        bytes: utf8('x'),
     });
     expect(saved).toEqual({ status: 'saved', versionId: 'v-mine' });
 });
@@ -432,14 +433,14 @@ test('a save whose editor session ended before its run starts uploads nothing', 
     await expect(
         saveVersion(
             b.start,
-            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'b' },
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, bytes: utf8('b') },
             { stillOn: () => false },
         ),
     ).rejects.toBeInstanceOf(SessionEnded);
     await expect(
         saveCopy(
             b.start,
-            { file, source: file, folder: b.folder, text: 'b' },
+            { file, source: file, folder: b.folder, bytes: utf8('b') },
             { stillOn: () => false },
         ),
     ).rejects.toBeInstanceOf(SessionEnded);
@@ -462,7 +463,7 @@ test('a save whose editor session ends while its run starts uploads nothing and 
     await expect(
         saveVersion(
             start,
-            { file, folder: b.folder, startedFrom: file.currentVersion!.id, text: 'b' },
+            { file, folder: b.folder, startedFrom: file.currentVersion!.id, bytes: utf8('b') },
             { stillOn: () => on },
         ),
     ).rejects.toBeInstanceOf(SessionEnded);
@@ -477,7 +478,7 @@ test('a save whose editor session ends while its run starts uploads nothing and 
     await expect(
         saveCopy(
             startCopy,
-            { file, source: file, folder: b.folder, text: 'b' },
+            { file, source: file, folder: b.folder, bytes: utf8('b') },
             { stillOn: () => on },
         ),
     ).rejects.toBeInstanceOf(SessionEnded);

@@ -15,11 +15,12 @@ import {
 } from './helpers';
 
 /*
- * Editing 1a on the web: a text file opens in the editor, a save is a new version holding
- * exactly the edit, a file the editor can't keep byte for byte opens read-only, a save after
- * someone else's offers Save on top, Save as a copy and Open theirs and each does what it
- * says, leaving with changes asks first, a lock drops the editor's text, and only those who
- * may change a file are offered Edit.
+ * Editing 1a and 1b on the web: a text file opens in the editor, a save is a new version holding
+ * exactly the edit in the file's own encoding, byte order mark and line breaks, a file the editor
+ * can't keep byte for byte opens read-only, Markdown shows a preview beside the source that
+ * fetches nothing, a save after someone else's offers Save on top, Save as a copy and Open
+ * theirs and each does what it says, leaving with changes asks first, a lock drops the editor's
+ * text, and only those who may change a file are offered Edit.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -86,6 +87,12 @@ async function close(p: Page) {
     await expect(p.locator('[data-slot=dialog-content]')).toHaveCount(0);
 }
 
+/* UTF-16 little endian with its byte order mark. */
+const utf16le = (text: string) =>
+    Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+/* Requests for the Markdown file's image, on the app's own origin (so no policy would stop a fetch). */
+let probes = 0;
+
 /* The file's current bytes, as Download gives them. */
 async function downloaded(p: Page, name: string) {
     await row(p, name).locator('button').first().click(grip);
@@ -100,12 +107,26 @@ test.beforeAll(async ({ browser }) => {
     test.setTimeout(300_000);
     page = await (await newContext(browser)).newPage();
     ownerEmail = (await registerAccount(page, 'Maya Lindqvist')).email;
+    const probe = `${new URL(page.url()).origin}/editing-preview-probe.png`;
+    page.on('request', (request) => {
+        if (request.url().includes('editing-preview-probe')) probes++;
+    });
     await page
         .locator('input[type=file]')
         .first()
         .setInputFiles([
             write('notes.txt', 'Grüße\nline two\nno final newline'),
-            write('windows.txt', 'first\r\nsecond\r\n'),
+            // CRLF with no final newline.
+            write('windows.txt', 'first\r\nsecond'),
+            write('utf16.txt', utf16le('Grüße\r\nzwei\r\n')),
+            // Two CRLF to one LF: saved in CRLF once edited.
+            write('mixed.txt', 'a\r\nb\r\nc\n'),
+            // Old Mac line endings: a lone CR.
+            write('classic.txt', 'one\rtwo\r'),
+            write(
+                'preview.md',
+                `# Notes\n\nAn image: ![tracking pixel](${probe})\n\n[A link](${probe}?link)\n`,
+            ),
             write('marked.md', Uint8Array.from([0xef, 0xbb, 0xbf, ...Buffer.from('# Title\n')])),
             write('latin.txt', Uint8Array.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
             write('config.json', '{\n  "a": 1\n}\n'),
@@ -116,7 +137,7 @@ test.beforeAll(async ({ browser }) => {
             write('main.rs', 'fn main() {\n    println!("hi");\n}\n'),
             write('Cargo.toml', '[package]\nname = "hushos"\n'),
         ]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
@@ -137,7 +158,7 @@ test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
     });
-    await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
     // The preload's workers (the thumbnailer's) may still be fetching their own imports once its
     // last step returned: what they fetch belongs to the preload too, whatever is opened later.
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
@@ -148,7 +169,8 @@ test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no
     // that: every new worker asks again for its own unbundled imports (the browser reports each
     // ask, cached or not), and those are exactly the ones the preload's worker fetched. So the
     // check, for each kind on its own: nothing outside what the preload fetched.
-    for (const name of ['config.json', 'settings.yaml', 'main.rs', 'Cargo.toml']) {
+    // Markdown too: its preview beside the source is the viewer's renderer, already preloaded.
+    for (const name of ['config.json', 'settings.yaml', 'main.rs', 'Cargo.toml', 'preview.md']) {
         const fetched = new Set<string>();
         const listen = (request: Request) => {
             const url = script(request);
@@ -250,8 +272,7 @@ test('with no answer for its folder, the editor never opens the row the viewer h
 
 test('files the editor can’t keep exactly open read-only with a note', async () => {
     for (const [name, note] of [
-        ['windows.txt', 'This file uses Windows line endings, which HushOS can’t edit yet.'],
-        ['marked.md', 'HushOS can’t edit this file’s encoding yet.'],
+        ['classic.txt', 'This file uses line endings HushOS can’t edit without changing them.'],
         ['latin.txt', 'This file uses an encoding HushOS can’t edit without changing it.'],
     ] as const) {
         await openEditor(page, name);
@@ -262,6 +283,99 @@ test('files the editor can’t keep exactly open read-only with a note', async (
         await expect(editor(page)).toHaveAttribute('contenteditable', 'false');
         await close(page);
     }
+});
+
+test('a UTF-16 file is saved in UTF-16 with its byte order mark, and a line typed is CRLF like the rest', async () => {
+    await openEditor(page, 'utf16.txt');
+    await expect(editor(page)).toContainText('Grüße');
+    await expect(editor(page)).toHaveAttribute('contenteditable', 'true');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('drei');
+    await page.keyboard.press('Enter');
+    await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await close(page);
+    expect([...(await downloaded(page, 'utf16.txt'))]).toEqual([
+        ...utf16le('Grüße\r\nzwei\r\ndrei\r\n'),
+    ]);
+});
+
+test('a CRLF file keeps CRLF, and its missing final newline stays missing', async () => {
+    await openEditor(page, 'windows.txt');
+    await expect(editor(page)).toHaveAttribute('contenteditable', 'true');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.insertText('third');
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await close(page);
+    expect((await downloaded(page, 'windows.txt')).toString('latin1')).toBe(
+        'first\r\nsecond\r\nthird',
+    );
+});
+
+test('a mixed file says which line break a save writes, and an edit writes them all that way', async () => {
+    const before = await earlierVersions(page, 'mixed.txt');
+    await openEditor(page, 'mixed.txt');
+    const note = dialog(page).getByText(
+        'This file mixes line endings; saving uses Windows (CRLF).',
+    );
+    await expect(note).toBeVisible();
+    // Unchanged, there is nothing to save, so its bytes stay exactly as they were.
+    await expect(dialog(page).getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+s');
+    await page.waitForTimeout(1_000);
+    await expect(dialog(page).getByText('Saved', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('d');
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    // One line break from here on: nothing mixed is left to say.
+    await expect(note).toHaveCount(0);
+    await close(page);
+    expect((await downloaded(page, 'mixed.txt')).toString('latin1')).toBe('a\r\nb\r\nc\r\nd');
+    // One new version: the edit's (the Ctrl+S with nothing changed made none). Asked again until the
+    // dialog lists it, never from a list cached before the save.
+    await expect
+        .poll(() => earlierVersions(page, 'mixed.txt'), { timeout: 30_000 })
+        .toBe(before + 1);
+});
+
+test('Markdown shows the viewer’s rendering beside the source, live, and fetches nothing it names', async () => {
+    const seen = probes;
+    await openEditor(page, 'preview.md');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    // Side by side on a wide screen, with no switch between them.
+    await expect(preview.getByRole('heading', { name: 'Notes' })).toBeVisible();
+    await expect(editor(page)).toBeVisible();
+    await expect(dialog(page).getByRole('button', { name: 'Preview', exact: true })).toBeHidden();
+    // The image is named, never drawn: no <img> at all, the link an anchor only.
+    await expect(preview.getByText('tracking pixel')).toBeVisible();
+    await expect(preview.locator('img')).toHaveCount(0);
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('\n## Added while typing\n');
+    await expect(preview.getByRole('heading', { name: 'Added while typing' })).toBeVisible();
+    // A narrow screen shows one at a time, Source first.
+    const size = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 800 });
+    await expect(preview).toBeHidden();
+    await expect(editor(page)).toBeVisible();
+    await dialog(page).getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(preview.getByRole('heading', { name: 'Added while typing' })).toBeVisible();
+    await expect(editor(page)).toBeHidden();
+    await dialog(page).getByRole('button', { name: 'Source', exact: true }).click();
+    await expect(editor(page)).toBeVisible();
+    await page.setViewportSize(size);
+    // Long enough for anything the page would have fetched to be on its way.
+    await page.waitForTimeout(1_500);
+    expect(probes - seen).toBe(0);
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
 test('broken JSON gets a warning beside Save, and still saves', async () => {

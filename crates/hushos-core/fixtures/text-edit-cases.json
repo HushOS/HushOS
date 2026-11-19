@@ -1,10 +1,14 @@
 {
-    "_about": "Text editability (Editing 1a): whether bytes open for editing (`reason` null) or read-only and why, and whether a name and recorded type open in the editor at all. Hand-written outcomes, read by apps/web/src/lib/text-edit.test.ts and crates/hushos-core/tests/text_edit.rs. Each `bytes` is its parts joined, each part `hex` repeated `repeat` times (once when absent).",
+    "_about": "Text editing (Editing 1a and 1b): whether bytes open for editing (`reason` null, with the `encoding`, the `lineEnding` a save writes, whether the file is `mixed`, and the editor's `text` where given) or read-only and why; what a save writes for an edited text (`edits`: `saved` null when nothing may be written); and whether a name and recorded type open in the editor at all. Every editable case saved without an edit is its own bytes again. Hand-written outcomes, read by apps/web/src/lib/text-edit.test.ts, crates/hushos-core/tests/text_edit.rs, HushOSKit's TextEditingTests and Android's TextEditingTest. Each `bytes` is its parts joined, each part `hex` repeated `repeat` times (once when absent).",
     "bytes": [
         {
             "name": "empty",
             "bytes": [],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": ""
         },
         {
             "name": "plain with final newline",
@@ -13,7 +17,11 @@
                     "hex": "68656c6c6f0a776f726c640a"
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "hello\nworld\n"
         },
         {
             "name": "no final newline",
@@ -22,7 +30,11 @@
                     "hex": "68656c6c6f0a776f726c64"
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "hello\nworld"
         },
         {
             "name": "multibyte, emoji and line separator",
@@ -31,7 +43,11 @@
                     "hex": "68c3a96c6c6f20e29c9320f09f9880e280a8646f6e650a"
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "héllo ✓ 😀 done\n"
         },
         {
             "name": "tab and form feed are text",
@@ -40,7 +56,11 @@
                     "hex": "6109620c630a"
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "a\tb\fc\n"
         },
         {
             "name": "utf-8 byte order mark",
@@ -52,7 +72,11 @@
                     "hex": "68690a"
                 }
             ],
-            "reason": "byte-order-mark"
+            "reason": null,
+            "encoding": "utf-8-bom",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "hi\n"
         },
         {
             "name": "byte order mark before CRLF",
@@ -64,7 +88,37 @@
                     "hex": "68690d0a"
                 }
             ],
-            "reason": "byte-order-mark"
+            "reason": null,
+            "encoding": "utf-8-bom",
+            "lineEnding": "crlf",
+            "mixed": false,
+            "text": "hi\n"
+        },
+        {
+            "name": "utf-8 byte order mark alone",
+            "bytes": [
+                {
+                    "hex": "efbbbf"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8-bom",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": ""
+        },
+        {
+            "name": "a second byte order mark is text",
+            "bytes": [
+                {
+                    "hex": "efbbbfefbbbf61"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8-bom",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "﻿a"
         },
         {
             "name": "utf-16 little endian",
@@ -73,7 +127,11 @@
                     "hex": "fffe68006900"
                 }
             ],
-            "reason": "utf-16"
+            "reason": null,
+            "encoding": "utf-16le",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "hi"
         },
         {
             "name": "utf-16 big endian",
@@ -82,7 +140,192 @@
                     "hex": "feff00680069"
                 }
             ],
-            "reason": "utf-16"
+            "reason": null,
+            "encoding": "utf-16be",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "hi"
+        },
+        {
+            "name": "utf-16 little endian, CRLF, emoji",
+            "bytes": [
+                {
+                    "hex": "fffe47007200fc00df00650020003dd800de0d000a007a007700650069000d000a00"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-16le",
+            "lineEnding": "crlf",
+            "mixed": false,
+            "text": "Grüße 😀\nzwei\n"
+        },
+        {
+            "name": "utf-16 big endian, mixed",
+            "bytes": [
+                {
+                    "hex": "feff0061000d000a0062000a0063000d000a"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-16be",
+            "lineEnding": "crlf",
+            "mixed": true,
+            "text": "a\nb\nc\n"
+        },
+        {
+            "name": "utf-16 byte order mark alone",
+            "bytes": [
+                {
+                    "hex": "fffe"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-16le",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": ""
+        },
+        {
+            "name": "utf-16 control characters at two percent",
+            "bytes": [
+                {
+                    "hex": "fffe"
+                },
+                {
+                    "hex": "6100",
+                    "repeat": 49
+                },
+                {
+                    "hex": "0100"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-16le",
+            "lineEnding": "lf",
+            "mixed": false
+        },
+        {
+            "name": "utf-16 control characters over two percent",
+            "bytes": [
+                {
+                    "hex": "fffe"
+                },
+                {
+                    "hex": "6100",
+                    "repeat": 48
+                },
+                {
+                    "hex": "0100",
+                    "repeat": 2
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "utf-16 odd length",
+            "bytes": [
+                {
+                    "hex": "fffe610062"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-16 lone high surrogate",
+            "bytes": [
+                {
+                    "hex": "fffe3dd86100"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-16 lone low surrogate",
+            "bytes": [
+                {
+                    "hex": "feffde00"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-16 NUL",
+            "bytes": [
+                {
+                    "hex": "fffe61000000"
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "utf-16 NUL past the sniff",
+            "bytes": [
+                {
+                    "hex": "fffe"
+                },
+                {
+                    "hex": "6100",
+                    "repeat": 5000
+                },
+                {
+                    "hex": "0000"
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "utf-32 little endian",
+            "bytes": [
+                {
+                    "hex": "fffe00006800000069000000"
+                }
+            ],
+            "reason": "binary"
+        },
+        {
+            "name": "utf-16 lone CR",
+            "bytes": [
+                {
+                    "hex": "fffe61000d006200"
+                }
+            ],
+            "reason": "line-endings"
+        },
+        {
+            "name": "utf-16 little endian without a byte order mark",
+            "bytes": [
+                {
+                    "hex": "680065006c006c006f000a00"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-16 big endian without a byte order mark",
+            "bytes": [
+                {
+                    "hex": "00680065006c006c006f000a"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-8 byte order mark before latin-1",
+            "bytes": [
+                {
+                    "hex": "efbbbf636166e9"
+                }
+            ],
+            "reason": "encoding"
+        },
+        {
+            "name": "utf-8 byte order mark before NUL",
+            "bytes": [
+                {
+                    "hex": "efbbbf610062"
+                }
+            ],
+            "reason": "binary"
         },
         {
             "name": "latin-1",
@@ -177,7 +420,10 @@
                     "repeat": 20
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false
         },
         {
             "name": "control characters past the sniff",
@@ -191,7 +437,10 @@
                     "repeat": 1000
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false
         },
         {
             "name": "CRLF",
@@ -200,7 +449,89 @@
                     "hex": "610d0a620d0a"
                 }
             ],
-            "reason": "line-endings"
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "crlf",
+            "mixed": false,
+            "text": "a\nb\n"
+        },
+        {
+            "name": "CRLF without a final newline",
+            "bytes": [
+                {
+                    "hex": "610d0a62"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "crlf",
+            "mixed": false,
+            "text": "a\nb"
+        },
+        {
+            "name": "one CRLF among LF",
+            "bytes": [
+                {
+                    "hex": "610a620d0a630a"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": true,
+            "text": "a\nb\nc\n"
+        },
+        {
+            "name": "mixed, CRLF the majority",
+            "bytes": [
+                {
+                    "hex": "610d0a620d0a630a64"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "crlf",
+            "mixed": true,
+            "text": "a\nb\nc\nd"
+        },
+        {
+            "name": "mixed tie, CRLF first",
+            "bytes": [
+                {
+                    "hex": "610d0a620a63"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "crlf",
+            "mixed": true,
+            "text": "a\nb\nc"
+        },
+        {
+            "name": "mixed tie, LF first",
+            "bytes": [
+                {
+                    "hex": "610a620d0a63"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": true,
+            "text": "a\nb\nc"
+        },
+        {
+            "name": "a line separator is not a line break",
+            "bytes": [
+                {
+                    "hex": "61e280a862e280a963c28564"
+                }
+            ],
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false,
+            "text": "a b cd"
         },
         {
             "name": "lone CR",
@@ -212,10 +543,19 @@
             "reason": "line-endings"
         },
         {
-            "name": "one CRLF among LF",
+            "name": "lone CR at the end",
             "bytes": [
                 {
-                    "hex": "610a620d0a630a"
+                    "hex": "610d"
+                }
+            ],
+            "reason": "line-endings"
+        },
+        {
+            "name": "CR before CRLF",
+            "bytes": [
+                {
+                    "hex": "610d0d0a62"
                 }
             ],
             "reason": "line-endings"
@@ -228,7 +568,10 @@
                     "repeat": 8388608
                 }
             ],
-            "reason": null
+            "reason": null,
+            "encoding": "utf-8",
+            "lineEnding": "lf",
+            "mixed": false
         },
         {
             "name": "past the limit",
@@ -239,6 +582,223 @@
                 }
             ],
             "reason": "too-large"
+        },
+        {
+            "name": "utf-16 past the limit",
+            "bytes": [
+                {
+                    "hex": "fffe"
+                },
+                {
+                    "hex": "6100",
+                    "repeat": 4194304
+                }
+            ],
+            "reason": "too-large"
+        }
+    ],
+    "edits": [
+        {
+            "name": "utf-16 little endian keeps its byte order mark and CRLF",
+            "bytes": [
+                {
+                    "hex": "fffe47007200fc00df00650020003dd800de0d000a007a007700650069000d000a00"
+                }
+            ],
+            "text": "Grüße 😀\nzwei\ndrei\n",
+            "saved": [
+                {
+                    "hex": "fffe47007200fc00df00650020003dd800de0d000a007a007700650069000d000a0064007200650069000d000a00"
+                }
+            ]
+        },
+        {
+            "name": "utf-16 big endian keeps its byte order mark",
+            "bytes": [
+                {
+                    "hex": "feff00680069000a"
+                }
+            ],
+            "text": "hi there ✓\n",
+            "saved": [
+                {
+                    "hex": "feff0068006900200074006800650072006500202713000a"
+                }
+            ]
+        },
+        {
+            "name": "utf-8 keeps its byte order mark",
+            "bytes": [
+                {
+                    "hex": "efbbbf23205469746c650a"
+                }
+            ],
+            "text": "# Title\n\nBody\n",
+            "saved": [
+                {
+                    "hex": "efbbbf23205469746c650a0a426f64790a"
+                }
+            ]
+        },
+        {
+            "name": "emptied, the byte order mark stays",
+            "bytes": [
+                {
+                    "hex": "efbbbf61"
+                }
+            ],
+            "text": "",
+            "saved": [
+                {
+                    "hex": "efbbbf"
+                }
+            ]
+        },
+        {
+            "name": "a line typed into a CRLF file is CRLF, and no final newline appears",
+            "bytes": [
+                {
+                    "hex": "66697273740d0a7365636f6e64"
+                }
+            ],
+            "text": "first\nnew\nsecond",
+            "saved": [
+                {
+                    "hex": "66697273740d0a6e65770d0a7365636f6e64"
+                }
+            ]
+        },
+        {
+            "name": "CRLF and CR pasted into an LF file are LF",
+            "bytes": [
+                {
+                    "hex": "610a"
+                }
+            ],
+            "text": "a\r\nb\rc\n",
+            "saved": [
+                {
+                    "hex": "610a620a630a"
+                }
+            ]
+        },
+        {
+            "name": "LF pasted into a CRLF file is CRLF",
+            "bytes": [
+                {
+                    "hex": "610d0a"
+                }
+            ],
+            "text": "a\nb\r\n",
+            "saved": [
+                {
+                    "hex": "610d0a620d0a"
+                }
+            ]
+        },
+        {
+            "name": "a mixed file edited is written in its majority, CRLF",
+            "bytes": [
+                {
+                    "hex": "610d0a620d0a630a64"
+                }
+            ],
+            "text": "a\nb\nc\nd!",
+            "saved": [
+                {
+                    "hex": "610d0a620d0a630d0a6421"
+                }
+            ]
+        },
+        {
+            "name": "a mixed file edited is written in its majority, LF",
+            "bytes": [
+                {
+                    "hex": "610a620a630d0a"
+                }
+            ],
+            "text": "a\nb\nc\n\n",
+            "saved": [
+                {
+                    "hex": "610a620a630a0a"
+                }
+            ]
+        },
+        {
+            "name": "a mixed tie is written as its first line break",
+            "bytes": [
+                {
+                    "hex": "610a620d0a63"
+                }
+            ],
+            "text": "a\nb\nc.",
+            "saved": [
+                {
+                    "hex": "610a620a632e"
+                }
+            ]
+        },
+        {
+            "name": "a utf-16 mixed file edited is written in its majority",
+            "bytes": [
+                {
+                    "hex": "feff0061000d000a0062000a0063000d000a"
+                }
+            ],
+            "text": "a\nb\nc\nd",
+            "saved": [
+                {
+                    "hex": "feff0061000d000a0062000d000a0063000d000a0064"
+                }
+            ]
+        },
+        {
+            "name": "the final newline stays absent",
+            "bytes": [
+                {
+                    "hex": "78"
+                }
+            ],
+            "text": "y",
+            "saved": [
+                {
+                    "hex": "79"
+                }
+            ]
+        },
+        {
+            "name": "the final newline stays",
+            "bytes": [
+                {
+                    "hex": "780d0a"
+                }
+            ],
+            "text": "y\n",
+            "saved": [
+                {
+                    "hex": "790d0a"
+                }
+            ]
+        },
+        {
+            "name": "a read-only file writes nothing",
+            "bytes": [
+                {
+                    "hex": "636166e9"
+                }
+            ],
+            "text": "cafe",
+            "saved": null
+        },
+        {
+            "name": "a lone CR file writes nothing",
+            "bytes": [
+                {
+                    "hex": "610d62"
+                }
+            ],
+            "text": "a\nb",
+            "saved": null
         }
     ],
     "names": [

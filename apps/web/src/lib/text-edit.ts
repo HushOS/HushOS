@@ -3,95 +3,248 @@ import { PREVIEW_LIMITS } from '@/lib/preview-limits';
 import { extensionOf, previewKindOf } from '@/lib/previews';
 
 /*
- * Which files the text editor opens, and whether it may change them
- * (docs/editing-design.md section 1, Editing 1a). An edit is saved byte for
- * byte except for what the person changed, so a file opens for editing only
- * when its bytes come back out of the editor exactly as they went in: UTF-8
- * without a byte order mark, lines ending in LF alone, and text rather than
- * binary. Anything else opens read-only with a plain note; byte order marks,
- * UTF-16 and CRLF are Editing 1b's.
+ * Which files the text editor opens, whether it may change them, and the bytes a save writes
+ * (docs/editing-design.md section 1, Editing 1a and 1b). An edit is saved byte for byte except
+ * for what the person changed, so a file opens for editing only when the editor can write it
+ * back in its own encoding, byte order mark and line endings:
  *
- * The phones ask the same of the core (crates/hushos-core/src/text_edit.rs),
- * and both are held to fixtures/text-edit-cases.json.
+ * - UTF-8 with or without a byte order mark, or UTF-16 either way with one;
+ * - lines ending in LF or CRLF; a file mixing them keeps the majority on an edit, and says so;
+ * - text rather than binary.
+ *
+ * Anything else opens read-only with a plain note and is never transcoded. The editor holds the
+ * text without its byte order mark and with every line break as LF (as CodeMirror does); a save
+ * writes it back in the file's encoding and line breaks, and a text still as it opened is its
+ * original bytes again.
+ *
+ * The phones ask the same of the core (crates/hushos-core/src/text_edit.rs), and all are held to
+ * fixtures/text-edit-cases.json.
  */
 
-/* Up to the text preview limit (8 MiB). A larger file opens read-only. */
+/* Up to the text preview limit (8 MiB), on the file's bytes. A larger file opens read-only. */
 export const TEXT_EDIT_LIMIT = PREVIEW_LIMITS.text;
 
 /* Why a text file opens read-only. */
-export type ReadOnlyReason =
-    | 'too-large'
-    | 'byte-order-mark'
-    | 'utf-16'
-    | 'encoding'
-    | 'binary'
-    | 'line-endings';
+export type ReadOnlyReason = 'too-large' | 'encoding' | 'binary' | 'line-endings';
 
 /* What each reason says, in one sentence, on every client. */
 export const READ_ONLY_WORDS: Record<ReadOnlyReason, string> = {
     'too-large': 'This file is too large to edit here.',
-    'byte-order-mark': 'HushOS can’t edit this file’s encoding yet.',
-    'utf-16': 'HushOS can’t edit this file’s encoding yet.',
     encoding: 'This file uses an encoding HushOS can’t edit without changing it.',
     binary: 'This file isn’t plain text, so it can’t be edited here.',
-    'line-endings': 'This file uses Windows line endings, which HushOS can’t edit yet.',
+    'line-endings': 'This file uses line endings HushOS can’t edit without changing them.',
 };
+
+export type TextEncoding = 'utf-8' | 'utf-8-bom' | 'utf-16le' | 'utf-16be';
+export type LineEnding = 'lf' | 'crlf';
+
+/*
+ * An editable file's encoding, the line break a save writes (the majority when it mixes them, the
+ * first one's on a tie, LF when it has none), and whether it mixes LF and CRLF.
+ */
+export type TextFormat = { encoding: TextEncoding; lineEnding: LineEnding; mixed: boolean };
+
+/* What the editor says of a file that mixes line endings: an edit writes them all one way. */
+export function mixedNote(format: TextFormat) {
+    if (!format.mixed) return null;
+    return `This file mixes line endings; saving uses ${format.lineEnding === 'crlf' ? 'Windows (CRLF)' : 'Unix (LF)'}.`;
+}
 
 /* The viewer's own sniff (looksLikeText): this much of the start is looked at for control characters. */
 const SNIFF_BYTES = 8 * 1024;
 
-/*
- * Why these bytes can't be edited without changing what the person didn't
- * touch, or null when they can. In this order: the size, a byte order mark
- * (UTF-8, then UTF-16 either way), bytes that aren't UTF-8, binary (a NUL
- * anywhere, or more than 2% control characters in the first 8 KiB, as the
- * viewer decides), then a carriage return anywhere.
- */
-export function readOnlyReason(bytes: Uint8Array): ReadOnlyReason | null {
-    if (bytes.length > TEXT_EDIT_LIMIT) return 'too-large';
-    if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return 'byte-order-mark';
-    if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
-        return 'utf-16';
-    try {
-        new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
-    } catch {
-        return 'encoding';
+const startsWith = (bytes: Uint8Array, prefix: readonly number[]) =>
+    prefix.every((byte, at) => bytes[at] === byte);
+const UTF8_BOM = [0xef, 0xbb, 0xbf] as const;
+const UTF16_LE_BOM = [0xff, 0xfe] as const;
+const UTF16_BE_BOM = [0xfe, 0xff] as const;
+
+const unitAt = (bytes: Uint8Array, at: number, encoding: TextEncoding) =>
+    encoding === 'utf-16be'
+        ? (bytes[at]! << 8) | bytes[at + 1]!
+        : bytes[at]! | (bytes[at + 1]! << 8);
+
+/* UTF-16 code units, or null for an odd length or a surrogate without its pair. */
+function decodeUtf16(payload: Uint8Array, encoding: TextEncoding) {
+    if (payload.length % 2 !== 0) return null;
+    const units = new Uint16Array(payload.length / 2);
+    for (let at = 0; at < units.length; at++) units[at] = unitAt(payload, at * 2, encoding);
+    for (let at = 0; at < units.length; at++) {
+        const unit = units[at]!;
+        if (unit >= 0xd800 && unit <= 0xdbff) {
+            const next = units[at + 1];
+            if (next === undefined || next < 0xdc00 || next > 0xdfff) return null;
+            at++;
+        } else if (unit >= 0xdc00 && unit <= 0xdfff) return null;
     }
-    if (bytes.includes(0)) return 'binary';
+    let text = '';
+    // In pieces: an 8 MiB file's units are too many arguments for one call.
+    for (let at = 0; at < units.length; at += 8192)
+        text += String.fromCharCode(...units.subarray(at, at + 8192));
+    return text;
+}
+
+/*
+ * UTF-16 that came without a byte order mark: an even length whose NUL bytes in the first 8 KiB
+ * all sit on one side of each pair and make up at least half of those pairs. Never transcoded: it
+ * gets the encoding note rather than "not plain text".
+ */
+function utf16WithoutMark(bytes: Uint8Array) {
+    if (bytes.length < 2 || bytes.length % 2 !== 0) return false;
     const sample = bytes.subarray(0, SNIFF_BYTES);
+    let even = 0;
+    let odd = 0;
+    for (let at = 0; at < sample.length; at++)
+        if (sample[at] === 0) {
+            if (at % 2 === 0) even++;
+            else odd++;
+        }
+    const pairs = Math.floor(sample.length / 2);
+    return (even === 0 && odd * 2 >= pairs) || (odd === 0 && even * 2 >= pairs);
+}
+
+const isControl = (value: number) =>
+    value < 32 && value !== 9 && value !== 10 && value !== 12 && value !== 13;
+
+/*
+ * The viewer's binary rule on the text's own bytes (after any byte order mark): a NUL anywhere,
+ * or control characters in more than 2% of the first 8 KiB, in bytes for UTF-8 and in code units
+ * for UTF-16.
+ */
+function binary(payload: Uint8Array, encoding: TextEncoding) {
+    const sample = payload.subarray(0, SNIFF_BYTES);
+    if (encoding === 'utf-8' || encoding === 'utf-8-bom') {
+        if (payload.includes(0)) return true;
+        let control = 0;
+        for (const byte of sample) if (isControl(byte)) control++;
+        return sample.length > 0 && control / sample.length > 0.02;
+    }
+    for (let at = 0; at + 1 < payload.length; at += 2)
+        if (unitAt(payload, at, encoding) === 0) return true;
+    const units = Math.floor(sample.length / 2);
     let control = 0;
-    for (const byte of sample)
-        if (byte < 32 && byte !== 9 && byte !== 10 && byte !== 12 && byte !== 13) control++;
-    if (sample.length > 0 && control / sample.length > 0.02) return 'binary';
-    if (bytes.includes(13)) return 'line-endings';
-    return null;
+    for (let at = 0; at + 1 < sample.length; at += 2)
+        if (isControl(unitAt(sample, at, encoding))) control++;
+    return units > 0 && control * 50 > units;
+}
+
+/*
+ * The line break a save writes and whether the text mixes LF and CRLF, or null for a carriage
+ * return on its own. The majority wins; a tie goes to the first break; no break at all is LF.
+ */
+function lineEndingsOf(text: string): { lineEnding: LineEnding; mixed: boolean } | null {
+    let lf = 0;
+    let crlf = 0;
+    let first: LineEnding | null = null;
+    for (let at = 0; at < text.length; at++) {
+        const code = text.charCodeAt(at);
+        if (code === 13) {
+            if (text.charCodeAt(at + 1) !== 10) return null;
+            crlf++;
+            first ??= 'crlf';
+            at++;
+        } else if (code === 10) {
+            lf++;
+            first ??= 'lf';
+        }
+    }
+    const lineEnding = crlf > lf ? 'crlf' : lf > crlf ? 'lf' : (first ?? 'lf');
+    return { lineEnding, mixed: lf > 0 && crlf > 0 };
 }
 
 export type TextOpen =
-    | { editable: true; text: string }
+    | { editable: true; format: TextFormat; text: string }
     | { editable: false; reason: ReadOnlyReason; text: string | null };
 
 /*
- * The bytes as the editor holds them: the text, editable when it comes back
- * out byte for byte (encodeText). A read-only file still shows its text where
- * it decodes as UTF-8, never past the limit.
+ * The bytes as the editor holds them. In this order: the size, the encoding (a UTF-8 or UTF-16
+ * byte order mark, else UTF-8; UTF-16 without one, or bytes that don't decode, are `encoding`),
+ * binary, then a lone carriage return anywhere. An editable file's text has no byte order mark and
+ * every line break as LF. A read-only file still shows its words where they decode (never past the
+ * limit, never binary, never a guess at another encoding), and is never saved.
  */
 export function openText(bytes: Uint8Array): TextOpen {
-    const reason = readOnlyReason(bytes);
-    if (reason === null)
-        return {
-            editable: true,
-            text: new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes),
-        };
-    if (reason === 'too-large' || reason === 'binary' || reason === 'utf-16')
-        return { editable: false, reason, text: null };
-    // Shown as the viewer shows it (a byte order mark dropped, anything not UTF-8 replaced): never saved.
-    return { editable: false, reason, text: new TextDecoder().decode(bytes) };
+    if (bytes.length > TEXT_EDIT_LIMIT) return { editable: false, reason: 'too-large', text: null };
+    let encoding: TextEncoding = 'utf-8';
+    let payload = bytes;
+    if (startsWith(bytes, UTF8_BOM)) [encoding, payload] = ['utf-8-bom', bytes.subarray(3)];
+    else if (startsWith(bytes, UTF16_LE_BOM)) [encoding, payload] = ['utf-16le', bytes.subarray(2)];
+    else if (startsWith(bytes, UTF16_BE_BOM)) [encoding, payload] = ['utf-16be', bytes.subarray(2)];
+    let decoded: string;
+    if (encoding === 'utf-8' || encoding === 'utf-8-bom') {
+        if (encoding === 'utf-8' && utf16WithoutMark(payload))
+            return { editable: false, reason: 'encoding', text: null };
+        try {
+            decoded = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(payload);
+        } catch {
+            // Shown as the viewer shows it (anything not UTF-8 replaced): never saved.
+            const shown = new TextDecoder('utf-8', { ignoreBOM: true }).decode(payload);
+            return { editable: false, reason: 'encoding', text: shown };
+        }
+    } else {
+        const text = decodeUtf16(payload, encoding);
+        if (text === null) return { editable: false, reason: 'encoding', text: null };
+        decoded = text;
+    }
+    if (binary(payload, encoding)) return { editable: false, reason: 'binary', text: null };
+    const endings = lineEndingsOf(decoded);
+    if (!endings) return { editable: false, reason: 'line-endings', text: decoded };
+    const text = decoded.includes('\r') ? decoded.replaceAll('\r\n', '\n') : decoded;
+    return { editable: true, format: { encoding, ...endings }, text };
 }
 
-/* What a save writes: the text as UTF-8, nothing added, nothing taken away. */
-export function encodeText(text: string) {
-    return new TextEncoder().encode(text);
+/* Why these bytes can't be edited without changing what the person didn't touch, or null when they can. */
+export function readOnlyReason(bytes: Uint8Array): ReadOnlyReason | null {
+    const opened = openText(bytes);
+    return opened.editable ? null : opened.reason;
+}
+
+/* The editor's text written in `format`: every CRLF, lone CR or LF as the file's line break, then encoded, the byte order mark first. */
+function encodeIn(format: TextFormat, text: string) {
+    const lines = text.replace(/\r\n?|\n/g, format.lineEnding === 'crlf' ? '\r\n' : '\n');
+    if (format.encoding === 'utf-8' || format.encoding === 'utf-8-bom') {
+        const body = new TextEncoder().encode(lines);
+        if (format.encoding === 'utf-8') return body;
+        const out = new Uint8Array(body.length + 3);
+        out.set(UTF8_BOM);
+        out.set(body, 3);
+        return out;
+    }
+    const out = new Uint8Array(2 + lines.length * 2);
+    out.set(format.encoding === 'utf-16le' ? UTF16_LE_BOM : UTF16_BE_BOM);
+    for (let at = 0; at < lines.length; at++) {
+        const unit = lines.charCodeAt(at);
+        const [first, second] =
+            format.encoding === 'utf-16le' ? [unit & 0xff, unit >> 8] : [unit >> 8, unit & 0xff];
+        out[2 + at * 2] = first;
+        out[3 + at * 2] = second;
+    }
+    return out;
+}
+
+/*
+ * What a save writes for `text`, the editor's words, when it opened `original`: `original` itself
+ * while the text is still what it opened as (a file opened and saved without an edit is byte for
+ * byte the same, a mixed one included); otherwise the text in the file's encoding with its byte
+ * order mark, every line break (LF, CRLF or a lone CR pasted) as the file's. Null when `original`
+ * isn't editable.
+ */
+export function saveBytes(original: Uint8Array, text: string): Uint8Array | null {
+    const opened = openText(original);
+    if (!opened.editable) return null;
+    if (opened.text === text) return original;
+    return encodeIn(opened.format, text);
+}
+
+/*
+ * The words a viewer shows for bytes it read (a part of a larger file included): UTF-16 with a
+ * byte order mark as UTF-16, anything else as UTF-8 with what doesn't decode replaced. Shown only,
+ * never saved.
+ */
+export function viewText(bytes: Uint8Array) {
+    if (startsWith(bytes, UTF16_LE_BOM)) return new TextDecoder('utf-16le').decode(bytes);
+    if (startsWith(bytes, UTF16_BE_BOM)) return new TextDecoder('utf-16be').decode(bytes);
+    return new TextDecoder().decode(bytes);
 }
 
 /*

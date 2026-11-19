@@ -1,7 +1,8 @@
-//! Text editability (`fixtures/text-edit-cases.json`, hand-written outcomes) as
-//! this core gives it; `apps/web/src/lib/text-edit.test.ts` holds the web to the
-//! same file. A verdict the twins give differently is a file one client lets the
-//! person edit and another doesn't, or one a phone saves with bytes changed.
+//! Text editing (`fixtures/text-edit-cases.json`, hand-written outcomes) as this
+//! core gives it; `apps/web/src/lib/text-edit.test.ts` holds the web to the same
+//! file, and the phones' own tests hold them. A verdict the twins give differently
+//! is a file one client lets the person edit and another doesn't, or one a client
+//! saves with bytes changed that nobody touched.
 
 use hushos_core::*;
 use serde_json::Value;
@@ -24,25 +25,83 @@ fn bytes_of(parts: &Value) -> Vec<u8> {
     out
 }
 
-fn word(reason: Option<TextReadOnly>) -> Option<&'static str> {
-    reason.map(|reason| match reason {
+fn word(reason: TextReadOnly) -> &'static str {
+    match reason {
         TextReadOnly::TooLarge => "too-large",
-        TextReadOnly::ByteOrderMark => "byte-order-mark",
-        TextReadOnly::Utf16 => "utf-16",
         TextReadOnly::Encoding => "encoding",
         TextReadOnly::Binary => "binary",
         TextReadOnly::LineEndings => "line-endings",
-    })
+    }
+}
+
+fn encoding(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Utf8 => "utf-8",
+        TextEncoding::Utf8Bom => "utf-8-bom",
+        TextEncoding::Utf16Le => "utf-16le",
+        TextEncoding::Utf16Be => "utf-16be",
+    }
+}
+
+fn ending(ending: LineEnding) -> &'static str {
+    match ending {
+        LineEnding::Lf => "lf",
+        LineEnding::Crlf => "crlf",
+    }
 }
 
 #[test]
-fn every_byte_case_opens_as_the_web_opens_it() {
+fn every_byte_case_opens_as_the_fixture_says() {
     let cases = cases();
     let list = cases["bytes"].as_array().expect("bytes");
-    assert!(list.len() >= 20);
+    assert!(list.len() >= 40);
+    for case in list {
+        let name = &case["name"];
+        let bytes = bytes_of(&case["bytes"]);
+        assert_eq!(text_read_only(bytes.clone()).map(word), case["reason"].as_str(), "{name}");
+        match text_open(bytes) {
+            TextOpened::Editable { format, text } => {
+                assert_eq!(Some(encoding(format.encoding)), case["encoding"].as_str(), "{name}");
+                assert_eq!(Some(ending(format.line_ending)), case["lineEnding"].as_str(), "{name}");
+                assert_eq!(Some(format.mixed), case["mixed"].as_bool(), "{name}");
+                if let Some(expected) = case["text"].as_str() {
+                    assert_eq!(text, expected, "{name}");
+                }
+                assert!(!text.contains('\r'), "{name}: the editor's text holds no carriage return");
+            }
+            TextOpened::ReadOnly { reason, .. } => {
+                assert_eq!(Some(word(reason)), case["reason"].as_str(), "{name}")
+            }
+        }
+    }
+}
+
+#[test]
+fn every_editable_case_saved_without_an_edit_is_its_own_bytes() {
+    let cases = cases();
+    for case in cases["bytes"].as_array().expect("bytes") {
+        let bytes = bytes_of(&case["bytes"]);
+        match text_open(bytes.clone()) {
+            TextOpened::Editable { text, .. } => {
+                assert!(text_save(bytes.clone(), text).as_deref() == Some(&bytes[..]), "{}", case["name"])
+            }
+            TextOpened::ReadOnly { .. } => {
+                assert_eq!(text_save(bytes, String::new()), None, "{}", case["name"])
+            }
+        }
+    }
+}
+
+#[test]
+fn every_edit_writes_what_the_fixture_says() {
+    let cases = cases();
+    let list = cases["edits"].as_array().expect("edits");
+    assert!(list.iter().any(|case| case["saved"].is_null()));
     for case in list {
         let bytes = bytes_of(&case["bytes"]);
-        assert_eq!(word(text_read_only(bytes)), case["reason"].as_str(), "{}", case["name"]);
+        let text = case["text"].as_str().expect("text").to_owned();
+        let expected = (!case["saved"].is_null()).then(|| bytes_of(&case["saved"]));
+        assert_eq!(text_save(bytes, text), expected, "{}", case["name"]);
     }
 }
 

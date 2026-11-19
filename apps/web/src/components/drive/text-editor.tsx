@@ -26,7 +26,7 @@ import { useFormatForDisplay, useHotkey } from '@tanstack/react-hotkeys';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
 import { SaveIcon, TriangleAlertIcon } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Notice, Opening } from '@/components/drive/viewer-parts';
 import { openStorageFull } from '@/components/drive/storage-full-dialog';
@@ -41,6 +41,7 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
+import { segmentOn, segmentTrack } from '@/components/ui/segment';
 import { unlockedNow } from '@/lib/auth-view';
 import { deviceSession } from '@/lib/device-session';
 import {
@@ -58,9 +59,18 @@ import {
     wrapsLines,
 } from '@/lib/editor-languages';
 import { holdPageWhile } from '@/lib/leave-guard';
-import { openReader, readAll, type ReadProgress } from '@/lib/previews';
+import { MARKDOWN_LIMIT } from '@/lib/markdown';
+import { openReader, previewKindOf, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
-import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
+import {
+    mixedNote,
+    openText,
+    READ_ONLY_WORDS,
+    saveBytes,
+    TEXT_EDIT_LIMIT,
+    type ReadOnlyReason,
+    type TextFormat,
+} from '@/lib/text-edit';
 import { startCheck, type Check } from '@/lib/text-check';
 import { parseWarning, preloadParsers, structuredKindOf } from '@/lib/text-parse';
 import {
@@ -72,16 +82,25 @@ import {
     type EditTarget,
     type StartRun,
 } from '@/lib/text-save';
+import { cn } from '@/lib/utils';
+
+/* The viewer's Markdown renderer (preloaded after unlock with the viewers), for the preview beside the source. */
+const MarkdownView = lazy(() =>
+    import('@/components/drive/rich-text').then((m) => ({ default: m.MarkdownView })),
+);
 
 /*
- * The text editor (docs/editing-design.md section 1; Editing 1a): CodeMirror over the
+ * The text editor (docs/editing-design.md section 1; Editing 1a and 1b): CodeMirror over the
  * file's current version, read again from the server, never the viewer's copy. Saving is
  * explicit (Save, Ctrl or Cmd+S), a new version through the save path, with the stale
- * choices when someone else saved first. A file it can't save byte for byte opens read-only
- * with a note. Its text lives in this component only: a lock or a sign-out unmounts the drive
+ * choices when someone else saved first. A save writes the file's own encoding, byte order mark
+ * and line breaks (saveBytes); a file it can't save byte for byte opens read-only with a note.
+ * Markdown shows the viewer's rendering beside the source on a wide screen, and Source or Preview
+ * on a narrow one. Its text lives in this component only: a lock or a sign-out unmounts the drive
  * and the text goes with it, and nothing is kept on this device (drafts are Editing 1c).
  *
- * Loaded on first use, never with the drive (the preload is Editing 1b).
+ * Fetched with every grammar and parser in the post-unlock preload (lib/preload.ts), never on
+ * first use, so which chunks a device fetched never says what kind of file was edited.
  */
 
 /*
@@ -150,6 +169,9 @@ export const editorWords = {
     discard: 'Discard changes',
     theirsGone: 'This file is no longer there.',
     finishing: 'Finishing your save, then closing',
+    source: 'Source',
+    preview: 'Preview',
+    previewTooLong: 'This file is too long to preview while you edit.',
 };
 
 const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
@@ -357,6 +379,14 @@ export function TextEditor({
     /* Whether the text may be changed: off for a read-only file, and once a copy's file can't be told. */
     const editability = useRef(new Compartment());
     const saved = useRef<Text | null>(null);
+    /*
+     * The bytes the text opened as, or last saved as: a save writes from them (saveBytes), so the
+     * file keeps its encoding, byte order mark and line breaks, and a text still as it was is them
+     * again. Null while nothing editable is open.
+     */
+    const original = useRef<Uint8Array | null>(null);
+    /* The open file's encoding and line breaks: a mixed file says which a save writes. */
+    const [textFormat, setTextFormat] = useState<TextFormat | null>(null);
     const [dirty, setDirty] = useState(false);
     const dirtyNow = useRef(false);
     const endedNow = useRef(false);
@@ -384,6 +414,11 @@ export function TextEditor({
     /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
     const [ended, setEnded] = useState(false);
     const language = editorLanguage(loadFrom.name);
+    /* Markdown shows the viewer's rendering beside the source (Source or Preview on a narrow screen). */
+    const markdown = previewKindOf(loadFrom.name, loadFrom.metadata?.mime) === 'markdown';
+    const [pane, setPane] = useState<'source' | 'preview'>('source');
+    const [preview, setPreview] = useState<{ text: string } | 'too-long' | null>(null);
+    const previewed = useRef(false);
     // By the name's language, or the recorded type when the name gives none (an extensionless JSON file).
     const checks = structuredKindOf(language, loadFrom.metadata?.mime);
 
@@ -438,6 +473,9 @@ export function TextEditor({
                 if (!still()) return;
                 const text = openText(bytes);
                 target.current = openedTarget(file);
+                // A copy of its own: what a save writes unchanged is exactly these bytes, nothing around them.
+                original.current = text.editable ? bytes.slice() : null;
+                setTextFormat(text.editable ? text.format : null);
                 onRead(file.currentVersion?.id ?? null, file);
                 setPhase(
                     text.editable
@@ -540,6 +578,23 @@ export function TextEditor({
             running?.cancel();
         };
     }, [edits, checks, editable]);
+
+    // The Markdown preview, a moment after typing stops: the viewer's renderer, sanitized the same
+    // way (images and links named, never fetched). Past the renderer's limit it says so instead.
+    useEffect(() => {
+        const current = view.current;
+        if (!markdown || !current) return;
+        // The first one at once, so the preview never opens empty.
+        const timer = window.setTimeout(
+            () => {
+                previewed.current = true;
+                const doc = current.state.doc;
+                setPreview(doc.length > MARKDOWN_LIMIT ? 'too-long' : { text: doc.toString() });
+            },
+            previewed.current ? 250 : 0,
+        );
+        return () => window.clearTimeout(timer);
+    }, [edits, markdown]);
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
     useEffect(
@@ -648,9 +703,12 @@ export function TextEditor({
         [guard],
     );
 
-    /* After a save landed: the editor's text is the file's now, from that version on. */
+    /* After a save landed: the editor's text is the file's now, from that version on, as `bytes`. */
     const settled = useCallback(
-        (doc: Text, file: DriveNode, versionId: string | null) => {
+        (doc: Text, file: DriveNode, versionId: string | null, bytes: Uint8Array) => {
+            // Written in one line break from here on, unless the save sent the bytes it opened as.
+            if (bytes !== original.current) setTextFormat((was) => was && { ...was, mixed: false });
+            original.current = bytes;
             // The version this save published, never one read from a listing afterwards (which may
             // already be someone else's). Unknown, the next save asks the stale question. A copy
             // is still signed from the version the text was read from, never this row.
@@ -680,6 +738,11 @@ export function TextEditor({
             const taken = token();
             const doc = current.state.doc;
             const { file, startedFrom } = target.current;
+            const opened = original.current;
+            if (!opened) return;
+            // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
+            const bytes = saveBytes(opened, doc.toString());
+            if (!bytes) return;
             let landed = false;
             beginSaving();
             setStatus(null);
@@ -700,7 +763,7 @@ export function TextEditor({
                         file: listed,
                         folder: listing.folder,
                         startedFrom: onTopOf ?? startedFrom,
-                        text: doc.toString(),
+                        bytes,
                     },
                     { stillOn: () => live(taken) },
                 );
@@ -709,7 +772,7 @@ export function TextEditor({
                     setStale({ currentVersionId: result.currentVersionId });
                     return;
                 }
-                settled(doc, listed, result.versionId);
+                settled(doc, listed, result.versionId, bytes);
                 landed = true;
                 setStatus(editorWords.saved);
             } catch (error) {
@@ -743,6 +806,11 @@ export function TextEditor({
         const taken = token();
         const doc = current.state.doc;
         const { file, source } = target.current;
+        const opened = original.current;
+        if (!opened) return;
+        // The copy keeps the file's encoding and line breaks too.
+        const bytes = saveBytes(opened, doc.toString());
+        if (!bytes) return;
         let landed = false;
         beginSaving();
         setStatus(null);
@@ -752,7 +820,7 @@ export function TextEditor({
             if (!live(taken)) return;
             const made = await saveCopy(
                 start,
-                { file, source, folder: listing.folder, text: doc.toString() },
+                { file, source, folder: listing.folder, bytes },
                 {
                     stillOn: () => live(taken),
                     // Who wrote what the copy is made from, as trust stands now (not when it opened).
@@ -775,7 +843,7 @@ export function TextEditor({
             // Published either way: a close waiting on it goes on (asking first if typed meanwhile).
             landed = true;
             if (made.node && listed) {
-                settled(doc, listed, made.versionId);
+                settled(doc, listed, made.versionId, bytes);
                 onTarget(listed);
                 setStatus(editorWords.savedCopy(listed.name));
             } else {
@@ -865,6 +933,33 @@ export function TextEditor({
     const header = actions
         ? createPortal(
               <div className="flex min-w-0 items-center gap-3">
+                  {markdown && shown && (
+                      // A narrow screen shows one at a time; a wide one shows both side by side.
+                      <fieldset
+                          className={cn(
+                              'm-0 inline-flex min-w-0 shrink-0 rounded-md border-0 p-0.5 lg:hidden',
+                              segmentTrack,
+                          )}
+                      >
+                          <legend className="sr-only">Show</legend>
+                          {(['source', 'preview'] as const).map((value) => (
+                              <button
+                                  key={value}
+                                  type="button"
+                                  aria-pressed={pane === value}
+                                  onClick={() => setPane(value)}
+                                  className={cn(
+                                      'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring sm:px-3',
+                                      pane === value
+                                          ? segmentOn
+                                          : 'text-muted-foreground hover:text-foreground',
+                                  )}
+                              >
+                                  {value === 'source' ? editorWords.source : editorWords.preview}
+                              </button>
+                          ))}
+                      </fieldset>
+                  )}
                   {warning && (
                       <output className="flex min-w-0 items-center gap-1.5 text-[13px] text-warning max-sm:hidden">
                           <TriangleAlertIcon className="size-3.5 shrink-0" />
@@ -933,6 +1028,11 @@ export function TextEditor({
                         {READ_ONLY_WORDS[phase.reason]}
                     </p>
                 )}
+                {phase.kind === 'editing' && textFormat && mixedNote(textFormat) && (
+                    <p className="shrink-0 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground">
+                        {mixedNote(textFormat)}
+                    </p>
+                )}
                 {warning && (
                     // On a phone the header has no room for it: said here instead, and read out the same way.
                     <output className="flex shrink-0 items-center gap-1.5 border-b border-rule px-5 py-2 text-[13px] text-warning sm:hidden">
@@ -940,7 +1040,39 @@ export function TextEditor({
                         {warning}
                     </output>
                 )}
-                <div ref={host} data-text-editor className="min-h-0 flex-1 overflow-hidden" />
+                <div className="flex min-h-0 flex-1">
+                    <div
+                        ref={host}
+                        data-text-editor
+                        className={cn(
+                            'min-h-0 min-w-0 flex-1 overflow-hidden',
+                            markdown && pane === 'preview' && 'max-lg:hidden',
+                        )}
+                    />
+                    {markdown && (
+                        // Beside the source on a wide screen; in its place on a narrow one, when chosen.
+                        <section
+                            aria-label={editorWords.preview}
+                            data-markdown-preview
+                            className={cn(
+                                'min-h-0 min-w-0 flex-1 overflow-auto border-rule lg:border-l',
+                                pane === 'source' && 'max-lg:hidden',
+                            )}
+                        >
+                            {preview === 'too-long' ? (
+                                <p className="px-6 py-10 text-center text-sm text-muted-foreground">
+                                    {editorWords.previewTooLong}
+                                </p>
+                            ) : (
+                                preview && (
+                                    <Suspense fallback={null}>
+                                        <MarkdownView text={preview.text} />
+                                    </Suspense>
+                                )
+                            )}
+                        </section>
+                    )}
+                </div>
             </div>
         );
 

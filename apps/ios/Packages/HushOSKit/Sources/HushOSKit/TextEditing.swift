@@ -2,13 +2,15 @@ import Foundation
 import HushOSCore
 
 /*
- * Editing 1a on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts and
- * lib/text-save.ts): which files the text editor opens, whether it may change them, and how a save
- * goes through the save path (SaveRuns.swift), never a second one.
+ * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts
+ * and lib/text-save.ts): which files the text editor opens, whether it may change them, the bytes a
+ * save writes, and how a save goes through the save path (SaveRuns.swift), never a second one.
  *
  * A file opens for editing only when what the editor saves is the file byte for byte except for the
- * edit: the core decides (text_edit.rs, held to the web by fixtures/text-edit-cases.json). Anything
- * else opens read-only with a note.
+ * edit, in its own encoding (UTF-8 with or without a byte order mark, UTF-16 with one), byte order
+ * mark and line breaks (LF or CRLF; a mixed file keeps its majority on an edit): the core decides and
+ * writes (text_edit.rs, held to the web by fixtures/text-edit-cases.json). Anything else opens
+ * read-only with a note, never transcoded.
  */
 public enum TextEditing {
     /* The largest file the editor opens for editing (8 MiB, the web's text preview limit). */
@@ -43,7 +45,7 @@ public enum TextEditing {
 
     public static func readsAsText(_ bytes: Data) -> Bool {
         switch textReadOnly(bytes: bytes) {
-        case nil, .lineEndings, .byteOrderMark: true
+        case nil, .lineEndings: true
         default: false
         }
     }
@@ -52,39 +54,45 @@ public enum TextEditing {
     public static func words(_ reason: TextReadOnly) -> String {
         switch reason {
         case .tooLarge: "This file is too large to edit here."
-        case .byteOrderMark, .utf16: "HushOS can’t edit this file’s encoding yet."
         case .encoding: "This file uses an encoding HushOS can’t edit without changing it."
         case .binary: "This file isn’t plain text, so it can’t be edited here."
-        case .lineEndings: "This file uses Windows line endings, which HushOS can’t edit yet."
+        case .lineEndings: "This file uses line endings HushOS can’t edit without changing them."
         }
+    }
+
+    /* What the editor says of a file that mixes line endings, in the web's words: an edit writes them all one way. */
+    public static func mixedNote(_ format: TextFormat) -> String? {
+        guard format.mixed else { return nil }
+        return "This file mixes line endings; saving uses \(format.lineEnding == .crlf ? "Windows (CRLF)" : "Unix (LF)")."
     }
 
     public enum Open: Equatable, Sendable {
-        case editable(String)
-        /* The text is shown when it decodes (never past the limit, never binary), and never saved. */
+        /* Without the byte order mark, every line break as LF. */
+        case editable(String, TextFormat)
+        /* The text is shown when it decodes (never past the limit, never binary, never a guess at another encoding), and never saved. */
         case readOnly(TextReadOnly, String?)
     }
 
-    /* The bytes as the editor holds them. */
+    /* The bytes as the editor holds them, as the core reads them. */
     public static func open(_ data: Data) -> Open {
-        if let reason = textReadOnly(bytes: data) {
-            switch reason {
-            case .tooLarge, .binary, .utf16: return .readOnly(reason, nil)
-            default: return .readOnly(reason, String(decoding: data, as: UTF8.self))
-            }
+        switch textOpen(bytes: data) {
+        case .editable(let format, let text): .editable(text, format)
+        case .readOnly(let reason, let text): .readOnly(reason, text)
         }
-        // Checked valid UTF-8 by the core, so this decodes every byte as it is.
-        return .editable(String(decoding: data, as: UTF8.self))
     }
 
-    /* What a save writes: the text as UTF-8, nothing added, nothing taken away. */
-    public static func encode(_ text: String) -> Data { Data(text.utf8) }
+    /*
+     * What a save writes for `text` when the editor opened (or last saved) `original`: `original` itself while the text
+     * is still what it opened as, otherwise the text in the file's encoding, byte order mark and line breaks (the core's
+     * text_save). Nil when `original` isn't editable.
+     */
+    public static func bytes(for text: String, from original: Data) -> Data? { textSave(original: original, text: text) }
 
     /*
      * A line break typed or pasted into the system's text view, as the editor keeps it: CRLF and a
-     * lone CR become LF, as CodeMirror does on the web, so a file the editor wrote never holds a
-     * carriage return (which would make it read-only next time). Looked for as a byte: Swift takes
-     * "\r\n" for one Character, so a Character search for "\r" never finds it there.
+     * lone CR become LF, as CodeMirror does on the web; a save writes each one as the file's line
+     * break. Looked for as a byte: Swift takes "\r\n" for one Character, so a Character search for
+     * "\r" never finds it there.
      */
     public static func lineFeeds(_ inserted: String) -> String {
         guard hasCarriageReturn(inserted) else { return inserted }
@@ -255,14 +263,13 @@ public enum TextSave {
     }
 
     /*
-     * Save, and Save on top: a new version of `file` holding `text`, unless the file moved on from
-     * `startedFrom` (Save on top passes the version current now). Planned as its UTF-8 bytes with no
-     * thumbnail, signed as the person's own writing.
+     * Save, and Save on top: a new version of `file` holding `bytes` (TextEditing.bytes), unless the file
+     * moved on from `startedFrom` (Save on top passes the version current now). Planned as those bytes
+     * with no thumbnail, signed as the person's own writing.
      */
-    public static func version(_ text: String, of file: Opened, in folder: Opened, startedFrom: String?, start: Start,
+    public static func version(_ bytes: Data, of file: Opened, in folder: Opened, startedFrom: String?, start: Start,
                                stillOn: @Sendable () async -> Bool = { true },
                                pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextSaved {
-        let bytes = TextEditing.encode(text)
         // Asked last thing before the run starts: a save whose session ended uploads nothing.
         guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([file], [.known(size: UInt64(bytes.count), thumbnail: false)])
@@ -279,11 +286,10 @@ public enum TextSave {
         }
     }
 
-    /* Save as a copy: a new file beside `file` under the next free name, signed as `file` is (`sources`). */
-    public static func copy(_ text: String, of file: Opened, in folder: Opened, sources: SaveSources, start: Start,
+    /* Save as a copy: a new file beside `file` under the next free name holding `bytes`, signed as `file` is (`sources`). */
+    public static func copy(_ bytes: Data, of file: Opened, in folder: Opened, sources: SaveSources, start: Start,
                             stillOn: @Sendable () async -> Bool = { true },
                             pause: (@Sendable (Int) async -> Void)? = nil) async throws -> TextCopy {
-        let bytes = TextEditing.encode(text)
         guard await stillOn() else { throw TextEditing.SessionEnded() }
         let run = try await start([folder], [.known(size: UInt64(bytes.count), thumbnail: false)])
         guard await stillOn() else {
