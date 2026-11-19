@@ -23,10 +23,10 @@ Toolchain on this Mac:
 | Tool   | Where or which                                           |
 | ------ | -------------------------------------------------------- |
 | SDK    | `~/Library/Android/sdk` (platform 37, build-tools 37)    |
-| NDK    | 27                                                       |
+| NDK    | 30, the `ndkVersion` in `app/build.gradle.kts`           |
 | JDK    | 21 at `/opt/homebrew/opt/openjdk@21`                     |
-| Gradle | 9.6 through the wrapper                                  |
-| AGP    | 9.4, with built-in Kotlin: do not apply `kotlin.android` |
+| Gradle | 9.9 through the wrapper                                  |
+| AGP    | 9.5, with built-in Kotlin: do not apply `kotlin.android` |
 
 - A fresh worktree has no `local.properties`. The dev tools then need `ANDROID_HOME=$HOME/Library/Android/sdk`.
 - Run the unit tests on JDK 21. On JDK 26, Robolectric 4.16 fails every test with "Unsupported class file major version 70".
