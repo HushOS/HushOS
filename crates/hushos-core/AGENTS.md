@@ -194,7 +194,7 @@ Design: docs/identity-pq-design.md.
 
 ### ML-DSA-65 (`pq.rs`)
 
-- From `ml-dsa = "=0.1.1"`: pure FIPS 204.
+- From `ml-dsa` (an exact pin in Cargo.toml, 0.1.2 now; it moves only with the ACVP vectors passing again): pure FIPS 204.
 - Keys come from the 32-byte ξ.
 - Signing is hedged, through `sign_internal` over `0 || len(ctx) || ctx || M`.
 - `fixtures/ml-dsa-65-acvp.json` is a subset of NIST's ACVP-Server vectors (commit and file hashes inside).

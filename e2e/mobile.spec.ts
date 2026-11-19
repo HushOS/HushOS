@@ -134,6 +134,11 @@ test('on a touch screen taps toggle rows into the selection, and a second tap re
     // The rest of the actions live behind one menu, so the bar stays one line.
     await page.getByRole('button', { name: 'More actions' }).click();
     await expect(page.getByRole('menuitem', { name: 'Versions' })).toBeVisible();
+    // Escape closes one layer at a time: the menu, then the button's tooltip when it shows, then
+    // the selection. None of them takes the selection with it.
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+    await expect(page.getByText(/^1 selected$/)).toBeVisible();
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(page.locator('[data-selection-bar]')).toHaveCount(0);

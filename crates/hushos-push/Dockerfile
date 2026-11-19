@@ -3,7 +3,7 @@
 #   docker build -f crates/hushos-push/Dockerfile -t hushos-push:local .
 # HushOS runs it at push.hushos.com; self-hosted servers never need to.
 
-FROM rust:1.97-bookworm AS build
+FROM rust:1.100-bookworm AS build
 WORKDIR /src
 # The whole workspace's manifests and members, since cargo reads every member; only the relay
 # is compiled.

@@ -25,14 +25,14 @@
         "@hushos/emails": "workspace:*",
         "@hushos/env": "workspace:*",
         "@hushos/logging": "workspace:*",
-        "@simplewebauthn/server": "14.0.3",
+        "@simplewebauthn/server": "14.1.0",
         "zustand": "5.1.0"
     },
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.4",
-        "fake-indexeddb": "6.2.7",
+        "fake-indexeddb": "6.2.8",
         "typescript": "7.0.2",
-        "vitest": "^5.1.0"
+        "vitest": "^5.1.1"
     }
 }

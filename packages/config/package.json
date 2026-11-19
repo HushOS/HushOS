@@ -12,7 +12,7 @@
         "typecheck": "tsc --noEmit"
     },
     "devDependencies": {
-        "oxfmt": "0.77.0",
+        "oxfmt": "0.79.0",
         "typescript": "7.0.2"
     }
 }
