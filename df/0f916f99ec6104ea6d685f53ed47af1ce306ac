@@ -1,0 +1,37 @@
+bun.lock
+  s_c60e24772e04af::t_87c7f5db7e1fff 28-30
+apps/web/nitro.config.ts
+  s_c60e24772e04af::t_23ed16ab6bc039 16-21
+apps/web/vite.config.ts
+  s_c60e24772e04af::t_901680edf0d068 201,203-210
+apps/web/scripts/check-server-deps.ts
+  s_566b8e0c4467a4::t_44a9950f32ab11 33-44,173,175-176,179,221
+  s_c60e24772e04af::t_1c4e264a9d85fa 2-3,13-18,20-31,48-94,105-124,126-141,143-144,146-168,172,174,180-220
+  s_c60e24772e04af::t_ffb5389d31ed5d 222
+apps/web/package.json
+  s_c60e24772e04af::t_654708ed2804e0 22-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df0f916f99ec6104ea6d685f53ed47af1ce306ac",
+  "prompts": {},
+  "sessions": {
+    "s_566b8e0c4467a4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6dac3959-035d-4ca2-88ce-5a4e2c0efc5a",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
