@@ -26,3 +26,11 @@ export function useIsTablet() {
         `(min-width: ${MOBILE_BREAKPOINT}px) and (max-width: ${DESKTOP_BREAKPOINT - 1}px)`,
     );
 }
+
+/*
+ * Tailwind's `lg` exactly: 64rem, so it moves with the browser's font size as the `lg:`
+ * classes do (1024px only at the default 16px).
+ */
+export function useIsDesktop() {
+    return useMediaQuery('(min-width: 64rem)');
+}

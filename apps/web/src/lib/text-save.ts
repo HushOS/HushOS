@@ -2,7 +2,6 @@ import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
 import type { NodeIntegrity } from '@hushos/drive/trust';
 import { endRun, OWN_WRITING, type RunPlan, type SaveRun } from '@hushos/drive/save-runs';
-import { encodeText } from '@/lib/text-edit';
 
 /*
  * The text editor's save (docs/editing-design.md section 3; Editing 1a):
@@ -18,9 +17,10 @@ import { encodeText } from '@/lib/text-edit';
  * - Open theirs: nothing is saved; the editor discards its text after a
  *   confirmation and opens the current version.
  *
- * The bytes are the editor's text as UTF-8, exactly (lib/text-edit.ts), and
- * the run is planned for that many bytes with no thumbnail, so the room check
- * before anything is made is the save's real size.
+ * The bytes are the editor's text in the file's own encoding, byte order mark
+ * and line breaks (saveBytes in lib/text-edit.ts), and the run is planned for
+ * that many bytes with no thumbnail, so the room check before anything is made
+ * is the save's real size.
  */
 
 export type StartRun = (plan: RunPlan) => Promise<SaveRun>;
@@ -102,13 +102,13 @@ export function editTargetOf(listing: FolderListing, file: DriveNode) {
     return { folder, file: listed };
 }
 
-/* A new version of `file` holding `text`, unless the file moved on from `startedFrom`. */
+/* A new version of `file` holding `bytes`, unless the file moved on from `startedFrom`. */
 export async function saveVersion(
     start: StartRun,
-    edit: { file: DriveNode; folder: DriveNode; startedFrom: string | null; text: string },
+    edit: { file: DriveNode; folder: DriveNode; startedFrom: string | null; bytes: Uint8Array },
     { stillOn = () => true, pause }: SaveOptions = {},
 ): Promise<TextSaved> {
-    const bytes = encodeText(edit.text);
+    const bytes = edit.bytes;
     if (!stillOn()) throw new SessionEnded();
     const run = await start({
         targets: [edit.file],
@@ -142,17 +142,17 @@ export type TextCopy = { node: NodeView | null; versionId: string | null };
 export type CheckNow = (nodes: DriveNode[]) => Promise<Map<string, NodeIntegrity | null>>;
 
 /*
- * A new file beside `file` in `folder`, under the next free name, holding `text`, signed as
+ * A new file beside `file` in `folder`, under the next free name, holding `bytes`, signed as
  * `source` (the row the text was read from) is. Its version is the one the upload minted, never
  * the reply row's: a repeated completion answers with the node as it is by then, which may already
  * carry another device's edit.
  */
 export async function saveCopy(
     start: StartRun,
-    edit: { file: DriveNode; source: DriveNode; folder: DriveNode; text: string },
+    edit: { file: DriveNode; source: DriveNode; folder: DriveNode; bytes: Uint8Array },
     { stillOn = () => true, pause, check }: SaveOptions & { check?: CheckNow } = {},
 ): Promise<TextCopy> {
-    const bytes = encodeText(edit.text);
+    const bytes = edit.bytes;
     // Signed as the weakest of what it is made from, each checked now: the text's own version
     // (`source`) and, when they differ, the row its name and type come from (`file`, which a save
     // may have adopted renamed). A check that can't run re-seals rather than vouches.

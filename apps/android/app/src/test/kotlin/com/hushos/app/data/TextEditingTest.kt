@@ -1,13 +1,17 @@
 package com.hushos.app.data
 
 import com.hushos.core.Integrity
+import com.hushos.core.LineEnding
 import com.hushos.core.NodeMetadata
 import com.hushos.core.PlannedResult
+import com.hushos.core.TextEncoding
 import com.hushos.core.TextReadOnly
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,10 +19,11 @@ import java.io.File
 import java.nio.file.Files
 
 /*
- * Editing 1a on the phone (TextEditing.kt). Which bytes open for editing is held to the web's verdicts
- * (fixtures/text-edit-cases.json); a file that opens for editing comes back out of the EditText's own buffer byte for byte;
- * and the editor's saves ask the save path the right things: a new version from the version it opened, a refusal when
- * someone else saved first, Save on top after theirs, Save as a copy beside it under the next free name.
+ * Editing 1a and 1b on the phone (TextEditing.kt). Which bytes open for editing, in which encoding and line breaks, and
+ * what a save writes for an edited text, are held to the web's verdicts (fixtures/text-edit-cases.json); a file that opens
+ * for editing comes back out of the EditText's own buffer byte for byte; and the editor's saves ask the save path the right
+ * things: a new version from the version it opened, a refusal when someone else saved first, Save on top after theirs, Save
+ * as a copy beside it under the next free name.
  */
 class TextEditingTest {
     private val cases = JSONObject(File("../../../crates/hushos-core/fixtures/text-edit-cases.json").readText())
@@ -34,27 +39,64 @@ class TextEditingTest {
         return out.toByteArray()
     }
 
+    /* What a save of `text` writes from an editor just opened on `original`; null when it opened read-only. */
+    private fun saved(text: CharSequence, original: ByteArray) = TextEditing.SaveState.opening(original)?.bytes(text)
+
     private fun word(reason: TextReadOnly) = when (reason) {
         TextReadOnly.TOO_LARGE -> "too-large"
-        TextReadOnly.BYTE_ORDER_MARK -> "byte-order-mark"
-        TextReadOnly.UTF16 -> "utf-16"
         TextReadOnly.ENCODING -> "encoding"
         TextReadOnly.BINARY -> "binary"
         TextReadOnly.LINE_ENDINGS -> "line-endings"
     }
 
+    private fun word(encoding: TextEncoding) = when (encoding) {
+        TextEncoding.UTF8 -> "utf-8"
+        TextEncoding.UTF8_BOM -> "utf-8-bom"
+        TextEncoding.UTF16_LE -> "utf-16le"
+        TextEncoding.UTF16_BE -> "utf-16be"
+    }
+
+    private fun word(ending: LineEnding) = when (ending) {
+        LineEnding.LF -> "lf"
+        LineEnding.CRLF -> "crlf"
+    }
+
     @Test fun everyByteCaseOpensAsTheWebOpensIt() {
         val list = cases.getJSONArray("bytes")
-        assertTrue(list.length() >= 20)
+        assertTrue(list.length() >= 40)
         for (i in 0 until list.length()) {
             val case = list.getJSONObject(i)
+            val name = case.getString("name")
             val expected = if (case.isNull("reason")) null else case.getString("reason")
-            val got = when (val opened = TextEditing.open(bytes(case.getJSONArray("bytes")))) {
-                is TextEditing.Open.Editable -> null
-                is TextEditing.Open.ReadOnly -> word(opened.reason)
+            when (val opened = TextEditing.open(bytes(case.getJSONArray("bytes")))) {
+                is TextEditing.Open.Editable -> {
+                    assertNull(name, expected)
+                    assertEquals(name, case.getString("encoding"), word(opened.format.encoding))
+                    assertEquals(name, case.getString("lineEnding"), word(opened.format.lineEnding))
+                    assertEquals(name, case.getBoolean("mixed"), opened.format.mixed)
+                    if (case.has("text")) assertEquals(name, case.getString("text"), opened.text)
+                    assertFalse(name, '\r' in opened.text)
+                }
+                is TextEditing.Open.ReadOnly -> assertEquals(name, expected, word(opened.reason))
             }
-            assertEquals(case.getString("name"), expected, got)
         }
+    }
+
+    /* What a save writes for an edited text: the file's encoding, byte order mark and line breaks, as on the web. */
+    @Test fun everyEditWritesWhatTheWebWrites() {
+        val list = cases.getJSONArray("edits")
+        var refused = 0
+        for (i in 0 until list.length()) {
+            val case = list.getJSONObject(i)
+            val name = case.getString("name")
+            val original = bytes(case.getJSONArray("bytes"))
+            val text = case.getString("text")
+            val expected = if (case.isNull("saved")) null.also { refused++ } else bytes(case.getJSONArray("saved"))
+            assertArrayEquals(name, expected, saved(text, original))
+            // As the EditText holds a paste (its filter makes every break LF): the same bytes.
+            assertArrayEquals(name, expected, saved(TextEditing.lineFeeds(text), original))
+        }
+        assertTrue(refused > 0)
     }
 
     @Test fun everyNameOpensInTheEditorAsOnTheWeb() {
@@ -74,21 +116,58 @@ class TextEditingTest {
             if (!case.isNull("reason")) continue
             val data = bytes(case.getJSONArray("bytes"))
             val opened = TextEditing.open(data) as TextEditing.Open.Editable
-            assertArrayEquals(case.getString("name"), data, TextEditing.encode(opened.text))
+            assertArrayEquals(case.getString("name"), data, saved(opened.text, data))
             // StringBuilder stands in for the EditText's SpannableStringBuilder (both a CharSequence of the same chars).
-            assertArrayEquals(case.getString("name"), data, TextEditing.encode(StringBuilder(opened.text)))
+            assertArrayEquals(case.getString("name"), data, saved(StringBuilder(opened.text), data))
+        }
+    }
+
+    /* Every save of one session, the format kept from the open: past the limit and back, a CRLF file emptied and typed into. */
+    @Test fun everySaveOfASessionWritesWhatTheWebWrites() {
+        val list = cases.getJSONArray("sessions")
+        assertTrue(list.length() >= 5)
+        for (i in 0 until list.length()) {
+            val case = list.getJSONObject(i)
+            var state = TextEditing.SaveState.opening(bytes(case.getJSONArray("bytes")))!!
+            val saves = case.getJSONArray("saves")
+            for (at in 0 until saves.length()) {
+                val save = saves.getJSONObject(at)
+                val parts = save.getJSONArray("text")
+                val text = (0 until parts.length()).joinToString("") { parts.getJSONObject(it).let { part -> part.getString("text").repeat(part.optInt("repeat", 1)) } }
+                val written = state.bytes(text)
+                assertArrayEquals("${case.getString("name")}, save ${at + 1}", bytes(save.getJSONArray("saved")), written)
+                state = state.saved(text, written)
+            }
         }
     }
 
     @Test fun anEditInMultibyteTextChangesOnlyThoseBytes() {
         val original = "Grüße 👋\nzweite Zeile noch\nohne Zeilenende"
         val opened = TextEditing.open(original.encodeToByteArray()) as TextEditing.Open.Editable
-        val saved = TextEditing.encode(opened.text.replace("zweite", "dritte ✓"))
+        val written = saved(opened.text.replace("zweite", "dritte ✓"), original.encodeToByteArray())!!
         val at = "Grüße 👋\n".encodeToByteArray().size
         val bytes = original.encodeToByteArray()
         val expected = bytes.copyOfRange(0, at) + "dritte ✓".encodeToByteArray() + bytes.copyOfRange(at + 6, bytes.size)
-        assertArrayEquals(expected, saved)
-        assertEquals('e'.code.toByte(), saved.last())
+        assertArrayEquals(expected, written)
+        assertEquals('e'.code.toByte(), written.last())
+    }
+
+    /* Half of an emoji is never written, in any encoding (the core would get "?"); a whole one is, and opens again. */
+    @Test fun halfAnEmojiIsNeverWrittenAndAWholeOneOpensAgain() {
+        val smile = "\uD83D\uDE00"
+        for (opened in listOf(
+            "a\n".toByteArray(),
+            byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + "a\n".toByteArray(),
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0x61, 0x00, 0x0A, 0x00),
+            byteArrayOf(0xFE.toByte(), 0xFF.toByte(), 0x00, 0x61, 0x00, 0x0A),
+        )) {
+            val state = TextEditing.SaveState.opening(opened)!!
+            for (broken in listOf("a${smile[0]}x${smile[1]}\n", "a${smile[0]}\n", "a${smile[1]}\n")) {
+                assertThrows(TextEditing.HalfCharacter::class.java) { state.bytes(broken) }
+            }
+            val whole = state.bytes("a$smile\n")
+            assertEquals("a$smile\n", (TextEditing.open(whole) as TextEditing.Open.Editable).text)
+        }
     }
 
     @Test fun aLineBreakTypedOrPastedIsLineFeed() {
@@ -97,10 +176,20 @@ class TextEditingTest {
     }
 
     @Test fun readOnlyFilesKeepTheirWordsAndNeverOfferText() {
-        assertEquals(TextEditing.Open.ReadOnly(TextReadOnly.BINARY, null), TextEditing.open(byteArrayOf(0x61, 0)))
-        assertEquals(TextEditing.Open.ReadOnly(TextReadOnly.UTF16, null), TextEditing.open(byteArrayOf(-1, -2, 0x68, 0)))
-        assertEquals("This file uses Windows line endings, which HushOS can’t edit yet.", TextEditing.words(TextReadOnly.LINE_ENDINGS))
+        assertEquals(TextEditing.Open.ReadOnly(TextReadOnly.BINARY, null), TextEditing.open(byteArrayOf(0x61, 0, 0x62)))
+        assertEquals(TextEditing.Open.ReadOnly(TextReadOnly.ENCODING, "caf\uFFFD"), TextEditing.open(byteArrayOf(0x63, 0x61, 0x66, -0x17)))
+        assertEquals(TextEditing.Open.ReadOnly(TextReadOnly.LINE_ENDINGS, "a\rb"), TextEditing.open("a\rb".encodeToByteArray()))
+        assertEquals("This file uses an encoding HushOS can’t edit without changing it.", TextEditing.words(TextReadOnly.ENCODING))
         assertEquals(8L * 1024 * 1024, TextEditing.LIMIT)
+        // Nothing is written for a file the editor can't keep exactly.
+        assertNull(saved("cafe", byteArrayOf(0x63, 0x61, 0x66, -0x17)))
+    }
+
+    @Test fun aMixedFileSaysWhichLineBreakASaveWrites() {
+        fun note(text: String) = TextEditing.mixedNote((TextEditing.open(text.encodeToByteArray()) as TextEditing.Open.Editable).format)
+        assertEquals("This file mixes line endings; saving uses Windows (CRLF).", note("a\r\nb\r\nc\n"))
+        assertEquals("This file mixes line endings; saving uses Unix (LF).", note("a\nb\nc\r\n"))
+        assertNull(note("a\r\n"))
     }
 
     /* A folder the way the server keeps it for a save: each file's versions in order, a version refused stale when the file moved on. */
@@ -183,7 +272,7 @@ class TextEditingTest {
     @Test fun aSaveIsANewVersionHoldingExactlyTheEditedTextPlannedAsItsBytes() {
         val bench = Bench()
         val file = bench.add("notes.txt", "café\n")
-        val saved = TextSave.version("café ✓\n", file, folder, file.node.currentVersion?.id, start(bench))
+        val saved = TextSave.version("café ✓\n".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench))
         assertTrue(saved is TextSaved.Saved)
         assertEquals("café ✓\n", bench.text(file.id))
         assertEquals(2, bench.versions.getValue(file.id).size)
@@ -200,7 +289,7 @@ class TextEditingTest {
         val bench = Bench()
         val file = bench.add("notes.txt", "a")
         bench.refused = true
-        val stopped = assertThrows(SaveRunStopped::class.java) { TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench)) }
+        val stopped = assertThrows(SaveRunStopped::class.java) { TextSave.version("b".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench)) }
         assertTrue(stopped.sessionRefused)
         assertEquals(1, bench.versions.getValue(file.id).size)
     }
@@ -234,12 +323,12 @@ class TextEditingTest {
         // On through the checks before and after the run starts, gone by the time it would complete.
         fun closingAfterStart(): () -> Boolean { var asked = 0; return { ++asked <= 2 } }
         assertThrows(Exception::class.java) {
-            TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench), stillOn = closingAfterStart())
+            TextSave.version("b".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench), stillOn = closingAfterStart())
         }
         assertEquals(1, bench.versions.getValue(file.id).size)
         val files = bench.versions.size
         assertThrows(Exception::class.java) {
-            TextSave.copy("c", file, folder, SaveSources.OwnWriting, start(bench), stillOn = closingAfterStart())
+            TextSave.copy("c".encodeToByteArray(), file, folder, SaveSources.OwnWriting, start(bench), stillOn = closingAfterStart())
         }
         assertEquals(files, bench.versions.size)
     }
@@ -248,7 +337,7 @@ class TextEditingTest {
         val bench = Bench()
         val file = bench.add("notes.txt", "start\n")
         val theirs = bench.theirs(file.id, "theirs\n")
-        assertEquals(TextSaved.Stale(theirs), TextSave.version("mine\n", file, folder, file.node.currentVersion?.id, start(bench)))
+        assertEquals(TextSaved.Stale(theirs), TextSave.version("mine\n".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench)))
         assertEquals("theirs\n", bench.text(file.id))
         assertEquals(2, bench.versions.getValue(file.id).size)
     }
@@ -257,7 +346,7 @@ class TextEditingTest {
         val bench = Bench()
         val file = bench.add("notes.txt", "start\n")
         val theirs = bench.theirs(file.id, "theirs\n")
-        assertTrue(TextSave.version("mine\n", bench.file(file.id), folder, theirs, start(bench)) is TextSaved.Saved)
+        assertTrue(TextSave.version("mine\n".encodeToByteArray(), bench.file(file.id), folder, theirs, start(bench)) is TextSaved.Saved)
         assertEquals(3, bench.versions.getValue(file.id).size)
         assertEquals("theirs\n", bench.text(file.id, 1))
         assertEquals("mine\n", bench.text(file.id))
@@ -269,7 +358,7 @@ class TextEditingTest {
         bench.add("notes (2).txt", "already here")
         bench.theirs(file.id, "theirs\n")
         val sources = SaveSources.From(listOf(SaveSource.OfFile(Integrity.UNKNOWN_SIGNER, Integrity.UNKNOWN_SIGNER)))
-        val made = TextSave.copy("mine\n", file, folder, sources, start(bench))
+        val made = TextSave.copy("mine\n".encodeToByteArray(), file, folder, sources, start(bench))
         assertEquals("notes (3).txt", bench.names[made.file.id])
         assertEquals("mine\n", bench.text(made.file.id))
         assertEquals(bench.versions.getValue(made.file.id).first().first, made.versionId)
@@ -283,7 +372,7 @@ class TextEditingTest {
         val bench = Bench()
         val file = bench.add("notes.txt", "a")
         bench.theirsAfterLanding = "theirs"
-        val saved = TextSave.version("mine", file, folder, file.node.currentVersion?.id, start(bench)) as TextSaved.Saved
+        val saved = TextSave.version("mine".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench)) as TextSaved.Saved
         assertEquals(bench.versions.getValue(file.id)[1].first, saved.versionId)
         assertEquals("theirs", bench.text(file.id))
     }
@@ -313,10 +402,10 @@ class TextEditingTest {
         val bench = Bench()
         val file = bench.add("notes.txt", "a")
         assertThrows(TextEditing.SessionEnded::class.java) {
-            TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench), stillOn = { false })
+            TextSave.version("b".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start(bench), stillOn = { false })
         }
         assertThrows(TextEditing.SessionEnded::class.java) {
-            TextSave.copy("b", file, folder, SaveSources.OwnWriting, start(bench), stillOn = { false })
+            TextSave.copy("b".encodeToByteArray(), file, folder, SaveSources.OwnWriting, start(bench), stillOn = { false })
         }
         assertEquals(1, bench.versions.getValue(file.id).size)
         assertEquals(1, bench.names.size)
@@ -386,13 +475,13 @@ class TextEditingTest {
         var on = true
         val start = TextSave.Start { targets, results -> SaveRun.start(bench, targets, results, journal).also { on = false } }
         assertThrows(TextEditing.SessionEnded::class.java) {
-            TextSave.version("b", file, folder, file.node.currentVersion?.id, start, stillOn = { on }, pause = {})
+            TextSave.version("b".encodeToByteArray(), file, folder, file.node.currentVersion?.id, start, stillOn = { on }, pause = {})
         }
         assertEquals(1, bench.versions.getValue(file.id).size)
         assertTrue(journal.list().isEmpty())
         on = true
         assertThrows(TextEditing.SessionEnded::class.java) {
-            TextSave.copy("b", file, folder, SaveSources.OwnWriting, start, stillOn = { on }, pause = {})
+            TextSave.copy("b".encodeToByteArray(), file, folder, SaveSources.OwnWriting, start, stillOn = { on }, pause = {})
         }
         assertEquals(1, bench.names.size)
         assertTrue(journal.list().isEmpty())

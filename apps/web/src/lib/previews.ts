@@ -155,10 +155,19 @@ const TEXT_SNIFF_BYTES = 8 * 1024;
 
 /*
  * Whether bytes look like text: valid UTF-8 with no NUL and few control
- * characters. Lets a file with an unknown extension still open as text.
+ * characters, or UTF-16 with its byte order mark. Lets a file with an unknown
+ * extension still open as text.
  */
 export function looksLikeText(bytes: Uint8Array) {
     if (!bytes.length) return true;
+    // UTF-16 says so with its byte order mark: text when no code unit in the sample is NUL (the
+    // editor still decides whether it may change it).
+    if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) {
+        const sample = bytes.subarray(2, TEXT_SNIFF_BYTES);
+        for (let at = 0; at + 1 < sample.length; at += 2)
+            if (sample[at] === 0 && sample[at + 1] === 0) return false;
+        return true;
+    }
     const sample = bytes.subarray(0, TEXT_SNIFF_BYTES);
     let control = 0;
     for (const byte of sample) {

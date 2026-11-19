@@ -13,7 +13,10 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.TextView
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +24,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.History
@@ -29,6 +34,9 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -46,6 +54,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
 import com.hushos.app.data.EditSession
+import com.hushos.app.data.MarkdownDocument
+import com.hushos.app.data.MdBlock
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SaveRunJournal
@@ -57,6 +67,7 @@ import com.hushos.app.data.TextSaved
 import com.hushos.app.data.Vault
 import com.hushos.app.data.VaultSaveWriter
 import com.hushos.core.RunControl
+import com.hushos.core.TextFormat
 import com.hushos.core.TextReadOnly
 import com.hushos.core.toolWatchdogMillis
 import com.hushos.tokens.AlpineSpace
@@ -91,13 +102,35 @@ object EditorWords {
     const val DISCARD = "Discard changes"
     const val KEEP_EDITING = "Keep editing"
     const val FINISHING = "Finishing your save, then closing"
+    const val SOURCE = "Source"
+    const val PREVIEW = "Preview"
+    const val PREVIEW_TOO_LONG = "This file is too long to preview while you edit."
+    const val HALF_CHARACTER = "This text has half of an emoji or symbol in it. Delete it, then save."
+}
+
+/* How many bytes `text` takes in UTF-8, counted without encoding it (a lone surrogate as the three of its replacement). */
+internal fun utf8Length(text: CharSequence): Long {
+    var bytes = 0L
+    var at = 0
+    while (at < text.length) {
+        val unit = text[at]
+        bytes += when {
+            unit.code < 0x80 -> 1
+            unit.code < 0x800 -> 2
+            unit.isHighSurrogate() && at + 1 < text.length && text[at + 1].isLowSurrogate() -> { at++; 4 }
+            else -> 3
+        }
+        at++
+    }
+    return bytes
 }
 
 /*
- * An editing session (Editing 1a; docs/editing-design.md sections 1 and 3, the web's text-editor.tsx, iOS's
+ * An editing session (Editing 1a and 1b; docs/editing-design.md sections 1 and 3, the web's text-editor.tsx, iOS's
  * TextEditorScreen): the file's current version read again from the server into one buffer the system's EditText edits in
- * place, saved explicitly as a new version through the save path (TextSave over SaveRuns), with the stale choices when
- * someone else saved first. Held by the view model, so a rotation keeps the text; every path that ends a session ends this
+ * place, saved explicitly as a new version through the save path (TextSave over SaveRuns) in the file's own encoding, byte
+ * order mark and line breaks (TextEditing.SaveState), with the stale choices when someone else saved first. Markdown offers
+ * Source or Preview, the viewer's rendering (MarkdownDocument: images named, never fetched). Held by the view model, so a rotation keeps the text; every path that ends a session ends this
  * one (`end`), its text emptied. Nothing is kept on the phone (drafts are Editing 1c), and the decrypted copy it reads goes
  * as soon as it is read.
  */
@@ -163,6 +196,55 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var edited by mutableStateOf(false); private set
     /* The text as last opened or saved: typing then undoing it is no change (Save sends nothing, Close asks nothing). */
     private var savedText: String? = null
+    /*
+     * The session's saves (TextEditing.SaveState): the format found when the file opened, kept whatever is saved since, and
+     * the text and bytes last opened or saved, so a text still as it was writes those bytes again. Null while nothing
+     * editable is open.
+     */
+    @Volatile private var saveState: TextEditing.SaveState? = null
+    /* The open file's encoding and line breaks: a mixed file says which a save writes. */
+    var format by mutableStateOf<TextFormat?>(null); private set
+
+    /*
+     * Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. Decided by the row the
+     * text was read from (load, Open theirs included), never the item sheet's, which may be a version or a rename behind.
+     */
+    var markdown by mutableStateOf(false); private set
+    var previewing by mutableStateOf(false); private set
+    /* The text was past what the preview renders when Preview was chosen: it stayed on Source and says so. */
+    var previewTooLong by mutableStateOf(false); private set
+    var preview by mutableStateOf<List<MdBlock>?>(null); private set
+    private var parsing: Job? = null
+
+    fun showSource() {
+        previewing = false
+    }
+
+    fun showPreview() {
+        if (previewing) return
+        val text = (phase as? Phase.ReadOnly)?.text ?: buffer.toString()
+        // Past what the viewer renders (MarkdownDocument.LIMIT, in UTF-8 bytes): Source stays, and says why.
+        if (utf8Length(text) > MarkdownDocument.LIMIT) {
+            previewTooLong = true
+            return
+        }
+        previewTooLong = false
+        previewing = true
+        preview = null
+        parsing?.cancel()
+        // Parsed off the main thread: a long file shouldn't hold up the switch.
+        parsing = scope.launch {
+            val blocks = withContext(Dispatchers.Default) { MarkdownDocument.parse(text) }
+            if (previewing) preview = blocks
+        }
+    }
+
+    /* A save or a copy of `text` landed as `bytes`: in one line break from here, unless it sent the bytes it had. */
+    private fun settle(text: String, bytes: ByteArray) {
+        val state = saveState ?: return
+        if (!state.bytes.contentEquals(bytes)) format = format?.copy(mixed = false)
+        saveState = state.saved(text, bytes)
+    }
 
     /* Changes to lose or save: typed, and not back to what was last opened or saved. */
     fun changed(): Boolean {
@@ -213,6 +295,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun markEdited() {
         if (!edited) edited = true
         status = null
+        // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
+        previewTooLong = false
     }
 
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
@@ -230,8 +314,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     // The row in the file's own folder and workspace, and its bytes read for that row's version, in memory:
                     // nothing decrypted is written to disk for a killed process to leave behind.
                     val file = writer(vault).editTarget(from, destination).second ?: return@runCatching null
-                    if ((file.size ?: 0L) > TextEditing.LIMIT) return@runCatching file to TextEditing.Open.ReadOnly(TextReadOnly.TOO_LARGE, null)
-                    file to TextEditing.open(TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control))
+                    if ((file.size ?: 0L) > TextEditing.LIMIT) return@runCatching Triple(file, TextEditing.Open.ReadOnly(TextReadOnly.TOO_LARGE, null), null)
+                    val bytes = TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control)
+                    Triple(file, TextEditing.open(bytes), bytes)
                 }
             }
             if (sessionRefused(opened.exceptionOrNull())) return@launch
@@ -241,7 +326,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 phase = Phase.Failed
                 return@launch
             }
-            val (file, text) = loaded
+            val (file, text, bytes) = loaded
             target = file
             marked = file
             startedFrom = file.node.currentVersion?.id
@@ -249,9 +334,22 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             edited = false
             buffer.clear()
             buffer.clearSpans()
+            previewing = false
+            preview = null
+            previewTooLong = false
+            markdown = MarkdownDocument.handles(file.name, file.metadata.mime)
             phase = when (text) {
-                is TextEditing.Open.Editable -> Phase.Editing.also { buffer.append(text.text); savedText = text.text }
-                is TextEditing.Open.ReadOnly -> Phase.ReadOnly(text.reason, text.text)
+                is TextEditing.Open.Editable -> Phase.Editing.also {
+                    buffer.append(text.text)
+                    savedText = text.text
+                    // From what was opened off the main thread, never decoded again here.
+                    saveState = bytes?.let { TextEditing.SaveState.opening(text, it) }
+                    format = text.format
+                }
+                is TextEditing.Open.ReadOnly -> Phase.ReadOnly(text.reason, text.text).also {
+                    saveState = null
+                    format = null
+                }
             }
         }
     }
@@ -264,7 +362,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
         val token = session.take() ?: return
         val vault = token.owner
+        // The text as it is now, taken here; written out in the file's format off the main thread.
         val text = buffer.toString()
+        val state = saveState ?: return
         val file = target
         saving = true
         failure = null
@@ -273,11 +373,13 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saveJob = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it had.
+                    val bytes = state.bytes(text)
                     val writer = writer(vault)
                     val (folder, listed) = writer.editTarget(file, destination)
-                    if (listed == null) TextSaved.Stale(null)
-                    else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
-                        stillOn = { session.live(token) })
+                    bytes to (if (listed == null) TextSaved.Stale(null)
+                    else TextSave.version(bytes, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
+                        stillOn = { session.live(token) }))
                 }
             }
             if (sessionRefused(result.exceptionOrNull())) {
@@ -285,7 +387,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 return@launch
             }
             if (!session.live(token)) return@launch
-            result.onSuccess { done ->
+            result.onSuccess { (bytes, done) ->
                 when (done) {
                     is TextSaved.Stale -> stale = Stale(done.currentVersionId)
                     is TextSaved.Saved -> {
@@ -299,13 +401,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                         markWith(done.item, done.versionId)
                         // Typed while it saved: still changed.
                         savedText = text
+                        settle(text, bytes)
                         edited = !TextEditing.same(buffer, text)
                         status = EditorWords.SAVED
                         saved(done.item.node.parentId)
                     }
                 }
-            }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
-            settledSave(result.getOrNull() is TextSaved.Saved)
+            }.onFailure { failure = failureWords(it) }
+            settledSave(result.getOrNull()?.second is TextSaved.Saved)
         }
     }
 
@@ -314,6 +417,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         val token = session.take() ?: return
         val vault = token.owner
         val text = buffer.toString()
+        val state = saveState ?: return
         val file = target
         val from = source
         saving = true
@@ -322,9 +426,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saveJob = scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
+                    // The copy keeps the file's encoding and line breaks too, written out off the main thread.
+                    val bytes = state.bytes(text)
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file, destination)
-                    TextSave.copy(text, file, folder, writer.copySources(from, named = file), TextSave.runs(writer, SaveRunJournal.of(context)),
+                    bytes to TextSave.copy(bytes, file, folder, writer.copySources(from, named = file), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
             }
@@ -333,7 +439,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 return@launch
             }
             if (!session.live(token)) return@launch
-            result.onSuccess { made ->
+            result.onSuccess { (bytes, made) ->
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs. The copy went into the editor's folder: a row answered from elsewhere sets no version to go
                 // on from, and the next save finds it gone from here.
@@ -341,13 +447,18 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
                 markWith(made.file, made.versionId)
                 savedText = text
+                settle(text, bytes)
                 edited = !TextEditing.same(buffer, text)
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
-            }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
+            }.onFailure { failure = failureWords(it) }
             settledSave(result.isSuccess)
         }
     }
+
+    /* What went wrong with a save or a copy; half a character in the text saved nothing and keeps the text. */
+    private fun failureWords(error: Throwable) =
+        if (error is TextEditing.HalfCharacter) EditorWords.HALF_CHARACTER else SaveRuns.reason(error) ?: EditorWords.SAVE_FAILED
 
     /* Their version, read in place of this text (after the person confirmed). */
     fun openTheirs() {
@@ -359,6 +470,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         edited = false
         buffer.clear()
         savedText = null
+        saveState = null
+        previewing = false
+        previewTooLong = false
+        preview = null
         load(target)
     }
 
@@ -368,9 +483,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         work?.cancel()
         saveJob?.cancel()
         reading?.cancel()
+        parsing?.cancel()
         buffer.clear()
         buffer.clearSpans()
         savedText = null
+        saveState = null
+        previewTooLong = false
+        preview = null
+        previewing = false
         phase = Phase.Loading
     }
 }
@@ -411,6 +531,13 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                         }
                     }
                     marks(edit.marked)
+                    val phase = edit.phase
+                    if (edit.markdown && (phase == TextEdit.Phase.Editing || (phase is TextEdit.Phase.ReadOnly && phase.text != null))) {
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+                            SegmentedButton(selected = !edit.previewing, onClick = edit::showSource, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text(EditorWords.SOURCE) }
+                            SegmentedButton(selected = edit.previewing, onClick = edit::showPreview, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text(EditorWords.PREVIEW) }
+                        }
+                    }
                 }
             },
         ) { padding ->
@@ -423,13 +550,25 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                         androidx.compose.material3.Button(onClick = { edit.load() }) { Text(EditorWords.TRY_AGAIN) }
                     }
                     is TextEdit.Phase.ReadOnly -> {
+                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
                         Note(TextEditing.words(phase.reason))
-                        phase.text?.let { text -> PlainText(text = text, buffer = null, onEdit = {}) } ?: Spacer(Modifier.height(0.dp))
+                        phase.text?.let { text ->
+                            Box(Modifier.fillMaxSize()) {
+                                PlainText(text = text, buffer = null, onEdit = {}, hidden = edit.previewing)
+                                if (edit.previewing) MarkdownPreview(edit.preview)
+                            }
+                        } ?: Spacer(Modifier.height(0.dp))
                     }
                     TextEdit.Phase.Editing -> {
                         val line = if (edit.closing) EditorWords.FINISHING else edit.failure ?: edit.status.takeIf { !edit.edited }
                         line?.let { Note(it, failed = !edit.closing && edit.failure != null) }
-                        PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited)
+                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
+                        edit.format?.let(TextEditing::mixedNote)?.let { Note(it) }
+                        // The EditText stays while the preview shows (out of sight, focus and TalkBack): it holds the text.
+                        Box(Modifier.fillMaxSize()) {
+                            PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited, hidden = edit.previewing)
+                            if (edit.previewing) MarkdownPreview(edit.preview)
+                        }
                     }
                 }
             }
@@ -498,9 +637,26 @@ private fun Note(text: String, failed: Boolean = false) {
         modifier = Modifier.fillMaxWidth().background(alpine.surface).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
 }
 
-/* The EditText: over `buffer` in place when editing, or `text` read-only. */
+/* The viewer's Markdown blocks (MarkdownViewer.kt): raw HTML dropped, links only on a tap, images named and never fetched. */
 @Composable
-private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: () -> Unit) {
+private fun MarkdownPreview(blocks: List<MdBlock>?) {
+    val alpine = Alpine.colors
+    Box(Modifier.fillMaxSize().background(alpine.ground)) {
+        if (blocks == null) CircularProgressIndicator(color = alpine.primary, modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp))
+        else LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            // Not selectable: a copy from here would go to the clipboard without the editor's protections.
+            itemsIndexed(blocks) { _, block -> MarkdownBlockView(block) }
+        }
+    }
+}
+
+/* The EditText: over `buffer` in place when editing, or `text` read-only; `hidden` while the preview covers it. */
+@Composable
+private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: () -> Unit, hidden: Boolean = false) {
     val alpine = Alpine.colors
     val ink = alpine.ink.toArgb()
     val background = alpine.ground.toArgb()
@@ -543,6 +699,17 @@ private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: ()
                     keyListener = null
                     setTextIsSelectable(true)
                     setText(text.orEmpty())
+                }
+            }
+        },
+        update = { view ->
+            // Out of sight, focus and TalkBack under the preview, its keyboard gone; back as it was after.
+            val shown = if (hidden) View.INVISIBLE else View.VISIBLE
+            if (view.visibility != shown) {
+                view.visibility = shown
+                if (hidden) {
+                    view.clearFocus()
+                    view.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(view.windowToken, 0)
                 }
             }
         },

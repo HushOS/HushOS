@@ -1,7 +1,8 @@
-//! Text editability (`fixtures/text-edit-cases.json`, hand-written outcomes) as
-//! this core gives it; `apps/web/src/lib/text-edit.test.ts` holds the web to the
-//! same file. A verdict the twins give differently is a file one client lets the
-//! person edit and another doesn't, or one a phone saves with bytes changed.
+//! Text editing (`fixtures/text-edit-cases.json`, hand-written outcomes) as this
+//! core gives it; `apps/web/src/lib/text-edit.test.ts` holds the web to the same
+//! file, and the phones' own tests hold them. A verdict the twins give differently
+//! is a file one client lets the person edit and another doesn't, or one a client
+//! saves with bytes changed that nobody touched.
 
 use hushos_core::*;
 use serde_json::Value;
@@ -24,25 +25,145 @@ fn bytes_of(parts: &Value) -> Vec<u8> {
     out
 }
 
-fn word(reason: Option<TextReadOnly>) -> Option<&'static str> {
-    reason.map(|reason| match reason {
+fn word(reason: TextReadOnly) -> &'static str {
+    match reason {
         TextReadOnly::TooLarge => "too-large",
-        TextReadOnly::ByteOrderMark => "byte-order-mark",
-        TextReadOnly::Utf16 => "utf-16",
         TextReadOnly::Encoding => "encoding",
         TextReadOnly::Binary => "binary",
         TextReadOnly::LineEndings => "line-endings",
-    })
+    }
+}
+
+fn encoding(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Utf8 => "utf-8",
+        TextEncoding::Utf8Bom => "utf-8-bom",
+        TextEncoding::Utf16Le => "utf-16le",
+        TextEncoding::Utf16Be => "utf-16be",
+    }
+}
+
+fn ending(ending: LineEnding) -> &'static str {
+    match ending {
+        LineEnding::Lf => "lf",
+        LineEnding::Crlf => "crlf",
+    }
 }
 
 #[test]
-fn every_byte_case_opens_as_the_web_opens_it() {
+fn every_byte_case_opens_as_the_fixture_says() {
     let cases = cases();
     let list = cases["bytes"].as_array().expect("bytes");
-    assert!(list.len() >= 20);
+    assert!(list.len() >= 40);
     for case in list {
+        let name = &case["name"];
         let bytes = bytes_of(&case["bytes"]);
-        assert_eq!(word(text_read_only(bytes)), case["reason"].as_str(), "{}", case["name"]);
+        assert_eq!(text_read_only(bytes.clone()).map(word), case["reason"].as_str(), "{name}");
+        match text_open(bytes) {
+            TextOpened::Editable { format, text } => {
+                assert_eq!(Some(encoding(format.encoding)), case["encoding"].as_str(), "{name}");
+                assert_eq!(Some(ending(format.line_ending)), case["lineEnding"].as_str(), "{name}");
+                assert_eq!(Some(format.mixed), case["mixed"].as_bool(), "{name}");
+                if let Some(expected) = case["text"].as_str() {
+                    assert_eq!(text, expected, "{name}");
+                }
+                assert!(!text.contains('\r'), "{name}: the editor's text holds no carriage return");
+            }
+            TextOpened::ReadOnly { reason, .. } => {
+                assert_eq!(Some(word(reason)), case["reason"].as_str(), "{name}")
+            }
+        }
+    }
+}
+
+/// One editing session as every client keeps it: the format found at open, and
+/// the text and bytes last opened or saved. A save writes those bytes again while
+/// the text is unchanged, otherwise the text in the format found at open.
+struct Session {
+    format: TextFormat,
+    text: String,
+    bytes: Vec<u8>,
+}
+
+impl Session {
+    fn open(bytes: Vec<u8>) -> Option<Self> {
+        match text_open(bytes.clone()) {
+            TextOpened::Editable { format, text } => Some(Self { format, text, bytes }),
+            TextOpened::ReadOnly { .. } => None,
+        }
+    }
+
+    fn save(&mut self, text: &str) -> Vec<u8> {
+        if text != self.text {
+            self.bytes = text_encode(self.format, text.to_owned());
+            self.text = text.to_owned();
+        }
+        self.bytes.clone()
+    }
+}
+
+fn text_of(parts: &Value) -> String {
+    let mut out = String::new();
+    for part in parts.as_array().expect("parts") {
+        for _ in 0..part["repeat"].as_u64().unwrap_or(1) {
+            out.push_str(part["text"].as_str().expect("text"));
+        }
+    }
+    out
+}
+
+/// The encoder, not the save state's shortcut: a file with one line-ending style
+/// that opens for editing is written back as its own bytes from its text alone
+/// (encoding, byte order mark, line breaks, final newline or none). A mixed file
+/// is left out: an edit rewrites its minority on purpose.
+#[test]
+fn every_editable_case_with_one_line_ending_encodes_back_to_its_own_bytes() {
+    let cases = cases();
+    let mut encoded = Vec::new();
+    for case in cases["bytes"].as_array().expect("bytes") {
+        let bytes = bytes_of(&case["bytes"]);
+        if let TextOpened::Editable { format, text } = text_open(bytes.clone()) {
+            if format.mixed {
+                continue;
+            }
+            assert!(text_encode(format, text) == bytes, "{}", case["name"]);
+            encoded.push((format.encoding, format.line_ending));
+        }
+    }
+    // Every encoding, and both line endings, went through the encoder.
+    let encodings = [TextEncoding::Utf8, TextEncoding::Utf8Bom, TextEncoding::Utf16Le, TextEncoding::Utf16Be];
+    for encoding in encodings {
+        assert!(encoded.iter().any(|(at, _)| *at == encoding), "{encoding:?}");
+    }
+    for ending in [LineEnding::Lf, LineEnding::Crlf] {
+        assert!(encoded.iter().any(|(_, at)| *at == ending), "{ending:?}");
+    }
+}
+
+#[test]
+fn every_edit_writes_what_the_fixture_says() {
+    let cases = cases();
+    let list = cases["edits"].as_array().expect("edits");
+    assert!(list.iter().any(|case| case["saved"].is_null()));
+    for case in list {
+        let session = Session::open(bytes_of(&case["bytes"]));
+        let text = case["text"].as_str().expect("text");
+        let expected = (!case["saved"].is_null()).then(|| bytes_of(&case["saved"]));
+        assert_eq!(session.map(|mut session| session.save(text)), expected, "{}", case["name"]);
+    }
+}
+
+#[test]
+fn every_save_of_a_session_writes_what_the_fixture_says() {
+    let cases = cases();
+    let list = cases["sessions"].as_array().expect("sessions");
+    assert!(list.len() >= 5);
+    for case in list {
+        let mut session = Session::open(bytes_of(&case["bytes"])).expect("editable");
+        for (at, save) in case["saves"].as_array().expect("saves").iter().enumerate() {
+            let written = session.save(&text_of(&save["text"]));
+            assert!(written == bytes_of(&save["saved"]), "{}, save {}", case["name"], at + 1);
+        }
     }
 }
 

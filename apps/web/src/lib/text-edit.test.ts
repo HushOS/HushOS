@@ -7,18 +7,25 @@ import {
     editableThroughShares,
     editableFile,
     editableKind,
-    encodeText,
+    mixedNote,
+    openedState,
     openText,
     readOnlyReason,
+    saveBytes,
+    savedState,
     TEXT_EDIT_LIMIT,
+    utf8Length,
+    viewText,
     type ReadOnlyReason,
+    type SaveState,
 } from '@/lib/text-edit';
 
 /*
- * The editor opens a file for editing only when what it saves is the file
- * byte for byte except for the edit. The verdicts are held to the core's
- * (fixtures/text-edit-cases.json, crates/hushos-core/tests/text_edit.rs): a
- * case that differs is a file the phones let someone edit and the web doesn't.
+ * The editor opens a file for editing only when what it saves is the file byte for byte except
+ * for the edit, in the file's own encoding, byte order mark and line breaks. The verdicts and the
+ * bytes a save writes are held to the core's (fixtures/text-edit-cases.json,
+ * crates/hushos-core/tests/text_edit.rs): a case that differs is a file the phones let someone
+ * edit and the web doesn't, or one a client saves with bytes changed that nobody touched.
  */
 
 type Part = { hex: string; repeat?: number };
@@ -28,7 +35,21 @@ const cases = JSON.parse(
         'utf8',
     ),
 ) as {
-    bytes: { name: string; bytes: Part[]; reason: ReadOnlyReason | null }[];
+    bytes: {
+        name: string;
+        bytes: Part[];
+        reason: ReadOnlyReason | null;
+        encoding?: string;
+        lineEnding?: string;
+        mixed?: boolean;
+        text?: string;
+    }[];
+    edits: { name: string; bytes: Part[]; text: string; saved: Part[] | null }[];
+    sessions: {
+        name: string;
+        bytes: Part[];
+        saves: { text: { text: string; repeat?: number }[]; saved: Part[] }[];
+    }[];
     names: { name: string; mime: string | null; editable: boolean }[];
 };
 
@@ -50,24 +71,48 @@ function bytesOf(parts: Part[]) {
 
 /* Bytes compared as plain arrays: a TextEncoder of another realm (jsdom's) still compares equal. */
 const plain = (bytes: Uint8Array) => Array.from(bytes);
+/* Compared as buffers: the cases run to the 8 MiB limit, too long to diff element by element. */
+const same = (a: Uint8Array | null, b: Uint8Array) =>
+    a !== null && Buffer.from(a).equals(Buffer.from(b));
+const utf8 = (text: string) => new TextEncoder().encode(text);
+/* The text as CodeMirror's own document holds it, as the editor reads it back at a save. */
+const throughEditor = (text: string) => EditorState.create({ doc: text }).doc.toString();
+/* A session over bytes that must open for editing. */
+const session = (bytes: Uint8Array): SaveState => {
+    const state = openedState(bytes);
+    if (!state) throw new Error('should open');
+    return state;
+};
+/* What a save of `text` writes from an editor just opened on `bytes`, or null when it opened read-only. */
+const savedFrom = (bytes: Uint8Array, text: string) => {
+    const state = openedState(bytes);
+    return state && saveBytes(state, text);
+};
 
 describe('which bytes open for editing', () => {
     test.each(cases.bytes.map((c) => [c.name, c] as const))('%s', (_, c) => {
-        expect(readOnlyReason(bytesOf(c.bytes))).toBe(c.reason);
+        const bytes = bytesOf(c.bytes);
+        expect(readOnlyReason(bytes)).toBe(c.reason);
+        const opened = openText(bytes);
+        if (!opened.editable) return expect(opened.reason).toBe(c.reason);
+        expect(opened.format).toEqual({
+            encoding: c.encoding,
+            lineEnding: c.lineEnding,
+            mixed: c.mixed,
+        });
+        if (c.text !== undefined) expect(opened.text).toBe(c.text);
+        expect(opened.text.includes('\r')).toBe(false);
     });
 
-    test('the fixture covers every reason and the limit is the web’s text limit', () => {
+    test('the fixture covers every reason, encoding and line ending, and the limit is the web’s text limit', () => {
         const reasons = new Set(cases.bytes.map((c) => c.reason));
-        for (const reason of [
-            null,
-            'too-large',
-            'byte-order-mark',
-            'utf-16',
-            'encoding',
-            'binary',
-            'line-endings',
-        ])
+        for (const reason of [null, 'too-large', 'encoding', 'binary', 'line-endings'])
             expect(reasons).toContain(reason);
+        const encodings = new Set(cases.bytes.map((c) => c.encoding));
+        for (const encoding of ['utf-8', 'utf-8-bom', 'utf-16le', 'utf-16be'])
+            expect(encodings).toContain(encoding);
+        expect(cases.bytes.some((c) => c.lineEnding === 'crlf' && !c.mixed)).toBe(true);
+        expect(cases.bytes.some((c) => c.mixed)).toBe(true);
         expect(TEXT_EDIT_LIMIT).toBe(8 * 1024 * 1024);
     });
 });
@@ -82,34 +127,50 @@ describe('which files the editor opens', () => {
 });
 
 describe('a save changes only the edited bytes', () => {
-    test('every editable case comes back out of the editor byte for byte', () => {
+    test('every editable case saved without an edit, through the editor, is its own bytes again', () => {
         for (const c of cases.bytes.filter((each) => each.reason === null)) {
             const bytes = bytesOf(c.bytes);
             const opened = openText(bytes);
-            expect(opened.editable, c.name).toBe(true);
-            if (!opened.editable) continue;
-            // Through CodeMirror's own document, as the editor holds it.
-            const doc = EditorState.create({ doc: opened.text }).doc.toString();
-            // Compared as buffers: the cases run to the 8 MiB limit, too long to diff element by element.
-            expect(Buffer.from(encodeText(doc)).equals(Buffer.from(bytes)), c.name).toBe(true);
+            if (!opened.editable) throw new Error(`${c.name} should open`);
+            expect(same(savedFrom(bytes, throughEditor(opened.text)), bytes), c.name).toBe(true);
+        }
+    });
+
+    test.each(cases.edits.map((c) => [c.name, c] as const))('%s', (_, c) => {
+        const bytes = bytesOf(c.bytes);
+        const saved = savedFrom(bytes, c.text);
+        if (c.saved === null) return expect(saved).toBeNull();
+        expect(plain(saved!)).toEqual(plain(bytesOf(c.saved)));
+        // Typed or pasted into CodeMirror, whose document keeps every line break as LF: the same bytes.
+        expect(plain(savedFrom(bytes, throughEditor(c.text))!)).toEqual(plain(bytesOf(c.saved)));
+    });
+
+    test.each(cases.sessions.map((c) => [c.name, c] as const))('%s', (_, c) => {
+        let state = session(bytesOf(c.bytes));
+        for (const [at, save] of c.saves.entries()) {
+            const text = save.text.map((part) => part.text.repeat(part.repeat ?? 1)).join('');
+            const bytes = saveBytes(state, throughEditor(text));
+            if (!bytes) throw new Error(`save ${at + 1} refused`);
+            expect(same(bytes, bytesOf(save.saved)), `save ${at + 1}`).toBe(true);
+            state = savedState(state, throughEditor(text), bytes);
         }
     });
 
     test('an edit in the middle of multibyte text changes only those bytes', () => {
-        const original = 'Grüße 👋\nzweite Zeile noch\nohne Zeilenende';
-        const bytes = encodeText(original);
+        const original = 'Grüße 👋\nzweite Zeile noch\nohne Zeilenende';
+        const bytes = utf8(original);
         const opened = openText(bytes);
         if (!opened.editable) throw new Error('should open');
         const at = opened.text.indexOf('zweite');
         const state = EditorState.create({ doc: opened.text });
         const edited = state.update({ changes: { from: at, to: at + 6, insert: 'dritte ✓' } }).state
             .doc;
-        const saved = encodeText(edited.toString());
+        const saved = savedFrom(bytes, edited.toString())!;
         // The same edit made on the bytes: the UTF-8 offset of the replaced word, everything else untouched.
-        const byteAt = encodeText(original.slice(0, at)).length;
+        const byteAt = utf8(original.slice(0, at)).length;
         const expected = [
             ...plain(bytes.subarray(0, byteAt)),
-            ...plain(encodeText('dritte ✓')),
+            ...plain(utf8('dritte ✓')),
             ...plain(bytes.subarray(byteAt + 6)),
         ];
         expect(plain(saved)).toEqual(expected);
@@ -118,12 +179,56 @@ describe('a save changes only the edited bytes', () => {
         expect(edited.lines).toBe(3);
     });
 
-    test('a new line typed into the editor is LF, never CRLF', () => {
-        const state = EditorState.create({ doc: 'a' });
-        const typed = state.update({
-            changes: { from: 1, insert: state.toText('\r\nb') },
-        }).state;
-        expect(plain(encodeText(typed.doc.toString()))).toEqual(plain(encodeText('a\nb')));
+    test('half of an emoji is never written, in any encoding; a whole one is, and opens again', () => {
+        const smile = '\u{1F600}';
+        for (const bytes of [
+            new TextEncoder().encode('a\n'),
+            Uint8Array.from([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('a\n')]),
+            Uint8Array.from([0xff, 0xfe, 0x61, 0x00, 0x0a, 0x00]),
+            Uint8Array.from([0xfe, 0xff, 0x00, 0x61, 0x00, 0x0a]),
+        ]) {
+            const state = session(bytes);
+            // Typed between the halves, and each half left alone at the end.
+            for (const broken of [`a${smile[0]}x${smile[1]}\n`, `a${smile[0]}\n`, `a${smile[1]}\n`])
+                expect(saveBytes(state, broken)).toBeNull();
+            const whole = saveBytes(state, `a${smile}\n`);
+            expect(whole).not.toBeNull();
+            const reopened = openText(whole!);
+            expect(reopened.editable && reopened.text).toBe(`a${smile}\n`);
+        }
+    });
+
+    test('a line break typed into the editor takes the file’s, in its encoding', () => {
+        const typed = (bytes: Uint8Array) => {
+            const opened = openText(bytes);
+            if (!opened.editable) throw new Error('should open');
+            const state = EditorState.create({ doc: opened.text });
+            const end = state.doc.length;
+            // Typed or pasted as CRLF, it is one line break in CodeMirror's document either way.
+            const doc = state.update({ changes: { from: end, insert: state.toText('\r\nb') } })
+                .state.doc;
+            return plain(savedFrom(bytes, doc.toString())!);
+        };
+        expect(typed(utf8('a'))).toEqual(plain(utf8('a\nb')));
+        expect(typed(utf8('a\r\n'))).toEqual(plain(utf8('a\r\n\r\nb')));
+        // UTF-16 big endian with its byte order mark: CR and LF are two bytes each, high byte first.
+        expect(typed(Uint8Array.from([0xfe, 0xff, 0, 0x61, 0, 0x0d, 0, 0x0a]))).toEqual([
+            0xfe, 0xff, 0, 0x61, 0, 0x0d, 0, 0x0a, 0, 0x0d, 0, 0x0a, 0, 0x62,
+        ]);
+    });
+
+    test('a mixed file says which line break a save writes', () => {
+        const mixed = openText(utf8('a\r\nb\r\nc\n'));
+        if (!mixed.editable) throw new Error('should open');
+        expect(mixedNote(mixed.format)).toBe(
+            'This file mixes line endings; saving uses Windows (CRLF).',
+        );
+        const lf = openText(utf8('a\nb\nc\r\n'));
+        if (!lf.editable) throw new Error('should open');
+        expect(mixedNote(lf.format)).toBe('This file mixes line endings; saving uses Unix (LF).');
+        const one = openText(utf8('a\r\nb\r\n'));
+        if (!one.editable) throw new Error('should open');
+        expect(mixedNote(one.format)).toBeNull();
     });
 });
 
@@ -135,12 +240,35 @@ describe('read-only files', () => {
         }
     });
 
-    test('a byte order mark or CRLF file still shows its words, read-only', () => {
-        const bom = openText(Uint8Array.from([0xef, 0xbb, 0xbf, 0x68, 0x69]));
-        expect(bom).toEqual({ editable: false, reason: 'byte-order-mark', text: 'hi' });
-        const crlf = openText(encodeText('a\r\nb'));
-        expect(crlf).toMatchObject({ editable: false, reason: 'line-endings', text: 'a\r\nb' });
+    test('a Latin-1 or lone-CR file still shows its words, read-only; UTF-16 without a mark doesn’t', () => {
+        const latin = openText(Uint8Array.from([0x63, 0x61, 0x66, 0xe9]));
+        expect(latin).toEqual({ editable: false, reason: 'encoding', text: 'caf\ufffd' });
+        expect(openText(utf8('a\rb'))).toEqual({
+            editable: false,
+            reason: 'line-endings',
+            text: 'a\rb',
+        });
         expect(openText(Uint8Array.from([0x61, 0x00]))).toMatchObject({ text: null });
+        expect(openText(Uint8Array.from([0x68, 0, 0x69, 0]))).toEqual({
+            editable: false,
+            reason: 'encoding',
+            text: null,
+        });
+    });
+});
+
+describe('the size of a text in UTF-8', () => {
+    test('is what TextEncoder writes, without encoding it', () => {
+        for (const text of ['', 'ascii', 'Grüße', '✓ ✗', '👋 and 😀', '\ud83d alone', 'end \udc00'])
+            expect(utf8Length(text), text).toBe(new TextEncoder().encode(text).length);
+    });
+});
+
+describe('the viewer’s words', () => {
+    test('UTF-16 with a byte order mark reads as UTF-16; anything else as UTF-8', () => {
+        expect(viewText(Uint8Array.from([0xff, 0xfe, 0x68, 0, 0x69, 0]))).toBe('hi');
+        expect(viewText(Uint8Array.from([0xfe, 0xff, 0, 0x68, 0, 0x69]))).toBe('hi');
+        expect(viewText(Uint8Array.from([0xef, 0xbb, 0xbf, 0x68, 0x69]))).toBe('hi');
     });
 });
 

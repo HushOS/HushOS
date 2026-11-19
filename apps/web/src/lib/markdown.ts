@@ -38,8 +38,6 @@ const processor = unified()
     .use(remarkRehype, { allowDangerousHtml: false })
     .use(rehypeSanitize, schema);
 
-export const MARKDOWN_LIMIT = 2 * 1024 * 1024;
-
 /*
  * Synchronous on purpose: every plugin here is synchronous, so the tree can be
  * built during render and the document appears formed, never as raw text first.

@@ -1,10 +1,12 @@
-//! Which files the phones' text editor opens, and whether it may change them:
-//! the twin of `apps/web/src/lib/text-edit.ts` (docs/editing-design.md section 1,
-//! Editing 1a). An edit is saved byte for byte except for what the person
-//! changed, so a file opens for editing only when its bytes come back out of the
-//! editor exactly as they went in: UTF-8 without a byte order mark, lines ending
-//! in LF alone, and text rather than binary. Anything else opens read-only.
-//! Both twins are held to `fixtures/text-edit-cases.json`.
+//! Which files the phones' text editor opens, whether it may change them, and the
+//! bytes a save writes: the twin of `apps/web/src/lib/text-edit.ts`
+//! (docs/editing-design.md section 1, Editing 1a and 1b). An edit is saved byte
+//! for byte except for what the person changed, so a file opens for editing only
+//! when the editor can write it back in its own encoding, byte order mark and line
+//! endings: UTF-8 with or without a byte order mark, or UTF-16 either way with
+//! one; lines ending in LF or CRLF (a file mixing them keeps the majority on an
+//! edit); text rather than binary. Anything else opens read-only, never
+//! transcoded. All twins are held to `fixtures/text-edit-cases.json`.
 
 /// The largest file the editor opens for editing (the web's text preview limit, 8 MiB).
 pub const TEXT_EDIT_LIMIT: u64 = 8 * 1024 * 1024;
@@ -12,16 +14,64 @@ pub const TEXT_EDIT_LIMIT: u64 = 8 * 1024 * 1024;
 /// How much of the start the viewer's text sniff looks at for control characters.
 const SNIFF_BYTES: usize = 8 * 1024;
 
+const UTF8_BOM: [u8; 3] = [0xef, 0xbb, 0xbf];
+const UTF16_LE_BOM: [u8; 2] = [0xff, 0xfe];
+const UTF16_BE_BOM: [u8; 2] = [0xfe, 0xff];
+
 /// Why a text file opens read-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum TextReadOnly {
+    /// Past the 8 MiB limit.
     TooLarge,
-    ByteOrderMark,
-    Utf16,
+    /// Not UTF-8 or UTF-16 with a byte order mark (Latin-1, UTF-16 without one,
+    /// invalid sequences): editing would change bytes nobody touched.
     Encoding,
+    /// A NUL, or more than 2% control characters in the first 8 KiB.
     Binary,
+    /// A carriage return on its own (classic Mac line endings).
     LineEndings,
+}
+
+/// How a file's text is written: the encoding and its byte order mark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TextEncoding {
+    Utf8,
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+}
+
+/// The line break a save writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum LineEnding {
+    Lf,
+    Crlf,
+}
+
+/// What an editable file is: its encoding, the line break a save writes (the
+/// majority when it mixes them, the first one's on a tie, LF when it has none),
+/// and whether it mixes LF and CRLF (the editor says so: an edit rewrites the
+/// minority).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Record))]
+pub struct TextFormat {
+    pub encoding: TextEncoding,
+    pub line_ending: LineEnding,
+    pub mixed: bool,
+}
+
+/// A file as the editor opens it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
+pub enum TextOpened {
+    /// `text`: without the byte order mark, every line break as LF.
+    Editable { format: TextFormat, text: String },
+    /// `text`: the words to show where they decode (never past the limit, never
+    /// binary, never a guess at another encoding), never saved.
+    ReadOnly { reason: TextReadOnly, text: Option<String> },
 }
 
 /// The largest file the editor opens for editing, in bytes.
@@ -35,48 +85,242 @@ pub fn text_edit_limit() -> u64 {
 }
 
 /// Why these bytes can't be edited without changing what the person didn't touch,
-/// or `None` when they can. In the web's order: the size, a byte order mark
-/// (UTF-8, then UTF-16 either way), bytes that aren't UTF-8, binary (a NUL
-/// anywhere, or more than 2% control characters in the first 8 KiB), then a
-/// carriage return anywhere.
+/// or `None` when they can (`text_open` says the rest).
 ///
 /// ```
 /// use hushos_core::{text_read_only, TextReadOnly};
-/// assert_eq!(text_read_only(b"notes\n".to_vec()), None);
-/// assert_eq!(text_read_only(b"a\r\nb".to_vec()), Some(TextReadOnly::LineEndings));
+/// assert_eq!(text_read_only(b"notes\r\n".to_vec()), None);
+/// assert_eq!(text_read_only(b"a\rb".to_vec()), Some(TextReadOnly::LineEndings));
 /// assert_eq!(text_read_only(vec![0x63, 0x61, 0x66, 0xe9]), Some(TextReadOnly::Encoding));
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn text_read_only(bytes: Vec<u8>) -> Option<TextReadOnly> {
-    read_only(&bytes)
+    match open(&bytes) {
+        TextOpened::Editable { .. } => None,
+        TextOpened::ReadOnly { reason, .. } => Some(reason),
+    }
 }
 
-pub(crate) fn read_only(bytes: &[u8]) -> Option<TextReadOnly> {
+/// The bytes as the editor holds them. In this order: the size, the encoding (a
+/// UTF-8 or UTF-16 byte order mark, else UTF-8; UTF-16 without one, or bytes that
+/// don't decode, are `Encoding`), binary (a NUL anywhere, or more than 2% control
+/// characters in the first 8 KiB of the text's bytes, counted in UTF-16 code
+/// units for UTF-16), then a lone carriage return anywhere.
+///
+/// ```
+/// use hushos_core::{text_open, LineEnding, TextEncoding, TextOpened};
+/// let TextOpened::Editable { format, text } = text_open(vec![0xff, 0xfe, b'a', 0, b'\r', 0, b'\n', 0]) else { panic!() };
+/// assert_eq!((format.encoding, format.line_ending, text.as_str()), (TextEncoding::Utf16Le, LineEnding::Crlf, "a\n"));
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn text_open(bytes: Vec<u8>) -> TextOpened {
+    open(&bytes)
+}
+
+/// The editor's text written in `format`, the one `text_open` found when the file
+/// opened: the file's encoding with its byte order mark first, and every line
+/// break (LF, CRLF or a lone CR typed or pasted) as the file's. The format stays
+/// the session's whatever was saved since (a save that removed every line break
+/// still writes CRLF for the next one typed; a text past the limit still saves),
+/// and a client writes the bytes it last opened or saved instead while the text
+/// is still that one (every client's save state, held to the fixture's `sessions`).
+///
+/// ```
+/// use hushos_core::{text_encode, LineEnding, TextEncoding, TextFormat};
+/// let format = TextFormat { encoding: TextEncoding::Utf8, line_ending: LineEnding::Crlf, mixed: true };
+/// assert_eq!(text_encode(format, "a\nb\r\nc".into()), b"a\r\nb\r\nc".to_vec());
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn text_encode(format: TextFormat, text: String) -> Vec<u8> {
+    encode(format, &text)
+}
+
+fn open(bytes: &[u8]) -> TextOpened {
+    let read_only = |reason, text| TextOpened::ReadOnly { reason, text };
     if bytes.len() as u64 > TEXT_EDIT_LIMIT {
-        return Some(TextReadOnly::TooLarge);
+        return read_only(TextReadOnly::TooLarge, None);
     }
-    if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-        return Some(TextReadOnly::ByteOrderMark);
+    let (encoding, payload) = if let Some(rest) = bytes.strip_prefix(&UTF8_BOM) {
+        (TextEncoding::Utf8Bom, rest)
+    } else if let Some(rest) = bytes.strip_prefix(&UTF16_LE_BOM) {
+        (TextEncoding::Utf16Le, rest)
+    } else if let Some(rest) = bytes.strip_prefix(&UTF16_BE_BOM) {
+        (TextEncoding::Utf16Be, rest)
+    } else {
+        (TextEncoding::Utf8, bytes)
+    };
+    let decoded = match encoding {
+        TextEncoding::Utf8 | TextEncoding::Utf8Bom => {
+            if encoding == TextEncoding::Utf8 && utf16_without_bom(payload) {
+                return read_only(TextReadOnly::Encoding, None);
+            }
+            match std::str::from_utf8(payload) {
+                Ok(text) => text.to_owned(),
+                Err(_) => {
+                    let shown = String::from_utf8_lossy(payload).into_owned();
+                    return read_only(TextReadOnly::Encoding, Some(shown));
+                }
+            }
+        }
+        TextEncoding::Utf16Le | TextEncoding::Utf16Be => match decode_utf16(payload, encoding) {
+            Some(text) => text,
+            None => return read_only(TextReadOnly::Encoding, None),
+        },
+    };
+    if binary(payload, encoding) {
+        return read_only(TextReadOnly::Binary, None);
     }
-    if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
-        return Some(TextReadOnly::Utf16);
+    let Some((line_ending, mixed)) = line_endings(&decoded) else {
+        return read_only(TextReadOnly::LineEndings, Some(decoded));
+    };
+    let text = if decoded.contains('\r') { decoded.replace("\r\n", "\n") } else { decoded };
+    TextOpened::Editable { format: TextFormat { encoding, line_ending, mixed }, text }
+}
+
+/// UTF-16 code units of `payload`, or `None` for an odd length or a surrogate
+/// without its pair.
+fn decode_utf16(payload: &[u8], encoding: TextEncoding) -> Option<String> {
+    if !payload.len().is_multiple_of(2) {
+        return None;
     }
-    if std::str::from_utf8(bytes).is_err() {
-        return Some(TextReadOnly::Encoding);
+    let units = payload.as_chunks::<2>().0.iter().map(|pair| unit(pair, encoding));
+    char::decode_utf16(units).collect::<Result<String, _>>().ok()
+}
+
+fn unit(pair: &[u8; 2], encoding: TextEncoding) -> u16 {
+    match encoding {
+        TextEncoding::Utf16Be => u16::from_be_bytes([pair[0], pair[1]]),
+        _ => u16::from_le_bytes([pair[0], pair[1]]),
     }
-    if bytes.contains(&0) {
-        return Some(TextReadOnly::Binary);
+}
+
+/// UTF-16 that came without a byte order mark: an even length whose NUL bytes in
+/// the first 8 KiB all sit on one side of each pair and make up at least half of
+/// those pairs (Latin text, whose every other byte is zero). Never transcoded:
+/// it says the encoding note rather than "not plain text".
+fn utf16_without_bom(bytes: &[u8]) -> bool {
+    if bytes.len() < 2 || !bytes.len().is_multiple_of(2) {
+        return false;
     }
     let sample = &bytes[..bytes.len().min(SNIFF_BYTES)];
-    let control = sample.iter().filter(|&&b| b < 32 && !matches!(b, 9 | 10 | 12 | 13)).count();
-    // As the web computes it: control / length > 0.02, in whole numbers.
-    if !sample.is_empty() && control * 50 > sample.len() {
-        return Some(TextReadOnly::Binary);
+    let (mut even, mut odd) = (0usize, 0usize);
+    for (at, byte) in sample.iter().enumerate() {
+        if *byte == 0 {
+            if at % 2 == 0 {
+                even += 1;
+            } else {
+                odd += 1;
+            }
+        }
     }
-    if bytes.contains(&13) {
-        return Some(TextReadOnly::LineEndings);
+    let pairs = sample.len() / 2;
+    (even == 0 && odd * 2 >= pairs) || (odd == 0 && even * 2 >= pairs)
+}
+
+fn is_control(value: u32) -> bool {
+    value < 32 && !matches!(value, 9 | 10 | 12 | 13)
+}
+
+/// The viewer's binary rule on the text's own bytes (after any byte order mark):
+/// a NUL anywhere, or control characters in more than 2% of the first 8 KiB, in
+/// bytes for UTF-8 and in code units for UTF-16.
+fn binary(payload: &[u8], encoding: TextEncoding) -> bool {
+    let sample = &payload[..payload.len().min(SNIFF_BYTES)];
+    match encoding {
+        TextEncoding::Utf8 | TextEncoding::Utf8Bom => {
+            if payload.contains(&0) {
+                return true;
+            }
+            let control = sample.iter().filter(|&&b| is_control(u32::from(b))).count();
+            // As the web computes it: control / length > 0.02, in whole numbers.
+            !sample.is_empty() && control * 50 > sample.len()
+        }
+        TextEncoding::Utf16Le | TextEncoding::Utf16Be => {
+            if payload.as_chunks::<2>().0.iter().any(|pair| unit(pair, encoding) == 0) {
+                return true;
+            }
+            let units = sample.len() / 2;
+            let control = sample
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .filter(|pair| is_control(u32::from(unit(pair, encoding))))
+                .count();
+            units > 0 && control * 50 > units
+        }
     }
-    None
+}
+
+/// The line break a save writes and whether the file mixes LF and CRLF, or `None`
+/// for a carriage return on its own. The majority wins; a tie goes to the first
+/// break in the file; no break at all is LF.
+fn line_endings(text: &str) -> Option<(LineEnding, bool)> {
+    let bytes = text.as_bytes();
+    let (mut lf, mut crlf) = (0usize, 0usize);
+    let mut first = None;
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\r' if bytes.get(at + 1) == Some(&b'\n') => {
+                crlf += 1;
+                first.get_or_insert(LineEnding::Crlf);
+                at += 2;
+                continue;
+            }
+            b'\r' => return None,
+            b'\n' => {
+                lf += 1;
+                first.get_or_insert(LineEnding::Lf);
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    let ending = if crlf > lf {
+        LineEnding::Crlf
+    } else if lf > crlf {
+        LineEnding::Lf
+    } else {
+        first.unwrap_or(LineEnding::Lf)
+    };
+    Some((ending, lf > 0 && crlf > 0))
+}
+
+/// The editor's text written in `format`: every CRLF, lone CR or LF as the file's
+/// line break, then encoded, the byte order mark first.
+fn encode(format: TextFormat, text: &str) -> Vec<u8> {
+    let ending = match format.line_ending {
+        LineEnding::Lf => "\n",
+        LineEnding::Crlf => "\r\n",
+    };
+    let mut lines = String::with_capacity(text.len() + text.len() / 16);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                lines.push_str(ending);
+            }
+            '\n' => lines.push_str(ending),
+            other => lines.push(other),
+        }
+    }
+    match format.encoding {
+        TextEncoding::Utf8 => lines.into_bytes(),
+        TextEncoding::Utf8Bom => [&UTF8_BOM[..], lines.as_bytes()].concat(),
+        TextEncoding::Utf16Le => {
+            let mut out = UTF16_LE_BOM.to_vec();
+            out.extend(lines.encode_utf16().flat_map(u16::to_le_bytes));
+            out
+        }
+        TextEncoding::Utf16Be => {
+            let mut out = UTF16_BE_BOM.to_vec();
+            out.extend(lines.encode_utf16().flat_map(u16::to_be_bytes));
+            out
+        }
+    }
 }
 
 const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "svg", "ico"];
@@ -283,6 +527,10 @@ pub fn text_editable_kind(name: String, mime: Option<String>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn read_only(bytes: &[u8]) -> Option<TextReadOnly> {
+        text_read_only(bytes.to_vec())
+    }
 
     #[test]
     fn the_limit_is_the_last_byte_allowed() {

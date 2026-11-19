@@ -1,20 +1,26 @@
 package com.hushos.app.data
 
+import com.hushos.core.LineEnding
 import com.hushos.core.PlannedResult
 import com.hushos.core.RunControl
+import com.hushos.core.TextFormat
+import com.hushos.core.TextOpened
 import com.hushos.core.TextReadOnly
 import com.hushos.core.toolWatchdogMillis
 import com.hushos.core.textEditLimit
 import com.hushos.core.textEditableKind
-import com.hushos.core.textReadOnly
+import com.hushos.core.textOpen
+import com.hushos.core.textEncode
 
 /*
- * Editing 1a on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts and lib/text-save.ts, iOS's
- * TextEditing.swift): which files the text editor opens, whether it may change them, and how a save goes through the save
- * path (SaveRuns.kt), never a second one.
+ * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts and lib/text-save.ts,
+ * iOS's TextEditing.swift): which files the text editor opens, whether it may change them, the bytes a save writes, and how
+ * a save goes through the save path (SaveRuns.kt), never a second one.
  *
- * A file opens for editing only when what the editor saves is the file byte for byte except for the edit: the core decides
- * (text_edit.rs, held to the web by fixtures/text-edit-cases.json). Anything else opens read-only with a note.
+ * A file opens for editing only when what the editor saves is the file byte for byte except for the edit, in its own
+ * encoding (UTF-8 with or without a byte order mark, UTF-16 with one), byte order mark and line breaks (LF or CRLF; a mixed
+ * file keeps its majority on an edit): the core decides and writes (text_edit.rs, held to the web by
+ * fixtures/text-edit-cases.json). Anything else opens read-only with a note, never transcoded.
  */
 object TextEditing {
     /* The largest file the editor opens for editing (8 MiB, the web's text preview limit). */
@@ -28,33 +34,60 @@ object TextEditing {
     /* What each read-only reason says, in the web's words. */
     fun words(reason: TextReadOnly): String = when (reason) {
         TextReadOnly.TOO_LARGE -> "This file is too large to edit here."
-        TextReadOnly.BYTE_ORDER_MARK, TextReadOnly.UTF16 -> "HushOS can’t edit this file’s encoding yet."
         TextReadOnly.ENCODING -> "This file uses an encoding HushOS can’t edit without changing it."
         TextReadOnly.BINARY -> "This file isn’t plain text, so it can’t be edited here."
-        TextReadOnly.LINE_ENDINGS -> "This file uses Windows line endings, which HushOS can’t edit yet."
+        TextReadOnly.LINE_ENDINGS -> "This file uses line endings HushOS can’t edit without changing them."
     }
 
+    /* What the editor says of a file that mixes line endings, in the web's words: an edit writes them all one way. */
+    fun mixedNote(format: TextFormat): String? = if (!format.mixed) null
+        else "This file mixes line endings; saving uses ${if (format.lineEnding == LineEnding.CRLF) "Windows (CRLF)" else "Unix (LF)"}."
+
     sealed class Open {
-        data class Editable(val text: String) : Open()
-        /* The text is shown when it decodes (never past the limit, never binary), and never saved. */
+        /* Without the byte order mark, every line break as LF. */
+        data class Editable(val text: String, val format: TextFormat) : Open()
+        /* The text is shown when it decodes (never past the limit, never binary, never a guess at another encoding), and never saved. */
         data class ReadOnly(val reason: TextReadOnly, val text: String?) : Open()
     }
 
-    /* The bytes as the editor holds them. */
-    fun open(bytes: ByteArray): Open {
-        val reason = textReadOnly(bytes) ?: return Open.Editable(bytes.decodeToString())
-        return when (reason) {
-            TextReadOnly.TOO_LARGE, TextReadOnly.BINARY, TextReadOnly.UTF16 -> Open.ReadOnly(reason, null)
-            else -> Open.ReadOnly(reason, bytes.decodeToString())
+    /* The bytes as the editor holds them, as the core reads them. */
+    fun open(bytes: ByteArray): Open = when (val opened = textOpen(bytes)) {
+        is TextOpened.Editable -> Open.Editable(opened.text, opened.format)
+        is TextOpened.ReadOnly -> Open.ReadOnly(opened.reason, opened.text)
+    }
+
+    /*
+     * One editing session's saves, as on the web (lib/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
+     * format found when the file opened, kept for the whole session (a save that removed every line break still writes CRLF
+     * for the next one typed; a text grown past the limit still saves), and the text and bytes last opened or saved, which
+     * only answer "nothing changed".
+     */
+    class SaveState private constructor(val format: TextFormat, val text: String, val bytes: ByteArray) {
+        /*
+         * What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the
+         * session's format. Throws HalfCharacter for a text that can't be written as it is (`writable`): nothing is saved.
+         */
+        fun bytes(text: CharSequence): ByteArray = when {
+            same(text, this.text) -> bytes
+            !writable(text) -> throw HalfCharacter()
+            else -> textEncode(format, text.toString())
+        }
+
+        /* After a save of `text` landed as `bytes`: what the next one compares with. */
+        fun saved(text: String, bytes: ByteArray) = SaveState(format, text, bytes)
+
+        companion object {
+            /* The session of `bytes`, already opened as `opened`: never decoded a second time. */
+            fun opening(opened: Open.Editable, bytes: ByteArray) = SaveState(opened.format, opened.text, bytes)
+
+            /* The session of bytes that open for editing; null when they open read-only. */
+            fun opening(bytes: ByteArray): SaveState? = (open(bytes) as? Open.Editable)?.let { opening(it, bytes) }
         }
     }
 
-    /* What a save writes: the text as UTF-8, nothing added, nothing taken away. */
-    fun encode(text: CharSequence): ByteArray = text.toString().encodeToByteArray()
-
     /*
      * A line break typed or pasted into the system's text view, as the editor keeps it: CRLF and a lone CR become LF, as
-     * CodeMirror does on the web, so a file the editor wrote never holds a carriage return.
+     * CodeMirror does on the web; a save writes each one as the file's line break.
      */
     fun lineFeeds(inserted: CharSequence): CharSequence =
         if ('\r' !in inserted) inserted else inserted.toString().replace("\r\n", "\n").replace('\r', '\n')
@@ -67,6 +100,27 @@ object TextEditing {
      * a save writes do.
      */
     fun same(a: CharSequence, b: CharSequence): Boolean = a.toString() == b.toString()
+
+    /*
+     * Whether `text` can be written as it is: a surrogate without its pair (half an emoji, which a Kotlin string can hold)
+     * would reach the core as "?" in its place, a character nobody typed. As on the web (lib/text-edit.ts `writable`).
+     */
+    fun writable(text: CharSequence): Boolean {
+        var at = 0
+        while (at < text.length) {
+            val c = text[at]
+            if (Character.isLowSurrogate(c)) return false
+            if (Character.isHighSurrogate(c)) {
+                if (at + 1 >= text.length || !Character.isLowSurrogate(text[at + 1])) return false
+                at++
+            }
+            at++
+        }
+        return true
+    }
+
+    /* A save of text holding half a character: refused before anything is written; the text stays as it is. */
+    class HalfCharacter : Exception("half a character")
 
     /* Why a listing can't stand for the file's folder: it answered for another folder or another workspace. */
     class WrongFolder : Exception("HushOS answered with a different folder than this file’s. Nothing was saved.")
@@ -182,12 +236,12 @@ object TextSave {
     fun runs(writer: SaveRunWriter, journal: SaveRunJournal) = Start { targets, results -> SaveRun.start(writer, targets, results, journal) }
 
     /*
-     * Save, and Save on top: a new version of `file` holding `text`, unless the file moved on from `startedFrom` (Save on
-     * top passes the version current now). Planned as its UTF-8 bytes with no thumbnail, signed as the person's own writing.
+     * Save, and Save on top: a new version of `file` holding `bytes` (SaveState.bytes), unless the file moved on from
+     * `startedFrom` (Save on top passes the version current now). Planned as those bytes with no thumbnail, signed as the
+     * person's own writing.
      */
-    fun version(text: CharSequence, file: Opened, folder: Opened, startedFrom: String?, start: Start,
+    fun version(bytes: ByteArray, file: Opened, folder: Opened, startedFrom: String?, start: Start,
                 stillOn: () -> Boolean = { true }, pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextSaved {
-        val bytes = TextEditing.encode(text)
         // Asked last thing before the run starts: a save whose session ended uploads nothing.
         if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(file), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
@@ -207,10 +261,9 @@ object TextSave {
         }
     }
 
-    /* Save as a copy: a new file beside `file` under the next free name, signed as `file` is (`sources`). */
-    fun copy(text: CharSequence, file: Opened, folder: Opened, sources: SaveSources, start: Start,
+    /* Save as a copy: a new file beside `file` under the next free name holding `bytes`, signed as `file` is (`sources`). */
+    fun copy(bytes: ByteArray, file: Opened, folder: Opened, sources: SaveSources, start: Start,
              stillOn: () -> Boolean = { true }, pause: (Int) -> Unit = { Thread.sleep(250L * it) }): TextCopy {
-        val bytes = TextEditing.encode(text)
         if (!stillOn()) throw TextEditing.SessionEnded()
         val run = start.run(listOf(folder), listOf(PlannedResult.Known(bytes.size.toULong(), false)))
         if (!stillOn()) {
