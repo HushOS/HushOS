@@ -1,0 +1,49 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/ImagesPdf.kt
+  s_c60e24772e04af::t_e88a81d98e14d2 84-89
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_d7656cd2bc8cca 11,603-605,1816-1820,1824-1825
+apps/web/src/components/drive/home-view.tsx
+  s_c60e24772e04af::t_13ae1ee162674e 9,175-177,737-741,745-746
+apps/web/src/components/drive/interrupted-runs.tsx
+  s_c60e24772e04af::t_a1d5c375751134 8,30-31,62-66,68-77
+apps/web/src/lib/images-pdf/jpeg.test.ts
+  s_c60e24772e04af::t_36e1da3a488f12 62
+apps/web/src/lib/images-pdf/jpeg.ts
+  s_c60e24772e04af::t_cc6755f060d52c 194-203,264-265,267
+apps/web/src/lib/images-pdf/png.test.ts
+  s_c60e24772e04af::t_1fa97ea33b2765 117-155
+apps/web/src/lib/images-pdf/png.ts
+  s_c60e24772e04af::t_8ccea905e00557 87,117-140,154-155
+apps/web/src/lib/tool-run-rows.test.ts
+  s_c60e24772e04af::t_a9aa80e350b149 78-83
+apps/web/src/lib/tool-run-rows.ts
+  s_c60e24772e04af::t_781266c07345e5 33-34,47,79
+crates/hushos-core/src/images_pdf.rs
+  s_c60e24772e04af::t_92f9aef7f11e41 230-233,237,372-380
+crates/hushos-core/src/images_pdf/tests.rs
+  s_c60e24772e04af::t_e607ffc2c8cba1 110
+docs/file-tools-design.md
+  s_c60e24772e04af::t_40b69e5e0eacfd 594-595
+e2e/fixtures/images/expected.json
+  s_c60e24772e04af::t_6724d8266a556d 9-10,86-98,125-137
+e2e/fixtures/images/make.py
+  s_c60e24772e04af::t_6b4c0cba11d20d 43,276,350-358,374-386,554
+e2e/images-pdf.spec.ts
+  s_c60e24772e04af::t_a1fcd086fedef2 127-130,136-137,329-352,354,357-361,367,372-373
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e6e2faac6b349bdf39d772e29224e6801adde00",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
