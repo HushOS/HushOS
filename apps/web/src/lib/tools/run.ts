@@ -238,7 +238,15 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     const watchdogMs = options.watchdogMs ?? TOOL_WATCHDOG_MS;
     const maxOutputs = capOf('maxOutputs', options.maxOutputs, RUN_OUTPUTS_MAX);
     const maxTotalBytes = capOf('maxTotalBytes', options.maxTotalBytes, RUN_TOTAL_BYTES_MAX);
-    let sources: RangeReader[] = options.sources;
+    // Each closed once: when the worker says it is done with it (its reads over), or when the run ends.
+    let sources: RangeReader[] = options.sources.map((source) => {
+        let closing: Promise<void> | undefined;
+        return {
+            ...source,
+            read: source.read.bind(source),
+            close: () => (closing ??= Promise.resolve().then(() => source.close?.())),
+        };
+    });
     let launch: {
         worker: () => Worker;
         input: I;
@@ -373,6 +381,8 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                     hold: () => watchdog.hold(),
                     allowance,
                     onAbuse: failed,
+                    // Read whole: its chunks and key go now, not when the run's last image is done.
+                    onDone: () => void Promise.resolve(reader.close?.()).catch(() => {}),
                 }),
             );
             return { size: reader.size, port: channel.port2 };

@@ -542,6 +542,10 @@ An operator opens a report under their own identity. Which operators a report is
             'Zip archives',
             'Nothing of what is inside one: not names, how many items, sizes, or whether it has a password. A zip opens on your device. On the web, one up to 16 MB is read whole, as any file you preview is; a larger one is read by range, so the store sees which 8 MB parts of it were fetched (the end first, then those holding the items you open), as it does for large PDFs and videos. In the iPhone and Android apps, the zip browser reads a zip’s current version by range, whatever its size, and one kept on the phone opens from the copy there, with nothing fetched; an earlier version, or a zip opened from a link in the Android app, is fetched whole, as any file is. A password you type for a zip stays on your device, and only while the zip is open.',
         ],
+        [
+            'Photos to PDF',
+            'Nothing of the photos. One PDF is made on your device and saved as a new file, encrypted before it leaves like any upload, so the server sees a new file of a padded size beside them. Location, camera and other photo details (EXIF, XMP, IPTC, comments, a second picture tucked inside the file) are left out of the PDF. A JPEG’s picture goes in as it is, with its colour profile, which can name the device it was made for. A PNG goes in as its pixels, without its colour profile. HEIC, WebP and the other kinds are converted to JPEG or PNG first; on the web their colour profile is not carried over.',
+        ],
         ['Reports', 'The content of an item, once someone with access reports it'],
         [
             'Devices',
@@ -600,6 +604,7 @@ Every page carries a Content Security Policy: scripts run only from the app’s 
 - Replacing your account key can’t erase old locked copies, or take back private identity keys someone already pulled out of an older key bundle.
 - The server sees what’s listed above: your email, padded sizes, times, who wrote each change and how your folders nest. Padding hides a file’s exact size, not roughly how big it is.
 - Opening a zip over 16 MB on the web, or a zip’s current version in the zip browser of the iPhone and Android apps (unless it is kept on the phone), shows the store which parts of it you read, though not what they hold.
+- On the web, the first PDF you make from photos fetches the code that makes it, so whoever serves the app can tell a PDF was made then. The new file that lands beside the photos says nearly as much.
 - For people you never compared words with, whoever runs the server could put its own keys in front of theirs the first time your device sees them, and then read what you share with them. Comparing twelve words, at any time, rules that out from then on.
 - In a family nobody checked, whoever runs the server could plant its own keys for a newcomer, or show a newcomer a family it made up, and read what goes into those family folders. Two members checking each other rules that out from then on, not for what was added before.
 - Items written before HushOS signed changes, and anything re-locked without a signature your device could verify, show as Unverified until someone writes them again.

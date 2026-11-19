@@ -8,6 +8,7 @@ import {
 } from '@/components/drive/access';
 import { editableThroughShares } from '@/lib/text-edit';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
+import { toolRunRows } from '@/lib/tool-run-rows';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { FolderColourDialog } from '@/components/drive/folder-colour-dialog';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -129,7 +130,9 @@ import {
     RotateCcwIcon,
 } from 'lucide-react';
 import {
+    lazy,
     memo,
+    Suspense,
     useEffect,
     useMemo,
     useRef,
@@ -145,6 +148,11 @@ import {
  * drawn on empty space, arrows), a double click or Enter opens, and every action
  * is also a keyboard shortcut and a palette entry.
  */
+
+// One PDF's dialog arrives when it is first asked for, not with the folder view.
+const ImagesPdfDialog = lazy(() =>
+    import('@/components/drive/images-pdf-dialog').then((m) => ({ default: m.ImagesPdfDialog })),
+);
 
 /* Where a folder's page is: one's own Drive, or a family folder's under its family's space. */
 type Here = { rootId: string; groupId: string | null };
@@ -540,6 +548,8 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [reporting, setReporting] = useState<DriveNode | null>(null);
     const [tagging, setTagging] = useState<DriveNode[] | null>(null);
     const [colouring, setColouring] = useState<DriveNode[] | null>(null);
+    // Convert, then One PDF: the images, in the order they were selected in the list.
+    const [pdfImages, setPdfImages] = useState<DriveNode[] | null>(null);
     // Tag colours are this workspace's; a shared item's tags read by name alone.
     const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const [trashing, setTrashing] = useState(false);
@@ -590,7 +600,9 @@ export function FolderView({ folderId }: { folderId: string }) {
         sharing !== null ||
         tagging !== null ||
         paletteOpen ||
-        previewing !== null;
+        previewing !== null ||
+        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
+        pdfImages !== null;
     const enabled = !dialogOpen;
     const page = folderLink(here, folderId);
     function showPreview(node: DriveNode | null, replace = false) {
@@ -1361,6 +1373,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         onSaveCopy: (nodes) => void saveToMyDrive(nodes),
         onReport: setReporting,
         onTrash: (nodes) => void trash(nodes),
+        onImagesPdf: setPdfImages,
     };
     /*
      * A node's menu: its own actions, or the selection's when it is part of one. A family
@@ -1381,6 +1394,8 @@ export function FolderView({ folderId }: { folderId: string }) {
             onMove: writable ? actions.onMove : null,
             onTrash: writable ? actions.onTrash : null,
             onColour: writable ? setColouring : null,
+            // A result is a new file here: only where files may be added.
+            onImagesPdf: canAdd && !waiting ? actions.onImagesPdf : null,
         });
     }
 
@@ -1784,10 +1799,33 @@ export function FolderView({ folderId }: { folderId: string }) {
                     onSelectAll={selectAll}
                     onClear={clear}
                     onColour={writable ? () => setColouring(selection) : null}
+                    onImagesPdf={canAdd && !waiting ? setPdfImages : null}
                 />
             )}
             {folder && (
                 <CreateFolderDialog parent={folder} open={creating} onOpenChange={setCreating} />
+            )}
+            {folder && pdfImages && (
+                <Suspense fallback={null}>
+                    <ImagesPdfDialog
+                        folder={folder}
+                        images={pdfImages}
+                        onOpenChange={(open) => !open && setPdfImages(null)}
+                        onMake={(choice) => {
+                            clear();
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void makeImagesPdf(queryClient, {
+                                    folder,
+                                    folderName: crumbName(folder),
+                                    ...choice,
+                                });
+                            });
+                        }}
+                    />
+                </Suspense>
             )}
             <RenameDialog
                 node={renaming}

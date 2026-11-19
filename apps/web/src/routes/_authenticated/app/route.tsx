@@ -17,6 +17,7 @@ import { DriveRuntime } from '@/components/drive/drive-shell';
 import { CommandCenter } from '@/components/drive/command-palette';
 import { StorageFullDialog } from '@/components/drive/storage-full-dialog';
 import { TransfersPanel } from '@/components/drive/transfers-panel';
+import { InterruptedRuns } from '@/components/drive/interrupted-runs';
 import { Spinner } from '@/components/motion';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -286,6 +287,7 @@ function AppLayout() {
             </SidebarInset>
             <DriveRuntime user={user} />
             <TransfersPanel />
+            <InterruptedRuns />
             <StorageFullDialog />
             <CollisionDialog />
             <CommandCenter user={user} />

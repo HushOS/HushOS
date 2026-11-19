@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Transform
 import androidx.compose.foundation.selection.selectable
 import com.hushos.core.folderSwatches
 import com.hushos.core.folderColour
@@ -128,7 +129,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
-enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT }
+enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT, CONVERT, ONE_PDF }
 
 /*
  * Whether this person may change the file's text here: never through ownerOf's ME guess while the own root isn't loaded;
@@ -241,6 +242,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             if (!item.isFolder) SheetRow("Send a copy", Icons.AutoMirrored.Outlined.Send) { sheet = ItemSheet.SEND }
             // A family folder's text file, while this phone may write there.
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
+            // Convert, then One PDF: a new file beside it, while this phone may write the family's folder.
+            if (com.hushos.app.data.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
             if (canEdit) {
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
@@ -304,6 +307,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             // Text and code, for whoever may change the file (an owner, an editor of the share). Never a file shared on its
             // own: its folder can't be listed, and a save needs it.
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
+            // Convert, then One PDF: a new file beside it, for whoever may add one there.
+            if (com.hushos.app.data.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
@@ -328,6 +333,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         ItemSheet.TAGS -> ItemTagsSheet(model, state, listOf(item), dismiss)
         ItemSheet.SHARE -> ShareSheet(model, state, item, dismiss)
         ItemSheet.SEND -> SendCopy(model, state, listOf(item), dismiss)
+        ItemSheet.CONVERT -> ConvertSheet(onePdf = { sheet = ItemSheet.ONE_PDF }, dismiss = dismiss)
+        ItemSheet.ONE_PDF -> ImagesPdfSheet(model, state, listOf(item), dismiss)
         // Main shows Info: beside the list when the window has room, otherwise as this same sheet.
         ItemSheet.INFO -> LocalInfo.current?.let { host -> LaunchedEffect(item.id) { host.open(item); dismiss() } }
             ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)

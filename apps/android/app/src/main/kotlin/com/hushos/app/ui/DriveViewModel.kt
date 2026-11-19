@@ -628,6 +628,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* The app leaves the session it had, as it does when one ends, with what the phone holds kept: for a sign-in screen that follows this phone's own change. */
     private fun leaveSession() {
         if (state.value.gate != Gate.SIGNED_IN) return
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -956,6 +957,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun signOut() {
         endTwoStepFlow()
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -995,6 +997,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // answered. "You've been signed out" would be wrong, and would take the words off the screen.
         if (ownChange.mutesSessionEnd) return
         endTwoStepFlow()
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -2585,6 +2588,101 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         textEdit = TextEdit(item, context, viewModelScope, opening, current = { vault }, saved = { parent -> parent?.let { refresh(it) } },
             refused = ::archiveRefused).also { it.load() }
         _state.update { it.copy(editing = item.id) }
+    }
+
+    /*
+     * One PDF's run, held here and not by its sheet, so a rotation or a fold keeps it going and the sheet
+     * finds it again: progress (images done of all), what to say when it failed or stopped, and done.
+     */
+    data class PdfRun(val running: Boolean = false, val progress: Pair<Int, Int>? = null, val failure: String? = null, val done: Boolean = false)
+    private val _pdfRun = kotlinx.coroutines.flow.MutableStateFlow(PdfRun())
+    val pdfRun: kotlinx.coroutines.flow.StateFlow<PdfRun> = _pdfRun
+    private var pdfJob: kotlinx.coroutines.Job? = null
+    /* Moves on when the session ends: a run's late progress or outcome from before is never shown after. */
+    private var pdfSession = 0
+
+    /* The session ends (a sign-out, a refused session, leaving): the run stops and cleans up, and nothing of it stays. */
+    private fun endImagesPdf() {
+        pdfSession++
+        pdfJob?.cancel()
+        pdfJob = null
+        _pdfRun.value = PdfRun()
+    }
+
+    /*
+     * Convert, then One PDF (data/ImagesPdf.kt): the PDF of `order` into the folder the `selection` is in (worked out
+     * from the selection as it came, never from the order), as `name` (the next free one there).
+     */
+    fun startImagesPdf(selection: List<Opened>, order: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean, name: String) {
+        if (pdfJob?.isActive == true) return
+        _pdfRun.value = PdfRun(running = true, progress = 0 to order.size)
+        val session = pdfSession
+        pdfJob = viewModelScope.launch {
+            val said = makeImagesPdf(selection, order, size, margin, name) { done, all ->
+                if (session == pdfSession) _pdfRun.update { it.copy(progress = done to all) }
+            }
+            if (session == pdfSession) _pdfRun.value = PdfRun(failure = said, done = said == null)
+        }
+    }
+
+    /* Stop: the run cancels, through its upload, and its clean-up removes what was made; the sheet says how it ended. */
+    fun stopImagesPdf() {
+        pdfJob?.cancel()
+    }
+
+    /* The sheet went: a run that ended is forgotten (a running one keeps going until it ends or is stopped). */
+    fun forgetImagesPdf() {
+        if (pdfJob?.isActive != true) _pdfRun.value = PdfRun()
+    }
+
+    /* Null once saved, else what to say; a cancel of the calling coroutine stops it and cleans up what was made. */
+    private suspend fun makeImagesPdf(selection: List<Opened>, images: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean,
+                                      name: String, progress: (Int, Int) -> Unit): String? {
+        val opening = vault ?: return com.hushos.core.toolFailedMessage()
+        if (!com.hushos.app.data.ImagesPdf.oneFolder(selection)) return com.hushos.app.data.ImagesPdf.MIXED_FOLDERS
+        // The account session this run began under: a 401 ends it only while it is still the one in use.
+        val signedIn = Shared.session(context)
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memory = android.app.ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }.totalMem
+        // The app's own heap, which a decoded image's pixels must fit in: the large one when the app asks for it.
+        val large = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_LARGE_HEAP != 0
+        val heap = (if (large) manager.largeMemoryClass else manager.memoryClass).toLong() shl 20
+        var stopped: com.hushos.app.data.SaveRunStopped? = null
+        val result = runCatching {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val writer = com.hushos.app.data.VaultSaveWriter(opening, storage = { Auth.storage(context) })
+                val (folder, _) = writer.editTarget(selection.first())
+                val saved = com.hushos.app.data.ImagesPdf.make(writer, opening, com.hushos.app.data.SaveRunJournal.of(context), images, folder,
+                    size, margin, name, memory, heap, progress, stopped = { stopped = it })
+                folder to saved
+            }
+        }
+        result.onSuccess { (folder, saved) ->
+            refresh(folder.id)
+            notify("Saved “${saved.name}”.")
+            return null
+        }
+        val error = result.exceptionOrNull()!!
+        if (sessionGone(error, signedIn)) return null
+        // Stopped (Stop, or the run cancelled): how the run's clean-up ended, in its words.
+        if (error is kotlinx.coroutines.CancellationException) return stopped?.message ?: com.hushos.app.data.SaveRuns.CANCELLED
+        return (error as? com.hushos.app.data.ImagesPdfRefused)?.message
+            ?: com.hushos.app.data.SaveRuns.reason(error)
+            ?: (error as? com.hushos.app.data.ToolFailed)?.message
+            ?: com.hushos.core.toolFailedMessage()
+    }
+
+    /* A sign-out or a refused session under a run: the session check says it, not the run. */
+    private fun sessionGone(error: Throwable, signedIn: Shared.Session?): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is NotAuthenticated || (cause is com.hushos.app.data.SaveRunStopped && cause.sessionRefused)) {
+                archiveRefused(signedIn)
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
     }
 
     fun closeEditor() {

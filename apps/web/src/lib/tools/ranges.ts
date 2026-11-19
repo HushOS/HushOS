@@ -77,6 +77,8 @@ export type ServeHooks = {
     allowance?: ReturnType<typeof readAllowance>;
     /* The worker broke a rule: the run fails. */
     onAbuse?: () => void;
+    /* The worker said it will read this source no more: the page may close it now. */
+    onDone?: () => void;
 };
 
 /* A read request's three numbers, copied out, or null if they are not all whole and in range. */
@@ -106,6 +108,13 @@ export function serveRanges(port: MessagePort, reader: RangeReader, hooks: Serve
     let stopped = false;
     port.onmessage = (event: MessageEvent) => {
         if (stopped) return;
+        if ((event.data as { type?: unknown } | null)?.type === 'done') {
+            stopped = true;
+            port.onmessage = null;
+            port.close();
+            hooks.onDone?.();
+            return;
+        }
         // Only the checked numbers are kept: nothing past here holds the worker's message, so
         // anything else it carried is garbage once this handler returns.
         const request = requestOf(event.data);

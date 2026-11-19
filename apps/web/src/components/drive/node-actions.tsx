@@ -4,6 +4,8 @@ import {
     DownloadIcon,
     EllipsisIcon,
     EyeIcon,
+    FileImageIcon,
+    FileTextIcon,
     FlagIcon,
     FolderInputIcon,
     FolderPlusIcon,
@@ -26,6 +28,9 @@ import {
     ContextMenuItem,
     ContextMenuSeparator,
     ContextMenuShortcut,
+    ContextMenuSub,
+    ContextMenuSubContent,
+    ContextMenuSubTrigger,
 } from '@/components/ui/context-menu';
 import {
     DropdownMenu,
@@ -34,9 +39,13 @@ import {
     DropdownMenuItem,
     DropdownMenuSeparator,
     DropdownMenuShortcut,
+    DropdownMenuSub,
+    DropdownMenuSubContent,
+    DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { formatBytes, nodeSize } from '@/lib/drive';
+import { pdfable } from '@/lib/images-pdf/limits';
 import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import { useState, useSyncExternalStore } from 'react';
 
@@ -86,6 +95,8 @@ export type MenuEntry = {
     onSelect: () => void;
     shortcut?: string;
     destructive?: boolean;
+    /* A submenu: the entry opens these instead of acting itself. */
+    children?: MenuEntry[];
 };
 
 export type NodeActions = {
@@ -108,7 +119,23 @@ export type NodeActions = {
     /* Present only for someone else's node: the operators get its key, sealed here. */
     onReport: ((node: DriveNode) => void) | null;
     onTrash: ((nodes: DriveNode[]) => void) | null;
+    /* Convert, then One PDF: where results may be saved into the folder these items are in. */
+    onImagesPdf?: ((nodes: DriveNode[]) => void) | null;
 };
+
+/* Convert's entry for a selection that is all images a PDF takes, or null. */
+export function convertEntry(
+    targets: DriveNode[],
+    onImagesPdf: ((nodes: DriveNode[]) => void) | null | undefined,
+): MenuEntry | null {
+    if (!onImagesPdf || targets.length === 0 || !targets.every(pdfable)) return null;
+    return {
+        label: 'Convert',
+        icon: FileImageIcon,
+        onSelect: () => {},
+        children: [{ label: 'One PDF', icon: FileTextIcon, onSelect: () => onImagesPdf(targets) }],
+    };
+}
 
 /*
  * What a row or tile's menu offers, in groups: getting at it, organising it, what
@@ -144,6 +171,8 @@ export function nodeEntries(
             icon: FolderPlusIcon,
             onSelect: () => onSaveCopy(targets),
         });
+    const convert = convertEntry(targets, actions.onImagesPdf);
+    if (convert) open.push(convert);
     const organise: MenuEntry[] = [];
     if (onRename && !many)
         organise.push({
@@ -214,17 +243,36 @@ export function NodeContextMenuItems({ entries }: { entries: MenuEntry[][] }) {
     return entries.map((group, index) => (
         <ContextMenuGroup key={group[0]!.label}>
             {index > 0 && <ContextMenuSeparator />}
-            {group.map((entry) => (
-                <ContextMenuItem
-                    key={entry.label}
-                    variant={entry.destructive ? 'destructive' : 'default'}
-                    onClick={entry.onSelect}
-                >
-                    <entry.icon aria-hidden="true" />
-                    {entry.label}
-                    {entry.shortcut && <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>}
-                </ContextMenuItem>
-            ))}
+            {group.map((entry) =>
+                entry.children ? (
+                    <ContextMenuSub key={entry.label}>
+                        <ContextMenuSubTrigger>
+                            <entry.icon aria-hidden="true" />
+                            {entry.label}
+                        </ContextMenuSubTrigger>
+                        <ContextMenuSubContent className="w-44">
+                            {entry.children.map((child) => (
+                                <ContextMenuItem key={child.label} onClick={child.onSelect}>
+                                    <child.icon aria-hidden="true" />
+                                    {child.label}
+                                </ContextMenuItem>
+                            ))}
+                        </ContextMenuSubContent>
+                    </ContextMenuSub>
+                ) : (
+                    <ContextMenuItem
+                        key={entry.label}
+                        variant={entry.destructive ? 'destructive' : 'default'}
+                        onClick={entry.onSelect}
+                    >
+                        <entry.icon aria-hidden="true" />
+                        {entry.label}
+                        {entry.shortcut && (
+                            <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>
+                        )}
+                    </ContextMenuItem>
+                ),
+            )}
         </ContextMenuGroup>
     ));
 }
@@ -244,22 +292,46 @@ function NodeMoreContent({ entries }: { entries: MenuEntry[][] }) {
             {entries.map((group, index) => (
                 <DropdownMenuGroup key={group[0]!.label}>
                     {index > 0 && <DropdownMenuSeparator />}
-                    {group.map((entry) => (
-                        <DropdownMenuItem
-                            key={entry.label}
-                            variant={entry.destructive ? 'destructive' : 'default'}
-                            onClick={entry.onSelect}
-                        >
-                            <entry.icon aria-hidden="true" />
-                            {entry.label}
-                            {entry.shortcut && (
-                                <DropdownMenuShortcut>{entry.shortcut}</DropdownMenuShortcut>
-                            )}
-                        </DropdownMenuItem>
-                    ))}
+                    {group.map((entry) =>
+                        entry.children ? (
+                            <SubmenuEntry key={entry.label} entry={entry} />
+                        ) : (
+                            <DropdownMenuItem
+                                key={entry.label}
+                                variant={entry.destructive ? 'destructive' : 'default'}
+                                onClick={entry.onSelect}
+                            >
+                                <entry.icon aria-hidden="true" />
+                                {entry.label}
+                                {entry.shortcut && (
+                                    <DropdownMenuShortcut>{entry.shortcut}</DropdownMenuShortcut>
+                                )}
+                            </DropdownMenuItem>
+                        ),
+                    )}
                 </DropdownMenuGroup>
             ))}
         </DropdownMenuContent>
+    );
+}
+
+/* An entry that opens a submenu (Convert), in a dropdown: the row's ⋯ menu or the selection bar's More. */
+function SubmenuEntry({ entry, className }: { entry: MenuEntry; className?: string }) {
+    return (
+        <DropdownMenuSub>
+            <DropdownMenuSubTrigger className={className}>
+                <entry.icon aria-hidden="true" />
+                {entry.label}
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent className="w-44">
+                {entry.children?.map((child) => (
+                    <DropdownMenuItem key={child.label} onClick={child.onSelect}>
+                        <child.icon aria-hidden="true" />
+                        {child.label}
+                    </DropdownMenuItem>
+                ))}
+            </DropdownMenuSubContent>
+        </DropdownMenuSub>
     );
 }
 
@@ -362,6 +434,7 @@ export function NodeSelectionBar({
     onSelectAll,
     onClear,
     onColour,
+    onImagesPdf,
 }: {
     selection: DriveNode[];
     own: boolean;
@@ -383,6 +456,8 @@ export function NodeSelectionBar({
     onClear: () => void;
     /* Absent where nothing may be changed here. */
     onColour?: (() => void) | null;
+    /* Convert, then One PDF; absent where results may not be saved here. */
+    onImagesPdf?: ((nodes: DriveNode[]) => void) | null;
 }) {
     // Rows leave the list as each lands in the trash. The bar keeps what it was acting on until
     // the batch is done: its count and its actions (Share and Rename would appear for the last
@@ -394,8 +469,9 @@ export function NodeSelectionBar({
     const [moreOpen, setMoreOpen] = useState(false);
     const single = items.length === 1 ? items[0]! : null;
     const canColour = Boolean(onColour) && items.every((node) => node.kind === 'folder');
-    /* What More holds on a wide screen: Colour, Versions, Info, Select all. */
-    const moreWide = canColour || items.length === 1 || !allSelected;
+    const convert = convertEntry(items, onImagesPdf);
+    /* What More holds on a wide screen: Convert, Colour, Versions, Info, Select all. */
+    const moreWide = Boolean(convert) || canColour || items.length === 1 || !allSelected;
     return (
         <SelectionBar label={`${items.length} selected`} onClear={onClear}>
             {single && own && (
@@ -500,6 +576,7 @@ export function NodeSelectionBar({
                             <TagIcon aria-hidden="true" /> Tags
                         </DropdownMenuItem>
                     )}
+                    {convert && <SubmenuEntry entry={convert} />}
                     {canColour && (
                         <DropdownMenuItem onClick={() => onColour?.()}>
                             <PaletteIcon aria-hidden="true" /> Colour

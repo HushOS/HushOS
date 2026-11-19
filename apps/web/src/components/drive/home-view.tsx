@@ -4,7 +4,9 @@ import { useHotkey } from '@tanstack/react-hotkeys';
 import { Link, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CheckIcon, FileUpIcon, FolderPlusIcon } from 'lucide-react';
-import { useMemo, useRef, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { MIXED_FOLDERS } from '@/lib/images-pdf/limits';
+import { toolRunRows } from '@/lib/tool-run-rows';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import { AddMenu } from '@/components/drive/add-menu';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
@@ -79,6 +81,11 @@ function folderLink(rootId: string, folderId: string) {
         : ({ to: '/app/drive/f/$folderId', params: { folderId } } as const);
 }
 
+// One PDF's dialog arrives when it is first asked for, not with Home.
+const ImagesPdfDialog = lazy(() =>
+    import('@/components/drive/images-pdf-dialog').then((m) => ({ default: m.ImagesPdfDialog })),
+);
+
 export function HomeView() {
     const { rootId, workspaceId } = useDrive();
     const navigate = useNavigate();
@@ -128,6 +135,11 @@ export function HomeView() {
     const picker = useRef<UploadPicker>(null);
     const [creating, setCreating] = useState(false);
     const [renaming, setRenaming] = useState<DriveNode | null>(null);
+    const [pdfFor, setPdfFor] = useState<{
+        folder: DriveNode;
+        name: string;
+        images: DriveNode[];
+    } | null>(null);
     const [moving, setMoving] = useState<DriveNode[] | null>(null);
     const [copying, setCopying] = useState<DriveNode[] | null>(null);
     const [versionsOf, setVersionsOf] = useState<DriveNode | null>(null);
@@ -160,7 +172,9 @@ export function HomeView() {
         sharing !== null ||
         tagging !== null ||
         paletteOpen ||
-        previewing !== null
+        previewing !== null ||
+        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
+        pdfFor !== null
     );
 
     const access = useAccessIndex(true);
@@ -368,7 +382,38 @@ export function HomeView() {
         onSaveCopy: null,
         onReport: null,
         onTrash: (nodes) => void trash(nodes),
+        onImagesPdf: (nodes) => void onePdf(nodes),
     };
+    /*
+     * Convert, then One PDF, from Home: into the folder the images are in (the catalogue holds only one's own),
+     * the same folder for all of them, or the same refusal as everywhere else, never a PDF of some of them.
+     */
+    async function onePdf(nodes: DriveNode[]) {
+        const [first] = nodes;
+        if (!first?.parentId) return;
+        if (
+            nodes.some(
+                (node) =>
+                    node.parentId !== first.parentId || node.workspaceId !== first.workspaceId,
+            )
+        ) {
+            toast.add({ type: 'error', title: MIXED_FOLDERS });
+            return;
+        }
+        try {
+            const listing = await queryClient.fetchQuery(
+                folderQueryOptions(first.parentId, first.workspaceId),
+            );
+            const target = listing.folder;
+            setPdfFor({
+                folder: target,
+                name: target.parentId === null ? 'My files' : target.name,
+                images: nodes,
+            });
+        } catch (error) {
+            toast.add({ type: 'error', title: driveError(error) });
+        }
+    }
     const entriesFor = (node: DriveNode) =>
         nodeEntries(
             node,
@@ -677,7 +722,31 @@ export function HomeView() {
                     onInfo={toggleInfo}
                     onSelectAll={selectAll}
                     onClear={clear}
+                    onImagesPdf={(nodes) => void onePdf(nodes)}
                 />
+            )}
+            {pdfFor && (
+                <Suspense fallback={null}>
+                    <ImagesPdfDialog
+                        folder={pdfFor.folder}
+                        images={pdfFor.images}
+                        onOpenChange={(open) => !open && setPdfFor(null)}
+                        onMake={(choice) => {
+                            const { folder: into, name } = pdfFor;
+                            clear();
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void makeImagesPdf(queryClient, {
+                                    folder: into,
+                                    folderName: name,
+                                    ...choice,
+                                });
+                            });
+                        }}
+                    />
+                </Suspense>
             )}
 
             {folder && (

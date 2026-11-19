@@ -634,6 +634,11 @@ private struct SelectBar: View {
                     .disabled(one == nil || family)
                 Button("Colour", systemImage: "paintpalette") { action = .colour(items); done() }
                     .disabled(items.contains { !$0.isFolder || store.role(of: $0) == .viewer })
+                // Convert, then One PDF: every one an image a PDF takes, in a folder this person may add to.
+                Menu("Convert", systemImage: "photo.on.rectangle") {
+                    Button("One PDF", systemImage: "doc.richtext") { action = .onePdf(items); done() }
+                }
+                .disabled(!items.allSatisfy { ImagesPdf.takes($0) && store.mayEdit($0) })
             } label: {
                 label("More", "ellipsis")
             }

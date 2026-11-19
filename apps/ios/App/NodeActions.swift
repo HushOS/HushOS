@@ -18,6 +18,8 @@ enum NodeAction: Identifiable {
     case colour([Opened])
     case info(Opened)
     case report(Opened)
+    /* Convert, then One PDF: the images, in the list's order. */
+    case onePdf([Opened])
 
     var id: String {
         switch self {
@@ -29,6 +31,7 @@ enum NodeAction: Identifiable {
         case .colour(let items): return "colour-" + items.map(\.id).joined(separator: ",")
         case .info(let item): return "info-\(item.id)"
         case .report(let item): return "report-\(item.id)"
+        case .onePdf(let items): return "pdf-" + items.map(\.id).joined(separator: ",")
         }
     }
 }
@@ -95,6 +98,7 @@ private struct NodeActionSheets: ViewModifier {
                 case .versions(let item): VersionsSheet(item: item).environment(store)
                 case .tags(let item): ItemTagsSheet(item: item).environment(store)
                 case .colour(let items): FolderColourSheet(folders: items).environment(store)
+                case .onePdf(let items): ImagesPdfSheet(images: items).environment(store)
                 case .info(let item): InfoSheet(item: item, open: { next in action = next }).environment(store)
                 case .report(let item):
                     ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
@@ -224,6 +228,12 @@ struct NodeMenu: View {
                 }
             }
             if !mine && !family { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
+            // A new file beside it: only where this person may add one.
+            if ImagesPdf.takes(item) && store.mayEdit(item) {
+                Menu("Convert", systemImage: "photo.on.rectangle") {
+                    Button("One PDF", systemImage: "doc.richtext") { action = .onePdf([item]) }
+                }
+            }
         }
         Section {
             if canEdit {

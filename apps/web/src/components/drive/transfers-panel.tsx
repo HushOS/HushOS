@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button';
 import { downloads, useDownloads } from '@/lib/downloads';
 import { FINISHING_KEY_CHANGE, formatBytes, isNetworkFailure, OFFLINE_WORDS } from '@/lib/drive';
 import { transfers, useTransfers } from '@/lib/transfers';
+import { ended, toolRunRows, useToolRunRows, type RunRow as ToolRunRow } from '@/lib/tool-run-rows';
 import { useBatchProgress } from '@/lib/batch-progress';
 import { formatTimeLeft } from '@/lib/progress';
 import {
@@ -386,37 +387,169 @@ function UploadRow({ item, offline }: { item: UploadItem; offline: boolean }) {
     );
 }
 
+/*
+ * A tool's run (docs/file-tools-design.md, "Runs in the transfers panel"): its headline, where it
+ * is, and while its result uploads, that upload's bytes, Pause and Resume. Cancel asks first.
+ */
+function RunRowView({
+    row,
+    upload,
+    offline,
+}: {
+    row: ToolRunRow;
+    upload: UploadItem | null;
+    offline: boolean;
+}) {
+    const [asking, setAsking] = useState(false);
+    const over = ended(row.phase);
+    const saving = row.phase === 'saving' && upload !== null;
+    const paused = saving && upload.status === 'paused';
+    const line = saving && !paused ? statusLine(upload, offline) : paused ? 'Paused' : row.line;
+    return (
+        <>
+            <Row
+                name={row.title}
+                line={line}
+                wrap={row.phase === 'failed'}
+                tone={
+                    row.phase === 'failed'
+                        ? 'failed'
+                        : row.phase === 'done'
+                          ? 'done'
+                          : paused
+                            ? 'paused'
+                            : 'active'
+                }
+                progress={
+                    over || row.phase === 'stopping'
+                        ? null
+                        : saving
+                          ? { value: upload.loaded, max: upload.total || 1 }
+                          : row.progress
+                            ? { value: row.progress.value, max: row.progress.max }
+                            : { value: undefined, max: undefined }
+                }
+                actions={
+                    <>
+                        {saving &&
+                            (upload.status === 'uploading' || upload.status === 'queued') && (
+                                <IconAction
+                                    label={`Pause ${row.title}`}
+                                    icon={PauseIcon}
+                                    onClick={() => void transfers.pause(upload.id)}
+                                />
+                            )}
+                        {paused && (
+                            <IconAction
+                                label={`Resume ${row.title}`}
+                                icon={PlayIcon}
+                                onClick={() => void transfers.resume(upload.id)}
+                            />
+                        )}
+                        {over ? (
+                            <IconAction
+                                label={`Remove ${row.title} from the list`}
+                                icon={XIcon}
+                                onClick={() => {
+                                    toolRunRows.remove(row.id);
+                                    // Its upload goes with it, or it would come back as a row of its own.
+                                    if (row.uploadId) transfers.remove(row.uploadId);
+                                }}
+                            />
+                        ) : row.phase !== 'stopping' ? (
+                            <IconAction
+                                label={`Cancel ${row.title}`}
+                                icon={XIcon}
+                                onClick={() => setAsking(true)}
+                            />
+                        ) : null}
+                    </>
+                }
+            />
+            {/* A run that ended while this was open: nothing left to stop, so the question goes. */}
+            <AlertDialog open={asking && !over} onOpenChange={setAsking}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{row.cancelQuestion}</AlertDialogTitle>
+                        <AlertDialogDescription>{row.cancelWarning}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep going</AlertDialogCancel>
+                        <AlertDialogAction
+                            variant="destructive"
+                            onClick={() => {
+                                setAsking(false);
+                                toolRunRows.cancel(row.id);
+                            }}
+                        >
+                            Stop
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+        </>
+    );
+}
+
 export function TransfersPanel() {
-    const state = useTransfers();
+    const all = useTransfers();
     const down = useDownloads();
+    const runs = useToolRunRows();
     const [collapsed, setCollapsed] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const { batch, timeLeft } = useBatchProgress();
     const offline = useOffline();
-    if (!state.uploads.length && !down.downloads.length) return null;
+    // A run's result uploads under the run's own row, not a second one of its own.
+    const claimed = new Set(runs.flatMap((row) => (row.uploadId ? [row.uploadId] : [])));
+    const state = claimed.size
+        ? { ...all, uploads: all.uploads.filter((item) => !claimed.has(item.id)) }
+        : all;
+    const liveRuns = runs.filter((row) => !ended(row.phase));
+    const counted = state.uploads.length + down.downloads.length;
+    if (!state.uploads.length && !down.downloads.length && !runs.length) return null;
     const settled = (status: string) => status === 'done' || status === 'cancelled';
     const doneUploads = state.uploads.filter((item) => item.status === 'done').length;
     const doneDownloads = down.downloads.filter((item) => item.status === 'done').length;
     const finished =
         state.uploads.filter((item) => settled(item.status)).length +
-        down.downloads.filter((item) => settled(item.status)).length;
+        down.downloads.filter((item) => settled(item.status)).length +
+        runs.filter((row) => ended(row.phase)).length;
     // The one headline every client uses. An upload waiting for a key change moves nothing,
     // so it never counts as active here: no ring, bytes or Pause for it.
-    const {
-        title,
-        mode,
-        moving: active,
-    } = transferHeadline({
+    const headline = transferHeadline({
         uploads: state.uploads,
         downloads: down.downloads,
         downloadsActive: down.active,
         offline,
     });
+    // A run going is what the panel is about: its headline, unless other files move beside it.
+    const run = liveRuns[0] ?? null;
+    // Only runs that ended are listed (their uploads under them): the headline is theirs.
+    const endedRuns = runs.filter((row) => ended(row.phase));
+    const onlyEnded = !run && endedRuns.length > 0 && counted === 0;
+    const unmade = endedRuns.filter((row) => row.phase === 'failed').length;
+    const title = onlyEnded
+        ? unmade > 0
+            ? `${unmade === 1 ? '1 file' : `${unmade} files`} not made`
+            : `${endedRuns.length === 1 ? '1 file' : `${endedRuns.length} files`} made`
+        : run && headline.moving === 0
+          ? run.title
+          : headline.title;
+    const mode = onlyEnded
+        ? unmade > 0
+            ? 'failed'
+            : 'done'
+        : run && headline.mode !== 'moving'
+          ? 'moving'
+          : headline.mode;
+    const active = headline.moving + liveRuns.length;
     const rate = state.bytesPerSecond + down.bytesPerSecond;
-    const counted = state.uploads.length + down.downloads.length;
     // Under the headline: files done of all, and the time left once the rate has settled.
-    const summary =
-        active > 0
+    const summary = onlyEnded
+        ? null
+        : run && headline.moving === 0
+          ? run.line
+          : active > 0
             ? [
                   batch.files.total > 1
                       ? `${batch.files.done} of ${batch.files.total} files`
@@ -448,12 +581,19 @@ export function TransfersPanel() {
     const unsettled = [
         ...state.uploads.filter((item) => !settled(item.status) && item.status !== 'failed'),
         ...down.downloads.filter((item) => !settled(item.status) && item.status !== 'failed'),
+        ...liveRuns,
     ];
     function removeEverything() {
         for (const item of state.uploads) transfers.remove(item.id);
         for (const item of down.downloads) downloads.remove(item.id);
+        // Finished runs' uploads, which the rows above leave out, go with their runs.
+        for (const row of runs)
+            if (ended(row.phase) && row.uploadId) transfers.remove(row.uploadId);
+        toolRunRows.clearFinished();
     }
     async function cancelEverything() {
+        // A run's own upload stops with it: the run cleans up what it made.
+        for (const row of liveRuns) toolRunRows.cancel(row.id);
         await Promise.all([
             ...state.uploads
                 .filter((item) => !settled(item.status) && item.status !== 'failed')
@@ -464,7 +604,9 @@ export function TransfersPanel() {
         ]);
         transfers.clearFinished();
         downloads.clearFinished();
-        for (const item of transfers.getState().uploads) transfers.remove(item.id);
+        toolRunRows.clearFinished();
+        for (const item of transfers.getState().uploads)
+            if (!claimed.has(item.id)) transfers.remove(item.id);
         for (const item of downloads.getState().downloads) downloads.remove(item.id);
     }
     return (
@@ -479,7 +621,15 @@ export function TransfersPanel() {
                         <CloudOffIcon className="size-5 text-muted-foreground" aria-hidden="true" />
                     ) : active > 0 ? (
                         <Ring
-                            value={batch.bytes.total ? batch.bytes.loaded / batch.bytes.total : 0}
+                            value={
+                                run && headline.moving === 0
+                                    ? run.progress
+                                        ? run.progress.value / (run.progress.max || 1)
+                                        : 0
+                                    : batch.bytes.total
+                                      ? batch.bytes.loaded / batch.bytes.total
+                                      : 0
+                            }
                             size={22}
                         />
                     ) : mode === 'waiting' ? (
@@ -503,7 +653,7 @@ export function TransfersPanel() {
                         </p>
                     )}
                 </div>
-                {active > 0 ? (
+                {headline.moving > 0 ? (
                     <IconAction
                         label="Pause all"
                         icon={PauseIcon}
@@ -546,6 +696,19 @@ export function TransfersPanel() {
             {!collapsed && (
                 <>
                     <ul className="max-h-[min(380px,32svh)] overflow-y-auto">
+                        {runs.map((row) => (
+                            <RunRowView
+                                key={row.id}
+                                row={row}
+                                upload={
+                                    row.uploadId
+                                        ? (all.uploads.find((item) => item.id === row.uploadId) ??
+                                          null)
+                                        : null
+                                }
+                                offline={offline}
+                            />
+                        ))}
                         {down.downloads.map((item) => (
                             <DownloadRow key={item.id} item={item} offline={offline} />
                         ))}
@@ -566,6 +729,7 @@ export function TransfersPanel() {
                                     onClick={() => {
                                         transfers.clearFinished();
                                         downloads.clearFinished();
+                                        toolRunRows.clearFinished();
                                     }}
                                 >
                                     Clear finished

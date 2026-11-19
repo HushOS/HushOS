@@ -1,6 +1,7 @@
 package com.hushos.app.ui
 
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Transform
 import androidx.compose.runtime.retain.retain
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -227,6 +228,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     val clearSelection = { if (!trashing) { picked = emptySet(); selecting = false } }
     var movingMany by retain { mutableStateOf(false) }
     var sendingMany by retain { mutableStateOf<List<Opened>?>(null) }
+    // Convert's choices, then One PDF, for the selection.
+    var convertingMany by retain { mutableStateOf<List<Opened>?>(null) }
+    var pdfMany by retain { mutableStateOf<List<Opened>?>(null) }
     var taggingMany by retain { mutableStateOf<List<Opened>?>(null) }
     var colouringMany by retain { mutableStateOf<List<Opened>?>(null) }
     var selectMenu by remember { mutableStateOf(false) }
@@ -266,6 +270,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // Search results stay rows whatever the choice: each needs its "In …" line.
     val grid = view == "grid" && words.isEmpty()
     val chosen = here.filter { it.id in picked }
+    // What is picked, as the list shows it (sorted, filtered, search results from folders below included): what Convert
+    // takes, in this order. Images from more than one folder are refused whole by the sheet, never converted in part.
+    val shown = items.filter { it.id in picked }
     // Whose folder this is: someone else's that this account can only view takes no adds, moves or trash.
     val owner = (current ?: state.rootId?.let { model.item(it) })?.let { ownerOf(model, state, it) } ?: Owner.ME
     val clip = state.clipboard
@@ -309,6 +316,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                     onClick = { selectMenu = false; one?.let { sheetSelects = false; sheetFor = it to ItemSheet.RENAME }; clearSelection() })
                                 if (owner == Owner.ME) DropdownMenuItem(text = { Text("Tags") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Label, null) }, enabled = chosen.isNotEmpty(),
                                     onClick = { selectMenu = false; taggingMany = chosen; clearSelection() })
+                                if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Convert") }, leadingIcon = { Icon(Icons.Outlined.Transform, null) },
+                                    enabled = shown.isNotEmpty() && shown.all { com.hushos.app.data.ImagesPdf.takes(it) && mayEditText(model, state, it) },
+                                    onClick = { selectMenu = false; convertingMany = shown; clearSelection() })
                                 if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Colour") }, leadingIcon = { Icon(Icons.Outlined.Palette, null) }, enabled = chosen.isNotEmpty() && chosen.all { it.isFolder },
                                     onClick = { selectMenu = false; colouringMany = chosen; clearSelection() })
                                 if (owner != Owner.ME && !family) DropdownMenuItem(text = { Text("Save a copy to my files") }, leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null) }, enabled = chosen.isNotEmpty(),
@@ -490,6 +500,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     if (movingMany) MovePicker(model, state, chosen) { movingMany = false; clearSelection() }
     sharing?.let { item -> ShareSheet(model, state, item) { sharing = null; clearSelection(); model.refreshAccess() } }
     sendingMany?.let { items -> SendCopy(model, state, items) { sendingMany = null } }
+    convertingMany?.let { items -> ConvertSheet(onePdf = { convertingMany = null; pdfMany = items }, dismiss = { convertingMany = null }) }
+    pdfMany?.let { items -> ImagesPdfSheet(model, state, items) { pdfMany = null } }
     taggingMany?.let { items -> ItemTagsSheet(model, state, items) { taggingMany = null } }
     colouringMany?.let { items -> FolderColourDialog(items, onPick = { model.recolour(items, it); colouringMany = null }, onDismiss = { colouringMany = null }) }
     sheetFor?.let { (item, open) ->

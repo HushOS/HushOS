@@ -36,6 +36,7 @@ import { forgetPreviews } from '@/lib/previews';
 // The live runs only: the save path's engine comes in with the first editor or tool that saves.
 import { lockRuns as lockSaveRuns } from '@hushos/drive/save-runs-live';
 import { cancelAllToolRuns } from '@/lib/tools/active';
+import { lookForInterrupted } from '@/lib/interrupted-runs';
 import { forgetThumbnails } from '@/lib/thumbnails';
 import { restoreTransfers } from '@/lib/transfers';
 import { passesThrough } from '@/lib/own-keys';
@@ -107,6 +108,8 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     useEffect(() => {
         if (!workspaceId) return;
         void restoreTransfers(workspaceId);
+        // A tool's save a closed tab left behind: offered to delete or keep.
+        void lookForInterrupted(queryClient);
         prepareDownloads();
         resumePendingRotation(queryClient);
         // The catalogue: the tree mirrored on this device and opened, resumed from wherever it stopped.
