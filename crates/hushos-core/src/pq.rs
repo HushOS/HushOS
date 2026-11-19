@@ -5,7 +5,7 @@
 //! beside the Ed25519 seed. Signing is hedged (FIPS 204 Algorithm 2 with fresh
 //! randomness), so two signatures over one message differ and both verify.
 //!
-//! The `ml-dsa` crate is pinned at exactly 0.1.1; the FIPS 204 ACVP vectors in
+//! The `ml-dsa` crate is pinned at exactly 0.1.2; the FIPS 204 ACVP vectors in
 //! `fixtures/ml-dsa-65-acvp.json` are checked below and by the web's
 //! `ml-dsa-acvp.test.ts`, and must pass again before it moves.
 

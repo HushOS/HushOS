@@ -5,14 +5,14 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use sha2::{Digest, Sha256};
 
 /// 32 bytes from the operating system's generator: a handle or a deletion secret.
 pub fn random32() -> [u8; 32] {
     let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
+    SysRng.try_fill_bytes(&mut bytes).expect("the operating system's generator failed");
     bytes
 }
 

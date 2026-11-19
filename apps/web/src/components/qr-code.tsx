@@ -69,7 +69,6 @@ export function QrCode({
         if (dots && !square) circles.push([x, y]);
         else squares.push(`M${x} ${y}h1v1h-1z`);
     });
-    /* oxlint-disable jsx-a11y/prefer-tag-over-role -- drawn inline so the dots stay crisp; role=img reads its title as one image */
     return (
         <svg
             viewBox={`0 0 ${n} ${n}`}
@@ -87,7 +86,6 @@ export function QrCode({
             <image href={mark} x={from} y={from} width={box} height={box} />
         </svg>
     );
-    /* oxlint-enable jsx-a11y/prefer-tag-over-role */
 }
 
 /* Extra white around a saved code, in modules: with the one drawn in, the four that print asks for. */

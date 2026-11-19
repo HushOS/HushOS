@@ -522,7 +522,7 @@ mod postgres {
     use std::str::FromStr;
 
     use sqlx::postgres::PgConnectOptions;
-    use sqlx::PgPool;
+    use sqlx::{AssertSqlSafe, PgPool};
 
     use super::*;
     use crate::store::{check_contract, PgStore};
@@ -534,7 +534,10 @@ mod postgres {
 
     impl Schema {
         async fn drop(self) {
-            let _ = sqlx::query(&format!("drop schema {} cascade", self.name)).execute(&self.admin).await;
+            // The schema name is the test's own (fresh() below), never input.
+            let _ = sqlx::query(AssertSqlSafe(format!("drop schema {} cascade", self.name)))
+                .execute(&self.admin)
+                .await;
         }
     }
 
@@ -549,7 +552,7 @@ mod postgres {
             "push_test_{}",
             handle::encode(&handle::random32())[..12].to_ascii_lowercase().replace(['-', '_'], "x")
         );
-        sqlx::query(&format!("create schema {name}")).execute(&admin).await.unwrap();
+        sqlx::query(AssertSqlSafe(format!("create schema {name}"))).execute(&admin).await.unwrap();
         let options = PgConnectOptions::from_str(&url).unwrap().options([("search_path", name.as_str())]);
         let store = PgStore::connect_with(options).await.unwrap();
         Some((Arc::new(store), Schema { admin, name }))

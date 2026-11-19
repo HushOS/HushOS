@@ -67,20 +67,16 @@
     "devDependencies": {
         "@hushos/billing": "workspace:*",
         "@hushos/config": "workspace:*",
-        "@playwright/test": "1.65.0",
+        "@playwright/test": "1.65.1",
         "@types/bun": "1.4.4",
         "fflate": "^0.8.3",
-        "oxfmt": "0.77.0",
-        "oxlint": "1.92.0",
-        "oxlint-tsgolint": "7.0.2006",
-        "turbo": "2.11.10",
+        "oxfmt": "0.79.0",
+        "oxlint": "1.94.0",
+        "oxlint-tsgolint": "7.0.2007",
+        "turbo": "2.11.13",
         "typescript": "7.0.2",
-        "vitest": "^5.1.0",
+        "vitest": "^5.1.1",
         "xlsx": "file:vendor/xlsx-0.20.3.tgz"
-    },
-    "overrides": {
-        "@codemirror/lint": "6.9.7",
-        "style-mod": "4.1.4"
     },
     "engines": {
         "bun": ">=1.4.4"

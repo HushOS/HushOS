@@ -22,7 +22,7 @@ Forgery needs the break to exist when the attack is made, but trust anchored tod
 A version 2 identity is a version 1 identity plus an ML-DSA-65 key (FIPS 204, the pure form, not HashML-DSA):
 
 - `@noble/post-quantum` `ml_dsa65` on the web and the server, which already supplies ML-KEM on the web, pinned at exactly 0.7.1;
-- the RustCrypto `ml-dsa` crate in the core, the one the group key uses, pinned at an exact version (`ml-dsa = "=0.1.1"`, the current release) when it is added to `crates/hushos-core/Cargo.toml`.
+- the RustCrypto `ml-dsa` crate in the core, the one the group key uses, pinned at an exact version in `crates/hushos-core/Cargo.toml` (`ml-dsa = "=0.1.1"` when it was added; 0.1.2 since 19 November 2026, after both ACVP suites passed on it).
 
 Neither is upgraded without the shared fixtures passing again. The fixtures include the FIPS 204 ACVP vectors for ML-DSA-65: key generation from ξ, signing with a context string, and verification that refuses malformed hints. Both implementations must pass all three.
 

@@ -27,8 +27,8 @@
         "check:evidence": "bun scripts/check-evidence.ts"
     },
     "dependencies": {
-        "@aws-sdk/client-s3": "3.1164.0",
-        "@aws-sdk/s3-request-presigner": "3.1164.0",
+        "@aws-sdk/client-s3": "3.1172.0",
+        "@aws-sdk/s3-request-presigner": "3.1172.0",
         "@hushos/crypto": "workspace:*",
         "@hushos/db": "workspace:*",
         "@hushos/env": "workspace:*",
@@ -38,8 +38,8 @@
     "devDependencies": {
         "@hushos/config": "workspace:*",
         "@types/bun": "1.4.4",
-        "fake-indexeddb": "6.2.7",
+        "fake-indexeddb": "6.2.8",
         "typescript": "7.0.2",
-        "vitest": "^5.1.0"
+        "vitest": "^5.1.1"
     }
 }
