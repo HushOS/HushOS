@@ -150,6 +150,7 @@ describe('a save changes only the edited bytes', () => {
         for (const [at, save] of c.saves.entries()) {
             const text = save.text.map((part) => part.text.repeat(part.repeat ?? 1)).join('');
             const bytes = saveBytes(state, throughEditor(text));
+            if (!bytes) throw new Error(`save ${at + 1} refused`);
             expect(same(bytes, bytesOf(save.saved)), `save ${at + 1}`).toBe(true);
             state = savedState(state, throughEditor(text), bytes);
         }
@@ -176,6 +177,25 @@ describe('a save changes only the edited bytes', () => {
         // No final newline was added, and the line separator wasn't taken for a line break.
         expect(saved.at(-1)).toBe('e'.charCodeAt(0));
         expect(edited.lines).toBe(3);
+    });
+
+    test('half of an emoji is never written, in any encoding; a whole one is, and opens again', () => {
+        const smile = '\u{1F600}';
+        for (const bytes of [
+            new TextEncoder().encode('a\n'),
+            Uint8Array.from([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('a\n')]),
+            Uint8Array.from([0xff, 0xfe, 0x61, 0x00, 0x0a, 0x00]),
+            Uint8Array.from([0xfe, 0xff, 0x00, 0x61, 0x00, 0x0a]),
+        ]) {
+            const state = session(bytes);
+            // Typed between the halves, and each half left alone at the end.
+            for (const broken of [`a${smile[0]}x${smile[1]}\n`, `a${smile[0]}\n`, `a${smile[1]}\n`])
+                expect(saveBytes(state, broken)).toBeNull();
+            const whole = saveBytes(state, `a${smile}\n`);
+            expect(whole).not.toBeNull();
+            const reopened = openText(whole!);
+            expect(reopened.editable && reopened.text).toBe(`a${smile}\n`);
+        }
     });
 
     test('a line break typed into the editor takes the file’s, in its encoding', () => {

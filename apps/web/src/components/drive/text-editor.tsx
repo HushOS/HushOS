@@ -69,7 +69,7 @@ import {
     wrapsLines,
 } from '@/lib/editor-languages';
 import { holdPageWhile } from '@/lib/leave-guard';
-import { MARKDOWN_LIMIT } from '@/lib/markdown';
+import { MARKDOWN_LIMIT } from '@/lib/markdown-limit';
 import { openReader, previewKindOf, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import {
@@ -97,9 +97,9 @@ import {
 } from '@/lib/text-save';
 import { cn } from '@/lib/utils';
 
-/* The viewer's Markdown renderer (preloaded after unlock with the viewers), for the preview beside the source. */
-const MarkdownView = lazy(() =>
-    import('@/components/drive/rich-text').then((m) => ({ default: m.MarkdownView })),
+/* The viewer's Markdown renderer, for the preview beside the source: one of the editor's assets (editorAssets). */
+const EditorPreview = lazy(() =>
+    import('@/components/drive/editor-preview').then((m) => ({ default: m.EditorPreview })),
 );
 
 /*
@@ -137,6 +137,7 @@ type SessionToken = { opening: number; account: number };
 export async function preloadEditor() {
     await preloadLanguages();
     await preloadParsers();
+    await import('@/components/drive/editor-preview');
 }
 type GuardRef = { readonly current: EditGuard };
 
@@ -146,7 +147,13 @@ type GuardRef = { readonly current: EditGuard };
  * kind. Already fetched, it costs nothing.
  */
 function editorAssets() {
-    return Promise.all([allLanguages(), preloadParsers()]).then(() => {});
+    return Promise.all([
+        allLanguages(),
+        preloadParsers(),
+        // The Markdown preview's renderer too, whatever kind of file is open. Its failure is the
+        // preview's to show (PreviewBoundary), never a reason to leave the text uncoloured or unchecked.
+        import('@/components/drive/editor-preview').catch(() => {}),
+    ]).then(() => {});
 }
 
 type Phase =
@@ -186,6 +193,7 @@ export const editorWords = {
     preview: 'Preview',
     previewTooLong: 'This file is too long to preview while you edit.',
     previewFailed: 'The preview couldn’t be shown.',
+    halfCharacter: 'This text has half of an emoji or symbol in it. Delete it, then save.',
     refreshPreview: 'Refresh preview',
 };
 
@@ -847,6 +855,8 @@ export function TextEditor({
             if (!state) return;
             // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it had.
             const bytes = saveBytes(state, doc.toString());
+            // Half of a character can't be written as typed: nothing is saved, and the text stays.
+            if (!bytes) return setFailure(editorWords.halfCharacter);
             let landed = false;
             beginSaving();
             setStatus(null);
@@ -914,6 +924,7 @@ export function TextEditor({
         if (!state) return;
         // The copy keeps the file's encoding and line breaks too.
         const bytes = saveBytes(state, doc.toString());
+        if (!bytes) return setFailure(editorWords.halfCharacter);
         let landed = false;
         beginSaving();
         setStatus(null);
@@ -1176,10 +1187,7 @@ export function TextEditor({
                                     <PreviewBoundary text={preview.text}>
                                         <Suspense fallback={null}>
                                             {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
-                                            <MarkdownView
-                                                text={preview.text}
-                                                fences="after-preload"
-                                            />
+                                            <EditorPreview text={preview.text} />
                                         </Suspense>
                                     </PreviewBoundary>
                                 )

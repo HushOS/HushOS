@@ -239,13 +239,27 @@ export function openedState(bytes: Uint8Array): SaveState | null {
     return opened.editable ? { format: opened.format, text: opened.text, bytes } : null;
 }
 
+/* A surrogate without its pair: half of an emoji or another character past U+FFFF. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/*
+ * Whether `text` can be written as it is. A surrogate without its pair (typing between an emoji's
+ * halves, where Go to Line can put the cursor) would be written as a UTF-16 file no reader opens
+ * again, and TextEncoder would write U+FFFD in its place, a character nobody typed.
+ */
+export function writable(text: string) {
+    return !LONE_SURROGATE.test(text);
+}
+
 /*
  * What a save writes for `text`: the bytes last opened or saved while the text is still theirs (a
  * file opened and saved without an edit is byte for byte the same, a mixed one included),
- * otherwise the text in the session's format.
+ * otherwise the text in the session's format. Null when the text can't be written as it is
+ * (writable): nothing is saved, and the edit stays for the person to mend.
  */
-export function saveBytes(state: SaveState, text: string): Uint8Array {
-    return text === state.text ? state.bytes : encodeText(state.format, text);
+export function saveBytes(state: SaveState, text: string): Uint8Array | null {
+    if (text === state.text) return state.bytes;
+    return writable(text) ? encodeText(state.format, text) : null;
 }
 
 /* After a save of `text` landed as `bytes`: what the next one compares with. */

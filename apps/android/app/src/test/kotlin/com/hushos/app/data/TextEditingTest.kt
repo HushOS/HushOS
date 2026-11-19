@@ -152,6 +152,24 @@ class TextEditingTest {
         assertEquals('e'.code.toByte(), written.last())
     }
 
+    /* Half of an emoji is never written, in any encoding (the core would get "?"); a whole one is, and opens again. */
+    @Test fun halfAnEmojiIsNeverWrittenAndAWholeOneOpensAgain() {
+        val smile = "\uD83D\uDE00"
+        for (opened in listOf(
+            "a\n".toByteArray(),
+            byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + "a\n".toByteArray(),
+            byteArrayOf(0xFF.toByte(), 0xFE.toByte(), 0x61, 0x00, 0x0A, 0x00),
+            byteArrayOf(0xFE.toByte(), 0xFF.toByte(), 0x00, 0x61, 0x00, 0x0A),
+        )) {
+            val state = TextEditing.SaveState.opening(opened)!!
+            for (broken in listOf("a${smile[0]}x${smile[1]}\n", "a${smile[0]}\n", "a${smile[1]}\n")) {
+                assertThrows(TextEditing.HalfCharacter::class.java) { state.bytes(broken) }
+            }
+            val whole = state.bytes("a$smile\n")
+            assertEquals("a$smile\n", (TextEditing.open(whole) as TextEditing.Open.Editable).text)
+        }
+    }
+
     @Test fun aLineBreakTypedOrPastedIsLineFeed() {
         assertEquals("a\nb\nc\n", TextEditing.lineFeeds("a\r\nb\rc\n").toString())
         assertEquals("plain", TextEditing.lineFeeds("plain").toString())

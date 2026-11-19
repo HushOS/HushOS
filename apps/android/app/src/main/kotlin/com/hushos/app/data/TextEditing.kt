@@ -63,8 +63,15 @@ object TextEditing {
      * only answer "nothing changed".
      */
     class SaveState private constructor(val format: TextFormat, val text: String, val bytes: ByteArray) {
-        /* What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the session's format. */
-        fun bytes(text: CharSequence): ByteArray = if (same(text, this.text)) bytes else textEncode(format, text.toString())
+        /*
+         * What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the
+         * session's format. Throws HalfCharacter for a text that can't be written as it is (`writable`): nothing is saved.
+         */
+        fun bytes(text: CharSequence): ByteArray = when {
+            same(text, this.text) -> bytes
+            !writable(text) -> throw HalfCharacter()
+            else -> textEncode(format, text.toString())
+        }
 
         /* After a save of `text` landed as `bytes`: what the next one compares with. */
         fun saved(text: String, bytes: ByteArray) = SaveState(format, text, bytes)
@@ -93,6 +100,27 @@ object TextEditing {
      * a save writes do.
      */
     fun same(a: CharSequence, b: CharSequence): Boolean = a.toString() == b.toString()
+
+    /*
+     * Whether `text` can be written as it is: a surrogate without its pair (half an emoji, which a Kotlin string can hold)
+     * would reach the core as "?" in its place, a character nobody typed. As on the web (lib/text-edit.ts `writable`).
+     */
+    fun writable(text: CharSequence): Boolean {
+        var at = 0
+        while (at < text.length) {
+            val c = text[at]
+            if (Character.isLowSurrogate(c)) return false
+            if (Character.isHighSurrogate(c)) {
+                if (at + 1 >= text.length || !Character.isLowSurrogate(text[at + 1])) return false
+                at++
+            }
+            at++
+        }
+        return true
+    }
+
+    /* A save of text holding half a character: refused before anything is written; the text stays as it is. */
+    class HalfCharacter : Exception("half a character")
 
     /* Why a listing can't stand for the file's folder: it answered for another folder or another workspace. */
     class WrongFolder : Exception("HushOS answered with a different folder than this file’s. Nothing was saved.")

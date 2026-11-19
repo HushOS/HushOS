@@ -100,7 +100,14 @@ struct TextEditorScreen: View {
 
     private var shown: Opened { target ?? item }
 
-    private var isMarkdown: Bool { MarkdownDocument.handles(name: shown.name, mime: shown.metadata.mime) }
+    /*
+     * Decided by the row the text was read from (`source`: set by load, Open theirs included), never `target`, which a
+     * save or a copy moves on.
+     */
+    private var isMarkdown: Bool {
+        let read = source ?? item
+        return MarkdownDocument.handles(name: read.name, mime: read.metadata.mime)
+    }
     private var previewing: Bool { isMarkdown && pane == .preview }
 
     var body: some View {
@@ -260,6 +267,8 @@ struct TextEditorScreen: View {
                     PlainTextView(box: editor, text: editor.opening, editable: true) {
                         if !edited { edited = true }
                         status = nil
+                        // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
+                        if previewTooLong { previewTooLong = false }
                     }
                     .hiddenWhile(previewing)
                     if previewing { preview }

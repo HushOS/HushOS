@@ -105,6 +105,7 @@ object EditorWords {
     const val SOURCE = "Source"
     const val PREVIEW = "Preview"
     const val PREVIEW_TOO_LONG = "This file is too long to preview while you edit."
+    const val HALF_CHARACTER = "This text has half of an emoji or symbol in it. Delete it, then save."
 }
 
 /* How many bytes `text` takes in UTF-8, counted without encoding it (a lone surrogate as the three of its replacement). */
@@ -294,6 +295,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun markEdited() {
         if (!edited) edited = true
         status = null
+        // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
+        previewTooLong = false
     }
 
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
@@ -404,7 +407,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                         saved(done.item.node.parentId)
                     }
                 }
-            }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
+            }.onFailure { failure = failureWords(it) }
             settledSave(result.getOrNull()?.second is TextSaved.Saved)
         }
     }
@@ -448,10 +451,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 edited = !TextEditing.same(buffer, text)
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
-            }.onFailure { failure = SaveRuns.reason(it) ?: EditorWords.SAVE_FAILED }
+            }.onFailure { failure = failureWords(it) }
             settledSave(result.isSuccess)
         }
     }
+
+    /* What went wrong with a save or a copy; half a character in the text saved nothing and keeps the text. */
+    private fun failureWords(error: Throwable) =
+        if (error is TextEditing.HalfCharacter) EditorWords.HALF_CHARACTER else SaveRuns.reason(error) ?: EditorWords.SAVE_FAILED
 
     /* Their version, read in place of this text (after the person confirmed). */
     fun openTheirs() {

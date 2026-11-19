@@ -128,6 +128,11 @@ test.beforeAll(async ({ browser }) => {
                 `# Notes\n\nAn image: ![tracking pixel](${probe})\n\n[A link](${probe}?link)\n`,
             ),
             write('marked.md', Uint8Array.from([0xef, 0xbb, 0xbf, ...Buffer.from('# Title\n')])),
+            // Past the 32K characters the preview follows as it is typed.
+            write(
+                'long.md',
+                `# Long notes\n\n${'A paragraph of text that repeats.\n\n'.repeat(1200)}`,
+            ),
             write('latin.txt', Uint8Array.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
             write('config.json', '{\n  "a": 1\n}\n'),
             // No extension and no type: the viewer reads it to find it is text.
@@ -137,7 +142,7 @@ test.beforeAll(async ({ browser }) => {
             write('main.rs', 'fn main() {\n    println!("hi");\n}\n'),
             write('Cargo.toml', '[package]\nname = "hushos"\n'),
         ]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
@@ -158,7 +163,7 @@ test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
     });
-    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
     // The preload's workers (the thumbnailer's) may still be fetching their own imports once its
     // last step returned: what they fetch belongs to the preload too, whatever is opened later.
     await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
@@ -201,7 +206,13 @@ test('a fenced block typed in the Markdown preview before the preload finishes f
     };
     page.on('request', listen);
     await page.reload();
-    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
+    // Every editor fetches the preview's renderer with its other assets, a JSON file's too: an Edit
+    // before the preload never fetches it for Markdown only.
+    const previewModule = page.waitForRequest(/\/components\/drive\/editor-preview/);
+    await openEditor(page, 'config.json');
+    await previewModule;
+    await close(page);
     await openEditor(page, 'preview.md');
     await editor(page).click();
     await page.keyboard.press('ControlOrMeta+End');
@@ -417,17 +428,37 @@ test('Markdown shows the viewer’s rendering beside the source, live, and fetch
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
+test('past 32K characters the preview follows typing only on Refresh preview', async () => {
+    await openEditor(page, 'long.md');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    const refresh = preview.getByRole('button', { name: 'Refresh preview' });
+    await expect(preview.getByRole('heading', { name: 'Long notes' })).toBeVisible();
+    // Just opened, it shows the text as it is: nothing to refresh.
+    await page.waitForTimeout(1_000);
+    await expect(refresh).toHaveCount(0);
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+Home');
+    await page.keyboard.insertText('## Typed at the top\n\n');
+    await expect(refresh).toBeVisible();
+    // Long enough for a live render to have come, had there been one.
+    await page.waitForTimeout(1_000);
+    await expect(preview.getByRole('heading', { name: 'Typed at the top' })).toHaveCount(0);
+    await refresh.click();
+    await expect(preview.getByRole('heading', { name: 'Typed at the top' })).toBeVisible();
+    await expect(refresh).toHaveCount(0);
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+});
+
 test('a preview whose renderer can’t load says so, and the text typed beside it still saves', async () => {
-    // The renderer's code fails to load; the preload is held before it, so only the preview asks for it.
-    const held: Route[] = [];
-    await page.route('**/components/drive/pdf-viewer.tsx*', (route) => {
-        held.push(route);
-    });
-    await page.route('**/components/drive/rich-text.tsx*', (route) =>
+    // Only the editor's preview module fails to load: the viewer, which renders the same file with
+    // the same renderer before Edit is pressed, is untouched, so the failure is met in the editor.
+    await page.route('**/components/drive/editor-preview.tsx*', (route) =>
         route.fulfill({ status: 500, body: '' }),
     );
     await page.reload();
-    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
     await openEditor(page, 'preview.md');
     const preview = dialog(page).getByRole('region', { name: 'Preview' });
     await expect(preview.getByText('The preview couldn’t be shown.')).toBeVisible();
@@ -442,10 +473,8 @@ test('a preview whose renderer can’t load says so, and the text typed beside i
     const saved = (await downloaded(page, 'preview.md')).toString();
     expect(saved.startsWith('# Notes\n')).toBe(true);
     expect(saved).toContain('\nTyped beside a failed preview\n');
-    // A fresh page for the tests after: nothing failed or held.
-    await page.unroute('**/components/drive/rich-text.tsx*');
-    await page.unroute('**/components/drive/pdf-viewer.tsx*');
-    for (const route of held) await route.continue().catch(() => {});
+    // A fresh page for the tests after: nothing failing.
+    await page.unroute('**/components/drive/editor-preview.tsx*');
     await page.reload();
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
