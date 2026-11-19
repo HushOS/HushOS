@@ -1,0 +1,19 @@
+e2e/editing.spec.ts
+  s_fe732417ee9cdb::t_bccb74531761a8 49-57,209-210,215,222,239,467-468,486,816-818
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "32ec34c0392905db7f5e729bfa6c2d53c9f78558",
+  "prompts": {},
+  "sessions": {
+    "s_fe732417ee9cdb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b6666194-df82-46a7-a1ef-33e06788ffe9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
