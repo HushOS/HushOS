@@ -1,0 +1,86 @@
+apps/web/src/lib/images-pdf/dimensions.ts
+  s_c60e24772e04af::t_e0962df3e4342f 1-85
+  s_c60e24772e04af::t_d73c12d2c16dfc 86-89
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_3293eb91d23108 686-687
+apps/android/app/src/main/kotlin/com/hushos/app/data/ImagesPdf.kt
+  s_c60e24772e04af::t_f52a432378ab3a 109-165,169-172,175,177-179,182,186-189,193-194,197-198,205,207-208,213,215-217,253-254,261,267-283
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_ae1ca66f1809c4 2591-2592,2594-2624,2626,2629-2633,2638,2640,2651
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_c60e24772e04af::t_3d74ce5a763639 273-275,320-321
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ImagesPdfSheet.kt
+  s_c60e24772e04af::t_5d482ec3c8c4df 34-38,72-76,78-90,101,109-113,141,147,156,174,185-187,191,194-195,212
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_c60e24772e04af::t_a1ffea0af119e4 246,311
+apps/android/app/src/test/kotlin/com/hushos/app/data/ImagesPdfTest.kt
+  s_c60e24772e04af::t_a8ed5685a179bd 3,7,100-175,188-189
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_12c8d04e0570ad 729-731
+apps/ios/App/BrowseView.swift
+  s_c60e24772e04af::t_89fbbb9f2f6147 641
+apps/ios/App/ImagesPdfSheet.swift
+  s_c60e24772e04af::t_ca9de44c8d139d 23-25,34-39,83,111,128-129,140-157,166,180
+apps/ios/App/NodeActions.swift
+  s_c60e24772e04af::t_0caebf9fe705f8 232
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ImagesPdf.swift
+  s_c60e24772e04af::t_430aadc1364109 43-67,97-112,281,292-296,298,301-302,305-306,313,318-321
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ImagesPdfTests.swift
+  s_c60e24772e04af::t_8f9fc1f7e9e17c 146-159
+apps/web/src/components/drive/images-pdf-dialog.tsx
+  s_c60e24772e04af::t_fbe4727a60610e 249-250
+apps/web/src/components/drive/interrupted-runs.tsx
+  s_c60e24772e04af::t_323c1f1d4a5a48 23-25,30-51
+apps/web/src/components/drive/transfers-panel.tsx
+  s_c60e24772e04af::t_50a9d2c34e1c44 453-457,507,526-543,547-570,588-590
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_923708ae0151f9 547
+apps/web/src/lib/images-pdf/core-made.test.ts
+  s_c60e24772e04af::t_0568f02c33c403 14,20-22
+apps/web/src/lib/images-pdf/decode.test.ts
+  s_c60e24772e04af::t_e5b8f886af061b 1-91
+apps/web/src/lib/images-pdf/decode.ts
+  s_c60e24772e04af::t_443a220975f3bd 1-2,16-19,22-32,39-40,81-85,87-89
+apps/web/src/lib/images-pdf/make.ts
+  s_c60e24772e04af::t_ca61b3385b5c95 36-39,52-53,93-100
+apps/web/src/lib/images-pdf/pdf.test.ts
+  s_c60e24772e04af::t_af10e8721b825e 91-96
+apps/web/src/lib/images-pdf/pdf.ts
+  s_c60e24772e04af::t_d785493a8b2b49 5-7,35-40,124-125,143-145,149-159
+apps/web/src/lib/tools/protocol.ts
+  s_c60e24772e04af::t_f2721126668304 78-81
+apps/web/src/lib/tools/ranges.ts
+  s_c60e24772e04af::t_c1a36569b96034 80-81,111-117
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_22a477737b8f43 241-249,384-385
+apps/web/src/lib/tools/worker.ts
+  s_c60e24772e04af::t_8f427f1576ea07 114-115
+crates/hushos-core/src/images_pdf.rs
+  s_c60e24772e04af::t_ca0f10e3283b68 587-589
+crates/hushos-core/src/images_pdf/tests.rs
+  s_c60e24772e04af::t_3954e66519fcd2 251-252,266-267,277,280-281,289,299-300
+docs/file-tools-design.md
+  s_c60e24772e04af::t_b528a1d31c4e9a 39,561,574-581
+e2e/fixtures/images/expected.json
+  s_c60e24772e04af::t_43024d54ff4432 88-99
+e2e/fixtures/images/make.py
+  s_c60e24772e04af::t_923fb797857bb8 325-339,470-472
+e2e/images-pdf.spec.ts
+  s_c60e24772e04af::t_4b5f13a3e50feb 113-115,219-221,224,247-283,287-295,297-303,305-323,349,360,371,373-409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3327781ceb994f8d774839a2bd193c644ebfa7c7",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
