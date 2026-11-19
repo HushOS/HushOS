@@ -461,7 +461,13 @@ test('past 32K characters the preview follows typing only on Refresh preview', a
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
-test('a preview whose renderer can’t load says so, and the text typed beside it still saves', async () => {
+test('a preview whose renderer can’t load says so, and the text typed beside it still saves', async ({
+    browserName,
+}) => {
+    // WebKit answers an immutable module it already holds from its memory cache after a reload,
+    // so page.route never sees the request it is meant to fail. The error boundary is the same
+    // React code in every browser; Chromium proves it.
+    test.skip(browserName === 'webkit', 'WebKit serves the cached module past page.route');
     // Only the editor's preview module fails to load: the viewer, which renders the same file with
     // the same renderer before Edit is pressed, is untouched, so the failure is met in the editor.
     const editorPreview = appModule('editor-preview');
