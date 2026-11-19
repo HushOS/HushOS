@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+    <a href="https://github.com/HushOS/HushOS/actions/workflows/ci.yml?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/HushOS/HushOS/ci.yml?branch=main&event=push&label=CI&labelColor=2c428e" alt="CI status on main"></a>
+    <a href="https://github.com/HushOS/HushOS/releases/latest"><img src="https://img.shields.io/github/v/release/HushOS/HushOS?label=release&labelColor=2c428e&color=2c428e" alt="Latest release"></a>
+    <a href="https://apps.apple.com/app/hushos-encrypted-cloud-drive/id6831238356"><img src="https://img.shields.io/itunes/v/6831238356?label=App%20Store&labelColor=2c428e&color=2c428e" alt="App Store version"></a>
+</p>
+
+<p align="center">
     <a href="https://hushos.com/security">How it protects your files</a> ·
     <a href="docs/self-hosting.md">Host it yourself</a> ·
     <a href="https://hushos.com/blog">Notes from the build</a> ·
