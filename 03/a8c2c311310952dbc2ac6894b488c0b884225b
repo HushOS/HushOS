@@ -1,0 +1,63 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_017fcb984394ff 368,370-372,377
+apps/android/app/src/main/kotlin/com/hushos/app/data/TextEditing.kt
+  s_c60e24772e04af::t_e0a6245cc57534 3,6-7,12-13,16-18,20-23,39,42-45,47-49,53-56,59-64,68,196-198,200,221-222
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_7bcd09f1916b37 16,18-19,27-29,38-40,58-59,71,106-107,111,113-115,181-216,284-286,296,304-305,307-316,330-331,343,366,382-383,394,411,430,440,444-446,487-493,507-512,517-522,591-607,609,655-665
+apps/android/app/src/test/kotlin/com/hushos/app/data/TextEditingTest.kt
+  s_c60e24772e04af::t_63c9974358c025 4,7,13-14,22-26,49-60,63,66,68-77,82-98,116,118,125,139-142,144-152,235,252,286,291,300,309,321,335,365,368,438,444
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_0106f6aae40cde 244,246-249,255
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_8a8cc1903810d0 6-14,54-66,100-102,120-121,144-145,237,239-244,248,252-260,266-289,324-325,360,363-364,367-369,408-409,422,440,457-458,466,477,488-493,501,536-545,569-573,579-580
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TextEditing.swift
+  s_c60e24772e04af::t_2233081cf5af40 5-7,10-13,48,59,63-68,70-72,76,78-80,84-89,93-95,266-268,270,289-290
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TextEditingTests.swift
+  s_c60e24772e04af::t_4d9d3a4da7b4e6 10-15,21-25,27,61-76,79,82-88,94-104,113-114,119,125,127,129,221-222,228-231,233-243,336,355,388,400,404,422,429,439,450,463
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_06494e5ce6aaed 75,1077-1078
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_7bdca25387052b 29,44,62-63,65-73,85-90,93,96-99,102-103,172-174,382-389,417-421,476-478,582-598,706,708-711,741-745,766,775,809-813,823,846,936-962,1031-1035,1043-1075
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_404f1558e9159c 291
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_465b9f90685574 357
+apps/web/src/lib/previews.ts
+  s_c60e24772e04af::t_00a3255b2b5312 158-159,163-170
+apps/web/src/lib/text-edit.test.ts
+  s_c60e24772e04af::t_bd51ff1b59ee6d 10,13,15,20-24,34-43,65-70,74-84,87,89,91-95,110,114-115,119-127,129-130,137,139,142,151-181,193-200,202-214
+apps/web/src/lib/text-edit.ts
+  s_c60e24772e04af::t_9115519bd0ac75 6-9,11-21,24,28,35,38-52,56-86,88-90,92-93,95-124,126-152,156,160-164,167-199,202-247
+apps/web/src/lib/text-save.test.ts
+  s_c60e24772e04af::t_90902b9fa642f0 23-24,46,105,122,139,146,163,180,200,216,242,258,286,311,321,336,351,365,424,436,443,466,481
+apps/web/src/lib/text-save.ts
+  s_c60e24772e04af::t_122e4aaf32aaee 20-23,105,108,111,145,152,155
+crates/hushos-core/fixtures/text-edit-cases.json
+  s_c60e24772e04af::t_e7111f435fa867 2,7-11,20-24,33-37,46-50,59-63,75-79,91-121,130-134,143-328,423-426,440-443,452-534,546,549-558,571-574,585-801
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_ccfd8e89a7e4a9 91-94
+crates/hushos-core/src/text_edit.rs
+  s_c60e24772e04af::t_cd6351e19bfd8b 1-9,17-20,25,27-28,30,32,36-76,88,92-93,98-139,142-143,145,147-175,177-188,190-197,199-207,210-218,220-322,531-534
+crates/hushos-core/tests/text_edit.rs
+  s_c60e24772e04af::t_60c666a6c8059a 1-5,28-29,34-50,54,57-99,102-104
+docs/editing-design.md
+  s_c60e24772e04af::t_8c11d8ed4f7934 150-158
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_41f5d21de94d04 18-23,90-95,110-113,119-129,140,161,172-173,275,288-380
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "03a8c2c311310952dbc2ac6894b488c0b884225b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
