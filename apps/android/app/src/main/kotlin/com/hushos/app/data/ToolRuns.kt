@@ -365,6 +365,11 @@ fun toolReaderOf(
     online: () -> Boolean = { true },
     metered: () -> Boolean = { false },
     drains: PaddingDrains = PaddingDrains.shared,
+    /*
+     * The first session refusal (a 401) met under the reader's own fetches, kept for the caller: the core turns any failure of
+     * its source into its own error, so the refusal would otherwise be lost as a read failure.
+     */
+    refused: AtomicReference<NotAuthenticated?>? = null,
 ): VersionReader {
     // The id alone: no function below may hold `opened`, whose content carries the version's key.
     val versionId = opened.versionId
@@ -387,22 +392,30 @@ fun toolReaderOf(
         }
     }
     val source = StoreSource({ ranges -> drains.enqueue(ranges, born, metered(), drainOnce) }) { range, _ ->
-        Resumable.run(
-            online = online,
-            sleep = { millis -> sleepWhileRunning(control, millis) },
-            onExpired = { url.set(address()) },
-        ) {
-            control.check()
-            api.range(url.get(), range) { call, request -> Cutoff.whileRunning(control, call, request) }
+        try {
+            Resumable.run(
+                online = online,
+                sleep = { millis -> sleepWhileRunning(control, millis) },
+                onExpired = { url.set(address()) },
+            ) {
+                control.check()
+                api.range(url.get(), range) { call, request -> Cutoff.whileRunning(control, call, request) }
+            }
+        } catch (ended: NotAuthenticated) {
+            // A 401 renewing the address: kept, since the core says only that its read failed.
+            refused?.compareAndSet(null, ended)
+            throw ended
         }
     }
     return VersionReader(source, opened.content, control)
 }
 
 /* A seekable, decrypting reader over a file's version for a tool run under `control` (toolReaderOf). */
-fun Vault.toolReader(item: Opened, control: RunControl, version: VersionListView? = null): VersionReader =
+fun Vault.toolReader(item: Opened, control: RunControl, version: VersionListView? = null,
+                     refused: AtomicReference<NotAuthenticated?>? = null): VersionReader =
     toolReaderOf(
         api, openVersion(item, version), item.node.workspaceId, control,
         online = { Resumable.online(context) },
         metered = { context.getSystemService(android.net.ConnectivityManager::class.java)?.isActiveNetworkMetered ?: false },
+        refused = refused,
     )

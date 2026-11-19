@@ -18,9 +18,14 @@ const NAMES: Record<StructuredKind, string> = {
  * The parsers and the check worker, for the post-unlock preload: fetched whether or not such a
  * file is edited (lib/text-check.ts runs the checks in the worker).
  */
-export async function preloadParsers() {
-    await import('@/lib/text-parse-data');
-    (await import('@/lib/text-check')).preloadCheckWorker();
+let parsers: Promise<void> | null = null;
+export function preloadParsers() {
+    // Once a page: the editor asks for it too, for whatever file it opens (text-editor.tsx editorAssets).
+    parsers ??= (async () => {
+        await import('@/lib/text-parse-data');
+        (await import('@/lib/text-check')).preloadCheckWorker();
+    })().catch(() => {});
+    return parsers;
 }
 
 /* Which check a file gets, from the editor's language for it; null for anything else (JSONC included). */

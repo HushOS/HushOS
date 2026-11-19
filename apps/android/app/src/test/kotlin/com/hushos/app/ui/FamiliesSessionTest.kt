@@ -132,6 +132,37 @@ class FamiliesSessionTest {
         assertEquals(VERIFIED, verdicts.of(later))
     }
 
+    /*
+     * The text editor holds an older, unverified version of a family file while another device's newer one is listed and
+     * judged: the editor's row keeps its own warning, whatever the listing's row now says. Fails if the newer version's
+     * judgement takes the mark off the text on screen. A trust change drops it like any other, to be judged again.
+     */
+    @Test
+    fun theEditorsRowKeepsItsWarningWhileANewerVersionIsJudged() {
+        val verdicts = FamilyVerdicts { if (it == "area") "family" else null }
+        val held = versioned("file", 3, 1uL)
+        val newer = versioned("file", 7, 2uL)
+        verdicts.hold(held)
+        val trust = verdicts.capture("family")
+        assertTrue(verdicts.publish("family", trust, listOf(held to WARNING)))
+        assertTrue(verdicts.publish("family", trust, listOf(newer to VERIFIED)))
+        assertEquals("the editor's warning went with the newer version's judgement", WARNING, verdicts.of(held))
+        assertEquals(VERIFIED, verdicts.of(newer))
+        // Judged in the other order, the same.
+        val again = FamilyVerdicts { if (it == "area") "family" else null }
+        again.hold(held)
+        val now = again.capture("family")
+        again.publish("family", now, listOf(newer to VERIFIED))
+        again.publish("family", now, listOf(held to WARNING))
+        assertEquals(WARNING, again.of(held))
+        // The family's trust moved: dropped, and only a judgement under the new generation brings it back.
+        verdicts.moved("family")
+        assertNull(verdicts.of(held))
+        assertFalse(verdicts.publish("family", trust, listOf(held to VERIFIED)))
+        assertTrue(verdicts.publish("family", verdicts.capture("family"), listOf(held to WARNING)))
+        assertEquals(WARNING, verdicts.of(held))
+    }
+
     private fun versioned(id: String, changeSeq: Int, metadataVersion: ULong) =
         Opened(NodeView(id, "area", "root", "file", 1uL, 1uL, "", metadataVersion, "", null, null, null, null, changeSeq), NodeMetadata(id, null, null, null, emptyMap()))
 

@@ -14,6 +14,21 @@ export type EditorRead = {
 };
 
 /*
+ * What the editor's text is after it read a version or a save or copy published one (`versionId`):
+ * `row` (the opened file, the saved file, the copy) speaks for it only when it lists that very
+ * version, so after Save as a copy the header names the copy, and a row already showing someone
+ * else's version never does. Otherwise the row before stands.
+ */
+export function nextRead(
+    before: EditorRead,
+    versionId: string | null,
+    row?: DriveNode,
+): EditorRead {
+    const speaks = row && versionId !== null && row.currentVersion?.id === versionId;
+    return { row: speaks ? row : before.row, versionId };
+}
+
+/*
  * The row whose checks the marks show: the listing's row of the file being written only while it
  * lists the very version the editor holds (its checks are of that version), else the row read.
  */

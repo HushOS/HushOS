@@ -27,7 +27,7 @@ import {
 } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
 import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
-import { headerRow, type EditorRead } from '@/lib/editor-marks';
+import { headerRow, nextRead, type EditorRead } from '@/lib/editor-marks';
 import {
     LargeFile,
     LargeFileBar,
@@ -229,7 +229,7 @@ export function Preview({
             onRead: (versionId: string | null, row?: DriveNode) =>
                 setEditing((now) =>
                     now && now.session === session
-                        ? { ...now, read: { row: row ?? now.read.row, versionId } }
+                        ? { ...now, read: nextRead(now.read, versionId, row) }
                         : now,
                 ),
             onFinishing: (wait: () => Promise<boolean> | null) => {

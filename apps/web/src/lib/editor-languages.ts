@@ -50,6 +50,8 @@ const LOADERS: Record<string, Loader> = {
         legacy(async () => (await import('@codemirror/legacy-modes/mode/shell')).shell),
     ini: () =>
         legacy(async () => (await import('@codemirror/legacy-modes/mode/properties')).properties),
+    properties: () =>
+        legacy(async () => (await import('@codemirror/legacy-modes/mode/properties')).properties),
     dockerfile: () =>
         legacy(async () => (await import('@codemirror/legacy-modes/mode/dockerfile')).dockerFile),
     diff: () => legacy(async () => (await import('@codemirror/legacy-modes/mode/diff')).diff),
@@ -63,9 +65,27 @@ export async function preloadLanguages() {
     for (const load of Object.values(LOADERS)) await load().catch(() => {});
 }
 
+/*
+ * Every grammar, all at once and in one fixed order, once per page: what the editor asks for
+ * before its file's own grammar (loadLanguage). An Edit pressed before the post-unlock preload
+ * reached the grammars then fetches all of them, never the one that names the file's language.
+ */
+let everyLanguage: Promise<void> | null = null;
+export function allLanguages() {
+    everyLanguage ??= Promise.all(
+        Object.values(LOADERS).map((load) => load().catch(() => {})),
+    ).then(() => {});
+    return everyLanguage;
+}
+
+/* Names the viewer's colouring has no grammar for that the editor still colours. */
+const EDITOR_ONLY: Record<string, string> = { properties: 'properties' };
+
 /* The editor's language for a file name, or null for plain text. */
 export function editorLanguage(name: string) {
-    const language = languageFor(name);
+    const extension = name.toLowerCase().split('.').pop() ?? '';
+    const language =
+        languageFor(name) ?? (name.includes('.') ? (EDITOR_ONLY[extension] ?? null) : null);
     return language && LOADERS[language] ? language : null;
 }
 
@@ -73,6 +93,8 @@ export function editorLanguage(name: string) {
 export async function loadLanguage(language: string | null): Promise<Extension> {
     const loader = language ? LOADERS[language] : undefined;
     if (!loader) return [];
+    // Never this grammar alone: the whole set first (allLanguages), whatever the file is.
+    await allLanguages();
     try {
         return await loader();
     } catch {

@@ -475,7 +475,14 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
 fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
     val alpine = Alpine.colors
     val family = model.families.familyOf(row) != null
-    LaunchedEffect(row.node) { if (family) model.families.judge(listOf(row)) }
+    // This exact row's verdict, kept apart from the listing's (another device's newer version judged meanwhile never takes
+    // it), and judged again whenever its family's trust moved and dropped it.
+    androidx.compose.runtime.DisposableEffect(row.id, row.node) {
+        if (family) model.families.holdForEditor(row)
+        onDispose { model.families.holdForEditor(null) }
+    }
+    val unjudged = family && model.families.verdict(row) == null
+    LaunchedEffect(row.node, unjudged) { if (unjudged) model.families.judge(listOf(row)) }
     val saved = remember(row.node, state.trust) { com.hushos.app.data.savedLineOf(row.node, state.trust) }
     if (!model.marked(row, state) && saved == null) return
     Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S2)) {

@@ -130,10 +130,14 @@ object TextEditing {
      * `limit` + 1 bytes. `cancelled` ends the read.
      */
     fun bytesOf(vault: Vault, file: Opened, limit: Long, control: RunControl = RunControl(toolWatchdogMillis(), null)): ByteArray {
+        // A 401 renewing the object's address mid-read: thrown as itself, for the editor's session check, not the core's failure.
+        val refused = java.util.concurrent.atomic.AtomicReference<NotAuthenticated?>(null)
         try {
-            val reader = vault.toolReader(file, control)
+            val reader = vault.toolReader(file, control, refused = refused)
             val length = minOf(reader.size(), (limit + 1).toULong())
             return reader.readAt(0uL, length)
+        } catch (error: Exception) {
+            throw refused.get() ?: error
         } finally {
             control.finish()
         }

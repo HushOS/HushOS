@@ -179,6 +179,9 @@ extension DriveStore {
     /* The family's verdict for an item as it is now; nil while it is being judged. */
     func familyVerdict(of item: Opened) -> FamilyVerdict? { familyBook.verdict(of: item.ref, node: item.node) }
 
+    /* The text editor's row (nil: closed): its verdict is kept for it, apart from the listing's row (FamilyVerdictBook.hold). */
+    func holdForEditor(_ item: Opened?) { familyBook.hold(item?.ref, node: item?.node) }
+
     /*
      * Each family folder item's mark and Info lines, judged once per version of its row, a family
      * at a time. A judgement publishes only for the session and the family's trust generation it

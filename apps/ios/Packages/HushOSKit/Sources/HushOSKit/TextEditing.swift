@@ -361,17 +361,24 @@ extension Vault {
     public func editBytes(_ file: Opened, limit: UInt64) async throws -> Data {
         let control = RunControl(watchdogMillis: toolWatchdogMillis(), clock: nil)
         defer { control.finish() }
-        let reader = try await toolReader(file, control: control)
+        // A 401 renewing the object's address mid-read: thrown as itself (the session that asked), not the core's read failure.
+        let refusals = SessionRefusals()
+        let reader = try await toolReader(file, control: control, refusals: refusals)
         let length = min(reader.size(), limit + 1)
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Data, Error>) in
-                // On a thread of its own: the core's reads wait on the network (StoreSource), never on the cooperative pool.
-                let thread = Thread { done.resume(with: Result { try reader.readAt(offset: 0, length: length) }) }
-                thread.stackSize = 8 << 20
-                thread.start()
+        do {
+            return try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (done: CheckedContinuation<Data, Error>) in
+                    // On a thread of its own: the core's reads wait on the network (StoreSource), never on the cooperative pool.
+                    let thread = Thread { done.resume(with: Result { try reader.readAt(offset: 0, length: length) }) }
+                    thread.stackSize = 8 << 20
+                    thread.start()
+                }
+            } onCancel: {
+                control.cancel()
             }
-        } onCancel: {
-            control.cancel()
+        } catch {
+            if let refused = refusals.refused { throw refused }
+            throw error
         }
     }
 

@@ -44,7 +44,13 @@ import { Button } from '@/components/ui/button';
 import { unlockedNow } from '@/lib/auth-view';
 import { deviceSession } from '@/lib/device-session';
 import { driveError, folderQueryOptions, invalidateFolders, nodeSize } from '@/lib/drive';
-import { editorLanguage, loadLanguage, preloadLanguages, wrapsLines } from '@/lib/editor-languages';
+import {
+    allLanguages,
+    editorLanguage,
+    loadLanguage,
+    preloadLanguages,
+    wrapsLines,
+} from '@/lib/editor-languages';
 import { holdPageWhile } from '@/lib/leave-guard';
 import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
@@ -95,6 +101,15 @@ export async function preloadEditor() {
     await preloadParsers();
 }
 type GuardRef = { readonly current: EditGuard };
+
+/*
+ * Every grammar and parser, whatever file the editor opens: an Edit pressed before the post-unlock
+ * preload got to them fetches the whole set (in one fixed order), never one that names the file's
+ * kind. Already fetched, it costs nothing.
+ */
+function editorAssets() {
+    return Promise.all([allLanguages(), preloadParsers()]).then(() => {});
+}
 
 type Phase =
     | { kind: 'loading'; progress: ReadProgress | null }
@@ -469,9 +484,11 @@ export function TextEditor({
         markDirty(false);
         setEdits((count) => count + 1);
         // The language comes in after the text shows, then colours it.
-        void loadLanguage(language).then((extension) => {
-            if (active) made.dispatch({ effects: languageSlot.reconfigure(extension) });
-        });
+        void editorAssets()
+            .then(() => loadLanguage(language))
+            .then((extension) => {
+                if (active) made.dispatch({ effects: languageSlot.reconfigure(extension) });
+            });
         if (editable) made.focus();
         return () => {
             active = false;
@@ -487,22 +504,29 @@ export function TextEditor({
         const current = view.current;
         if (!checks || !current || !editable) return;
         let check: Check | null = null;
+        let ended = false;
         const timer = window.setTimeout(() => {
             const doc = current.state.doc;
             if (doc.length > CHECK_LIMIT) {
                 setWarning(null);
                 return;
             }
-            const running = startCheck(checks, doc.toString());
-            check = running;
-            void running.result.then((failed) => {
-                if (view.current !== current || check !== running) return;
-                // Not checked (ended, or too large to check without a worker): no warning either way.
-                if (failed === 'skipped') return setWarning(null);
-                setWarning(failed ? parseWarning(checks, failed.line) : null);
+            const text = doc.toString();
+            // Its worker only once every parser (and the worker's own code) is fetched: never first.
+            void editorAssets().then(() => {
+                if (ended) return;
+                const running = startCheck(checks, text);
+                check = running;
+                void running.result.then((failed) => {
+                    if (view.current !== current || check !== running) return;
+                    // Not checked (ended, or too large to check without a worker): no warning either way.
+                    if (failed === 'skipped') return setWarning(null);
+                    setWarning(failed ? parseWarning(checks, failed.line) : null);
+                });
             });
         }, 500);
         return () => {
+            ended = true;
             window.clearTimeout(timer);
             const running = check;
             check = null;
@@ -624,7 +648,9 @@ export function TextEditor({
             // already be someone else's). Unknown, the next save asks the stale question. A copy
             // is still signed from the version the text was read from, never this row.
             target.current = savedTarget(target.current, file, versionId);
-            onRead(versionId);
+            // The header names and marks `file` from here only if it lists this very version (a copy's row, as
+            // located); a save's row from before it never does (lib/editor-marks.ts nextRead).
+            onRead(versionId, file);
             saved.current = doc;
             markDirty(!(view.current?.state.doc.eq(doc) ?? true));
             void invalidateFolders(queryClient, file.parentId);

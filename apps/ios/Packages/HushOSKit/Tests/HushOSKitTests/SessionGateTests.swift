@@ -359,6 +359,33 @@ import Testing
         #expect(book.verdict(of: ref, node: changed)?.writtenBy == "changed")
     }
 
+    /*
+     * The text editor holds an older, unverified version of a family file while another device's newer one is listed and
+     * judged: the editor's row keeps its own warning, whatever the listing's row now says. Fails if the newer version's
+     * judgement takes the mark off the text on screen. A trust change drops it like any other, to be judged again.
+     */
+    @Test func theEditorsRowKeepsItsWarningWhileANewerVersionIsJudged() {
+        let ref = NodeRef(workspaceId: ws, nodeId: node.id)
+        let newer = NodeView(id: node.id, workspaceId: ws, parentId: nil, kind: "file", keyEpoch: 1, parentKeyEpoch: 1, keyEnvelope: "", metadataVersion: 2,
+                             metadataEnvelope: "", currentVersion: nil, trashedAt: nil, changeSeq: 2, createdAt: nil, updatedAt: nil)
+        for order in [false, true] {
+            var book = FamilyVerdictBook()
+            book.hold(ref, node: node)
+            let trust = book.capture(group)
+            let judged: [[(ref: NodeRef, node: NodeView, verdict: FamilyVerdict)]] = [[(ref, node, verdict("unverified"))], [(ref, newer, verdict("verified"))]]
+            for batch in order ? judged.reversed() : judged { book.publish(group, trust: trust, batch) }
+            #expect(book.verdict(of: ref, node: node)?.writtenBy == "unverified", "the editor's warning went with the newer version's judgement")
+            #expect(book.verdict(of: ref, node: newer)?.writtenBy == "verified")
+            // The family's trust moved: dropped, and only a judgement under the new generation brings it back.
+            book.moved(group)
+            #expect(book.verdict(of: ref, node: node) == nil)
+            let stale = book.publish(group, trust: trust, [(ref, node, verdict("stale"))])
+            #expect(!stale)
+            book.publish(group, trust: book.capture(group), [(ref, node, verdict("again"))])
+            #expect(book.verdict(of: ref, node: node)?.writtenBy == "again")
+        }
+    }
+
     /* Two listings of one folder overlap and the one begun first lands last: it shows nothing. Fails if listings show by arrival. */
     @Test func anOlderListingThatLandsLastShowsNothing() {
         var order = ListingOrder()

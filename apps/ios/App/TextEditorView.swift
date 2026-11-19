@@ -96,6 +96,10 @@ struct TextEditorScreen: View {
             dismiss()
         }
         .onChange(of: leaveAsked) { _, _ in requestClose() }
+        // The header's row keeps its own family verdict, apart from the listing's (another device's newer version judged
+        // meanwhile never takes the mark off this text), and is judged again whenever its family's trust dropped it.
+        .onChange(of: heldKey, initial: true) { _, _ in store.holdForEditor(marked ?? shown) }
+        .task(id: "\(heldKey)-\(unjudged)") { if unjudged { await store.judgeFamilyItems([marked ?? shown]) } }
         .onChange(of: saving) { _, now in
             guard !now, closing else { return }
             closing = false
@@ -111,7 +115,8 @@ struct TextEditorScreen: View {
             work?.cancel()
             editor.drop()
             savedText = ""
-            // Gone: what waited for it goes on, once.
+            // Gone: what waited for it goes on, once; its family row's verdict is the listing's again.
+            store.holdForEditor(nil)
             store.editorClosed()
         }
         .confirmationDialog(stale?.currentVersionId == nil ? EditorWords.goneTitle : EditorWords.staleTitle,
@@ -144,6 +149,18 @@ struct TextEditorScreen: View {
         } message: {
             Text(EditorWords.leaveText(shown.name))
         }
+    }
+
+    /* The header's exact row, as the family verdicts know it. */
+    private var heldKey: String {
+        let row = marked ?? shown
+        return "\(row.ref.workspaceId)/\(row.id)/\(row.node.changeSeq ?? 0)/\(row.node.metadataVersion)/\(row.node.currentVersion?.id ?? "")"
+    }
+
+    /* A family row whose verdict isn't held (not judged yet, or dropped by a trust change). */
+    private var unjudged: Bool {
+        let row = marked ?? shown
+        return store.isFamily(row) && store.familyVerdict(of: row) == nil
     }
 
     /* The name and, under it, the verdict on the version the text is, as the viewer's title marks a file. */

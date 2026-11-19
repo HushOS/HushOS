@@ -1,6 +1,6 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { describe, expect, test } from 'vitest';
-import { headerRow, markedRow } from '@/lib/editor-marks';
+import { headerRow, markedRow, nextRead } from '@/lib/editor-marks';
 
 /*
  * While the editor is open the viewer's Unverified mark speaks for the text on screen. Fails if a
@@ -63,5 +63,21 @@ describe('the marks while editing', () => {
         const viewing = headerRow(listed, listed, null);
         expect(viewing?.name).toBe('renamed.txt');
         expect(viewing?.integrity?.metadata).toBe('unverified');
+    });
+
+    test('after Save as a copy the header names the copy, once its row lists the version published', () => {
+        const original = row('v1', 'unverified');
+        const copy = {
+            ...row('c1', 'unverified', 'w', 'notes (2).txt'),
+            id: 'copy',
+        } as unknown as DriveNode;
+        const read = nextRead({ row: original, versionId: 'v1' }, 'c1', copy);
+        expect(read.row).toBe(copy);
+        expect(headerRow(original, original, { target: copy, read })?.name).toBe('notes (2).txt');
+        // The copy's row already showing someone else's version speaks for nothing: the row before stands.
+        const theirs = { ...copy, currentVersion: { id: 'c2' } } as unknown as DriveNode;
+        expect(nextRead({ row: original, versionId: 'v1' }, 'c1', theirs).row).toBe(original);
+        // A save's row from before it (its old version) never does either.
+        expect(nextRead({ row: original, versionId: 'v1' }, 'v2', original).row).toBe(original);
     });
 });
