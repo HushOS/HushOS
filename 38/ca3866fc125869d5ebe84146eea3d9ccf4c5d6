@@ -1,0 +1,65 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_3f83ee6d865dba 1528-1530,1535-1537,1541,1544
+apps/android/app/src/main/kotlin/com/hushos/app/data/TextEditing.kt
+  s_c60e24772e04af::t_859c883e410444 83-100,108-111,114
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_b8a0c1f374d643 2141-2144,2148-2153
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_828fe7c34f638e 126-127,187,227,239-244,270,278-279,281
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_c60e24772e04af::t_90324d9bd6d7d0 789-792,859-860
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_2e2a6a18fb03b0 2208-2251
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_aaffef97847e27 107-137
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_6b148050947f04 20-21,43-44,95,130,214-216,231,267,281-287,307,315-316,318
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_9d195f2fbab986 69-73,153,160,162-167,206-216
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TextEditing.swift
+  s_c60e24772e04af::t_885d0d1801678f 119-123,130-134,143-164,336-340,342-343
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_d05e0de3fa57aa 1091-1098
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_c60e24772e04af::t_06158767bc029f 347-349,582-583,653-654,737-738
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_32fb47f83d60b9 1913-1954
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_c7814b2268aa1f 242-243,245
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_14e1da4c90ae7c 52-53,79-80,82-86,477-478,482,489-494,498-503,627-632,637-638,695,701,767,810-811
+apps/web/src/lib/text-check.test.ts
+  s_c60e24772e04af::t_490e7b0cd4b92c 1-100
+apps/web/src/lib/text-check.ts
+  s_c60e24772e04af::t_d497e3ae4c7494 1-73
+apps/web/src/lib/text-check.worker.ts
+  s_c60e24772e04af::t_5adb446c2463bf 1-16
+apps/web/src/lib/text-lines.ts
+  s_c60e24772e04af::t_a629f076b591d4 1-8
+apps/web/src/lib/text-parse-data.ts
+  s_c60e24772e04af::t_14571bd3f54d9a 1-55
+apps/web/src/lib/text-parse.ts
+  s_c60e24772e04af::t_c170137a4e837e 4-5,17-20,22-23,42,54,56-58
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_32e66ba5bcad11 138-139,298-312
+packages/db/src/drive.ts
+  s_c60e24772e04af::t_6ec31e6b4bfdb3 1881-1886,2399-2403,2617-2621
+packages/db/src/drive.uploads.test.ts
+  s_c60e24772e04af::t_496446b84558bb 654-734
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38ca3866fc125869d5ebe84146eea3d9ccf4c5d6",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

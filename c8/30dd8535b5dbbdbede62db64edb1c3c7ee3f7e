@@ -1,0 +1,73 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_d4b3f0540566a0 2201-2203
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_eec1a30b68c348 35,91,120-125,133-139,148-165,198,247,252,257,266,280,318-330,356-357
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_c60e24772e04af::t_da83470090488f 789-791,856-859
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_493377289c5e4a 20,2176-2207
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_c87ef3a35df8ce 35-40,48-53,77,86-91,134,163-164,184-192,194-195,224,290,298,354
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_a3225edcb6e12a 784-786
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/RotationTests.swift
+  s_c60e24772e04af::t_eb2c9550c80e82 579-582,650-654
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/SaveRunTests.swift
+  s_c60e24772e04af::t_5af754e9fc92c2 1882-1923
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_58a85a16f9f751 185-186,220-221,225-228,234,251,257-262,264-274,278,289,525
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_97d2c5431fa067 53-61,74-80,125,284,299-300,321,333-338,406,494-524,531-535,554-567,571-572,600-602,613,617-618,647,655,658-670,675,678-680,688,704-705,728,730-741,801-805
+apps/web/src/lib/api/shared.server.ts
+  s_c60e24772e04af::t_4fcf20f0a8996b 437-438
+apps/web/src/lib/text-edit.test.ts
+  s_c60e24772e04af::t_46e39a832e4c13 93-94
+apps/web/src/lib/text-save.test.ts
+  s_c60e24772e04af::t_61703993a0e999 5,8,14-21,210-215,228-265,380-384,418-422
+apps/web/src/lib/text-save.ts
+  s_c60e24772e04af::t_6c383c56a53ec5 51-73,138-141,145,163
+docs/self-hosting.md
+  s_c60e24772e04af::t_48a72b33edb3a1 2552-2558
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_ce7c4f6d9fe684 264,266,270-273,275,380-397
+packages/db/drizzle/20261118201135_upload_expected_parent/migration.sql
+  s_c60e24772e04af::t_e0de09262deb33 1
+packages/db/drizzle/20261118201135_upload_expected_parent/snapshot.json
+  s_c60e24772e04af::t_8e4e64371651f3 1-37
+packages/db/src/drive.ts
+  s_c60e24772e04af::t_146bb770c518b2 1713-1724,1887-1889,2023,2055,2071,2074,2120,2127-2128,2392-2395,2400-2403,2601-2604,2608-2610
+packages/db/src/drive.uploads.test.ts
+  s_c60e24772e04af::t_d270328fb96a17 53-58,75-77,549-665
+packages/db/src/readiness.ts
+  s_c60e24772e04af::t_e891d9c20b995c 14
+packages/db/src/schema/drive.ts
+  s_c60e24772e04af::t_dad18eba2cd233 358-360
+packages/db/test/signed.ts
+  s_c60e24772e04af::t_80ffb5b97c17e1 114-120
+packages/drive/src/api.ts
+  s_c60e24772e04af::t_cb13b3d5daf319 353-360
+packages/drive/src/server.ts
+  s_c60e24772e04af::t_8badbe914bb5de 1362-1368,1531-1533
+packages/drive/src/transfers.harness.ts
+  s_c60e24772e04af::t_80f6bc6df1a48c 114-115,412-423
+packages/drive/src/transfers.test.ts
+  s_c60e24772e04af::t_a25e7e0a9db7da 2069-2104
+packages/drive/src/transfers.ts
+  s_c60e24772e04af::t_61f2f3626c141e 1293-1295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c830dd8535b5dbbdbede62db64edb1c3c7ee3f7e",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}

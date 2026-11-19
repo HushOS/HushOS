@@ -1,0 +1,53 @@
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_4f8900cab7b73d 373
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_5cdab6520b3200 1540,1542-1543
+apps/android/app/src/main/kotlin/com/hushos/app/data/TextEditing.kt
+  s_c60e24772e04af::t_9532549cd0a0e9 79-92,166-170,186-189,221-242
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_c60e24772e04af::t_8feeb727c82bb3 140-142
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_f643002ba8402a 127-128,186-187,224-225,264
+apps/android/app/src/test/kotlin/com/hushos/app/data/TextEditingTest.kt
+  s_c60e24772e04af::t_0e9d1ee5cad841 277-279,281-288,290-291,293-343
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_94544d9a433366 250-251
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_2bb9e15dc68d07 662-663,667-668,672-684
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_85a68354d22566 18-19,74-76
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_0ee1e7eaa4666c 28-29,149,157-162,189-197,200
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TextEditing.swift
+  s_c60e24772e04af::t_68794dc324cb32 36-40,114-127,233-237,253-256,286-289,293-296,300,314-315
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TextEditingTests.swift
+  s_c60e24772e04af::t_03ddae92244f35 131-143,152-155,319-343,431-448
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_93ad9df147d4a8 97,357-366
+apps/web/src/lib/text-edit.test.ts
+  s_c60e24772e04af::t_3aea898b5b3c57 189-202
+apps/web/src/lib/text-edit.ts
+  s_c60e24772e04af::t_bec2a0db94e0a0 129-133,139-140,146-148,150
+apps/web/src/lib/text-save.test.ts
+  s_c60e24772e04af::t_c094b56a5a8af6 334-366
+apps/web/src/lib/text-save.ts
+  s_c60e24772e04af::t_78336f119af56a 93-97,130-133
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_c3521aa880bf47 213-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3d273eac4b90eb78880a22b5fefce1388bc7c808",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
