@@ -1952,6 +1952,30 @@ extension OnFakeDrive {
             #expect(found == nil)
         }
 
+        /*
+         * An editor's save and an ordinary replacement begin alike: both name the folder the file is in, with the same
+         * fields, so nothing in the request tells the server a file was edited in the app. Fails if either leaves the
+         * folder out or the two differ in shape.
+         */
+        @Test func anEditorsSaveAndAnOrdinaryReplacementBeginAlike() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            let b = try await vault.children(of: server.root).first { $0.id == server.b }!
+            var g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            _ = try await vault.uploadResult(Data([1]), name: g.name, mime: nil, in: b.id, replacing: g, startedFrom: g.node.currentVersion!.id,
+                                             signing: (.own, .own))
+            let edited = try #require(server.begins.last?["node"] as? [String: Any])
+            g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try Data([2]).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+            _ = try await vault.upload(fileURL: file, name: g.name, mime: nil, in: b.id, replacing: g)
+            let ordinary = try #require(server.begins.last?["node"] as? [String: Any])
+            #expect(edited["expectedParentId"] as? String == server.b)
+            #expect(ordinary["expectedParentId"] as? String == server.b)
+            #expect(Set(edited.keys) == Set(ordinary.keys))
+        }
+
         func moveG(_ server: FakeDrive, to parent: String) {
             let old = server.nodes[server.g]!
             var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: parent, kind: old.kind, keyEpoch: old.keyEpoch,

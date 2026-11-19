@@ -106,9 +106,11 @@ final class DriveStore {
     static let sessionEnded = "Your session ended. Sign in again."
     /*
      * A link the shell handed over, for the tab it opened to act on and clear. While a text editor is open
-     * (`editorOpen`) a new one is held instead, never routed: routing replaces the stack that presents the
-     * editor, and its unsaved text with it. The editor is asked to leave (`editorLeaveAsked`); the link goes
-     * on once it has closed (`releaseRoute`), and is dropped if the person keeps editing (`dropRoute`).
+     * (`editorOpen`, set while the editor's own screen is up) a new one is held instead, never routed:
+     * routing replaces the stack that presents the editor, and its unsaved text with it. So is a tapped
+     * notification's move to another tab (`whenEditorAllows`). The editor is asked to leave
+     * (`editorLeaveAsked`); what was held goes on once, when the editor's screen has gone (`editorClosed`),
+     * and is dropped if the person keeps editing (`dropRoute`).
      */
     var route: AppLink? {
         get { routing }
@@ -123,18 +125,40 @@ final class DriveStore {
     }
     private var routing: AppLink?
     @ObservationIgnored private var heldRoute: AppLink?
+    @ObservationIgnored private var heldIntent: (@MainActor () -> Void)?
+    @ObservationIgnored private var intentDropped: (@MainActor () -> Void)?
     @ObservationIgnored var editorOpen = false
     var editorLeaveAsked = 0
 
-    /* The editor closed: a link held meanwhile goes on now. */
-    func releaseRoute() {
-        guard let held = heldRoute else { return }
-        heldRoute = nil
-        routing = held
+    /* A move a notification asked for (another tab, a sheet): now, or once the editor has closed (never under it). */
+    /* `dropped`: what undoing it takes when the person keeps editing (a notice's target it left set for a screen). */
+    func whenEditorAllows(_ intent: @escaping @MainActor () -> Void, dropped: (@MainActor () -> Void)? = nil) {
+        guard editorOpen else { return intent() }
+        intentDropped?()
+        heldIntent = intent
+        intentDropped = dropped
+        editorLeaveAsked += 1
     }
 
-    /* The person kept editing: a link held meanwhile is let go. */
-    func dropRoute() { heldRoute = nil }
+    /* The editor's screen has gone (Discard, saved, nothing to lose, or its session ended): what was held goes on, once. */
+    func editorClosed() {
+        editorOpen = false
+        let (link, intent) = (heldRoute, heldIntent)
+        heldRoute = nil
+        heldIntent = nil
+        intentDropped = nil
+        if let link { routing = link }
+        intent?()
+    }
+
+    /* The person kept editing: what was held meanwhile is let go. */
+    func dropRoute() {
+        heldRoute = nil
+        heldIntent = nil
+        let undo = intentDropped
+        intentDropped = nil
+        undo?()
+    }
     /* A family to push onto Account's stack (a join that finished in the invitation sheet, "Open <family>"): Account clears it. */
     var familyToOpen: String?
     /* A file a link asked to open in the viewer, and the files beside it. */

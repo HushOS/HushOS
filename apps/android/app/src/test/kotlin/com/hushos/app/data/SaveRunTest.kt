@@ -2250,6 +2250,30 @@ class SaveResultTest {
     }
 
     /*
+     * An editor's save and an ordinary replacement begin alike: both name the folder the file is in, with the same fields,
+     * so nothing in the request tells the server a file was edited in the app. Fails if either leaves the folder out or
+     * the two differ in shape.
+     */
+    @Test
+    fun anEditorsSaveAndAnOrdinaryReplacementBeginAlike() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        var doc = vault.listChildren(server.root).single { it.id == id }
+        vault.uploadResult("edited".toByteArray(), doc.name, null, server.root, doc, doc.node.currentVersion!!.id, copy = null)
+        val edited = server.begins.last().getJSONObject("node")
+        doc = vault.listChildren(server.root).single { it.id == id }
+        val replacement = java.io.File.createTempFile("replace", ".txt").apply { writeText("replaced") }
+        try {
+            vault.upload(replacement, doc.name, null, server.root, doc)
+        } finally {
+            replacement.delete()
+        }
+        val ordinary = server.begins.last().getJSONObject("node")
+        assertEquals(server.root, edited.getString("expectedParentId"))
+        assertEquals(server.root, ordinary.getString("expectedParentId"))
+        assertEquals(edited.keys().asSequence().toSortedSet(), ordinary.keys().asSequence().toSortedSet())
+    }
+
+    /*
      * A tool's new version leaves the file's name record as it is (docs/editing-design.md section 3, as the web does):
      * nothing is signed again (so nothing waits on whom to trust). Fails if the record is sealed or signed again.
      */

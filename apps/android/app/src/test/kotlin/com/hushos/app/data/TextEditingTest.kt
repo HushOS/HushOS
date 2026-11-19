@@ -112,6 +112,8 @@ class TextEditingTest {
         val planned = mutableListOf<List<PlannedResult>>()
         /* Someone else saves right after this one lands, before its reply is read (the reply row shows theirs). */
         var theirsAfterLanding: String? = null
+        /* The session the upload went under ended (a 401) once the run had begun. */
+        var refused = false
         private var count = 0
 
         fun add(name: String, text: String): Opened {
@@ -142,6 +144,7 @@ class TextEditingTest {
                                   thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened {
             val n = ++count
             copies += copy
+            if (refused) throw NotAuthenticated()
             if (replacing != null) {
                 val list = versions[replacing.id] ?: throw SaveStale(null)
                 if (list.last().first != startedFrom) throw SaveStale(list.last().first)
@@ -187,6 +190,19 @@ class TextEditingTest {
         // Its UTF-8 bytes (10), not its length in characters (7), and no thumbnail; signed as the person's own writing.
         assertEquals(listOf(listOf(PlannedResult.Known(10uL, false))), bench.planned)
         assertEquals(null, bench.copies.last())
+    }
+
+    /*
+     * A 401 while the save's upload went up: the run stops saying the session was refused, so the editor hands it to the
+     * app's session check rather than showing it as a line. Fails if the refusal is lost in the stop.
+     */
+    @Test fun aSaveStoppedByA401SaysTheSessionWasRefused() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        bench.refused = true
+        val stopped = assertThrows(SaveRunStopped::class.java) { TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench)) }
+        assertTrue(stopped.sessionRefused)
+        assertEquals(1, bench.versions.getValue(file.id).size)
     }
 
     @Test fun aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() {

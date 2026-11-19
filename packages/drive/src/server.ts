@@ -1703,6 +1703,8 @@ export async function completeUpload(
             );
         case 'move-stale':
             throw moveStale();
+        case 'parent-trashed':
+            throw parentTrashed();
         case 'not-found':
             throw new DriveError('not-found', 'This upload no longer exists.', 404);
         case 'not-completing':

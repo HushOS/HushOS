@@ -1290,9 +1290,10 @@ export function createTransferManager(options: TransferManagerOptions) {
                         id: u.replaces.id,
                         keyEpoch: u.replaces.keyEpoch,
                         expectedVersionId: expectedOf(u),
-                        // A produced version (an editor's save) is held to the folder it was saved
-                        // into: the server refuses it once the file moved, at begin and at completion.
-                        ...(u.produced && { expectedParentId: parent.id }),
+                        // Held to the folder it was queued into: the server refuses it once the file
+                        // moved, at begin and at completion. Every replacement says so, an editor's
+                        // save and an ordinary one alike, so the server can't tell them apart.
+                        expectedParentId: parent.id,
                     };
                     u.keyEpoch = u.replaces.keyEpoch;
                 } else {

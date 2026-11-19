@@ -522,7 +522,21 @@ public struct SaveRunStopped: Error, Equatable, WordedError {
     public let cleanup: SaveCleanup
     public var keptVersions = 0
     public var uncertainVersions = 0
+    /* Stopped by a 401: the session the request went under is over (its tag, as `DriveAPIError.notAuthenticated` names it). */
+    public var refusedSession: RefusedSession?
     public var errorDescription: String? { message }
+
+    public struct RefusedSession: Equatable, Sendable {
+        public let tag: String?
+    }
+
+    /* The 401 that stopped it, for the app's session check (which drops one of a session no longer in use). */
+    public var sessionRefusal: DriveAPIError? { refusedSession.map { .notAuthenticated(session: $0.tag) } }
+
+    static func refusal(of error: Error) -> RefusedSession? {
+        if case DriveAPIError.notAuthenticated(let tag) = error { return RefusedSession(tag: tag) }
+        return nil
+    }
 }
 
 public enum VersionSaved: Sendable, Equatable {
@@ -1381,7 +1395,8 @@ public actor SaveRun {
         if error is SaveRunStopped || error is SaveStale { return error }
         if let stopping { return await stopping.value }
         if let stopped { return stopped }
-        return await stop(.failed, error is SaveUnrecorded ? SaveRuns.unrecorded : SaveRuns.reason(error))
+        return await stop(.failed, error is SaveUnrecorded ? SaveRuns.unrecorded : SaveRuns.reason(error),
+                          refused: SaveRunStopped.refusal(of: error))
     }
 
     private func makeFolder(_ name: String, into: Opened, signing: Signing) async throws -> Opened {
@@ -1618,14 +1633,15 @@ public actor SaveRun {
                 if let ids = begun.ids { try? state.begun(ids, tracked: tracked, version: version) }
                 if error is SaveUnrecorded { throw await stop(.failed, SaveRuns.unrecorded) }
                 let noRoom = SaveRuns.isNoRoom(error)
-                throw await stop(noRoom ? .noRoom : .failed, noRoom ? nil : SaveRuns.reason(error))
+                throw await stop(noRoom ? .noRoom : .failed, noRoom ? nil : SaveRuns.reason(error), refused: SaveRunStopped.refusal(of: error))
             }
         }
     }
 
     /* Stops the run once: every caller, concurrent ones included, gets the same outcome. */
     @discardableResult
-    private func stop(_ reason: SaveRunStopped.Reason, _ failure: String? = nil) async -> SaveRunStopped {
+    private func stop(_ reason: SaveRunStopped.Reason, _ failure: String? = nil,
+                      refused: SaveRunStopped.RefusedSession? = nil) async -> SaveRunStopped {
         if let stopped { return stopped }
         if let stopping { return await stopping.value }
         // Finished: what it made was saved and stays. A late stop removes nothing, and says so when there was any.
@@ -1633,6 +1649,7 @@ public actor SaveRun {
             var done = SaveRunStopped(reason: reason, message: keptVersions > 0 || state.nodeCount > 0 ? SaveRuns.alreadySaved : SaveRuns.cancelled,
                                       cleanup: .nothing)
             done.keptVersions = keptVersions
+            done.refusedSession = refused
             return done
         }
         if state.abandoned { abandon(); return stopped! }
@@ -1662,6 +1679,7 @@ public actor SaveRun {
                                       cleanup: cleanup)
             done.keptVersions = total
             done.uncertainVersions = uncertain
+            done.refusedSession = refused
             return done
         }
         stopping = task

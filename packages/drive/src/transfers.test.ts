@@ -2066,7 +2066,7 @@ describe('produced results', () => {
         openNodes: async () => ({ parent: node('root', null), replaces: fileAt(version()) }),
     });
 
-    test('an editor’s version names the folder it was saved into; an ordinary replacement names none', async () => {
+    test('an editor’s version and an ordinary replacement both name the folder: the server can’t tell them apart', async () => {
         const h = harness({ serverVersion: () => 'v1', ...listedAt(() => 'v1') });
         h.manager.enqueue([
             {
@@ -2083,7 +2083,9 @@ describe('produced results', () => {
         const nodes = h.server.begins.map((begin) => begin.node);
         expect(nodes).toHaveLength(2);
         expect(nodes[0]).toMatchObject({ existing: true, expectedParentId: 'root' });
-        expect(nodes[1]).not.toHaveProperty('expectedParentId');
+        expect(nodes[1]).toMatchObject({ existing: true, expectedParentId: 'root' });
+        // The same fields, the same shape: nothing in an editor's begin marks it as one.
+        expect(Object.keys(nodes[0] ?? {}).sort()).toEqual(Object.keys(nodes[1] ?? {}).sort());
     });
 
     test('a file moved between begin and completion is stale with no version: no copy, nothing attached', async () => {

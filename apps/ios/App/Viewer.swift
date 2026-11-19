@@ -164,7 +164,7 @@ struct FileViewer: View {
         // While the editor is open a link is held at the store (DriveStore.route) and the editor asked first (with
         // changes, Discard or Keep editing); the viewer goes once it has closed, the link released then.
         .onChange(of: store.editorLeaveAsked) { _, _ in
-            if editing != nil { leaveAsked += 1 } else { store.releaseRoute() }
+            if editing != nil { leaveAsked += 1 }
         }
         // Keyed on the session's vault too: a new session (the same account signed in again from Files) cancels a copy
         // under way, and the copy starts again under the new one rather than waiting on a cancelled one.
@@ -202,18 +202,10 @@ struct FileViewer: View {
             editing = nil
             dismiss()
         }
+        // What the editor held goes on when its own screen has gone (TextEditorScreen's onDisappear), never when
+        // this viewer is covered by it: a link released then reaches .onChange(of: store.route) above.
         .onChange(of: editing == nil) { _, closed in
-            store.editorOpen = !closed
-            guard closed else { return }
-            store.releaseRoute()
-            if removed || store.route != nil { dismiss() }
-        }
-        // Gone some other way with the editor open: nothing stays held for it.
-        .onDisappear {
-            if store.editorOpen, editing != nil {
-                store.editorOpen = false
-                store.releaseRoute()
-            }
+            if closed, removed || store.route != nil { dismiss() }
         }
     }
 

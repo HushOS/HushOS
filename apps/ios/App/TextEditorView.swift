@@ -95,11 +95,15 @@ struct TextEditorScreen: View {
             guard failure == nil, stale == nil else { return onStay() }
             if edited { confirmLeave = true } else { close() }
         }
+        // Up: a link or a notification waits for this editor (DriveStore.route), whatever covers or uncovers the viewer.
+        .onAppear { store.editorOpen = true }
         .onDisappear {
             // A save still on its way belongs to this screen's session: it stops with it.
             session.close()
             work?.cancel()
             editor.drop()
+            // Gone: what waited for it goes on, once.
+            store.editorClosed()
         }
         .confirmationDialog(stale?.currentVersionId == nil ? EditorWords.goneTitle : EditorWords.staleTitle,
                             isPresented: Binding(get: { stale != nil && !confirmTheirs }, set: { if !$0 { stale = nil } }),
@@ -238,8 +242,20 @@ struct TextEditorScreen: View {
                 phase = .readOnly(reason, text)
             }
         } catch where !ErrorWords.isCancellation(error) {
+            if sessionRefused(error) { return }
             if session.live(token, current: store.vault) { phase = .failed }
         } catch {}
+    }
+
+    /*
+     * A 401 under this editor's work (a listing, a read, a run stopped by one): the app's session check, never a line in
+     * the editor. DriveStore.report ends the session in use only, and says nothing of one a later sign-in replaced.
+     */
+    private func sessionRefused(_ error: Error) -> Bool {
+        let refusal: Error? = endsSession(error) ? error : (error as? SaveRunStopped)?.sessionRefusal
+        guard let refusal else { return false }
+        store.report(refusal)
+        return true
     }
 
     private func begin(_ job: @escaping @MainActor () async -> Void) {
@@ -291,6 +307,7 @@ struct TextEditorScreen: View {
                 if let parent = landed.node.parentId { await store.refresh(folder: parent) }
             }
         } catch {
+            if sessionRefused(error) { return }
             guard stillOn(token) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
@@ -320,6 +337,7 @@ struct TextEditorScreen: View {
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
         } catch {
+            if sessionRefused(error) { return }
             guard stillOn(token) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }

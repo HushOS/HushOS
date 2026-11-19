@@ -125,7 +125,7 @@ struct MainView: View {
                     if scenePhase == .active { await store.liveSync() }
                 }
                 // A family opened from the invitation sheet is pushed in Account, where its row is.
-                .onChange(of: store.familyToOpen) { _, groupId in if groupId != nil { tab = .account } }
+                .onChange(of: store.familyToOpen) { _, groupId in if groupId != nil { store.whenEditorAllows { tab = .account } } }
                 // Anything that routes (a link, Info's Folder row) brings its tab forward.
                 .onChange(of: store.route) { _, link in
                     switch link {
@@ -137,22 +137,24 @@ struct MainView: View {
                     case .recover, .register, .join, .incompleteInvite, nil: break
                     }
                 }
-                // A tap on a transfers notification: the list for a failure, else where the files are.
+                // A tap on a transfers notification: the list for a failure, else where the files are. With a text
+                // editor open, each waits for it (DriveStore.whenEditorAllows, as links do): Keep editing drops it.
                 .onChange(of: TransferNotices.shared.opening, initial: true) { _, target in
                     guard let target else { return }
                     switch target {
-                    case .transfers: TransferNotices.shared.opening = nil; showingTransfers = true
+                    case .transfers: TransferNotices.shared.opening = nil; store.whenEditorAllows { showingTransfers = true }
                     case let .folder(id): TransferNotices.shared.opening = nil; store.route = .files(folder: id, preview: nil)
                     // Home pushes On this phone and clears it.
-                    case .phone: tab = .home
+                    case .phone: store.whenEditorAllows { tab = .home }
                     }
                 }
                 // A tapped notice: Shared for a share, Account for devices (pushed there), two-step sign-in and families, else as it was.
                 .onChange(of: PhonePush.shared.opening, initial: true) { _, target in
                     switch target {
                     case .shared: PhonePush.shared.opening = nil; store.route = .shared(byMe: false)
-                    case .devices: tab = .account
-                    case .families, .account: PhonePush.shared.opening = nil; tab = .account
+                    // Account clears it once Devices is pushed; kept editing, it goes without being opened.
+                    case .devices: store.whenEditorAllows({ tab = .account }, dropped: { PhonePush.shared.opening = nil })
+                    case .families, .account: PhonePush.shared.opening = nil; store.whenEditorAllows { tab = .account }
                     case .app: PhonePush.shared.opening = nil
                     case nil: break
                     }
@@ -162,7 +164,7 @@ struct MainView: View {
                 .onChange(of: QuickActions.shared.pending, initial: true) { _, action in
                     guard let action else { return }
                     QuickActions.shared.pending = nil
-                    if action == .search { tab = .search; return }
+                    if action == .search { store.whenEditorAllows { tab = .search }; return }
                     Task {
                         guard let root = await store.loadRoot() else { return }
                         // Your own drive's only: a family folder last saved into is Save to HushOS's to check, not a quick action's.
@@ -242,9 +244,9 @@ struct MainView: View {
     private func route(_ url: URL, store: DriveStore) async {
         switch AppLinks.parse(url, server: model.origin) {
         case .success(.join(let token)):
-            invitation = InvitationLink(token: token)
+            store.whenEditorAllows { invitation = InvitationLink(token: token) }
         case .success(.incompleteInvite):
-            invitation = InvitationLink(token: nil)
+            store.whenEditorAllows { invitation = InvitationLink(token: nil) }
         case .success(let link):
             // The tab follows the route (below); the tab's view picks the rest up once it is on screen.
             store.route = link

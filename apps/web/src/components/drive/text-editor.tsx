@@ -288,6 +288,7 @@ export function TextEditor({
     onDirty,
     onLeave,
     onFinishing,
+    onRead,
 }: {
     /* The file as the viewer listed it when Edit was pressed. */
     node: DriveNode;
@@ -304,6 +305,11 @@ export function TextEditor({
     onLeave: () => void;
     /* How the viewer's Close waits on a save on its way (EditGuard.finishing). */
     onFinishing: (wait: () => Promise<boolean> | null) => void;
+    /*
+     * The version the text now is: read (with the row it was read from), or published by a save or a
+     * copy. The viewer's marks speak for it (lib/editor-marks.ts).
+     */
+    onRead: (versionId: string | null, row?: DriveNode) => void;
 }) {
     const queryClient = useQueryClient();
     const leaving = useRef(onLeave);
@@ -410,6 +416,7 @@ export function TextEditor({
                 if (!still()) return;
                 const text = openText(bytes);
                 target.current = openedTarget(file);
+                onRead(file.currentVersion?.id ?? null, file);
                 setPhase(
                     text.editable
                         ? { kind: 'editing', text: text.text }
@@ -423,7 +430,7 @@ export function TextEditor({
             active = false;
             void reader?.close();
         };
-    }, [loadFrom, attempt, queryClient, onTarget]);
+    }, [loadFrom, attempt, queryClient, onTarget, onRead]);
 
     // The editor itself, once there is text to show.
     const shown = phase.kind === 'editing' || phase.kind === 'read-only' ? phase : null;
@@ -617,11 +624,12 @@ export function TextEditor({
             // already be someone else's). Unknown, the next save asks the stale question. A copy
             // is still signed from the version the text was read from, never this row.
             target.current = savedTarget(target.current, file, versionId);
+            onRead(versionId);
             saved.current = doc;
             markDirty(!(view.current?.state.doc.eq(doc) ?? true));
             void invalidateFolders(queryClient, file.parentId);
         },
-        [queryClient, markDirty],
+        [queryClient, markDirty, onRead],
     );
 
     /* "Discard your changes?" is open, or was answered Discard: nothing starts a save. */

@@ -202,6 +202,9 @@ actor TextBench: SaveRunWriter {
     /* Someone else saves right after this one lands, before its reply is read (the reply row shows theirs). */
     var theirsAfterLanding: String?
     func set(theirsAfterLanding: String?) { self.theirsAfterLanding = theirsAfterLanding }
+    /* The session the upload went under ended (a 401 naming it) once the run had begun. */
+    var refusedAs: String??
+    func set(refusedAs: String?) { self.refusedAs = .some(refusedAs) }
     private var count = 0
 
     func add(_ name: String, _ text: String) -> Opened {
@@ -235,6 +238,7 @@ actor TextBench: SaveRunWriter {
                       onCompleting: @escaping @Sendable (String) throws -> Void) async throws -> Opened {
         count += 1
         signed.append(signing)
+        if let refused = refusedAs { throw DriveAPIError.notAuthenticated(session: refused) }
         if let replacing {
             guard let list = versions[replacing.id] else { throw SaveStale(currentVersionId: nil) }
             if list.last!.id != startedFrom { throw SaveStale(currentVersionId: list.last!.id) }
@@ -287,6 +291,25 @@ actor TextBench: SaveRunWriter {
         // Its UTF-8 bytes (10), not its length in characters (7), and no thumbnail.
         #expect(await planned.results == [[.known(size: 10, thumbnail: false)]])
         #expect(await bench.signed.last.map { $0.version == .own } == true)
+    }
+
+    /*
+     * A 401 while the save's upload went up: the run stops naming the session refused, so the editor hands it to the app's
+     * session check (DriveStore.report) rather than showing it as a line. Fails if the refusal is lost in the stop.
+     */
+    @Test func aSaveStoppedByA401NamesTheSessionRefused() async throws {
+        let bench = TextBench()
+        let file = await bench.add("notes.txt", "a")
+        await bench.set(refusedAs: "session-1")
+        do {
+            _ = try await TextSave.version("b", of: file, in: opened("f"), startedFrom: file.node.currentVersion?.id, start: start(bench))
+            Issue.record("saved")
+        } catch let stopped as SaveRunStopped {
+            #expect(stopped.refusedSession == SaveRunStopped.RefusedSession(tag: "session-1"))
+            guard case .notAuthenticated(let tag)? = stopped.sessionRefusal else { Issue.record("no refusal"); return }
+            #expect(tag == "session-1")
+        }
+        #expect(await bench.versions[file.id]?.count == 1)
     }
 
     /* Someone else saved right after this landed: the next save must start from this save's version, not theirs. */

@@ -57,6 +57,8 @@ async function begin(
         expectedParentId?: string | null;
     },
     framing?: { contentSuite: number; chunkCount: number; ciphertextSize: bigint },
+    /* A new file's folder, when not the root, and the key epoch it is sealed under. */
+    into?: { parentId: string; parentKeyEpoch: number },
 ) {
     const chunkCount =
         framing?.chunkCount ??
@@ -79,10 +81,10 @@ async function begin(
             : {
                   existing: false,
                   id: randomUUID(),
-                  parentId: rootId,
+                  parentId: into?.parentId ?? rootId,
                   envelopes: {
                       keyEpoch: await epoch(),
-                      parentKeyEpoch: rootEpoch,
+                      parentKeyEpoch: into?.parentKeyEpoch ?? rootEpoch,
                       keyEnvelope: keyEnvelope(),
                       metadataEnvelope: metadataEnvelope(),
                   },
@@ -730,6 +732,84 @@ describe('an editor’s new version, held to the folder it checked', () => {
         expect(restored.status).toBe('ok');
         expect((await publish(upload.uploadId, upload.ciphertext)).status).toBe('published');
         expect((await current(file.id)).currentVersionId).not.toBe(file.currentVersionId);
+    });
+
+    /* A new file (a copy, a tool's result, an ordinary upload) begun into `folderId`. */
+    async function newFileIn(folderId: string) {
+        const folder = await current(folderId);
+        const made = await begin(1n * MiB, undefined, undefined, {
+            parentId: folderId,
+            parentKeyEpoch: folder.keyEpoch,
+        });
+        if (made.result.status !== 'ok') throw new Error(made.result.status);
+        const [upload] = await db
+            .select({ nodeId: driveUploads.nodeId })
+            .from(driveUploads)
+            .where(eq(driveUploads.id, made.result.uploadId));
+        return {
+            uploadId: made.result.uploadId,
+            ciphertext: made.ciphertext,
+            nodeId: upload!.nodeId,
+        };
+    }
+    async function finish(upload: { uploadId: string; ciphertext: bigint }) {
+        const started = await drive.startCompleting(account.workspaceId, upload.uploadId);
+        expect(started.status).toBe('ok');
+        return drive.finishCompleting(account.workspaceId, upload.uploadId, upload.ciphertext);
+    }
+    test('a new file whose folder was trashed between begin and complete is refused, never published into the trash', async () => {
+        const { folderId } = await fileAndFolder();
+        const upload = await newFileIn(folderId);
+        await trash(folderId);
+        expect(await finish(upload)).toEqual({ status: 'parent-trashed' });
+        // Released: no upload left to complete, and no file with a version, in the trash or anywhere.
+        const [row] = await db
+            .select({ status: driveUploads.status })
+            .from(driveUploads)
+            .where(eq(driveUploads.id, upload.uploadId));
+        expect(row === undefined || row.status === 'aborted').toBe(true);
+        const [node] = await db.select().from(driveNodes).where(eq(driveNodes.id, upload.nodeId));
+        expect(node?.currentVersionId ?? null).toBeNull();
+        // Asked again (a lost answer), it is not published then either.
+        const again = await drive.finishCompleting(
+            account.workspaceId,
+            upload.uploadId,
+            upload.ciphertext,
+        );
+        expect(again.status).not.toBe('published');
+    });
+
+    test('a new file whose folder’s parent was trashed between begin and complete is refused too', async () => {
+        const { folderId } = await fileAndFolder();
+        const inner = randomUUID();
+        const outer = await current(folderId);
+        const made = await signed.createFolders({
+            workspaceId: account.workspaceId,
+            userId: account.userId,
+            folders: [
+                {
+                    id: inner,
+                    parentId: folderId,
+                    envelopes: {
+                        keyEpoch: await epoch(),
+                        parentKeyEpoch: outer.keyEpoch,
+                        keyEnvelope: keyEnvelope(),
+                        metadataEnvelope: metadataEnvelope(),
+                    },
+                },
+            ],
+        });
+        if (made.status !== 'created') throw new Error(made.status);
+        const upload = await newFileIn(inner);
+        await trash(folderId);
+        expect(await finish(upload)).toEqual({ status: 'parent-trashed' });
+    });
+
+    test('a new file into a folder that stays is published as usual', async () => {
+        const { folderId } = await fileAndFolder();
+        const upload = await newFileIn(folderId);
+        expect((await finish(upload)).status).toBe('published');
+        expect((await current(upload.nodeId)).parentId).toBe(folderId);
     });
 
     test('without the precondition, a save behaves as before: a move does not stop it', async () => {

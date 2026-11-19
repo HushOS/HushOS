@@ -2579,7 +2579,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         textEdit?.end()
         // Bound to the vault it opens under: a save never runs under a vault a later sign-in made.
         val opening = vault ?: return
-        textEdit = TextEdit(item, context, viewModelScope, opening, current = { vault }, saved = { parent -> parent?.let { refresh(it) } }).also { it.load() }
+        // A 401 under it goes to the session check with the session it opened under, as an archive's does.
+        textEdit = TextEdit(item, context, viewModelScope, opening, current = { vault }, saved = { parent -> parent?.let { refresh(it) } },
+            refused = ::archiveRefused).also { it.load() }
         _state.update { it.copy(editing = item.id) }
     }
 

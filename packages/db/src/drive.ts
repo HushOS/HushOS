@@ -2380,6 +2380,13 @@ async function finishCompletingOnce(
             await releaseUpload(tx, row, 'aborted');
             return { status: 'move-stale' as const };
         }
+        // A new file whose folder (or a folder above it) went to the trash after begin: trashing
+        // changes no epoch, so nothing else here would stop it landing in the trash. Released, as
+        // begin refuses it (`parent-trashed`): an upload, an editor's copy or a tool's result alike.
+        if (row.newNode && chain.trashed) {
+            await releaseUpload(tx, row, 'aborted');
+            return { status: 'parent-trashed' as const };
+        }
         let conflicted = chain.node.key_epoch !== row.keyEpoch;
         const [node] = await tx
             .select({

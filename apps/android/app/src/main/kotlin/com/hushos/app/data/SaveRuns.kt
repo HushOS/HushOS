@@ -372,7 +372,9 @@ class SaveRefused(val reason: Reason, message: String, val needed: ULong? = null
  * Why a run stopped after it started, what its clean-up did, how many new versions had landed and were kept, and how many
  * may have (no answer to their abort, or still finishing: they may land yet).
  */
-class SaveRunStopped(val reason: Reason, message: String, val cleanup: SaveCleanup, val keptVersions: Int = 0, val uncertainVersions: Int = 0) :
+/* `sessionRefused`: stopped by a 401 (the session it ran under is over), for the app's session check rather than a line. */
+class SaveRunStopped(val reason: Reason, message: String, val cleanup: SaveCleanup, val keptVersions: Int = 0, val uncertainVersions: Int = 0,
+                     val sessionRefused: Boolean = false) :
     Exception(message) {
     enum class Reason { CANCELLED, NO_ROOM, FAILED, SIGNED_OUT }
 }
@@ -1035,8 +1037,8 @@ class SaveRun private constructor(
         synchronized(lock) { stopping }?.let { return it.get().also { keepInterrupt(error) } }
         // Interrupted on its way (a pause, a wait cut short): it stops and cleans up as any failure does, then the interrupt
         // is kept for the thread's owner.
-        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else SaveRuns.reason(error))
-            .also { keepInterrupt(error) }
+        return stop(SaveRunStopped.Reason.FAILED, if (error is SaveUnrecorded) SaveRuns.UNRECORDED else SaveRuns.reason(error),
+            refused = error is NotAuthenticated).also { keepInterrupt(error) }
     }
 
     /* A new folder's id, minted and on disk before its creation is sent; a run stopping, or a refused write, throws. */
@@ -1289,18 +1291,20 @@ class SaveRun private constructor(
                 started?.let { runCatching { noteBegun(it, tracked, version) } }
                 if (error is SaveUnrecorded) throw stop(SaveRunStopped.Reason.FAILED, SaveRuns.UNRECORDED)
                 val noRoom = SaveRuns.isNoRoom(error)
-                throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else SaveRuns.reason(error))
+                throw stop(if (noRoom) SaveRunStopped.Reason.NO_ROOM else SaveRunStopped.Reason.FAILED, if (noRoom) null else SaveRuns.reason(error),
+                    refused = error is NotAuthenticated)
             }
         }
     }
 
     /* Stops the run once: the first caller cleans up (outside the lock), every other one waits for its outcome. */
-    private fun stop(reason: SaveRunStopped.Reason, failure: String? = null): SaveRunStopped {
+    private fun stop(reason: SaveRunStopped.Reason, failure: String? = null, refused: Boolean = false): SaveRunStopped {
         val (future, owner) = synchronized(lock) {
             stopping?.let { return@synchronized it to false }
             // Finished in the meantime (a cancel that checked just before finish took the lock): it was saved, and stays.
             if (finished) return SaveRunStopped(reason,
-                if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions)
+                if (keptVersions > 0 || row.nodeIds.isNotEmpty()) SaveRuns.ALREADY_SAVED else SaveRuns.CANCELLED, SaveCleanup.NOTHING, keptVersions,
+                sessionRefused = refused)
             val made = CompletableFuture<SaveRunStopped>()
             stopping = made
             sealed = true
@@ -1328,7 +1332,7 @@ class SaveRun private constructor(
             val cleaned = SaveRuns.clean(held, writer, journal, versions, sent, out, asked, maybe, stillOn)
             val total = keptBefore + cleaned.kept
             done = SaveRunStopped(reason, SaveRuns.words(reason, shared, failure, total, cleaned.uncertain, cleaned.remains, cleaned.held),
-                cleaned.cleanup, total, cleaned.uncertain)
+                cleaned.cleanup, total, cleaned.uncertain, sessionRefused = refused)
             return done
         } catch (interrupted: InterruptedException) {
             // Interrupted while it waited (apps/android/AGENTS.md, threads): the interrupt is kept for the caller, and the

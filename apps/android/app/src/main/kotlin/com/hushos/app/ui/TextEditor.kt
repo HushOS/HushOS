@@ -46,8 +46,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
 import com.hushos.app.data.EditSession
+import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SaveRunJournal
+import com.hushos.app.data.SaveRunStopped
 import com.hushos.app.data.SaveRuns
 import com.hushos.app.data.TextEditing
 import com.hushos.app.data.TextSave
@@ -100,7 +102,27 @@ object EditorWords {
  * as soon as it is read.
  */
 class TextEdit(val item: Opened, private val context: Context, private val scope: CoroutineScope, opening: Vault,
-               current: () -> Vault?, private val saved: (parentId: String?) -> Unit) {
+               current: () -> Vault?, private val saved: (parentId: String?) -> Unit,
+               private val refused: (com.hushos.app.data.Shared.Session?) -> Unit = {}) {
+    /* The account session this editor opened under: a 401 ends it only while it is still the one in use (refused). */
+    private val signedIn = com.hushos.app.data.Shared.session(context)
+
+    /*
+     * A 401 under this editor's work (a listing, a read, a run it stopped): the app's session check with the session it ran
+     * under, never a line in the editor, and nothing for a session a later sign-in replaced (DriveViewModel.archiveRefused).
+     */
+    private fun sessionRefused(error: Throwable?): Boolean {
+        var cause = error
+        while (cause != null) {
+            if (cause is NotAuthenticated || (cause is SaveRunStopped && cause.sessionRefused)) {
+                refused(signedIn)
+                return true
+            }
+            cause = cause.cause
+        }
+        return false
+    }
+
     /* This editor's session: the vault it opened under and the opened text; every path checks it (EditSession). */
     private val session = EditSession(opening, current)
 
@@ -187,14 +209,16 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val file = writer(vault).editTarget(from, destination).second ?: return@runCatching null
                     if ((file.size ?: 0L) > TextEditing.LIMIT) return@runCatching file to TextEditing.Open.ReadOnly(TextReadOnly.TOO_LARGE, null)
                     file to TextEditing.open(TextEditing.bytesOf(vault, file, TextEditing.LIMIT, control))
-                }.getOrNull()
+                }
             }
+            if (sessionRefused(opened.exceptionOrNull())) return@launch
             if (!session.live(token)) return@launch
-            if (opened == null) {
+            val loaded = opened.getOrNull()
+            if (loaded == null) {
                 phase = Phase.Failed
                 return@launch
             }
-            val (file, text) = opened
+            val (file, text) = loaded
             target = file
             startedFrom = file.node.currentVersion?.id
             source = file
@@ -229,6 +253,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     else TextSave.version(text, listed, folder, onTopOf ?: startedFrom, TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
+            }
+            if (sessionRefused(result.exceptionOrNull())) {
+                settledSave(false)
+                return@launch
             }
             if (!session.live(token)) return@launch
             result.onSuccess { done ->
@@ -271,6 +299,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     TextSave.copy(text, file, folder, writer.copySources(from), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
+            }
+            if (sessionRefused(result.exceptionOrNull())) {
+                settledSave(false)
+                return@launch
             }
             if (!session.live(token)) return@launch
             result.onSuccess { made ->

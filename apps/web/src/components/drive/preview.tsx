@@ -27,6 +27,7 @@ import {
 } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
 import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
+import { markedRow, type EditorRead } from '@/lib/editor-marks';
 import {
     LargeFile,
     LargeFileBar,
@@ -110,7 +111,8 @@ const TextEditor = lazy(() => loadEditor().then((m) => ({ default: m.TextEditor 
 const SniffedText = createContext<((versionId: string) => void) | null>(null);
 
 /* An editing session: the file Edit was pressed on, and the one being written now. */
-type Editing = { session: number; start: DriveNode; target: DriveNode };
+/* `read`: the version the editor's text is, and the row it was read from: the marks speak for it (editor-marks.ts). */
+type Editing = { session: number; start: DriveNode; target: DriveNode; read: EditorRead };
 let sessions = 0;
 
 /*
@@ -195,6 +197,11 @@ export function Preview({
             ? current
             : editing.target
         : current;
+    // The marks while editing: of the version the editor holds, never a newer one the listing shows.
+    const marked =
+        editing && shown
+            ? { ...markedRow(current, editing.target, editing.read), name: shown.name }
+            : shown;
     const index = current ? files.findIndex((file) => file.id === current.id) : -1;
     const previous = !version && !editing && index > 0 ? files[index - 1] : undefined;
     const next =
@@ -222,6 +229,12 @@ export function Preview({
             },
             onTarget: (target: DriveNode) =>
                 setEditing((now) => (now && now.session === session ? { ...now, target } : now)),
+            onRead: (versionId: string | null, row?: DriveNode) =>
+                setEditing((now) =>
+                    now && now.session === session
+                        ? { ...now, read: { row: row ?? now.read.row, versionId } }
+                        : now,
+                ),
             onFinishing: (wait: () => Promise<boolean> | null) => {
                 if (session !== null && liveSession.current === session)
                     guard.current.finishing = wait;
@@ -293,7 +306,12 @@ export function Preview({
         guard.current = { discarded: false };
         const session = ++sessions;
         liveSession.current = session;
-        setEditing({ session, start: node, target: node });
+        setEditing({
+            session,
+            start: node,
+            target: node,
+            read: { row: node, versionId: node.currentVersion?.id ?? null },
+        });
     };
 
     // Formatted | Source, offered by the renderer and kept per file.
@@ -355,7 +373,7 @@ export function Preview({
                                         <MiddleName name={shown.name} />
                                     </DialogTitle>
                                     {/* An earlier version is marked in the versions list, not here. */}
-                                    {!version && <UnverifiedMark node={shown} />}
+                                    {!version && marked && <UnverifiedMark node={marked} />}
                                 </div>
                                 <DialogDescription className="truncate text-[13px] text-muted-foreground tabular-nums">
                                     {version
@@ -372,8 +390,8 @@ export function Preview({
                                               .filter(Boolean)
                                               .join(' · ')}
                                 </DialogDescription>
-                                {!version && (
-                                    <SavedFromLinkLine node={shown} className="leading-snug" />
+                                {!version && marked && (
+                                    <SavedFromLinkLine node={marked} className="leading-snug" />
                                 )}
                             </div>
                             {access && !version && (
@@ -525,6 +543,7 @@ export function Preview({
                                     onTarget={sessionCalls.onTarget}
                                     onDirty={sessionCalls.onDirty}
                                     onLeave={sessionCalls.onLeave}
+                                    onRead={sessionCalls.onRead}
                                     onFinishing={sessionCalls.onFinishing}
                                 />
                             </Suspense>
