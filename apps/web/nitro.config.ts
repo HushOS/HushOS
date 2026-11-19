@@ -21,6 +21,12 @@ export default defineConfig({
         '@aws-sdk/s3-request-presigner',
     ],
     experimental: { asyncContext: true },
+    // Every server module runs in source order, whatever chunk it lands in. Without it the
+    // bundler split the server into chunks that import each other, and one built its link-token
+    // header schema before the other had set the header's name: the schema asked for a header
+    // named "undefined", and every link visitor got 400 in the built server only. Any constant
+    // read at a module's top level across such a split (a schema's limits) was exposed the same way.
+    rolldownConfig: { output: { strictExecutionOrder: true } },
     // Listed one by one: Nitro doesn't scan server/ unless serverDir is set.
     plugins: [
         './server/plugins/environment.ts',
