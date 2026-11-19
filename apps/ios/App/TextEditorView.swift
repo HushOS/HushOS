@@ -132,6 +132,7 @@ struct TextEditorScreen: View {
                 .toolbar { toolbar }
                 .background(Alpine.ground.ignoresSafeArea())
         }
+
         // Changes are never dropped by a swipe: Close asks first.
         .interactiveDismissDisabled(edited || saving)
         .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
@@ -152,6 +153,7 @@ struct TextEditorScreen: View {
             if now, phase != .loading { render() }
         }
         .onAppear {
+            scroll.box = editor
             scroll.movePreview = { target in
                 switch target {
                 case .y(let y): previewPosition.scrollTo(y: y)
@@ -318,7 +320,6 @@ struct TextEditorScreen: View {
 
     /* The person scrolled the source (dragging it, or its fling still gliding): side by side, the preview follows. */
     private func sourceScrolled(_ view: UIScrollView) {
-        scroll.textView = editor.view
         if view.isTracking || view.isDragging || view.isDecelerating { scroll.sourceScrolled() }
     }
 
@@ -337,7 +338,6 @@ struct TextEditorScreen: View {
             return
         }
         scroll.rendering = true
-        scroll.textView = editor.view
         let revision = previewRevision
         Task {
             let lines = text.utf8.lazy.filter { $0 == 0x0A }.count + 1
@@ -375,8 +375,7 @@ struct TextEditorScreen: View {
         .padding(.horizontal, Alpine.Space.s4)
         .padding(.vertical, Alpine.Space.s2)
         .onChange(of: pane) { _, now in
-            scroll.textView = editor.view
-            guard now == .preview else {
+                guard now == .preview else {
                 // Back to Source at the line the preview showed at its top.
                 if let line = scroll.previewLine(at: scroll.previewTop) {
                     Task { @MainActor in scroll.showSource(line) }

@@ -54,7 +54,9 @@ struct EditorPreviewPane: View {
 @MainActor final class EditorScroll {
     nonisolated static let space = "editor-preview"
 
-    weak var textView: UITextView?
+    /* The editor's text box: its text view is read when asked, since SwiftUI makes it after the text opens. */
+    weak var box: TextBox?
+    var textView: UITextView? { box?.view }
     /* The preview's blocks by line, from the last render. */
     var map: LineMap?
     /* Where each rendered block sits in the preview's content, as laid out so far (a lazy stack lays out what is near). */
