@@ -1,0 +1,28 @@
+apps/web/scripts/check-server-deps.ts
+  s_c60e24772e04af::t_1c4e264a9d85fa 2-3,13-18,20-28,35-81,92-98,100,106-156
+  s_c60e24772e04af::t_ffb5389d31ed5d 158
+apps/web/nitro.config.ts
+  s_c60e24772e04af::t_23ed16ab6bc039 16-21
+apps/web/package.json
+  s_c60e24772e04af::t_654708ed2804e0 22-24
+apps/web/vite.config.ts
+  s_c60e24772e04af::t_901680edf0d068 201,203-210
+bun.lock
+  s_c60e24772e04af::t_87c7f5db7e1fff 28-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f7634bdb7094e5dbda0f121c558050f40d62d170",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
