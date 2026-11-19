@@ -191,7 +191,16 @@ export function cutJpeg(input: Uint8Array): CutJpeg {
                 orientation = exifOrientation(payload.subarray(6));
             }
             keep = keeps(marker, payload);
-            if (keep && marker === 0xee) adobe = true;
+            if (keep && marker === 0xee) {
+                // Adobe's marker, rewritten to its 12 bytes ("Adobe", version, two flags, the colour
+                // transform): anything an application put after them goes. One too short goes whole.
+                if (payload.length >= 12) {
+                    adobe = true;
+                    out.pushBytes(0xff, 0xee, 0x00, 0x0e);
+                    out.push(payload.subarray(0, 12));
+                }
+                keep = false;
+            }
             if (keep && marker === 0xe0) {
                 // JFIF's header, rewritten to its 16 bytes with no thumbnail (a second picture the
                 // page never shows): version, units and density kept. One too short to be JFIF goes.
@@ -252,8 +261,10 @@ export function iccProfile(cut: Uint8Array, components: number): Uint8Array | nu
         if (marker === 0xe2 && startsWith(payload, 'ICC_PROFILE\0') && payload.length >= 14) {
             const seq = payload[12]!;
             const total = payload[13]!;
+            // Numbered 1 to its count, every chunk the same count, none twice: anything else is no profile.
+            if (total === 0 || seq === 0 || seq > total) return null;
             if (chunks.length === 0) chunks = Array.from({ length: total }, () => null);
-            if (seq === 0 || total !== chunks.length || chunks[seq - 1]) return null;
+            if (total !== chunks.length || chunks[seq - 1]) return null;
             chunks[seq - 1] = payload.subarray(14);
         }
         pos = end;

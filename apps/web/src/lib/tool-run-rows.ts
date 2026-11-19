@@ -30,6 +30,8 @@ export type RunRow = {
 type Live = RunRow & { cancel: () => void };
 
 let rows: Live[] = [];
+/* Moves on at every forget: a start asked for before one (the engine still loading) is dropped. */
+let epoch = 0;
 const listeners = new Set<() => void>();
 function changed() {
     rows = [...rows];
@@ -42,6 +44,7 @@ export const toolRunRows = {
         return () => void listeners.delete(listener);
     },
     getState: () => rows as readonly Live[],
+    epoch: () => epoch,
     add(row: Omit<RunRow, 'id'>, cancel: () => void) {
         const live: Live = { ...row, id: crypto.randomUUID(), cancel };
         rows.push(live);
@@ -73,6 +76,7 @@ export const toolRunRows = {
      * name as rows of their own. One still on its way is cancelled, then removed once it has settled.
      */
     forget() {
+        epoch++;
         const claimed = rows.flatMap((row) => (row.uploadId ? [row.uploadId] : []));
         for (const row of rows) if (!ended(row.phase)) row.cancel();
         rows = [];

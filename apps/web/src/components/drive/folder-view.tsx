@@ -8,6 +8,7 @@ import {
 } from '@/components/drive/access';
 import { editableThroughShares } from '@/lib/text-edit';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
+import { toolRunRows } from '@/lib/tool-run-rows';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { FolderColourDialog } from '@/components/drive/folder-colour-dialog';
 import { useDrive } from '@/components/drive/drive-shell';
@@ -599,7 +600,9 @@ export function FolderView({ folderId }: { folderId: string }) {
         sharing !== null ||
         tagging !== null ||
         paletteOpen ||
-        previewing !== null;
+        previewing !== null ||
+        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
+        pdfImages !== null;
     const enabled = !dialogOpen;
     const page = folderLink(here, folderId);
     function showPreview(node: DriveNode | null, replace = false) {
@@ -1810,13 +1813,16 @@ export function FolderView({ folderId }: { folderId: string }) {
                         onOpenChange={(open) => !open && setPdfImages(null)}
                         onMake={(choice) => {
                             clear();
-                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) =>
-                                makeImagesPdf(queryClient, {
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void makeImagesPdf(queryClient, {
                                     folder,
                                     folderName: crumbName(folder),
                                     ...choice,
-                                }),
-                            );
+                                });
+                            });
                         }}
                     />
                 </Suspense>

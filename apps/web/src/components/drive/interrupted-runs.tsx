@@ -5,6 +5,7 @@ import {
     AlertDialogAction,
     AlertDialogCancel,
     AlertDialogContent,
+    AlertDialogDescription,
     AlertDialogFooter,
     AlertDialogHeader,
     AlertDialogTitle,
@@ -26,6 +27,8 @@ export function InterruptedRuns() {
     const row = rows[0];
     if (!row) return null;
     const count = row.nodeIds.length;
+    // Offered again for a folder whose creation was uncertain and which turned up: its count was taken then.
+    const folder = row.holds !== undefined || row.uncounted === true;
     async function answer(choice: 'delete' | 'keep') {
         if (inFlight.current === row!.id) return;
         inFlight.current = row!.id;
@@ -56,10 +59,22 @@ export function InterruptedRuns() {
             <AlertDialogContent>
                 <AlertDialogHeader>
                     <AlertDialogTitle>
-                        {count === 1
-                            ? 'Saving a file was interrupted. Delete what was made?'
-                            : `Saving ${count} files was interrupted. Delete what was made?`}
+                        {folder
+                            ? 'Making a folder was interrupted. Delete what was made?'
+                            : count === 1
+                              ? 'Saving a file was interrupted. Delete what was made?'
+                              : `Saving ${count} files was interrupted. Delete what was made?`}
                     </AlertDialogTitle>
+                    {/* A folder found after it was asked about may hold more now: deleting it deletes that too. */}
+                    {folder && (
+                        <AlertDialogDescription>
+                            {row.uncounted
+                                ? 'What it holds couldn’t be counted. Deleting it deletes everything in it.'
+                                : row.holds === 1
+                                  ? 'It holds 1 item now, which would be deleted with it.'
+                                  : `It holds ${row.holds} items now, which would be deleted with it.`}
+                        </AlertDialogDescription>
+                    )}
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                     <AlertDialogCancel onClick={() => void answer('keep')}>

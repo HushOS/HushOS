@@ -6,7 +6,8 @@
             "HUSHOS-CANARY-IPTC-2c90",
             "HUSHOS-CANARY-COM-913a",
             "HUSHOS-CANARY-MPF-4e07",
-            "HUSHOS-CANARY-JFIF-8c2b"
+            "HUSHOS-CANARY-JFIF-8c2b",
+            "HUSHOS-CANARY-ADOBE-51d7"
         ],
         "gpsLatitudeHex": [
             "33000000010000001e000000010000005a0a000064000000",
@@ -83,6 +84,19 @@
             "note": "ICC profile kept, EXIF dropped"
         },
         {
+            "file": "icc-bad-sequence.jpg",
+            "outcome": "ok",
+            "sha256": "40236a45df7cab740278613197ebd6195527e1fcfd0b9dd48bb90c1cb8b0e709",
+            "length": 3307,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "icc": null,
+            "note": "ICC chunk 2 of 1: the device space instead"
+        },
+        {
             "file": "icc-mismatch.jpg",
             "outcome": "ok",
             "sha256": "e9e26748d558887ca4488478163632a1b9dfccf254193922e995f10cc0e0c954",
@@ -107,6 +121,19 @@
             "adobe": true,
             "icc": null,
             "note": "CMYK with the Adobe marker kept, EXIF dropped"
+        },
+        {
+            "file": "adobe-trailing.jpg",
+            "outcome": "ok",
+            "sha256": "3f6ea244e49c82472aad7d949c8892bb2d660c086568364442fb88019349d161",
+            "length": 3543,
+            "width": 200,
+            "height": 120,
+            "components": 4,
+            "orientation": 1,
+            "adobe": true,
+            "icc": null,
+            "note": "APP14 Adobe with trailing data: its 12 bytes kept, the rest cut"
         },
         {
             "file": "plain-cmyk.jpg",

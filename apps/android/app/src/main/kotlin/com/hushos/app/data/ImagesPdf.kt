@@ -81,7 +81,12 @@ object ImagesPdf {
      */
     fun build(names: List<String>, size: PageSize, margin: Boolean, maxPixels: Long, control: RunControl,
               read: (Int) -> ByteArray, progress: (Int) -> Unit = {}, maxOutput: Long = Long.MAX_VALUE): Made {
-        val writer = ImagesPdfWriter(size, margin)
+        // Closed however the build ends (a refusal, a Stop): the partial PDF's plaintext goes with it, not when collected.
+        ImagesPdfWriter(size, margin).use { writer -> return buildWith(writer, names, maxPixels, control, read, progress, maxOutput) }
+    }
+
+    private fun buildWith(writer: ImagesPdfWriter, names: List<String>, maxPixels: Long, control: RunControl,
+                          read: (Int) -> ByteArray, progress: (Int) -> Unit, maxOutput: Long): Made {
         // The PDF comes back as one array on this app's heap: never larger than it can take.
         writer.limitOutput(maxOutput.coerceAtLeast(0).toULong())
         var thumbnail: ByteArray? = null

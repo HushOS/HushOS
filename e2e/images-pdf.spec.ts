@@ -29,7 +29,6 @@ let page: Page;
 let context: BrowserContext | undefined;
 let profile: string | undefined;
 let downloads: string | undefined;
-const started = Date.now();
 const dialog = (p: Page) => p.locator('[data-slot=dialog-content]');
 const transfers = (p: Page) => p.locator('section[aria-label=Transfers]');
 const row = (p: Page, name: string) =>
@@ -125,11 +124,17 @@ test('three images reordered make a three-page PDF in that order', async () => {
     // The name follows the first image until the person types one.
     await expect(name).toHaveValue('page-3.pdf');
     await form.getByRole('button', { name: 'Fit to each image' }).click();
+    // The list's own shortcuts sleep while the dialog is open: Delete here never trashes the images behind it.
+    await form.getByRole('button', { name: 'Fit to each image' }).focus();
+    await page.keyboard.press('Delete');
+    await page.keyboard.press('Backspace');
     await form.getByRole('button', { name: 'Make PDF' }).click();
     await expect(form).toHaveCount(0);
     await expect(transfers(page)).toContainText('Making page-3.pdf');
     await expect(transfers(page)).toContainText('Saved in My files', { timeout: 60_000 });
     await expect(row(page, 'page-3.pdf')).toBeVisible();
+    for (const name of ['page-1.jpg', 'page-2.jpg', 'page-3.jpg'])
+        await expect(row(page, name)).toBeVisible();
 
     const pdf = await download(page, 'page-3.pdf');
     const pages = await readPdf(pdf);
@@ -321,26 +326,51 @@ test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the
     const found = await scan();
     expect(found).toEqual([]);
 
-    // Every object written since this file began, the PDFs' among them: ciphertext only.
+    // Every object this account's workspace holds, the sources' and the PDFs' among them: ciphertext only.
+    // Only this workspace's keys: other files' accounts upload into the same bucket meanwhile.
+    const database = new SQL(e2eDatabase().url);
+    let expected: string[];
+    let workspace: string;
+    try {
+        const id = await row(page, 'Trip.pdf').getAttribute('data-node-id');
+        const [node] = await database`select workspace_id from drive_nodes where id = ${id}`;
+        workspace = node.workspace_id;
+        // The current version of each of the five images and the two PDFs, by name as the rows show them.
+        const names = [...IMAGES, 'page-3.pdf', 'Trip.pdf'];
+        const ids = await Promise.all(
+            names.map((name) => row(page, name).getAttribute('data-node-id')),
+        );
+        const objects = await database`
+            select o.object_key from drive_nodes n
+            join file_versions v on v.node_id = n.id
+            join drive_objects o on o.id = v.object_id
+            where n.id in ${database(ids)} and n.workspace_id = ${workspace}`;
+        expected = objects.map((object: { object_key: string }) => object.object_key);
+        expect(expected.length).toBeGreaterThanOrEqual(names.length);
+    } finally {
+        await database.close();
+    }
     const client = storage();
-    let checked = 0;
+    const inspected = new Set<string>();
     let startAfter: string | undefined;
     for (;;) {
-        const listing = await client.list({ startAfter, maxKeys: 1000 });
+        const listing = await client.list({
+            prefix: `ws/${workspace}/`,
+            startAfter,
+            maxKeys: 1000,
+        });
         const contents = listing.contents ?? [];
         for (const item of contents) {
-            const modified = item.lastModified ? new Date(item.lastModified).getTime() : Date.now();
-            if (modified < started - 60_000) continue;
             const bytes = Buffer.from(await client.file(item.key).bytes());
             expect(bytes.includes(PDF_CANARY), item.key).toBe(false);
             expect(bytes.includes(SOURCE_CANARY), item.key).toBe(false);
-            checked++;
+            inspected.add(item.key);
         }
         if (!listing.isTruncated || contents.length === 0) break;
         startAfter = contents.at(-1)!.key;
     }
-    // The five images and the two PDFs at least.
-    expect(checked).toBeGreaterThanOrEqual(7);
+    // Every source and PDF was read, not merely enough objects of anyone's.
+    expect(expected.filter((key) => !inspected.has(key))).toEqual([]);
 
     // The browser's own files on disk (a Blob paged out would land here); downloads are kept apart.
     const hits: string[] = [];

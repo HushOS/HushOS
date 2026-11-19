@@ -107,6 +107,7 @@ fn the_fixtures_carry_what_the_cutter_must_cut() {
         ("mpf-trailer.jpg", b"HUSHOS-CANARY-MPF"),
         ("progressive.jpg", b"HUSHOS-CANARY-COM"),
         ("jfif-thumbnail.jpg", b"HUSHOS-CANARY-JFIF"),
+        ("adobe-trailing.jpg", b"HUSHOS-CANARY-ADOBE"),
     ] {
         assert!(contains(&fixture(name), needle), "{name}");
     }

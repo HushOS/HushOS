@@ -227,10 +227,14 @@ pub fn jpeg_icc_profile(cut: &[u8], components: u8) -> Option<Vec<u8>> {
         let payload = &cut[pos + 4..end];
         if marker == 0xE2 && payload.starts_with(b"ICC_PROFILE\0") && payload.len() >= 14 {
             let (seq, total) = (payload[12] as usize, payload[13] as usize);
+            // Numbered 1 to its count, every chunk the same count, none twice: anything else is no profile.
+            if total == 0 || seq == 0 || seq > total {
+                return None;
+            }
             if chunks.is_empty() {
                 chunks = vec![None; total];
             }
-            if seq == 0 || total != chunks.len() || chunks[seq - 1].is_some() {
+            if total != chunks.len() || chunks[seq - 1].is_some() {
                 return None;
             }
             chunks[seq - 1] = Some(&payload[14..]);
@@ -365,9 +369,15 @@ pub fn cut_jpeg(input: &[u8]) -> Result<CutJpeg, ImageRefusal> {
                 }
                 let keep = keeps(marker, payload);
                 if keep && marker == 0xEE {
-                    adobe = true;
-                }
-                if keep && marker == 0xE0 {
+                    // Adobe's marker, rewritten to its 12 bytes ("Adobe", version, two flags, the colour
+                    // transform): anything an application put after them goes. One too short goes whole.
+                    if payload.len() >= 12 {
+                        adobe = true;
+                        out.extend_from_slice(&[0xFF, 0xEE, 0x00, 0x0E]);
+                        out.extend_from_slice(&payload[..12]);
+                    }
+                    false
+                } else if keep && marker == 0xE0 {
                     // JFIF's header, rewritten to its 16 bytes with no thumbnail (a second picture the
                     // page never shows): version, units and density kept. One too short to be JFIF goes.
                     if payload.len() >= 14 {

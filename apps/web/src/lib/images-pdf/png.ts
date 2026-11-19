@@ -84,6 +84,7 @@ export function preparePng(bytes: Uint8Array): PreparedPng {
         interlaced: boolean;
     } | null = null;
     let orientation = 1;
+    let palette: number | null = null;
     let ended = false;
     for (let at = 8; at + 12 <= bytes.length && !ended;) {
         const length = view.getUint32(at);
@@ -113,6 +114,30 @@ export function preparePng(bytes: Uint8Array): PreparedPng {
                 throw new PngRefused('damaged');
         } else if (!header) throw new PngRefused('damaged');
         if (type === 'acTL') throw new PngRefused('animated');
+        // The palette and its transparency, held to the specification (11.2.3, 11.3.2.1) before pdf-lib
+        // turns them into arrays: an oversized one would cost memory however small the picture.
+        if (type === 'PLTE') {
+            const entries = length / 3;
+            if (
+                palette !== null ||
+                ![2, 3, 6].includes(header.type) ||
+                length % 3 !== 0 ||
+                entries < 1 ||
+                entries > 256 ||
+                (header.type === 3 && entries > 2 ** header.depth)
+            )
+                throw new PngRefused('damaged');
+            palette = entries;
+        }
+        if (type === 'tRNS') {
+            const allowed =
+                header.type === 0
+                    ? length === 2
+                    : header.type === 2
+                      ? length === 6
+                      : header.type === 3 && palette !== null && length <= palette;
+            if (!allowed) throw new PngRefused('damaged');
+        }
         if (type === 'eXIf') orientation = exifOrientation(body) ?? 1;
         if (type === 'IDAT') data.push(body);
         if (type === 'IEND') ended = true;
@@ -126,7 +151,8 @@ export function preparePng(bytes: Uint8Array): PreparedPng {
         !ended ||
         data.length === 0 ||
         header.width === 0 ||
-        header.height === 0
+        header.height === 0 ||
+        (header.type === 3 && palette === null)
     )
         throw new PngRefused('damaged');
     // Inflated once, through a counter: past what the header says it holds, refused at once.

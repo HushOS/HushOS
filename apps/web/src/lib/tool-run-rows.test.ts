@@ -75,6 +75,12 @@ describe('a run’s rows are forgotten when the account leaves this tab', () => 
         expect([...uploads.values()].map((upload) => upload.name)).toEqual([]);
     });
 
+    test('a lock moves the epoch on, so a start asked for before it is dropped', () => {
+        const before = toolRunRows.epoch();
+        toolRunRows.forget();
+        expect(toolRunRows.epoch()).not.toBe(before);
+    });
+
     test('a Stop confirmed after the run ended leaves its row as it ended', () => {
         const cancel = vi.fn();
         const row = toolRunRows.add(

@@ -40,6 +40,7 @@ CANARY_IPTC = b"HUSHOS-CANARY-IPTC-2c90"
 CANARY_COMMENT = b"HUSHOS-CANARY-COM-913a"
 CANARY_TRAILER = b"HUSHOS-CANARY-MPF-4e07"
 CANARY_JFIF = b"HUSHOS-CANARY-JFIF-8c2b"
+CANARY_ADOBE = b"HUSHOS-CANARY-ADOBE-51d7"
 # The GPS latitude 51 deg 30' 26.5" as little-endian rationals, the bytes a GPS IFD carries.
 GPS_LATITUDE_LE = struct.pack("<6I", 51, 1, 30, 1, 2650, 100)
 GPS_LATITUDE_BE = struct.pack(">6I", 51, 1, 30, 1, 2650, 100)
@@ -272,7 +273,7 @@ def icc_of(jpeg, components):
         if segment[1] != 0xE2 or not payload.startswith(b"ICC_PROFILE\x00") or len(payload) < 14:
             continue
         seq, total = payload[12], payload[13]
-        if seq == 0 or seq in chunks or (count is not None and total != count):
+        if seq == 0 or seq > total or seq in chunks or (count is not None and total != count):
             return None
         count = total
         chunks[seq] = payload[14:]
@@ -346,6 +347,15 @@ def main():
         note="ICC profile kept, EXIF dropped",
     )
 
+    # An ICC chunk numbered past its own count (2 of 1): kept as a segment, never used, never a crash.
+    segments, scan = split(encode(photo))
+    bad_seq = Fixture().add(b"\xff\xd8", True)
+    for segment in segments:
+        bad_seq.add(segment, kept_header(segment))
+    bad_seq.add(seg(0xE2, b"ICC_PROFILE\x00\x02\x01" + srgb), True)
+    bad_seq.add(scan, True)
+    ok("icc-bad-sequence.jpg", bad_seq, note="ICC chunk 2 of 1: the device space instead")
+
     # An RGB profile on a greyscale JPEG: kept as a segment, but no use as the image's colour space.
     ok(
         "icc-mismatch.jpg",
@@ -360,6 +370,19 @@ def main():
         adobe=True,
         note="CMYK with the Adobe marker kept, EXIF dropped",
     )
+
+    # An Adobe marker with application data after its 12 bytes: the marker stays, rewritten to them.
+    segments, scan = split(cmyk)
+    trailing = Fixture().add(b"\xff\xd8", True)
+    for segment in segments:
+        if segment[1] == 0xEE:
+            payload = segment[4:]
+            assert len(payload) == 12, len(payload)
+            trailing.add(seg(0xEE, payload + CANARY_ADOBE), seg(0xEE, payload))
+        else:
+            trailing.add(segment, kept_header(segment))
+    trailing.add(scan, True)
+    ok("adobe-trailing.jpg", trailing, adobe=True, note="APP14 Adobe with trailing data: its 12 bytes kept, the rest cut")
 
     # CMYK without the Adobe marker: samples in the plain sense (ink 0 is none), as some tools
     # write it. Pillow stores Adobe's complemented samples, so the picture is complemented first
@@ -528,7 +551,7 @@ def main():
         json.dump(
             {
                 "canaries": {
-                    "text": [s.decode() for s in (CANARY_MAKE, CANARY_XMP, CANARY_IPTC, CANARY_COMMENT, CANARY_TRAILER, CANARY_JFIF)],
+                    "text": [s.decode() for s in (CANARY_MAKE, CANARY_XMP, CANARY_IPTC, CANARY_COMMENT, CANARY_TRAILER, CANARY_JFIF, CANARY_ADOBE)],
                     "gpsLatitudeHex": [GPS_LATITUDE_LE.hex(), GPS_LATITUDE_BE.hex()],
                 },
                 "cut": cases,

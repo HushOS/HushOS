@@ -6,6 +6,7 @@ import { cn } from 'cn';
 import { CheckIcon, FileUpIcon, FolderPlusIcon } from 'lucide-react';
 import { lazy, Suspense, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { MIXED_FOLDERS } from '@/lib/images-pdf/limits';
+import { toolRunRows } from '@/lib/tool-run-rows';
 import { AccessCell, useAccessIndex } from '@/components/drive/access';
 import { AddMenu } from '@/components/drive/add-menu';
 import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
@@ -171,7 +172,9 @@ export function HomeView() {
         sharing !== null ||
         tagging !== null ||
         paletteOpen ||
-        previewing !== null
+        previewing !== null ||
+        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
+        pdfFor !== null
     );
 
     const access = useAccessIndex(true);
@@ -731,13 +734,16 @@ export function HomeView() {
                         onMake={(choice) => {
                             const { folder: into, name } = pdfFor;
                             clear();
-                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) =>
-                                makeImagesPdf(queryClient, {
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/images-pdf/make').then(({ makeImagesPdf }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void makeImagesPdf(queryClient, {
                                     folder: into,
                                     folderName: name,
                                     ...choice,
-                                }),
-                            );
+                                });
+                            });
                         }}
                     />
                 </Suspense>

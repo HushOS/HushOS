@@ -114,6 +114,45 @@ test('a header the specification doesn’t allow is refused before it can widen 
     expect(() => preparePng(file(header(8, 3, [0, 0, 2])))).toThrow(new PngRefused('damaged')); // interlace 2
 });
 
+test('a palette or its transparency the specification doesn’t allow is refused before pdf-lib reads it', () => {
+    const header = (type: number, depth: number) => {
+        const data = new Uint8Array(13);
+        const view = new DataView(data.buffer);
+        view.setUint32(0, 4);
+        view.setUint32(4, 4);
+        data.set([depth, type, 0, 0, 0], 8);
+        return chunk('IHDR', data);
+    };
+    const channels: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+    const file = (type: number, depth: number, ...extra: Uint8Array[]) =>
+        join(
+            SIGNATURE,
+            header(type, depth),
+            ...extra,
+            chunk(
+                'IDAT',
+                deflateSync(new Uint8Array(rawSize(4, 4, depth, channels[type]!, false))),
+            ),
+            chunk('IEND', new Uint8Array(0)),
+        );
+    const plte = (entries: number) => chunk('PLTE', new Uint8Array(entries * 3));
+    const trns = (length: number) => chunk('tRNS', new Uint8Array(length));
+    // A 2-bit palette image with its four entries and their transparency: as the specification allows.
+    expect(preparePng(file(3, 2, plte(4), trns(4))).width).toBe(4);
+    const refused: [string, Uint8Array][] = [
+        ['a palette of 256 entries on a 2-bit image', file(3, 2, plte(256))],
+        ['a palette past 256 entries', file(3, 8, chunk('PLTE', new Uint8Array(257 * 3)))],
+        ['a palette not a multiple of 3', file(3, 8, chunk('PLTE', new Uint8Array(7)))],
+        ['a palette on a greyscale image', file(0, 8, plte(4))],
+        ['a palette image without one', file(3, 8)],
+        ['more transparency than palette entries', file(3, 2, plte(4), trns(5))],
+        ['transparency on an image with alpha', file(6, 8, trns(4))],
+        ['grey transparency of the wrong length', file(0, 8, trns(6))],
+    ];
+    for (const [why, bad] of refused)
+        expect(() => preparePng(bad), why).toThrow(new PngRefused('damaged'));
+});
+
 test('only the chunks the picture needs reach pdf-lib', () => {
     const text = chunk('tEXt', new TextEncoder().encode('Comment\0HUSHOS-CANARY-PNG-TEXT'));
     const prepared = preparePng(png(4, 4, () => [255, 0, 0, 255], [text]));
