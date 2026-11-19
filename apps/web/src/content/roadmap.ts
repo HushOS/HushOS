@@ -50,7 +50,7 @@ export type RoadmapSection = {
 };
 
 /* The day this file last changed what the page says (YYYY-MM-DD). */
-export const updated = '2026-11-19';
+export const updated = '2026-11-20';
 
 export const sections: RoadmapSection[] = [
     {

@@ -71,4 +71,74 @@ import Testing
         #expect(parking.held(key: notes, owner: session) == nil)
         #expect(parking.held(key: other, owner: session)?.text == "new")
     }
+
+    /* A file as the store lists it. */
+    private func file(_ id: String, workspace: String = "w") -> Opened {
+        let node = NodeView(id: id, workspaceId: workspace, parentId: "p", kind: "file", keyEpoch: 1, parentKeyEpoch: 1,
+                            keyEnvelope: "", metadataVersion: 1, metadataEnvelope: "", currentVersion: nil, trashedAt: nil,
+                            changeSeq: 1, createdAt: nil, updatedAt: nil)
+        return Opened(node: node, metadata: NodeMetadata(name: "\(id).md", mime: nil, size: 3, modified: nil, attributes: [:]), nodeKey: nil)
+    }
+
+    /* The viewer paged from A to B and B is being edited: what waits is B's, whichever file the viewer starts on. */
+    @Test func aRebuiltViewerFindsTheFileBeingEditedNotTheOneItStartedOn() throws {
+        let parking = EditorParking<Session, Work>()
+        let session = Session()
+        let b = file("b")
+        parking.hold(Work("B's unsaved words"), key: b.ref, owner: session)
+        // The viewer comes back on A, the file it was opened on.
+        #expect(parking.held(key: file("a").ref, owner: session) == nil)
+        // What waits, whichever file: B, for the viewer to page back to and present.
+        let waiting = try #require(parking.waiting(owner: session))
+        #expect(waiting.key == b.ref)
+        #expect(waiting.value.text == "B's unsaved words")
+    }
+
+    /* A family's removal processed while nothing is on screen: the work goes, and a rebuild finds nothing to present. */
+    @Test func accessLostWhileNothingIsPresentedDropsTheWork() {
+        let parking = EditorParking<Session, Work>()
+        let session = Session()
+        let family = file("notes", workspace: "family-area")
+        let work = Work("family plaintext")
+        parking.hold(work, key: family.ref, owner: session)
+        // The store hears of the removal: files in that workspace may no longer be edited.
+        let gone = parking.check { key, _ in key.workspaceId != "family-area" }
+        #expect(gone === work)
+        #expect(parking.waiting(owner: session) == nil)
+        // A check that still allows the file keeps it.
+        let kept = Work("own")
+        parking.hold(kept, key: notes, owner: session)
+        #expect(parking.check { _, _ in true } == nil)
+        #expect(parking.held(key: notes, owner: session) === kept)
+    }
+
+    /* The restore asks again: a file it may no longer edit is not handed over, and its work is handed to be emptied. */
+    @Test func theRestoreChecksAccessAndEmptiesWhatItRefuses() {
+        let parking = EditorParking<Session, Work>()
+        let session = Session()
+        let work = Work("words")
+        parking.hold(work, key: notes, owner: session)
+        var emptied: Work?
+        #expect(parking.held(key: notes, owner: session, allowed: { _, _ in false }, dropped: { emptied = $0 }) == nil)
+        #expect(emptied === work)
+        #expect(parking.isEmpty)
+    }
+
+    /* Open theirs empties the box and reads their version: a rebuild meanwhile reads it again, never the old baseline. */
+    @Test func afterOpenTheirsARebuildReadsTheirVersionNotTheOldBaseline() {
+        let mine = file("notes")
+        let parked = ParkedEdit<Work, String>(file: mine, box: Work(""))
+        parked.remember("baseline of my version")
+        guard case .adopt(let state) = parked.restore else { Issue.record("expected the state"); return }
+        #expect(state == "baseline of my version")
+        let theirs = file("notes")
+        parked.reload(from: theirs)
+        guard case .read(let reading) = parked.restore else { Issue.record("expected a fresh read"); return }
+        #expect(reading.ref == theirs.ref)
+        #expect(parked.state == nil)
+        // Their version opened: what the editor shows from here is theirs.
+        parked.remember("baseline of their version")
+        guard case .adopt(let next) = parked.restore else { Issue.record("expected the state"); return }
+        #expect(next == "baseline of their version")
+    }
 }

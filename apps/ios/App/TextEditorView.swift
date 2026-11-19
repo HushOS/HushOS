@@ -144,7 +144,7 @@ struct TextEditorScreen: View {
             store.editorWork.release(key: item.ref)
             session.close()
             work?.cancel()
-            editor.drop()
+            editor.forget()
             savedText = ""
             saveState = nil
             pieces = nil
@@ -160,10 +160,12 @@ struct TextEditorScreen: View {
         }
         .onAppear {
             scroll.box = editor
+            // Only the position's binding: the scroll object never holds this screen (and through it the session).
+            let position = $previewPosition
             scroll.movePreview = { target in
                 switch target {
-                case .y(let y): previewPosition.scrollTo(y: y)
-                case .block(let index): previewPosition.scrollTo(id: index, anchor: .top)
+                case .y(let y): position.wrappedValue.scrollTo(y: y)
+                case .block(let index): position.wrappedValue.scrollTo(id: index, anchor: .top)
                 }
             }
         }
@@ -185,7 +187,8 @@ struct TextEditorScreen: View {
             session.close()
             work?.cancel()
             // The text stays only while the store holds it for this editor presented again (a rebuild, not a close).
-            if ending || store.editorWork.held(key: item.ref, owner: store.vault)?.box !== editor { editor.drop() }
+            if ending || store.editorWork.held(key: item.ref, owner: store.vault)?.box !== editor { editor.forget() }
+            scroll.movePreview = { _ in }
             savedText = ""
             saveState = nil
             pieces = nil
@@ -281,7 +284,7 @@ struct TextEditorScreen: View {
         case .readOnly(let reason, let text):
             VStack(spacing: 0) {
                 if text != nil, isMarkdown, !sideBySide { panes }
-                if previewTooLong { note(EditorWords.previewTooLong) }
+                if previewTooLong, !sideBySide { note(EditorWords.previewTooLong) }
                 note(TextEditing.words(reason))
                 if let text {
                     sourceAndPreview(PlainTextView(box: editor, text: text, editable: false, onChange: {}, onScroll: sourceScrolled))
@@ -290,7 +293,7 @@ struct TextEditorScreen: View {
         case .editing:
             VStack(spacing: 0) {
                 if isMarkdown, !sideBySide { panes }
-                if previewTooLong { note(EditorWords.previewTooLong) }
+                if previewTooLong, !sideBySide { note(EditorWords.previewTooLong) }
                 if let line = closing ? EditorWords.finishing : failure ?? (edited ? nil : status) {
                     note(line, failed: !closing && failure != nil)
                 }
@@ -340,8 +343,11 @@ struct TextEditorScreen: View {
             return
         }
         let text = editor.text
+        // Past what the viewer renders: no preview at all (no spinner, no old blocks, nothing scrolled by it) until it fits.
         if text.utf8.count > MarkdownDocument.limit {
             previewTooLong = true
+            pieces = nil
+            scroll.unrendered()
             return
         }
         scroll.rendering = true
@@ -351,7 +357,8 @@ struct TextEditorScreen: View {
             let parsed = await Task.detached(priority: .userInitiated) { MarkdownDocument.parseLined(text) }.value
             scroll.rendering = false
             // Another text since (Open theirs, a close): this rendering is the last one's.
-            guard revision == previewRevision, phase != .loading else { return }
+            // Past the limit since it began: what it parsed is not shown.
+            guard revision == previewRevision, phase != .loading, !previewTooLong else { return }
             pieces = parsed
             scroll.rendered(parsed, lines: lines)
             if scroll.again {
@@ -411,7 +418,7 @@ struct TextEditorScreen: View {
      * from here would skip the editor's local-only, expiring one.
      */
     private var preview: some View {
-        EditorPreviewPane(pieces: pieces, position: $previewPosition, scroll: scroll)
+        EditorPreviewPane(pieces: pieces, unavailable: sideBySide && previewTooLong, position: $previewPosition, scroll: scroll)
     }
 
     private func note(_ text: String, failed: Bool = false) -> some View {
@@ -448,7 +455,7 @@ struct TextEditorScreen: View {
         store.editorWork.release(key: item.ref)
         session.close()
         work?.cancel()
-        editor.drop()
+        editor.forget()
         savedText = ""
         saveState = nil
         pieces = nil
@@ -473,15 +480,19 @@ struct TextEditorScreen: View {
         let state = EditorState(held: held, loadFrom: loadFrom, target: target, startedFrom: startedFrom, source: source,
                                 destination: destination, marked: marked, savedText: savedText, saveState: saveState,
                                 format: format, edited: edited, status: status, previewing: pane == .preview)
-        let work = store.editorWork.held(key: item.ref, owner: store.vault).flatMap { $0.box === editor ? $0 : nil } ?? EditorWork(box: editor)
-        work.state = state
+        let work = heldWork() ?? EditorWork(file: item, box: editor)
+        work.remember(state)
         store.editorWork.hold(work, key: item.ref, owner: store.vault)
+    }
+
+    /* This editor's work as the store holds it (the same text box), if it does. */
+    private func heldWork() -> EditorWork? {
+        store.editorWork.held(key: item.ref, owner: store.vault).flatMap { $0.box === editor ? $0 : nil }
     }
 
     /* Presented again after a rebuild: the same text view (its text, cursor, scroll and undo) and the state it had. */
     private func adopt(_ work: EditorWork, _ state: EditorState) {
-        editor = work.box
-        scroll.box = work.box
+        take(work)
         loadFrom = state.loadFrom
         target = state.target
         startedFrom = state.startedFrom
@@ -502,13 +513,31 @@ struct TextEditorScreen: View {
         if sideBySide || pane == .preview { render() }
     }
 
+    /* The held work's text box, as this editor's from here. */
+    private func take(_ work: EditorWork) {
+        editor = work.box
+        scroll.box = work.box
+    }
+
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
     private func load() async {
-        // Presented again after a rebuild: the work the store held, never a fresh read (which would drop what was typed).
-        if loadFrom == nil, phase == .loading, let work = store.editorWork.held(key: item.ref, owner: store.vault),
-           work.box !== editor, let state = work.state {
-            adopt(work, state)
-            return
+        // Presented again after a rebuild: the work the store held, never a fresh read of the old version (which would
+        // drop what was typed); after Open theirs, their version is read again, never the old baseline over an empty box.
+        // Only while this person may still edit the file: otherwise the held text is emptied and nothing is shown.
+        if loadFrom == nil, phase == .loading,
+           let work = store.editorWork.held(key: item.ref, owner: store.vault, allowed: { _, work in store.mayRestoreEditor(work) },
+                                            dropped: { $0.box.forget() }),
+           work.box !== editor {
+            switch work.restore {
+            case .adopt(let state):
+                adopt(work, state)
+                return
+            case .read(let theirs):
+                take(work)
+                loadFrom = theirs
+            case .fresh:
+                take(work)
+            }
         }
         let from = loadFrom ?? item
         // Read under the vault this editor opened with, and shown only while its session lasts.
@@ -694,6 +723,8 @@ struct TextEditorScreen: View {
         // Another text opens: nothing begun on this one publishes over it.
         session.reopened()
         work?.cancel()
+        // What the store holds for a rebuild is their version being read, never this text's baseline over an empty box.
+        heldWork()?.reload(from: file)
         editor.drop()
         savedText = ""
         saveState = nil
@@ -711,16 +742,11 @@ struct TextEditorScreen: View {
     }
 }
 
-/* An open editor's work, held by the store (DriveStore.editorWork) so a rebuild of the screens loses none of it. */
-@MainActor final class EditorWork {
-    /* The text view's box: the view itself, with its text, cursor, scroll and undo, is handed to the editor presented again. */
-    let box: TextBox
-    var state: EditorState?
-
-    init(box: TextBox) {
-        self.box = box
-    }
-}
+/*
+ * An open editor's work, held by the store (DriveStore.editorWork) so a rebuild of the screens loses none of it: the
+ * file it was opened on, the text box (the view itself, with its text, cursor, scroll and undo), and its state.
+ */
+typealias EditorWork = ParkedEdit<TextBox, EditorState>
 
 /* What an editor knows besides its text: the file, the version its text started from, the baseline and the format. */
 struct EditorState {
@@ -789,7 +815,7 @@ private extension View {
 @MainActor final class TextBox {
     /*
      * Held strongly while the editor is open: when a rebuild tears the screen down (EditorWork), the editor presented
-     * again takes this very view back, with its text, cursor, scroll and undo. Let go by drop.
+     * again takes this very view back, with its text, cursor, scroll and undo. Let go by forget.
      */
     var view: UITextView?
     /* The keyboard is up in it. */
@@ -810,10 +836,16 @@ private extension View {
         view?.text = text
     }
 
+    /* Emptied, the view kept (Open theirs puts their text in it). */
     func drop() {
         opening = ""
         view?.text = ""
         view?.undoManager?.removeAllActions()
+    }
+
+    /* Emptied and let go: the editor ended, or its held work did. */
+    func forget() {
+        drop()
         view = nil
         focused = false
         endedEditing = nil

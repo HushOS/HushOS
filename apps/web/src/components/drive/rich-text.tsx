@@ -31,7 +31,7 @@ import {
 } from '@/lib/highlight';
 import { largeFileStage } from '@/lib/previews';
 import { markdownToHast } from '@/lib/markdown';
-import { diagramsPreloaded, diagramsReady, drawDiagram } from '@/lib/mermaid';
+import { diagramsSettled, diagramsState, drawDiagram } from '@/lib/mermaid';
 import {
     DIAGRAMS_PER_DOCUMENT,
     type DiagramFailure,
@@ -200,18 +200,18 @@ function useDiagramPalette() {
     return useSyncExternalStore(onThemeChange, paletteNow, () => null);
 }
 
-/* Whether the viewers' preload has fetched the diagram worker; nothing draws a diagram before it. */
-function useDiagramsReady() {
-    const [ready, setReady] = useState(diagramsReady);
+/* Whether the viewers' preload has fetched the diagram worker (or found it can't start); nothing draws a diagram before it. */
+function useDiagramsState() {
+    const [now, setNow] = useState(diagramsState);
     useEffect(() => {
-        if (ready) return;
+        if (now !== 'waiting') return;
         let active = true;
-        void diagramsPreloaded.then(() => active && setReady(true));
+        void diagramsSettled.then(() => active && setNow(diagramsState()));
         return () => {
             active = false;
         };
-    }, [ready]);
-    return ready;
+    }, [now]);
+    return now;
 }
 
 /*
@@ -230,7 +230,8 @@ function MermaidFence({
     lines: Record<string, string>;
     children?: ReactNode;
 }) {
-    const ready = useDiagramsReady();
+    const diagrams = useDiagramsState();
+    const ready = diagrams === 'ready';
     const colours = useDiagramPalette();
     const tooMany = index >= DIAGRAMS_PER_DOCUMENT;
     const key = `${colours?.key ?? ''}\u0000${source}`;
@@ -257,7 +258,8 @@ function MermaidFence({
         };
     }, [ready, tooMany, colours, source, key]);
     const current = shown?.key === key ? shown : null;
-    if (current?.image)
+    // Past the bound now (a fence added above it), whatever was drawn before: the code, and why.
+    if (current?.image && !tooMany)
         return (
             <figure className="rt-diagram" {...lines}>
                 <img
@@ -268,7 +270,7 @@ function MermaidFence({
                 />
             </figure>
         );
-    const failure = tooMany ? 'too-many' : current?.failure;
+    const failure = tooMany ? 'too-many' : diagrams === 'failed' ? 'failed' : current?.failure;
     return (
         <div {...lines}>
             <pre className="rt-plain">{children}</pre>

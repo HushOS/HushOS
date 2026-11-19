@@ -133,6 +133,28 @@ final class DriveStore {
      * unfold or a resize that tears the screens down leaves it, and the viewer presented again presents the editor with it.
      */
     @ObservationIgnored let editorWork = EditorParking<Vault, EditorWork>()
+
+    /* Whether the editor's held work may be shown again: the file is still this person's to edit, its family still theirs. */
+    func mayRestoreEditor(_ work: EditorWork) -> Bool {
+        !familyRemoved(work.file) && mayEdit(work.file)
+    }
+
+    /* A family's removal, or a share revoked, while no editor is on screen: its held text goes now, not at the next rebuild. */
+    private func checkEditorWork() {
+        guard !editorOpen else { return }
+        editorWork.check { [unowned self] _, work in mayRestoreEditor(work) }?.box.forget()
+    }
+
+    /* Its family removed, forked or refused (FileViewer's familyGone, for a file no viewer shows). */
+    func familyRemoved(_ item: Opened) -> Bool {
+        guard isFamily(item), let groupId = familyAreaGroups[item.node.workspaceId.lowercased()],
+              let state = familyStates[groupId] else { return false }
+        switch state {
+        case .accepted: return false
+        case .failed(let words): return words != FamilyWords.noAnswer
+        default: return true
+        }
+    }
     var editorLeaveAsked = 0
 
     /* A move a notification asked for (another tab, a sheet): now, or once the editor has closed (never under it). */
@@ -202,7 +224,9 @@ final class DriveStore {
      * carry the family's verdicts, not the personal trust set's.
      */
     var familyList: [GroupSummary]?
-    var familyStates: [String: FamilyState] = [:]
+    var familyStates: [String: FamilyState] = [:] {
+        didSet { checkEditorWork() }
+    }
     /* How many times each family's state was published (`publishFamily`): a screen's own sync shown only over none newer. */
     @ObservationIgnored var familyGenerations = FamilyGenerations()
     /* The revision each family's shown answer was found at (FamilySync.syncRevised): only a later look replaces it. */
@@ -283,7 +307,9 @@ final class DriveStore {
     /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
     var trustGeneration = 0
     @ObservationIgnored var familiesSyncedAt: Date?
-    var mounts: [ShareMount] = []
+    var mounts: [ShareMount] = [] {
+        didSet { checkEditorWork() }
+    }
     var mountsError: String?
     var mountsLoaded = false
     var busy = false
@@ -445,7 +471,7 @@ final class DriveStore {
         guard next !== vault else { return }
         vault = next
         // An open editor's text belonged to the last session: emptied, not handed to this one.
-        editorWork.drop()?.box.drop()
+        editorWork.drop()?.box.forget()
         // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
         if error == Self.sessionEnded { error = nil }
         // The new session's vault has its own area ledger: families are checked again under it, and nothing the

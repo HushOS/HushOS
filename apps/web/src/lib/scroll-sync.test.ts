@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
     type Block,
+    inSourceOrder,
     lineForOffset,
     offsetForLine,
     ScrollLink,
@@ -130,7 +131,8 @@ describe('scrolling the two panes together', () => {
         link.scrolled('source');
         expect(preview.scrollTop).toBe(9_200);
         const moves = source.moves;
-        // The preview's scroll event for that move: an echo, not the person.
+        // The preview's scroll events for that move (a browser may send two): echoes, not the person.
+        link.scrolled('preview');
         link.scrolled('preview');
         expect(source.scrollTop).toBe(30_000);
         expect(source.moves).toBe(moves);
@@ -163,5 +165,31 @@ describe('scrolling the two panes together', () => {
         const line = link.lineOf('source')!;
         expect(link.show('preview', line)).toBe(true);
         expect(preview.scrollTop).toBe(3_000);
+    });
+});
+
+describe('footnotes', () => {
+    test('a footnote early in the source, drawn at the end, never takes a body line', () => {
+        // As measured: the heading (1), body paragraphs (3, 7, 9), then the footnote section the
+        // renderer moved to the end, though its definition is on line 5 of the source.
+        const measured: Block[] = [
+            { start: 1, end: 1, top: 0, bottom: 40 },
+            { start: 3, end: 3, top: 60, bottom: 80 },
+            { start: 7, end: 7, top: 100, bottom: 120 },
+            { start: 9, end: 9, top: 140, bottom: 160 },
+            { start: 5, end: 5, top: 200, bottom: 220 },
+            { start: 5, end: 5, top: 200, bottom: 220 },
+        ];
+        const blocks = inSourceOrder(measured);
+        // Body lines land on their own paragraphs, never in the footnotes at the bottom.
+        expect(offsetForLine(blocks, 7)).toBe(100);
+        expect(offsetForLine(blocks, 9)).toBe(140);
+        // The footnote's line lies between paragraphs 3 and 7 in the source: the gap between them.
+        const five = offsetForLine(blocks, 5)!;
+        expect(five).toBeGreaterThan(80);
+        expect(five).toBeLessThan(100);
+        // And back: the body's offsets give the body's lines.
+        expect(lineForOffset(blocks, 100)).toBe(7);
+        expect(lineForOffset(blocks, 150)).toBe(9.5);
     });
 });

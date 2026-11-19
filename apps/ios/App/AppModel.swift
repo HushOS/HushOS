@@ -338,7 +338,7 @@ final class AppModel {
         // The session's family check goes with it: nothing of it runs for the next one.
         FamilyWalkTasks.cancel()
         // An open editor's text, held for a rebuild of the screens (DriveStore.editorWork), goes with the session.
-        driveStore?.editorWork.drop()?.box.drop()
+        driveStore?.editorWork.drop()?.box.forget()
         driveStore?.resetFamilies()
         driveStore = nil
     }

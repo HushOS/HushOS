@@ -89,14 +89,130 @@ const ATTRIBUTES = new Set([
     'xml:space',
 ]);
 
-/* A URL anywhere in a value, other than a fragment within the SVG itself. */
-const OUTSIDE_URL = /url\(\s*(?!['"]?#)/i;
-const SCRIPTED = /javascript:|expression\(|@import|behavior:/i;
+/* The properties pele writes in a style attribute (its own custom properties, and these). */
+const STYLE_PROPERTIES = new Set([
+    'color',
+    'direction',
+    'dominant-baseline',
+    'fill',
+    'fill-opacity',
+    'font',
+    'font-family',
+    'font-size',
+    'font-style',
+    'font-weight',
+    'height',
+    'letter-spacing',
+    'max-width',
+    'opacity',
+    'rx',
+    'ry',
+    'stroke',
+    'stroke-dasharray',
+    'stroke-opacity',
+    'stroke-width',
+    'text-anchor',
+    'text-decoration',
+    'text-transform',
+    'white-space',
+    'width',
+    'word-spacing',
+]);
+const CUSTOM_PROPERTY = /^--(?:_|pele-)[\w-]*$/;
+
+const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+/*
+ * An attribute value as an SVG reader sees it: XML character references decoded. Null for a
+ * reference XML doesn't define (an SVG file has no other named entities without a DTD, which is
+ * refused anyway), so nothing reads differently here and there.
+ */
+export function decodeAttribute(value: string): string | null {
+    let failed = false;
+    const decoded = value.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);?/gi, (match, body: string) => {
+        if (!match.endsWith(';')) {
+            failed = true;
+            return '';
+        }
+        if (body[0] === '#') {
+            const code =
+                body[1] === 'x' || body[1] === 'X'
+                    ? Number.parseInt(body.slice(2), 16)
+                    : Number.parseInt(body.slice(1), 10);
+            if (!Number.isFinite(code) || code > 0x10ffff) {
+                failed = true;
+                return '';
+            }
+            return String.fromCodePoint(code);
+        }
+        const named = NAMED[body.toLowerCase()];
+        if (named === undefined) failed = true;
+        return named ?? '';
+    });
+    return failed ? null : decoded;
+}
+
+/* A CSS value as the CSS parser reads it: escapes (a backslash and hex digits, or a backslash and a character) decoded. */
+export function decodeCss(value: string): string {
+    return value.replace(
+        /\\([0-9a-f]{1,6})[ \t\n\r\f]?|\\([\s\S])/gi,
+        (_, hex: string | undefined, char: string | undefined) =>
+            hex
+                ? String.fromCodePoint(Math.min(Number.parseInt(hex, 16), 0x10ffff) || 0xfffd)
+                : (char ?? ''),
+    );
+}
+
+/*
+ * Whether a decoded CSS value reaches nothing outside the SVG: url() only to a fragment, and none of
+ * CSS's other ways to name a resource or run anything. CSS comments are refused outright: they could
+ * split a function name the checks look for.
+ */
+function cssValueSafe(value: string) {
+    const lower = value.toLowerCase();
+    if (/\/\*|\\|[<>]/.test(lower)) return false;
+    if (
+        /(?:image-set|image|cross-fade|element|paint|src)\s*\(|expression|javascript:|@import|behavior/.test(
+            lower,
+        )
+    )
+        return false;
+    for (const call of lower.matchAll(/url\s*\(\s*(['"]?)([^'")]*)/g))
+        if (!call[2]!.startsWith('#')) return false;
+    // A url( the pattern above couldn't read (unbalanced quotes): refused.
+    return (
+        (lower.match(/url\s*\(/g) ?? []).length ===
+        [...lower.matchAll(/url\s*\(\s*(['"]?)#/g)].length
+    );
+}
+
+/* A style attribute of pele's properties only, each with a safe value. */
+function styleSafe(style: string) {
+    const css = decodeCss(style);
+    for (const declaration of css.split(';')) {
+        if (!declaration.trim()) continue;
+        const colon = declaration.indexOf(':');
+        if (colon < 0) return false;
+        const property = declaration.slice(0, colon).trim().toLowerCase();
+        if (!STYLE_PROPERTIES.has(property) && !CUSTOM_PROPERTY.test(property)) return false;
+        if (!cssValueSafe(declaration.slice(colon + 1))) return false;
+    }
+    return true;
+}
+
+/* One attribute's value, decoded as an SVG reader and its CSS would read it. */
+function attributeSafe(key: string, raw: string) {
+    const value = decodeAttribute(raw);
+    if (value === null) return false;
+    if (key === 'style') return styleSafe(value);
+    return cssValueSafe(decodeCss(value));
+}
 
 /*
  * Whether pele's SVG may be shown: every tag is one of pele's elements and carries only allowlisted,
- * quoted attributes whose values name nothing outside the SVG. Text between tags is pele's escaped
- * text and is never read as markup.
+ * quoted attributes whose values, decoded as the SVG and its CSS read them, name nothing outside the
+ * SVG; a style carries only the properties pele writes. Text between tags is pele's escaped text and
+ * is never read as markup. Runs in the diagram worker, which has no DOM: the decoding is done here.
  */
 export function safeDiagramSvg(svg: string): boolean {
     if (!svg.startsWith('<svg') || /<[!?]/.test(svg)) return false;
@@ -113,11 +229,9 @@ export function safeDiagramSvg(svg: string): boolean {
         // Every attribute quoted and allowlisted; anything left over (an unquoted value, a stray
         // token) is refused.
         const attribute = /\s+([^\s=/>]+)\s*=\s*"([^"]*)"/g;
-        const leftover = rest.replace(attribute, (_, key: string, value: string) => {
-            if (!ATTRIBUTES.has(key) || OUTSIDE_URL.test(value) || SCRIPTED.test(value))
-                return '\u0000';
-            return '';
-        });
+        const leftover = rest.replace(attribute, (_, key: string, value: string) =>
+            ATTRIBUTES.has(key) && attributeSafe(key, value) ? '' : '\u0000',
+        );
         if (!/^\s*\/?\s*$/.test(leftover)) return false;
     }
     return seen > 0;

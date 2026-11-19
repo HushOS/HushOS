@@ -9,6 +9,25 @@
 /* A rendered block: the source lines it covers (1-based, inclusive) and where it sits in its scroller. */
 export type Block = { start: number; end: number; top: number; bottom: number };
 
+/*
+ * The blocks both lookups can trust: in document order, and starting no earlier in the source than
+ * the blocks before them. Footnote definitions are rendered at the end of the document whatever line
+ * they are on, so their starts go backwards; they are left out (their lines map through the gap they
+ * leave, to the blocks around them), and the binary searches below keep sorted keys.
+ */
+export function inSourceOrder(blocks: readonly Block[]): Block[] {
+    const kept: Block[] = [];
+    let start = -Infinity;
+    let top = -Infinity;
+    for (const block of blocks) {
+        if (block.start < start || block.top < top) continue;
+        kept.push(block);
+        start = block.start;
+        top = block.top;
+    }
+    return kept;
+}
+
 /* The last index whose key is at most `value`, in keys that never decrease; -1 when none is. */
 function lastAtMost(blocks: readonly Block[], value: number, key: (block: Block) => number) {
     let low = 0;
@@ -125,11 +144,11 @@ export class ScrollLink {
     scrolled(side: Side) {
         const pane = this.panes()[side];
         if (!pane) return;
+        // Still where the link put it: its own scroll, however many events the browser sends for it (a
+        // layout after the write can send another). Only a move away from there is the person's.
         const expected = this.expected[side];
-        if (expected !== null) {
-            this.expected[side] = null;
-            if (Math.abs(pane.scroller.scrollTop - expected) <= 1) return;
-        }
+        if (expected !== null && Math.abs(pane.scroller.scrollTop - expected) <= 1) return;
+        this.expected[side] = null;
         this.follow(side);
     }
 
@@ -199,5 +218,5 @@ export function measureBlocks(scroller: HTMLElement): Block[] {
             bottom: box.bottom - base,
         });
     }
-    return blocks;
+    return inSourceOrder(blocks);
 }

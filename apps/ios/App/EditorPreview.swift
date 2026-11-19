@@ -10,12 +10,21 @@ import UIKit
  */
 struct EditorPreviewPane: View {
     let pieces: [MarkdownPiece]?
+    /* Past what the viewer renders: said in place of the preview, never a spinner for work that won't start. */
+    var unavailable = false
     @Binding var position: ScrollPosition
     let scroll: EditorScroll
 
     var body: some View {
         ScrollView {
-            if let pieces {
+            if unavailable {
+                Text(EditorWords.previewTooLong)
+                    .font(Theme.Text.footnote)
+                    .foregroundStyle(Alpine.inkMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(Alpine.Space.s6)
+                    .frame(maxWidth: .infinity)
+            } else if let pieces {
                 LazyVStack(alignment: .leading, spacing: Alpine.Space.s4) {
                     ForEach(Array(pieces.enumerated()), id: \.offset) { index, piece in
                         MarkdownBlockView(block: piece.block)
@@ -28,6 +37,8 @@ struct EditorPreviewPane: View {
                 .padding(.vertical, Alpine.Space.s6)
                 .frame(maxWidth: 720, alignment: .leading)
                 .frame(maxWidth: .infinity)
+                // Every block a target, laid out or not, so a jump past what the lazy stack has measured lands on it.
+                .scrollTargetLayout()
                 .coordinateSpace(.named(EditorScroll.space))
                 .textSelection(.disabled)
             } else {
@@ -151,6 +162,14 @@ struct EditorPreviewPane: View {
         previewTop = y
         guard linked, previewHeld, let line = previewLine(at: y) else { return }
         showSource(line)
+    }
+
+    /* No rendering (the text is past the preview's limit): nothing maps, nothing follows. */
+    func unrendered() {
+        map = nil
+        frames = [:]
+        rendering = false
+        again = false
     }
 
     /* A new rendering: the old blocks' places are gone. */

@@ -60,7 +60,7 @@ struct FileViewer: View {
         ToolbarItem(placement: .cancellationAction) {
             Button {
                 // An editor work left without its screen (DriveStore.editorWork) goes with the viewer.
-                store.editorWork.release(key: current.ref)?.box.drop()
+                store.editorWork.release(key: current.ref)?.box.forget()
                 dismiss()
             } label: { HeaderWord(text: "Done") }
         }
@@ -71,6 +71,8 @@ struct FileViewer: View {
                 // family folder this phone may write. Never an earlier version.
                 if editable {
                     Button {
+                        // Work an unfold left waiting is taken back first: a new editor never opens over it.
+                        if presentHeldEditor() { return }
                         // From here a link waits for the editor (DriveStore.route) instead of replacing the screens under it.
                         store.editorOpen = true
                         editing = current
@@ -203,23 +205,33 @@ struct FileViewer: View {
         // A family's removal takes everything with it, an open editor and its text included, whatever moved before.
         .onChange(of: familyGone) { _, gone in
             guard gone else { return }
-            store.editorWork.release(key: current.ref)?.box.drop()
+            store.editorWork.release(key: current.ref)?.box.forget()
             editing = nil
             dismiss()
         }
         // Presented again after an unfold or a resize tore the screens down (DriveStore.editorWork): the editor that was
         // open over this file comes back with its text, cursor and scroll.
-        .onAppear {
-            if editing == nil, store.editorWork.held(key: current.ref, owner: store.vault) != nil {
-                store.editorOpen = true
-                editing = current
-            }
-        }
+        .onAppear { presentHeldEditor() }
         // What the editor held goes on when its own screen has gone (TextEditorScreen's onDisappear), never when
         // this viewer is covered by it: a link released then reaches .onChange(of: store.route) above.
         .onChange(of: editing == nil) { _, closed in
             if closed, removed || store.route != nil { dismiss() }
         }
+    }
+
+    /*
+     * The editor whose work an unfold or a resize left waiting (DriveStore.editorWork), presented again over the file it
+     * was editing (the viewer pages there when it lists it; a rebuilt viewer starts on the file it was first opened on).
+     * Work for a file this person may no longer edit (a family removed, a share revoked) is emptied instead.
+     */
+    @discardableResult private func presentHeldEditor() -> Bool {
+        guard editing == nil,
+              let (key, work) = store.editorWork.waiting(owner: store.vault, allowed: { _, work in store.mayRestoreEditor(work) },
+                                                         dropped: { $0.box.forget() }) else { return false }
+        if let page = items.first(where: { $0.ref == key }) { current = page }
+        store.editorOpen = true
+        editing = work.file
+        return true
     }
 
     private func sniffKey(_ item: Opened) -> String { "\(item.id)-\(item.node.currentVersion?.id ?? "")" }

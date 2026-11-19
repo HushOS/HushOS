@@ -42,6 +42,12 @@ describe('a diagram from a file', () => {
         const good =
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><g fill="red"><path d="M0,0L1,1"/></g></svg>';
         expect(safeDiagramSvg(good)).toBe(true);
+        // pele's own forms pass: its custom properties, var() with a fallback, a fragment url.
+        expect(
+            safeDiagramSvg(
+                '<svg xmlns="http://www.w3.org/2000/svg" style="max-width:100%;--_bg:var(--pele-bg,#fff);font:16px sans-serif"><rect fill="var(--pele-series-1,#4e79a7)" stroke="url(#grad)"/></svg>',
+            ),
+        ).toBe(true);
         for (const bad of [
             '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
             '<svg xmlns="http://www.w3.org/2000/svg"><a href="https://x.example"><path d="M0,0"/></a></svg>',
@@ -53,6 +59,16 @@ describe('a diagram from a file', () => {
             '<svg xmlns="http://www.w3.org/2000/svg"><!-- x --><g/></svg>',
             '<svg xmlns="http://www.w3.org/2000/svg"><use xlink:href="#a"/></svg>',
             '<svg xmlns="http://www.w3.org/2000/svg"><g style="background:url(javascript:alert(1))"/></svg>',
+            // Character references an SVG reader decodes: url(https://...) once read.
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="&#117;&#x72;l(https://x.example/f.svg#a)"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:u&#114;l(https://x.example/f.svg#a)"/></svg>',
+            // CSS escapes the style parser decodes: url(https://...) once read.
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:\\75 rl(https://x.example/f.svg#a)"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="u\\rl(https://x.example/f.svg#a)"/></svg>',
+            // A property pele never writes.
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect style="background-image:none"/></svg>',
+            // A named entity XML doesn't define.
+            '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="&nbsp;red"/></svg>',
         ])
             expect(safeDiagramSvg(bad), bad).toBe(false);
     });

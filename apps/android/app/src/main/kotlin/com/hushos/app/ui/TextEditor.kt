@@ -45,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -274,15 +275,28 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             is Phase.ReadOnly -> now.text ?: return
             else -> return
         }
+        // Past what the viewer renders: no preview at all (no spinner, no old blocks, nothing scrolled by it) until it
+        // fits again. The length alone settles most texts; only one that could go either way is counted in bytes.
+        if (tooLong(text)) {
+            previewTooLong = true
+            parsing?.cancel()
+            again = false
+            preview = null
+            lineMap = null
+            return
+        }
         if (parsing?.isActive == true) {
             again = true
             return
         }
-        if (utf8Length(text) > MarkdownDocument.LIMIT) {
-            previewTooLong = true
-            return
-        }
         render(text.toString())
+    }
+
+    /* Over MarkdownDocument.LIMIT in UTF-8 bytes: a UTF-16 unit is one to three bytes, so most lengths need no count. */
+    private fun tooLong(text: CharSequence): Boolean = when {
+        text.length > MarkdownDocument.LIMIT -> true
+        text.length * 3L <= MarkdownDocument.LIMIT -> false
+        else -> utf8Length(text) > MarkdownDocument.LIMIT
     }
 
     /*
@@ -293,10 +307,13 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         parsing?.cancel()
         again = false
         parsing = scope.launch {
-            val lines = text.count { it == '\n' } + 1
-            val pieces = withContext(Dispatchers.Default) { MarkdownDocument.parseLined(text) }
-            if (!previewing && !sideBySide) return@launch
-            lineMap = LineMap(pieces.map { it.start }, lines)
+            // Parsed and its lines counted off the main thread.
+            val (pieces, map) = withContext(Dispatchers.Default) {
+                val parsed = MarkdownDocument.parseLined(text)
+                parsed to LineMap(parsed.map { it.start }, text.count { it == '\n' } + 1)
+            }
+            if (!previewing && !sideBySide || previewTooLong) return@launch
+            lineMap = map
             preview = pieces
             if (again) {
                 again = false
@@ -655,24 +672,24 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                         androidx.compose.material3.Button(onClick = { edit.load() }) { Text(EditorWords.TRY_AGAIN) }
                     }
                     is TextEdit.Phase.ReadOnly -> {
-                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
+                        if (edit.previewTooLong && !side) Note(EditorWords.PREVIEW_TOO_LONG)
                         Note(TextEditing.words(phase.reason))
                         phase.text?.let { text ->
                             SourceAndPreview(side) {
                                 PlainText(text = text, buffer = null, onEdit = {}, scroll = scroll, hidden = edit.previewing && !side)
-                                if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side)
+                                if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side, unavailable = edit.previewTooLong)
                             }
                         } ?: Spacer(Modifier.height(0.dp))
                     }
                     TextEdit.Phase.Editing -> {
                         val line = if (edit.closing) EditorWords.FINISHING else edit.failure ?: edit.status.takeIf { !edit.edited }
                         line?.let { Note(it, failed = !edit.closing && edit.failure != null) }
-                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
+                        if (edit.previewTooLong && !side) Note(EditorWords.PREVIEW_TOO_LONG)
                         edit.format?.let(TextEditing::mixedNote)?.let { Note(it) }
                         // The EditText stays while the preview shows (out of sight, focus and TalkBack): it holds the text.
                         SourceAndPreview(side) {
                             PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited, scroll = scroll, hidden = edit.previewing && !side)
-                            if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side)
+                            if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side, unavailable = edit.previewTooLong)
                         }
                     }
                 }
@@ -763,13 +780,16 @@ private fun SourceAndPreview(side: Boolean, content: @Composable () -> Unit) {
 
 /* The viewer's Markdown blocks (MarkdownViewer.kt): raw HTML dropped, links only on a tap, images named and never fetched. */
 @Composable
-private fun MarkdownPreview(pieces: List<MdPiece>?, state: LazyListState, divided: Boolean) {
+private fun MarkdownPreview(pieces: List<MdPiece>?, state: LazyListState, divided: Boolean, unavailable: Boolean = false) {
     val alpine = Alpine.colors
     val rule = alpine.rule
     Box(Modifier.fillMaxSize().background(alpine.ground).drawBehind {
         if (divided) drawLine(rule, Offset(0f, 0f), Offset(0f, size.height), 1.dp.toPx())
     }) {
-        if (pieces == null) CircularProgressIndicator(color = alpine.primary, modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp))
+        // Past the limit: said here, never a spinner for a rendering that won't start.
+        if (unavailable) Text(EditorWords.PREVIEW_TOO_LONG, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted,
+            modifier = Modifier.align(Alignment.TopCenter).padding(24.dp))
+        else if (pieces == null) CircularProgressIndicator(color = alpine.primary, modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp))
         else LazyColumn(
             modifier = Modifier.fillMaxSize(),
             state = state,
@@ -868,15 +888,27 @@ private class EditorScroll(val edit: TextEdit) {
         return map.line(first.index, fraction)
     }
 
-    /* Puts `line` at the top of the preview: its block, and as far down it as the block is laid out. */
+    /*
+     * Puts `line` at the top of the preview: its block, then as far down it as the line is. A block not laid out yet has
+     * no height to take a fraction of: it is scrolled to first, measured, and then put at the fraction (a narrow switch
+     * in the middle of a tall code block keeps its line).
+     */
     fun movePreview(line: Double) {
         val state = listState ?: return
         val (index, fraction) = edit.lineMap?.place(line) ?: return
-        val size = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
-        val offset = (fraction * size).toInt()
-        if (state.firstVisibleItemIndex == index && state.firstVisibleItemScrollOffset == offset) return
-        expected = index to offset
-        scope?.launch { state.scrollToItem(index, offset) }
+        scope?.launch {
+            var size = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size
+            if (size == null) {
+                expected = index to 0
+                state.scrollToItem(index, 0)
+                withFrameNanos { }
+                size = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: return@launch
+            }
+            val offset = (fraction * size).toInt()
+            if (state.firstVisibleItemIndex == index && state.firstVisibleItemScrollOffset == offset) return@launch
+            expected = index to offset
+            state.scrollToItem(index, offset)
+        }
     }
 
     /* The preview's first block or offset changed: its own move lands here once and is let go; a person's moves the text. */

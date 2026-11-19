@@ -51,7 +51,7 @@ async function openEditor(p: Page, name: string) {
  * server (`/src/components/drive/pdf-viewer.tsx`), or as its chunk from a production build
  * (`/assets/pdf-viewer-<hash>.js`), which is what CI runs this suite against.
  */
-const appModule = (name: string) => new RegExp(`/(${name}\\.tsx|${name}-[\\w-]+\\.js)(\\?|$)`);
+const appModule = (name: string) => new RegExp(`/(${name}\\.tsx?|${name}-[\\w-]+\\.js)(\\?|$)`);
 /* The Rust grammar's fetch: Shiki's package in development, its own chunk in a production build. */
 const RUST_GRAMMAR = /shikijs[_/]langs|\/assets\/rust-[\w-]+\.js(\?|$)/;
 

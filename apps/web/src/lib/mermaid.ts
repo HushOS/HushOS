@@ -4,22 +4,39 @@ import type { DiagramOutcome } from '@/lib/mermaid-render';
  * Mermaid diagrams for the Markdown renderer (components/drive/rich-text.tsx): drawn by pele in a worker
  * of their own (lib/mermaid.worker.ts), which the viewers' post-unlock preload fetches whole
  * (lib/preload.ts). Until then a diagram stays its code: drawing it before would fetch the worker and
- * say that a file with a diagram was just opened. A diagram that takes too long ends its worker, and
- * the next one starts a new one from the same file.
+ * say that a file with a diagram was just opened.
+ *
+ * One diagram at a time: the worker draws synchronously, so the queue is kept here and each diagram's
+ * time starts when it is handed over, never while it waits behind others. One that takes too long ends
+ * the worker; it alone fails, and the rest go on in a new worker from the same (cached) file.
  */
 
-/* How long one diagram may take before its worker is ended. */
-const DIAGRAM_TIMEOUT = 8_000;
+/* How long one diagram may take, from the moment the worker is given it. */
+export const DIAGRAM_TIMEOUT = 8_000;
+/* How long the preload waits for the worker to say it has loaded. */
+const PRELOAD_TIMEOUT = 30_000;
 
-let worker: Worker | null = null;
-let ready = false;
+/* Whether diagrams can be drawn: waiting for the preload, ready, or failed (the worker couldn't start). */
+export type DiagramsState = 'waiting' | 'ready' | 'failed';
+
+let state: DiagramsState = 'waiting';
 let announce: () => void = () => {};
-const preloaded = new Promise<void>((resolve) => {
+const settled = new Promise<void>((resolve) => {
     announce = resolve;
 });
 let started = false;
+let worker: Worker | null = null;
 let next = 0;
-const waiting = new Map<number, (outcome: DiagramOutcome) => void>();
+
+type Job = { id: number; source: string; settle: (outcome: DiagramOutcome) => void };
+const queue: Job[] = [];
+let running: { job: Job; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function settle(now: DiagramsState) {
+    if (state !== 'waiting') return;
+    state = now;
+    announce();
+}
 
 function startWorker() {
     const made = new Worker(new URL('./mermaid.worker.ts', import.meta.url), {
@@ -30,57 +47,87 @@ function startWorker() {
         event: MessageEvent<{ kind: 'ready' } | { id: number; outcome: DiagramOutcome }>,
     ) => {
         const message = event.data;
-        if ('kind' in message) {
-            ready = true;
-            announce();
+        if ('kind' in message) return settle('ready');
+        if (running?.job.id !== message.id) return;
+        clearTimeout(running.timer);
+        const { job } = running;
+        running = null;
+        job.settle(message.outcome);
+        pump();
+    };
+    // The worker's script didn't load, or it died: before the preload settled, diagrams are off;
+    // during a diagram, that one fails and the rest go on in a new worker.
+    made.onerror = () => {
+        if (state === 'waiting') {
+            settle('failed');
+            for (const job of queue.splice(0)) job.settle({ failure: 'failed' });
             return;
         }
-        waiting.get(message.id)?.(message.outcome);
-        waiting.delete(message.id);
-    };
-    made.onerror = () => {
-        for (const [, settle] of waiting) settle({ failure: 'failed' });
-        waiting.clear();
+        restart();
     };
     return made;
 }
 
-/* The worker and every diagram type, fetched once after unlock with the other viewers. */
-export function preloadMermaid() {
-    if (!started && typeof Worker !== 'undefined') {
-        started = true;
-        try {
-            worker = startWorker();
-            worker.postMessage({ kind: 'preload' });
-        } catch {
-            // No module workers: diagrams stay code.
-        }
+/* The running diagram fails; a new worker takes the rest. */
+function restart() {
+    worker?.terminate();
+    if (running) {
+        clearTimeout(running.timer);
+        running.job.settle({ failure: 'failed' });
+        running = null;
     }
-    return Promise.race([preloaded, new Promise<void>((resolve) => setTimeout(resolve, 30_000))]);
+    try {
+        worker = startWorker();
+    } catch {
+        worker = null;
+        state = 'failed';
+        for (const job of queue.splice(0)) job.settle({ failure: 'failed' });
+        return;
+    }
+    pump();
 }
 
-/* Whether diagrams can be drawn now, and when they can. */
-export const diagramsReady = () => ready;
-export const diagramsPreloaded = preloaded;
+/* The next diagram, if none is being drawn; its time starts now. */
+function pump() {
+    if (running || !worker) return;
+    const job = queue.shift();
+    if (!job) return;
+    running = { job, timer: setTimeout(restart, DIAGRAM_TIMEOUT) };
+    worker.postMessage({ id: job.id, source: job.source });
+}
 
-/* A diagram drawn in the worker; only once the preload has fetched it. */
+/*
+ * The worker and every diagram type, fetched once after unlock with the other viewers. Settles as soon
+ * as the worker says it has loaded, or at once if it can't start, so the preloads after it never wait on
+ * a failure already known.
+ */
+export function preloadMermaid() {
+    if (!started) {
+        started = true;
+        if (typeof Worker === 'undefined') settle('failed');
+        else
+            try {
+                worker = startWorker();
+                worker.postMessage({ kind: 'preload' });
+            } catch {
+                settle('failed');
+            }
+    }
+    return Promise.race([
+        settled,
+        new Promise<void>((resolve) => setTimeout(resolve, PRELOAD_TIMEOUT)),
+    ]);
+}
+
+export const diagramsState = () => state;
+/* Settles when the preload has: the worker loaded, or couldn't. */
+export const diagramsSettled = settled;
+
+/* A diagram drawn in the worker, in turn; only once the preload has fetched it. */
 export function drawDiagram(source: string): Promise<DiagramOutcome> {
-    if (!ready || !worker) return Promise.resolve({ failure: 'failed' });
-    const id = ++next;
-    const current = worker;
+    if (state !== 'ready' || !worker) return Promise.resolve({ failure: 'failed' });
     return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-            if (!waiting.has(id)) return;
-            // A diagram that never finishes: its worker goes, and with it every diagram waiting on it.
-            current.terminate();
-            for (const [, settle] of waiting) settle({ failure: 'failed' });
-            waiting.clear();
-            if (worker === current) worker = startWorker();
-        }, DIAGRAM_TIMEOUT);
-        waiting.set(id, (outcome) => {
-            clearTimeout(timer);
-            resolve(outcome);
-        });
-        current.postMessage({ id, source });
+        queue.push({ id: ++next, source, settle: resolve });
+        pump();
     });
 }
