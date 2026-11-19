@@ -198,9 +198,16 @@ export default defineConfig({
     resolve: { tsconfigPaths: true },
     // Worker bundles take only these plugins in a build (the list below applies to them in dev).
     worker: { plugins: () => [zipJsWithoutCodecImport()] },
-    // Loaded by the runtime from the output's node_modules, never bundled: its dependencies
+    // Loaded by the runtime from the output's node_modules, never bundled: their dependencies
     // need their own load order (nitro.config.ts, `traceDeps`).
-    ssr: { external: ['@simplewebauthn/server'] },
+    ssr: {
+        external: [
+            '@simplewebauthn/server',
+            '@aws-sdk/client-s3',
+            '@aws-sdk/client-sesv2',
+            '@aws-sdk/s3-request-presigner',
+        ],
+    },
     optimizeDeps: {
         // Pre-bundle what the viewer loads lazily (highlighter, grammars, PDF,
         // video demuxing), so a cold dev server does not discover them on the
