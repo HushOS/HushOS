@@ -1,0 +1,53 @@
+apps/web/src/lib/mermaid-svg.ts
+  s_c60e24772e04af::t_83dcb7a9df2522 1-165
+apps/web/package.json
+  s_c60e24772e04af::t_eda6e035a9e56f 95
+apps/web/src/components/drive/rich-text.css
+  s_c60e24772e04af::t_e4abb33037f577 365-380
+apps/web/src/components/drive/rich-text.test.tsx
+  s_c60e24772e04af::t_2499881a6f0643 1-26
+apps/web/src/components/drive/rich-text.tsx
+  s_c60e24772e04af::t_7081804a604ea3 18,34-41,115-124,131-277,286-289,299-305
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_778c2db0906c44 284
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_8131cfb60c54c9 357
+apps/web/src/lib/markdown.ts
+  s_c60e24772e04af::t_a5ad2ca4de003c 56-80,94-97
+apps/web/src/lib/mermaid-bundle.test.ts
+  s_c60e24772e04af::t_b033699d94922d 1-61
+apps/web/src/lib/mermaid-render.ts
+  s_c60e24772e04af::t_92f545f9a53096 1-74
+apps/web/src/lib/mermaid-svg.test.ts
+  s_c60e24772e04af::t_b0e9a49e470c49 1-95
+apps/web/src/lib/mermaid.ts
+  s_c60e24772e04af::t_e3638c6d5d6b92 1-86
+apps/web/src/lib/mermaid.worker.ts
+  s_c60e24772e04af::t_407b7c7cbb9e69 1-14
+apps/web/src/lib/preload.ts
+  s_c60e24772e04af::t_862d58d677157e 30-31
+bun.lock
+  s_c60e24772e04af::t_cb558d0c7d7879 101,1951-1952
+docs/editing-design.md
+  s_c60e24772e04af::t_bac7362ffe22c6 163
+docs/file-tools-design.md
+  s_c60e24772e04af::t_3fa330e0285725 347
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_e939d03b2263b2 105,138,170-175,266-312
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5de0b3441c2348317dc7b2345997b280d2c733a",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
