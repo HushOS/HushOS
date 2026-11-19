@@ -376,7 +376,8 @@ struct TextEditorScreen: View {
             case .editable(let text, let opened):
                 editor.open(text)
                 savedText = text
-                saveState = TextEditing.SaveState(opening: data)
+                // From what was just opened, never decoded again.
+                saveState = TextEditing.SaveState(format: opened, text: text, bytes: data)
                 format = opened
                 phase = .editing
             case .readOnly(let reason, let text):
@@ -420,13 +421,16 @@ struct TextEditorScreen: View {
         // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
         guard let token = session.take(store.vault) else { return }
         let vault = token.owner
+        // The text and the session's format, taken here; written out off the main actor.
         let text = editor.text
-        // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
-        guard let bytes = saveState?.bytes(for: text) else { return }
+        guard let state = saveState else { return }
         saving = true
         failure = nil
         status = nil
         defer { saving = false }
+        // In the file's encoding, byte order mark and line breaks; unchanged, the bytes it opened as.
+        let bytes = await Self.encoded(text, in: state)
+        guard stillOn(token) else { return }
         do {
             let (folder, listed) = try await vault.editTarget(file, at: destination)
             guard stillOn(token) else { return }
@@ -470,11 +474,13 @@ struct TextEditorScreen: View {
         guard let file = target, let from = source, let token = session.take(store.vault) else { return }
         let vault = token.owner
         let text = editor.text
-        // The copy keeps the file's encoding and line breaks too.
-        guard let bytes = saveState?.bytes(for: text) else { return }
+        guard let state = saveState else { return }
         saving = true
         failure = nil
         defer { saving = false }
+        // The copy keeps the file's encoding and line breaks too, written out off the main actor.
+        let bytes = await Self.encoded(text, in: state)
+        guard stillOn(token) else { return }
         do {
             let (folder, _) = try await vault.editTarget(file, at: destination)
             let sources = try await vault.copySources(of: from, named: file)
@@ -499,6 +505,14 @@ struct TextEditorScreen: View {
             guard stillOn(token) else { return }
             failure = ErrorWords.say(error) ?? EditorWords.saveFailed
         }
+    }
+
+    /*
+     * What a save of `text` writes (SaveState.bytes), worked out off the main actor: encoding up to 8 MiB never holds up
+     * typing or the screen.
+     */
+    private nonisolated static func encoded(_ text: String, in state: TextEditing.SaveState) async -> Data {
+        await Task.detached(priority: .userInitiated) { state.bytes(for: text) }.value
     }
 
     /* A save or a copy of `text` landed as `bytes`: in one line break from here, unless it sent the bytes it had. */

@@ -92,12 +92,17 @@ public enum TextEditing {
         public private(set) var text: String
         public private(set) var bytes: Data
 
+        /* The session of `bytes`, already opened as `text` in `format`: never decoded a second time. */
+        public init(format: TextFormat, text: String, bytes: Data) {
+            self.format = format
+            self.text = text
+            self.bytes = bytes
+        }
+
         /* The session of bytes that open for editing; nil when they open read-only. */
         public init?(opening data: Data) {
             guard case .editable(let text, let format) = TextEditing.open(data) else { return nil }
-            self.format = format
-            self.text = text
-            bytes = data
+            self.init(format: format, text: text, bytes: data)
         }
 
         /* What a save writes for `text`: the bytes last opened or saved while the text is still theirs, else the text in the session's format. */

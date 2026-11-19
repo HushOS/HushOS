@@ -26,7 +26,16 @@ import { useFormatForDisplay, useHotkey } from '@tanstack/react-hotkeys';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { useBlocker } from '@tanstack/react-router';
 import { SaveIcon, TriangleAlertIcon } from 'lucide-react';
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import {
+    Component,
+    lazy,
+    Suspense,
+    useCallback,
+    useEffect,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { Notice, Opening } from '@/components/drive/viewer-parts';
 import { openStorageFull } from '@/components/drive/storage-full-dialog';
@@ -176,6 +185,8 @@ export const editorWords = {
     source: 'Source',
     preview: 'Preview',
     previewTooLong: 'This file is too long to preview while you edit.',
+    previewFailed: 'The preview couldn’t be shown.',
+    refreshPreview: 'Refresh preview',
 };
 
 const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
@@ -339,6 +350,41 @@ function tooLongToPreview(doc: Text) {
     return false;
 }
 
+/*
+ * The preview follows typing only up to this length: parsing Markdown runs on the main thread, about
+ * 30 ms for 32K characters on a fast laptop (a phone takes a few times that), and a megabyte took over
+ * a second. A longer text is rendered when the preview comes into view, then again on Refresh preview.
+ */
+const PREVIEW_LIVE_LIMIT = 32 * 1024;
+
+/*
+ * The preview's own failure (its renderer's chunk didn't load, or the renderer threw) stays in the
+ * preview: without this it would unmount the editor and lose the text. A new text tries again.
+ */
+class PreviewBoundary extends Component<
+    { text: string; children: ReactNode },
+    { text: string; failed: boolean }
+> {
+    state = { text: this.props.text, failed: false };
+    static getDerivedStateFromProps(
+        props: { text: string },
+        state: { text: string; failed: boolean },
+    ) {
+        return props.text === state.text ? null : { text: props.text, failed: false };
+    }
+    static getDerivedStateFromError() {
+        return { failed: true };
+    }
+    render() {
+        if (!this.state.failed) return this.props.children;
+        return (
+            <p className="px-6 py-10 text-center text-sm text-muted-foreground">
+                {editorWords.previewFailed}
+            </p>
+        );
+    }
+}
+
 /* Large text isn't checked as it changes: parsing megabytes of YAML on every pause would stall typing. */
 const CHECK_LIMIT = 2 * 1024 * 1024;
 
@@ -434,10 +480,17 @@ export function TextEditor({
     /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
     const [ended, setEnded] = useState(false);
     const language = editorLanguage(loadFrom.name);
-    /* Markdown shows the viewer's rendering beside the source (Source or Preview on a narrow screen). */
-    const markdown = previewKindOf(loadFrom.name, loadFrom.metadata?.mime) === 'markdown';
+    /*
+     * Markdown shows the viewer's rendering beside the source (Source or Preview on a narrow screen),
+     * decided by the row the text was read from (it may be newer than the one Edit was pressed on).
+     */
+    const [markdown, setMarkdown] = useState(false);
     const [pane, setPane] = useState<'source' | 'preview'>('source');
-    const [preview, setPreview] = useState<{ text: string } | 'too-long' | null>(null);
+    /*
+     * What the preview shows: the text it rendered (null: too long to render), and whether the editor
+     * has changed since while too long to follow typing (Refresh preview renders it again).
+     */
+    const [preview, setPreview] = useState<{ text: string | null; stale: boolean } | null>(null);
     /* Rendered only while it can be seen: beside the source on a wide screen, or chosen on a narrow one. */
     const wide = useIsDesktop();
     const previewShown = markdown && (wide || pane === 'preview');
@@ -500,6 +553,7 @@ export function TextEditor({
                     ? { format: text.format, text: text.text, bytes: bytes.slice() }
                     : null;
                 setTextFormat(text.editable ? text.format : null);
+                setMarkdown(previewKindOf(file.name, file.metadata?.mime) === 'markdown');
                 onRead(file.currentVersion?.id ?? null, file);
                 setPhase(
                     text.editable
@@ -606,25 +660,43 @@ export function TextEditor({
     // The Markdown preview, a moment after typing stops: the viewer's renderer, sanitized the same
     // way (images and links named, never fetched). Past the renderer's limit it says so instead.
     // Nothing is scheduled or mounted while it can't be seen; it shows the text as it is now when it can.
-    const previewing = useRef(false);
+    // Past PREVIEW_LIVE_LIMIT it stops following typing and offers Refresh preview instead.
+    /*
+     * The editor and the document (CodeMirror's are immutable: a change is a new one) the preview last
+     * rendered: a new editor (Open theirs) renders at once, and only a document that differs is stale.
+     */
+    const previewedFrom = useRef<EditorView | null>(null);
+    const previewedDoc = useRef<Text | null>(null);
+    const renderPreview = useCallback(() => {
+        const current = view.current;
+        if (!current) return;
+        const doc = current.state.doc;
+        previewedFrom.current = current;
+        previewedDoc.current = doc;
+        setPreview({ text: tooLongToPreview(doc) ? null : doc.toString(), stale: false });
+    }, [setPreview]);
     useEffect(() => {
         const current = view.current;
         if (!previewShown || !current) {
-            previewing.current = false;
+            previewedFrom.current = null;
+            previewedDoc.current = null;
             setPreview(null);
             return;
         }
-        // At once when it comes into view, so it never opens empty or on older text.
-        const timer = window.setTimeout(
-            () => {
-                previewing.current = true;
-                const doc = current.state.doc;
-                setPreview(tooLongToPreview(doc) ? 'too-long' : { text: doc.toString() });
-            },
-            previewing.current ? 250 : 0,
-        );
+        // At once when it comes into view or a new text opens, so it never opens empty or on older text.
+        if (previewedFrom.current !== current) {
+            const timer = window.setTimeout(renderPreview, 0);
+            return () => window.clearTimeout(timer);
+        }
+        // Already showing this text (a render that landed before this effect saw its count): nothing to do.
+        if (current.state.doc === previewedDoc.current) return;
+        if (current.state.doc.length > PREVIEW_LIVE_LIMIT) {
+            setPreview((shown) => (shown && !shown.stale ? { ...shown, stale: true } : shown));
+            return;
+        }
+        const timer = window.setTimeout(renderPreview, 250);
         return () => window.clearTimeout(timer);
-    }, [edits, previewShown]);
+    }, [edits, previewShown, renderPreview]);
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
     useEffect(
@@ -1087,16 +1159,29 @@ export function TextEditor({
                             data-markdown-preview
                             className="min-h-0 min-w-0 flex-1 overflow-auto border-rule lg:border-l"
                         >
-                            {preview === 'too-long' ? (
+                            {preview?.stale && (
+                                <div className="sticky top-0 z-10 flex justify-end border-b border-rule bg-background px-4 py-2">
+                                    <Button variant="outline" onClick={renderPreview}>
+                                        {editorWords.refreshPreview}
+                                    </Button>
+                                </div>
+                            )}
+                            {preview?.text === null ? (
                                 <p className="px-6 py-10 text-center text-sm text-muted-foreground">
                                     {editorWords.previewTooLong}
                                 </p>
                             ) : (
                                 preview && (
-                                    <Suspense fallback={null}>
-                                        {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
-                                        <MarkdownView text={preview.text} fences="after-preload" />
-                                    </Suspense>
+                                    // A failure here stays in this pane: the source, its text and Save go on.
+                                    <PreviewBoundary text={preview.text}>
+                                        <Suspense fallback={null}>
+                                            {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
+                                            <MarkdownView
+                                                text={preview.text}
+                                                fences="after-preload"
+                                            />
+                                        </Suspense>
+                                    </PreviewBoundary>
                                 )
                             )}
                         </section>

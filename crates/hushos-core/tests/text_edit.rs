@@ -112,15 +112,31 @@ fn text_of(parts: &Value) -> String {
     out
 }
 
+/// The encoder, not the save state's shortcut: a file with one line-ending style
+/// that opens for editing is written back as its own bytes from its text alone
+/// (encoding, byte order mark, line breaks, final newline or none). A mixed file
+/// is left out: an edit rewrites its minority on purpose.
 #[test]
-fn every_editable_case_saved_without_an_edit_is_its_own_bytes() {
+fn every_editable_case_with_one_line_ending_encodes_back_to_its_own_bytes() {
     let cases = cases();
+    let mut encoded = Vec::new();
     for case in cases["bytes"].as_array().expect("bytes") {
         let bytes = bytes_of(&case["bytes"]);
-        if let Some(mut session) = Session::open(bytes.clone()) {
-            let text = session.text.clone();
-            assert!(session.save(&text) == bytes, "{}", case["name"]);
+        if let TextOpened::Editable { format, text } = text_open(bytes.clone()) {
+            if format.mixed {
+                continue;
+            }
+            assert!(text_encode(format, text) == bytes, "{}", case["name"]);
+            encoded.push((format.encoding, format.line_ending));
         }
+    }
+    // Every encoding, and both line endings, went through the encoder.
+    let encodings = [TextEncoding::Utf8, TextEncoding::Utf8Bom, TextEncoding::Utf16Le, TextEncoding::Utf16Be];
+    for encoding in encodings {
+        assert!(encoded.iter().any(|(at, _)| *at == encoding), "{encoding:?}");
+    }
+    for ending in [LineEnding::Lf, LineEnding::Crlf] {
+        assert!(encoded.iter().any(|(_, at)| *at == ending), "{ending:?}");
     }
 }
 

@@ -417,6 +417,41 @@ test('Markdown shows the viewer’s rendering beside the source, live, and fetch
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
+test('a preview whose renderer can’t load says so, and the text typed beside it still saves', async () => {
+    // The renderer's code fails to load; the preload is held before it, so only the preview asks for it.
+    const held: Route[] = [];
+    await page.route('**/components/drive/pdf-viewer.tsx*', (route) => {
+        held.push(route);
+    });
+    await page.route('**/components/drive/rich-text.tsx*', (route) =>
+        route.fulfill({ status: 500, body: '' }),
+    );
+    await page.reload();
+    await expect(page.locator('[data-node-id]')).toHaveCount(13, { timeout: 60_000 });
+    await openEditor(page, 'preview.md');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByText('The preview couldn’t be shown.')).toBeVisible();
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('\nTyped beside a failed preview\n');
+    await expect(editor(page)).toContainText('Typed beside a failed preview');
+    await expect(preview.getByText('The preview couldn’t be shown.')).toBeVisible();
+    await dialog(page).getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(dialog(page).getByText('Saved', { exact: true })).toBeVisible({ timeout: 60_000 });
+    await close(page);
+    const saved = (await downloaded(page, 'preview.md')).toString();
+    expect(saved.startsWith('# Notes\n')).toBe(true);
+    expect(saved).toContain('\nTyped beside a failed preview\n');
+    // A fresh page for the tests after: nothing failed or held.
+    await page.unroute('**/components/drive/rich-text.tsx*');
+    await page.unroute('**/components/drive/pdf-viewer.tsx*');
+    for (const route of held) await route.continue().catch(() => {});
+    await page.reload();
+    await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
+        timeout: 90_000,
+    });
+});
+
 test('broken JSON gets a warning beside Save, and still saves', async () => {
     await openEditor(page, 'config.json');
     await editor(page).click();

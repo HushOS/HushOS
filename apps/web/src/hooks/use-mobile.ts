@@ -27,7 +27,10 @@ export function useIsTablet() {
     );
 }
 
-/* A desk's width, 1024px and up: Tailwind's `lg`. */
+/*
+ * Tailwind's `lg` exactly: 64rem, so it moves with the browser's font size as the `lg:`
+ * classes do (1024px only at the default 16px).
+ */
 export function useIsDesktop() {
-    return useMediaQuery(`(min-width: ${DESKTOP_BREAKPOINT}px)`);
+    return useMediaQuery('(min-width: 64rem)');
 }

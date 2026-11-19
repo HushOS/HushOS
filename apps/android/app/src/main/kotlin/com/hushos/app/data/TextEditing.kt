@@ -70,8 +70,11 @@ object TextEditing {
         fun saved(text: String, bytes: ByteArray) = SaveState(format, text, bytes)
 
         companion object {
+            /* The session of `bytes`, already opened as `opened`: never decoded a second time. */
+            fun opening(opened: Open.Editable, bytes: ByteArray) = SaveState(opened.format, opened.text, bytes)
+
             /* The session of bytes that open for editing; null when they open read-only. */
-            fun opening(bytes: ByteArray): SaveState? = (open(bytes) as? Open.Editable)?.let { SaveState(it.format, it.text, bytes) }
+            fun opening(bytes: ByteArray): SaveState? = (open(bytes) as? Open.Editable)?.let { opening(it, bytes) }
         }
     }
 

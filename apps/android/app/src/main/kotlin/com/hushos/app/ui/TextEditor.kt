@@ -204,8 +204,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     /* The open file's encoding and line breaks: a mixed file says which a save writes. */
     var format by mutableStateOf<TextFormat?>(null); private set
 
-    /* Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. */
-    val markdown = MarkdownDocument.handles(item.name, item.metadata.mime)
+    /*
+     * Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. Decided by the row the
+     * text was read from (load, Open theirs included), never the item sheet's, which may be a version or a rename behind.
+     */
+    var markdown by mutableStateOf(false); private set
     var previewing by mutableStateOf(false); private set
     /* The text was past what the preview renders when Preview was chosen: it stayed on Source and says so. */
     var previewTooLong by mutableStateOf(false); private set
@@ -330,11 +333,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             buffer.clearSpans()
             previewing = false
             preview = null
+            previewTooLong = false
+            markdown = MarkdownDocument.handles(file.name, file.metadata.mime)
             phase = when (text) {
                 is TextEditing.Open.Editable -> Phase.Editing.also {
                     buffer.append(text.text)
                     savedText = text.text
-                    saveState = bytes?.let(TextEditing.SaveState::opening)
+                    // From what was opened off the main thread, never decoded again here.
+                    saveState = bytes?.let { TextEditing.SaveState.opening(text, it) }
                     format = text.format
                 }
                 is TextEditing.Open.ReadOnly -> Phase.ReadOnly(text.reason, text.text).also {
