@@ -1,0 +1,143 @@
+apps/android/app/src/androidTest/kotlin/com/hushos/app/ImagesPdfDeviceTest.kt
+  s_c60e24772e04af::t_98e40171e32a92 1-104
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/ImagesPdfTests.swift
+  s_c60e24772e04af::t_b8d1d4f4d61d64 1-184
+  s_c60e24772e04af::t_2425131e20c8d2 185-197
+apps/web/src/lib/images-pdf/decode.ts
+  s_c60e24772e04af::t_411374f07bb10e 1-93
+  s_c60e24772e04af::t_3968d5076310cd 94
+apps/android/app/src/test/kotlin/com/hushos/app/data/ImagesPdfTest.kt
+  s_c60e24772e04af::t_8ed4f49d78e61e 1-111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/ImagesPdf.swift
+  s_c60e24772e04af::t_d140ab2d345a72 1-297
+  s_c60e24772e04af::t_e711e0eb3312ae 298-308
+apps/web/src/lib/images-pdf/images-pdf.tool-worker.ts
+  s_c60e24772e04af::t_a2fc2bb2d40755 1-66
+  s_c60e24772e04af::t_2ffadfbd4ebf0e 67-71
+apps/web/src/lib/tool-run-rows.ts
+  s_c60e24772e04af::t_109acefb4bfc96 1-78
+  s_c60e24772e04af::t_66f07d50035710 79-84
+e2e/fixtures/images/make.py
+  s_c60e24772e04af::t_f61e427713ad16 1-536
+  s_c60e24772e04af::t_c579467a7192b4 537-552
+apps/web/src/lib/images-pdf/jpeg.ts
+  s_c60e24772e04af::t_ea3553f6d61cc6 1-224
+apps/web/src/components/drive/images-pdf-dialog.tsx
+  s_c60e24772e04af::t_763be8159609e1 1-257
+  s_c60e24772e04af::t_c2e719a0ade7c2 258-276
+apps/web/src/lib/images-pdf/geometry.ts
+  s_c60e24772e04af::t_14fdab7dc79674 1-99
+  s_c60e24772e04af::t_dec9c28dd9d290 100
+apps/web/src/lib/images-pdf/limits.ts
+  s_c60e24772e04af::t_3dbce7007e82f0 1-52
+  s_c60e24772e04af::t_61b71b629d070b 53-64
+apps/ios/App/ImagesPdfSheet.swift
+  s_c60e24772e04af::t_323eecd4b9ccf0 1-158
+  s_c60e24772e04af::t_4dfa4c9fef9453 159
+apps/android/app/src/main/kotlin/com/hushos/app/data/ImagesPdf.kt
+  s_c60e24772e04af::t_e98688530ec794 1-238
+  s_c60e24772e04af::t_9f89f6f54798f6 239-240
+e2e/images-pdf.spec.ts
+  s_c60e24772e04af::t_553f210f3406e9 1-341
+  s_c60e24772e04af::t_bbbd7c5b7833c1 342-355
+apps/web/src/lib/images-pdf/make.ts
+  s_c60e24772e04af::t_29055b39ab20dc 1-179,185
+  s_c60e24772e04af::t_1f03cec25af292 180-184
+crates/hushos-core/src/images_pdf.rs
+  s_c60e24772e04af::t_99caad6e0f2a6a 1-697,700,705-706
+  s_c60e24772e04af::t_5aface6c5497c5 698-699,701-704,707-749
+apps/web/src/lib/images-pdf/pdf.ts
+  s_c60e24772e04af::t_d35d9dee1fc704 1-159
+  s_c60e24772e04af::t_0436446aba9591 160-163
+crates/hushos-core/src/images_pdf/tests.rs
+  s_c60e24772e04af::t_aee8d7733ac709 1-427,429,432-433
+  s_c60e24772e04af::t_0cca1d163a5556 428,430-431,434-454
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ImagesPdfSheet.kt
+  s_c60e24772e04af::t_8107dc5c45c35b 1-222
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_0a395155fbcff9 665,683-690
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_1ddd828bb16f3b 2590-2639
+apps/android/app/src/main/kotlin/com/hushos/app/ui/FilesScreen.kt
+  s_c60e24772e04af::t_6d6f8357321e11 4,231-233,316-318,500-501
+apps/android/app/src/main/kotlin/com/hushos/app/ui/ItemActions.kt
+  s_c60e24772e04af::t_0062b92158de49 8,132,245-246,310-311,336-337
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_0b313949d17c69 713,727-735
+apps/ios/App/BrowseView.swift
+  s_c60e24772e04af::t_f19e9ca72bd57a 637-641
+apps/ios/App/NodeActions.swift
+  s_c60e24772e04af::t_adcacb04718e99 21-22,34,101,231-236
+apps/web/package.json
+  s_c60e24772e04af::t_eb313a4c2bebe5 26
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_fd7a9caf4dba43 28
+apps/web/src/components/drive/drive-shell.tsx
+  s_c60e24772e04af::t_00d6c2477eeaa7 39,111-112
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_9c1c1da5c087e9 132,134,151-155,550-551,1373,1394-1395,1799,1805-1823
+apps/web/src/components/drive/interrupted-runs.tsx
+  s_c60e24772e04af::t_840ae035bb36e2 1-66
+apps/web/src/components/drive/node-actions.tsx
+  s_c60e24772e04af::t_22e272733bace3 7-8,31-33,42-44,48,98-99,122-123,126-139,174-175,246-275,295-311,318-337,437,459-460,472-474,579
+apps/web/src/components/drive/transfers-panel.tsx
+  s_c60e24772e04af::t_914bc13eb810e8 34,390-488,490,492,497-503,509-510,513,519-523,528-549,562,567,570-571,582-584,599-607,631,674-686,707
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_83934f935269f6 292
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_73b0fc0b993e48 545-548,607
+apps/web/src/lib/images-pdf/core-made.test.ts
+  s_c60e24772e04af::t_03818484967ffc 1-31
+apps/web/src/lib/images-pdf/geometry.test.ts
+  s_c60e24772e04af::t_a0e141015d0c31 1-30
+apps/web/src/lib/images-pdf/jpeg.test.ts
+  s_c60e24772e04af::t_8e1f717f0a39ea 1-91
+apps/web/src/lib/images-pdf/pdf-reader.testkit.ts
+  s_c60e24772e04af::t_abddd1d6c6c496 1-125
+apps/web/src/lib/images-pdf/pdf.test.ts
+  s_c60e24772e04af::t_527184eea9dbe5 1-131
+apps/web/src/lib/images-pdf/protocol.ts
+  s_c60e24772e04af::t_b8d1bc465ee6c1 1-24
+apps/web/src/lib/interrupted-runs.ts
+  s_c60e24772e04af::t_4a7d41d487a602 1-59
+apps/web/src/lib/sign-out.test.ts
+  s_c60e24772e04af::t_6739724b3b541d 30-31,52-53,545-547
+apps/web/src/lib/sign-out.ts
+  s_c60e24772e04af::t_71563818682021 250-252
+apps/web/src/routes/_authenticated/app/route.tsx
+  s_c60e24772e04af::t_3dcbe10f86eacf 20,290
+apps/web/vite.config.ts
+  s_c60e24772e04af::t_376d4e24a7a99f 191-225,235,269
+bun.lock
+  s_c60e24772e04af::t_e8817a9b43d168 32,460-461,1444-1445,1620-1621,1904-1905
+crates/hushos-core/AGENTS.md
+  s_c60e24772e04af::t_568e2f1aaf7b65 106
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_e07f8c7fc1e643 36,79-83
+docs/file-tools-design.md
+  s_c60e24772e04af::t_988d225f0434e1 38,340,556-575
+e2e/fixtures/images/expected.json
+  s_c60e24772e04af::t_e66ecde257c95d 1-355
+e2e/fixtures/images/geometry.json
+  s_c60e24772e04af::t_cca044dbebbb3f 1-1518
+e2e/fixtures/images/soi-eoi.jpg
+  s_c60e24772e04af::t_5ff9b007107401 1
+packages/drive/src/save-runs.ts
+  s_c60e24772e04af::t_0fd3368e1f599e 566-567,1002,1086,1367
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1ad547f5be53740f3325c3917a4abfb911f86f93",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
