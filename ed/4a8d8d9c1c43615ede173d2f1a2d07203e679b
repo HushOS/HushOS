@@ -1,0 +1,57 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/TextEditing.kt
+  s_c60e24772e04af::t_15e943d2877359 98-105
+apps/android/app/src/main/kotlin/com/hushos/app/data/Vault.kt
+  s_c60e24772e04af::t_aef3309fa67825 2150-2152,2154
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_bc2e1df5014b9c 1066-1067
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_c60e24772e04af::t_1a5fb15ec05b6b 175
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_c83fd3489009f6 141-151,164-175,246,253,262-263,299,301,342-343,361,373,384,392,399,405-411,413,470-486
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunEngineTest.kt
+  s_c60e24772e04af::t_67231e57a20035 30,338-342
+apps/android/app/src/test/kotlin/com/hushos/app/data/SaveRunTest.kt
+  s_c60e24772e04af::t_0af85e8ae3c317 2230-2256
+apps/android/app/src/test/kotlin/com/hushos/app/data/TextEditingTest.kt
+  s_c60e24772e04af::t_230fbaad83cb6a 208-225
+apps/ios/App/MainView.swift
+  s_c60e24772e04af::t_414e75aa2be7f8 147-155
+apps/ios/App/RecentsView.swift
+  s_c60e24772e04af::t_f9ce45cd8ad73b 98-99
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_4e9afaeec43e34 45-51,82,95,104,113,149-165,167,221-231,242,274,279,314-315,346-347,380-381,398
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TextEditing.swift
+  s_c60e24772e04af::t_1971a55848fa3a 130-139
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Vault+Writes.swift
+  s_c60e24772e04af::t_a44bb4a26f8aaf 728-731,791
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/FamilyWriteTests.swift
+  s_c60e24772e04af::t_65464dc232aea3 1218-1248
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/TextEditingTests.swift
+  s_c60e24772e04af::t_711a4385958134 315-332
+apps/web/src/components/drive/preview.tsx
+  s_c60e24772e04af::t_7517eea156778b 30,201,368,370-371
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_a5b1ca78eaa17f 53,291
+apps/web/src/lib/editor-marks.test.ts
+  s_c60e24772e04af::t_a497b7f19c5f86 3,11-16,20,47-66
+apps/web/src/lib/editor-marks.ts
+  s_c60e24772e04af::t_3a4ef03aead65e 35-48
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_916037c3fadc3f 4,114-117,119,125-126,131-151,153-155
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ed4a8d8d9c1c43615ede173d2f1a2d07203e679b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
