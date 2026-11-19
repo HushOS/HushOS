@@ -277,13 +277,6 @@ export const sections: RoadmapSection[] = [
                 links: [{ kind: 'page', to: '/teams', label: 'HushOS for teams today' }],
             },
             {
-                id: 'passkeys',
-                status: 'now',
-                area: 'Platform',
-                title: 'Sign in with a passkey',
-                body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
-            },
-            {
                 id: 'editing',
                 status: 'now',
                 area: 'Drive',
@@ -314,6 +307,13 @@ export const sections: RoadmapSection[] = [
         title: 'Later',
         summary: 'Planned, not promised. What comes first depends on what people need.',
         items: [
+            {
+                id: 'passkeys',
+                status: 'later',
+                area: 'Platform',
+                title: 'Sign in with a passkey',
+                body: 'No password: a passkey on your phone, computer or security key signs you in and unlocks your account. It needs a browser or security key that supports it, and your recovery phrase stays the way back in if you lose your passkeys.',
+            },
             {
                 id: 'desktop-apps',
                 status: 'later',
