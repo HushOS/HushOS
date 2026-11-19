@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import { jsonErrorOffset } from '@/lib/text-parse-data';
 import {
     lineAt,
     parseFailure,
@@ -68,5 +69,66 @@ describe('the structured-text check', () => {
         expect(structuredKindOf(null, null)).toBeNull();
         expect(structuredKindOf('yaml', 'application/json')).toBe('yaml');
         expect(structuredKindOf('rust', 'application/json')).toBeNull();
+    });
+
+    test('broken JSON names its line whatever the engine says: JavaScriptCore’s words name no place', async () => {
+        // Safari's JSON.parse: "JSON Parse error: …", with no position or line in it.
+        const parse = vi.spyOn(JSON, 'parse').mockImplementation(() => {
+            throw new SyntaxError('JSON Parse error: Unexpected comma at the end of object');
+        });
+        try {
+            expect(await parseFailure('json', '{\n  "a": 1,\n  "b": 2,\n}\n')).toEqual({ line: 4 });
+            expect(await parseFailure('json', '[1,\n2,\n\n  3 4]')).toEqual({ line: 4 });
+        } finally {
+            parse.mockRestore();
+        }
+    });
+});
+
+/*
+ * Our own scan of where JSON breaks, held to the grammar: every place it names is where a reader
+ * has to look, and text that parses is never said to break. Fails on a wrong place, or on a valid
+ * text called broken.
+ */
+describe('where JSON breaks', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    test('valid JSON breaks nowhere, deep nesting included', () => {
+        for (const text of [
+            '{}',
+            ' [ ] ',
+            '"\\u00e9\\n"',
+            '{"a": [1, -2.5e+3, true, false, null, {"b": "c"}]}',
+            '0',
+            '-0.0E-1',
+            '['.repeat(50_000) + ']'.repeat(50_000),
+        ]) {
+            expect(() => JSON.parse(text)).not.toThrow();
+            expect(jsonErrorOffset(text), text.slice(0, 40)).toBe(-1);
+        }
+    });
+
+    test('each fault is placed where the text can’t go on', () => {
+        const cases: [string, string][] = [
+            ['{"a": 1,}', '}'],
+            ['[1, 2,]', ']'],
+            ['{"a" 1}', '1'],
+            ['{a: 1}', 'a'],
+            ['[01]', '1]'],
+            ['[1 2]', '2]'],
+            ['{"a": tru}', 'tru}'],
+            ['"bad \\x escape"', 'x escape'],
+            ['"\\u12G4"', 'G4"'],
+            ['{} {}', '{}'],
+            ['[-]', '-]'],
+        ];
+        for (const [text, from] of cases) {
+            expect(() => JSON.parse(text)).toThrow();
+            expect(jsonErrorOffset(text), text).toBe(text.lastIndexOf(from));
+        }
+        // Ending too soon: placed at the end.
+        expect(jsonErrorOffset('{"a": [1, 2')).toBe(11);
+        expect(jsonErrorOffset('"open')).toBe(5);
+        expect(jsonErrorOffset('')).toBe(0);
     });
 });
