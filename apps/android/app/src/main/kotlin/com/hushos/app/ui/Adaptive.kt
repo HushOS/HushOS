@@ -54,6 +54,14 @@ fun navKind(widthDp: Float, heightDp: Float, tabletop: Boolean, infoBeside: Bool
 }
 
 /*
+ * The text editor's Markdown source and preview side by side: from Material's medium width (600dp, room for two panes as
+ * wide as a small phone) in a window at least medium tall, so an unfolded foldable and a tablet get both, and a phone,
+ * upright or on its side, keeps the Source/Preview switch.
+ */
+fun editorSideBySide(widthDp: Float, heightDp: Float): Boolean =
+    widthDp >= WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND && heightDp >= WindowSizeClass.HEIGHT_DP_MEDIUM_LOWER_BOUND
+
+/*
  * A bottom sheet's tallest, in dp, while the device stands half open on a horizontal hinge: it
  * stays on the lower half, below the fold, where the hands are, and nothing of it bends over the
  * hinge. Null when there is no such hinge (flat, folded shut, a book-style hinge, a phone).

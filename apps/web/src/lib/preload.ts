@@ -5,6 +5,10 @@
  * would tell whoever serves the app what kind of file was just opened or
  * uploaded, though the file itself is end-to-end encrypted. Only inside the
  * app, after unlock: a public page or a link visitor never pays for it.
+ *
+ * Not the text editor: its code (CodeMirror, every language, the parsers, the check's worker) comes
+ * in whole with the first Edit (text-editor.tsx editorAssets), whatever kind of file, so it says only
+ * that someone edits (editing-design.md section 4). No viewer may import any of it.
  */
 let started = false;
 
@@ -27,8 +31,6 @@ export function preloadViewers() {
                 // The archive reader opens like a viewer (docs/file-tools-design.md, "Dependencies").
                 () => import('@/components/drive/archive-view').then((m) => m.preloadArchive()),
                 () => import('@/lib/highlight').then((m) => m.preloadGrammars()),
-                // The text editor, every language it colours and the structured-text parsers (editing-design.md section 4).
-                () => import('@/components/drive/text-editor').then((m) => m.preloadEditor()),
                 () => import('@/lib/thumbnails').then((m) => m.preloadThumbnailer()),
             ];
             for (const step of steps) await step().catch(() => {});

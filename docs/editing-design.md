@@ -34,7 +34,7 @@ Search and replace, multiple cursors, soft wrap (on for Markdown and plain text,
 
 ### Markdown
 
-Editor and preview side by side on wide screens, a toggle on phones. The preview is the viewer's renderer (`components/drive/rich-text`), sanitized the same way: images and links are named, never fetched, so a document cannot make the browser call out.
+Editor and preview side by side on wide screens, a toggle on narrow ones. The preview is the viewer's renderer (`components/drive/rich-text`), sanitized the same way: images and links are named, never fetched, so a document cannot make the browser call out. It follows typing as it happens and scrolls with the source both ways (see As built: the Markdown preview).
 
 ### Tables: CSV and TSV
 
@@ -112,7 +112,7 @@ Images get a new thumbnail in the saved object. Text files have none. The name d
 ## 4. Privacy: what the server learns
 
 - That a file got a new version, when, and its padded size; under amend, that a version was replaced. This is what any upload tells it today.
-- The text editor (CodeMirror and its languages, roughly 150 to 250 KB gzipped) joins the post-unlock preload in `lib/preload.ts`, so fetching it reveals nothing.
+- The text editor (CodeMirror, every language it colours, the structured-text parsers and their check worker, and the preview's renderer) is not in the post-unlock preload: most people never edit, and fetching it for everyone slowed every unlock. The first Edit fetches the whole fixed set (`editorAssets` in `components/drive/text-editor.tsx`), in one order whatever the file, while the editor says it is opening. So the server can tell that someone edited a file then, never what kind of file: the same chunks come for a JSON file as for Markdown, and a later Edit fetches nothing more. Every viewer stays in the preload and imports nothing of the editor's.
 - The image editor and `wasm-vips` load on first use, so the server can tell that someone edited an image. It already knows which versions carry thumbnails, which says nearly as much. The security page states this.
 - Drafts never leave the device.
 
@@ -155,6 +155,13 @@ Each fails on a defect a person would notice (see AGENTS.md):
 - **Markdown preview:** on the web, the viewer's renderer (`MarkdownView`, sanitized the same way: images named with no `<img>`, links opened only on a click) beside the source at `lg` widths and behind a Source/Preview switch below them, mounted and rendered only while it can be seen (wide, or Preview chosen), a quarter second after typing stops, and not past `MARKDOWN_LIMIT` (2 MiB, counted in UTF-8 bytes). Parsing runs on the main thread (about 30 ms for 32K characters on a fast laptop, over a second for a megabyte), so past 32K characters (`PREVIEW_LIVE_LIMIT`) it renders when it comes into view and then only on Refresh preview. A preview that fails (its renderer's code didn't load, or the renderer threw) says "The preview couldn’t be shown." in its pane; the source, its text and Save go on. Whether a file gets the preview is decided by the row its text was read from, Open theirs included. Its code fences stay plain until the post-unlock preload has fetched every Shiki grammar, so a fence typed before that never fetches its language's grammar. The phones use a segmented Source/Preview control (SwiftUI `Picker`, Material `SegmentedButton`) over each app's viewer blocks (`MarkdownView`, `MarkdownBlockView`), rendered from the text when Preview is chosen, not selectable (a copy would skip the editor's protected one) and not past the viewers' 2 MiB limit; Open theirs goes back to Source. Nothing is fetched.
 - **Preload:** UTF-16 and the marks are the editor's own code. The preview's renderer is the viewer's, behind a module of its own (`components/drive/editor-preview.tsx`) that every editor fetches with its grammars and parsers (`editorAssets`), whatever kind of file is open, and the post-unlock preload fetches too (`preloadEditor`); the limit it checks is in `lib/markdown-limit.ts`, which imports nothing, so a plain-text editor never loads the Markdown parser on its own. The e2e preload check now includes a Markdown file, and a fence typed while the preload is held back fetches no grammar.
 - **Not yet:** drafts (1c), the large-file card's "edit anyway" above 8 MiB, colouring and a side-by-side preview on the phones, and the phones' viewers still read UTF-16 Markdown as UTF-8.
+
+## As built: the Markdown preview (2026-11-19)
+
+- **Live:** the web preview follows typing at most once a frame, leading and trailing (`lib/frame-throttle.ts`), never waiting for typing to stop, up to `PREVIEW_LIVE_LIMIT`, lowered from 32K to 16K characters: measured on a fast laptop against a production build, typing beside a 32K preview left a task of about 50 ms on most keys (48 of 60), and from 8K to 24K on at most one of 60; phones and slower laptops take a few times as long. Past it, Refresh preview as before.
+- **Scrolling together:** the renderer marks each block (paragraphs, headings, fences, quotes, list items, tables and their rows, rules) with the first and last source line remark gave it, as `data-source-line` and `data-source-end`, added after sanitising to elements the sanitiser kept (`lib/markdown.ts`). A position in either pane is a fractional source line, interpolated within a block and across the blank lines between two (`lib/scroll-sync.ts`); the other pane is scrolled to put that line at its top, and either pane at its top or end takes the other there. The link's own scroll comes back as a scroll event; it is recognised and dropped, so it never moves the pane being scrolled. Typing keeps the preview near the cursor: the source keeps the cursor in view and the preview follows the source after each render. The preview has no scroll anchoring. On a narrow screen, switching between Source and Preview keeps the line that was at the top.
+- **Phones:** side by side when the window is wide (see each app's AGENTS.md), with the same live updates and scrolling; the Source/Preview switch stays on narrow widths.
+- **Loading:** the editor left the post-unlock preload (section 4).
 
 ## 8. Milestones
 

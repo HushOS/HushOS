@@ -8,14 +8,18 @@ import UIKit
  * server. Saving is explicit (Save), a new version through the save path (TextSave over SaveRuns), in
  * the file's own encoding, byte order mark and line breaks (TextEditing.SaveState), with the stale choices
  * when someone else saved first: Save on top, Save as a copy, Open theirs after a confirmation. A file
- * it can't save byte for byte opens read-only with a note. Markdown offers Source or Preview, the
- * viewer's rendering (MarkdownView: images named, never fetched). No colouring on the phone. Its text
+ * it can't save byte for byte opens read-only with a note. Markdown shows the viewer's rendering (images named, never
+ * fetched) beside the source when the window is wide (SideBySide: the iPhone Duo's inner display), following typing and
+ * scrolling with it, and Source or Preview when narrow. No colouring on the phone. Its text
  * lives in this screen only: leaving it, a sign-out or another session drops it, and nothing is kept
  * on the phone (drafts are Editing 1c).
  */
 struct TextEditorScreen: View {
     @Environment(DriveStore.self) private var store
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    /* The room the editor has: with the size class, whether source and preview sit side by side. */
+    @State private var width: CGFloat = 0
     let item: Opened
     /* Moved on by the viewer when something asks it to go: closed at once without changes, asked about with them. */
     var leaveAsked = 0
@@ -59,9 +63,16 @@ struct TextEditorScreen: View {
     @State private var saveState: TextEditing.SaveState?
     /* The open file's encoding and line breaks: a mixed file says which a save writes. */
     @State private var format: TextFormat?
-    /* Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. */
+    /*
+     * Markdown shows Source or Preview when narrow (the preview renders the text as it was when Preview was chosen), or
+     * both side by side when wide, the preview following typing: a rendering at a time, and one more if the text changed
+     * while it rendered, never waiting for typing to stop.
+     */
     @State private var pane = Pane.source
-    @State private var previewText = ""
+    @State private var pieces: [MarkdownPiece]?
+    @State private var previewPosition = ScrollPosition(edge: .top)
+    @State private var scroll = EditorScroll()
+    /* Moved on by Open theirs: a rendering of the text before it lands nowhere. */
     @State private var previewRevision = 0
     /* The text was past what the preview renders when Preview was chosen: it stayed on Source and says so. */
     @State private var previewTooLong = false
@@ -108,11 +119,14 @@ struct TextEditorScreen: View {
         let read = source ?? item
         return MarkdownDocument.handles(name: read.name, mime: read.metadata.mime)
     }
-    private var previewing: Bool { isMarkdown && pane == .preview }
+    private var previewing: Bool { isMarkdown && pane == .preview && !sideBySide }
+    /* Both at once: the window is wide (regular width, and room for two panes), never by the screen or the device. */
+    private var sideBySide: Bool { isMarkdown && SideBySide.shows(regularWidth: sizeClass == .regular, width: width) }
 
     var body: some View {
         NavigationStack {
             content
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
                 .navigationTitle((marked ?? shown).name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
@@ -128,10 +142,23 @@ struct TextEditorScreen: View {
             editor.drop()
             savedText = ""
             saveState = nil
-            previewText = ""
+            pieces = nil
             dismiss()
         }
         .onChange(of: leaveAsked) { _, _ in requestClose() }
+        // Side by side (unfolded, or the window widened): the preview renders the text now and follows from here.
+        .onChange(of: sideBySide, initial: true) { _, now in
+            scroll.linked = now
+            if now, phase != .loading { render() }
+        }
+        .onAppear {
+            scroll.movePreview = { target in
+                switch target {
+                case .y(let y): previewPosition.scrollTo(y: y)
+                case .block(let index): previewPosition.scrollTo(id: index, anchor: .top)
+                }
+            }
+        }
         // The header's row keeps its own family verdict, apart from the listing's (another device's newer version judged
         // meanwhile never takes the mark off this text), and is judged again whenever its family's trust dropped it.
         .onChange(of: heldKey, initial: true) { _, _ in store.holdForEditor(marked ?? shown) }
@@ -152,7 +179,7 @@ struct TextEditorScreen: View {
             editor.drop()
             savedText = ""
             saveState = nil
-            previewText = ""
+            pieces = nil
             // Gone: what waited for it goes on, once; its family row's verdict is the listing's again.
             store.holdForEditor(nil)
             store.editorClosed()
@@ -244,34 +271,94 @@ struct TextEditorScreen: View {
             .frame(maxHeight: .infinity)
         case .readOnly(let reason, let text):
             VStack(spacing: 0) {
-                if text != nil, isMarkdown { panes }
+                if text != nil, isMarkdown, !sideBySide { panes }
                 if previewTooLong { note(EditorWords.previewTooLong) }
                 note(TextEditing.words(reason))
                 if let text {
-                    ZStack {
-                        PlainTextView(box: editor, text: text, editable: false, onChange: {}).hiddenWhile(previewing)
-                        if previewing { preview }
-                    }
+                    sourceAndPreview(PlainTextView(box: editor, text: text, editable: false, onChange: {}, onScroll: sourceScrolled))
                 } else { Spacer() }
             }
         case .editing:
             VStack(spacing: 0) {
-                if isMarkdown { panes }
+                if isMarkdown, !sideBySide { panes }
                 if previewTooLong { note(EditorWords.previewTooLong) }
                 if let line = closing ? EditorWords.finishing : failure ?? (edited ? nil : status) {
                     note(line, failed: !closing && failure != nil)
                 }
                 if let mixed = format.flatMap(TextEditing.mixedNote) { note(mixed) }
                 // The text view stays while the preview shows: it holds the text and its undo.
-                ZStack {
-                    PlainTextView(box: editor, text: editor.opening, editable: true) {
-                        if !edited { edited = true }
-                        status = nil
-                        // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
-                        if previewTooLong { previewTooLong = false }
-                    }
-                    .hiddenWhile(previewing)
-                    if previewing { preview }
+                sourceAndPreview(PlainTextView(box: editor, text: editor.opening, editable: true, onChange: {
+                    if !edited { edited = true }
+                    status = nil
+                    scroll.revision += 1
+                    // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
+                    if previewTooLong { previewTooLong = false }
+                    if sideBySide { render() }
+                }, onScroll: sourceScrolled))
+            }
+        }
+    }
+
+    /*
+     * The text view and the preview: side by side when wide, else one over the other (the text view kept underneath).
+     * One layout that changes its arrangement, so a fold, an unfold or a resize keeps the same text view: its text, its
+     * cursor and where it was scrolled.
+     */
+    private func sourceAndPreview(_ source: PlainTextView) -> some View {
+        let layout = sideBySide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(ZStackLayout())
+        return layout {
+            source.hiddenWhile(previewing)
+            if sideBySide || previewing {
+                preview.overlay(alignment: .leading) {
+                    if sideBySide { Rectangle().fill(Alpine.rule).frame(width: 1) }
+                }
+            }
+        }
+    }
+
+    /* The person scrolled the source (dragging it, or its fling still gliding): side by side, the preview follows. */
+    private func sourceScrolled(_ view: UIScrollView) {
+        scroll.textView = editor.view
+        if view.isTracking || view.isDragging || view.isDecelerating { scroll.sourceScrolled() }
+    }
+
+    /*
+     * The preview renders the text as it is now, off the main thread: one rendering at a time, and one more once it lands
+     * if the text changed meanwhile (never a wait for typing to stop). Past what the viewer renders, it says so instead.
+     */
+    private func render() {
+        if scroll.rendering {
+            scroll.again = true
+            return
+        }
+        let text = editor.text
+        if text.utf8.count > MarkdownDocument.limit {
+            previewTooLong = true
+            return
+        }
+        scroll.rendering = true
+        scroll.textView = editor.view
+        let revision = previewRevision
+        Task {
+            let lines = text.utf8.lazy.filter { $0 == 0x0A }.count + 1
+            let parsed = await Task.detached(priority: .userInitiated) { MarkdownDocument.parseLined(text) }.value
+            scroll.rendering = false
+            // Another text since (Open theirs, a close): this rendering is the last one's.
+            guard revision == previewRevision, phase != .loading else { return }
+            pieces = parsed
+            scroll.rendered(parsed, lines: lines)
+            if scroll.again {
+                scroll.again = false
+                render()
+            }
+            // Laid out first, then placed: at the line a narrow switch kept, or beside the source (typing keeps the cursor in
+            // view in the source, and the preview follows it).
+            Task { @MainActor in
+                if let line = scroll.kept, !sideBySide {
+                    scroll.kept = nil
+                    if let target = scroll.previewTarget(for: line) { scroll.movePreview(target) }
+                } else if sideBySide {
+                    scroll.sourceScrolled()
                 }
             }
         }
@@ -288,7 +375,14 @@ struct TextEditorScreen: View {
         .padding(.horizontal, Alpine.Space.s4)
         .padding(.vertical, Alpine.Space.s2)
         .onChange(of: pane) { _, now in
-            guard now == .preview else { return }
+            scroll.textView = editor.view
+            guard now == .preview else {
+                // Back to Source at the line the preview showed at its top.
+                if let line = scroll.previewLine(at: scroll.previewTop) {
+                    Task { @MainActor in scroll.showSource(line) }
+                }
+                return
+            }
             let text = editor.text
             // Past what the viewer renders (MarkdownDocument.limit, in UTF-8 bytes): Source stays, and says why.
             if text.utf8.count > MarkdownDocument.limit {
@@ -299,8 +393,10 @@ struct TextEditorScreen: View {
             previewTooLong = false
             // The words as they are now; the keyboard goes, since nothing is typed into a preview.
             editor.endEditing()
-            previewText = text
-            previewRevision += 1
+            // Shown at the line the source had at its top.
+            scroll.kept = scroll.sourceLine()
+            pieces = nil
+            render()
         }
     }
 
@@ -309,7 +405,7 @@ struct TextEditorScreen: View {
      * from here would skip the editor's local-only, expiring one.
      */
     private var preview: some View {
-        MarkdownView(data: Data(previewText.utf8), selectable: false).id(previewRevision)
+        EditorPreviewPane(pieces: pieces, position: $previewPosition, scroll: scroll)
     }
 
     private func note(_ text: String, failed: Bool = false) -> some View {
@@ -347,7 +443,7 @@ struct TextEditorScreen: View {
         editor.drop()
         savedText = ""
         saveState = nil
-        previewText = ""
+        pieces = nil
         edited = false
         dismiss()
     }
@@ -389,11 +485,13 @@ struct TextEditorScreen: View {
                 saveState = TextEditing.SaveState(format: opened, text: text, bytes: data)
                 format = opened
                 phase = .editing
+                if sideBySide { render() }
             case .readOnly(let reason, let text):
                 saveState = nil
                 format = nil
                 editor.open(text ?? "")
                 phase = .readOnly(reason, text)
+                if sideBySide, text != nil { render() }
             }
         } catch where !ErrorWords.isCancellation(error) {
             if sessionRefused(error) { return }
@@ -541,7 +639,8 @@ struct TextEditorScreen: View {
         saveState = nil
         // Their text opens on Source: the preview showed the text just discarded.
         pane = .source
-        previewText = ""
+        pieces = nil
+        previewRevision += 1
         previewTooLong = false
         edited = false
         status = nil
@@ -629,8 +728,10 @@ struct PlainTextView: UIViewRepresentable {
     let text: String
     let editable: Bool
     let onChange: () -> Void
+    /* It scrolled: the side-by-side preview follows a person's scroll (EditorScroll). */
+    var onScroll: (UIScrollView) -> Void = { _ in }
 
-    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange, onScroll: onScroll) }
 
     func makeUIView(context: Context) -> UITextView {
         let view = EditorTextView(usingTextLayoutManager: true)
@@ -661,15 +762,22 @@ struct PlainTextView: UIViewRepresentable {
 
     func updateUIView(_ view: UITextView, context: Context) {
         context.coordinator.onChange = onChange
+        context.coordinator.onScroll = onScroll
         view.isEditable = editable
         if box.view !== view { box.view = view }
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var onChange: () -> Void
-        init(onChange: @escaping () -> Void) { self.onChange = onChange }
+        var onScroll: (UIScrollView) -> Void
+        init(onChange: @escaping () -> Void, onScroll: @escaping (UIScrollView) -> Void) {
+            self.onChange = onChange
+            self.onScroll = onScroll
+        }
 
         func textViewDidChange(_ textView: UITextView) { onChange() }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) { onScroll(scrollView) }
 
         func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
             guard TextEditing.hasCarriageReturn(text) else { return true }

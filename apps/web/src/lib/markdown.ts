@@ -1,4 +1,4 @@
-import type { Root } from 'hast';
+import type { Element, Root } from 'hast';
 import rehypeSanitize, { defaultSchema, type Options as SanitizeSchema } from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -32,11 +32,48 @@ const schema: SanitizeSchema = {
     },
 };
 
+/*
+ * The blocks the editor's preview scrolls by (lib/scroll-sync.ts): each one's first and last source
+ * line, from the positions remark gave its node. Added after sanitising, to elements the sanitiser
+ * already let through, and only as two numbers: nothing in the document can set or change them.
+ */
+const SOURCE_BLOCKS = new Set([
+    'p',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'pre',
+    'blockquote',
+    'li',
+    'table',
+    'tr',
+    'hr',
+]);
+
+function markSourceLines(node: Root | Element) {
+    for (const child of node.children) {
+        if (child.type !== 'element') continue;
+        const position = child.position;
+        if (SOURCE_BLOCKS.has(child.tagName) && position) {
+            child.properties.dataSourceLine = position.start.line;
+            child.properties.dataSourceEnd = position.end.line;
+        }
+        // A fence's text has nothing to mark, and a table's cells are marked by their row.
+        if (child.tagName !== 'pre') markSourceLines(child);
+    }
+}
+
+const sourceLines = () => (tree: Root) => markSourceLines(tree);
+
 const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkRehype, { allowDangerousHtml: false })
-    .use(rehypeSanitize, schema);
+    .use(rehypeSanitize, schema)
+    .use(sourceLines);
 
 /*
  * Synchronous on purpose: every plugin here is synchronous, so the tree can be

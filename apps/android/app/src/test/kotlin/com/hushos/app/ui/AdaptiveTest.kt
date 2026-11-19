@@ -141,5 +141,18 @@ class AdaptiveTest {
         // The same id in another workspace is another node, with no refresh of its own yet.
         assertEquals(false, evidence.observe("mine", "U", "t", loading = false))
     }
-}
 
+    /* The editor's Markdown source and preview side by side on an unfolded Fold and a tablet, the switch on any phone. */
+    @Test
+    fun theEditorShowsBothOnlyWhereTwoPanesFit() {
+        assertEquals(true, editorSideBySide(841f, 701f))
+        assertEquals(true, editorSideBySide(701f, 841f))
+        assertEquals(true, editorSideBySide(1280f, 800f))
+        // The outer screen, and a phone on its side (wide, but too short).
+        assertEquals(false, editorSideBySide(411f, 797f))
+        assertEquals(false, editorSideBySide(915f, 411f))
+        // The last compact width.
+        assertEquals(false, editorSideBySide(599.9f, 900f))
+        assertEquals(true, editorSideBySide(600f, 480f))
+    }
+}

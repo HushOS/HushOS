@@ -101,6 +101,21 @@ const utf16le = (text: string) =>
     Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
 /* Requests for the Markdown file's image, on the app's own origin (so no policy would stop a fetch). */
 let probes = 0;
+/* How many files beforeAll uploads. */
+const FILES = 15;
+
+/*
+ * A long Markdown file for scrolling: parts of different lengths (a long paragraph wraps over many
+ * lines in the preview but is one line in the source), then 400 blank lines with nothing to render,
+ * so the source can be scrolled well past the preview's end.
+ */
+const scrollText = () => {
+    let text = '# Scrolling\n\n';
+    // Under the 16K characters the preview follows as it is typed.
+    for (let part = 1; part <= 60; part++)
+        text += `## Part ${part}\n\n${'Words go here. '.repeat(3 + (part % 5) * 6)}\n\n`;
+    return `${text}${'\n'.repeat(400)}`;
+};
 
 /* The file's current bytes, as Download gives them. */
 async function downloaded(p: Page, name: string) {
@@ -137,7 +152,7 @@ test.beforeAll(async ({ browser }) => {
                 `# Notes\n\nAn image: ![tracking pixel](${probe})\n\n[A link](${probe}?link)\n`,
             ),
             write('marked.md', Uint8Array.from([0xef, 0xbb, 0xbf, ...Buffer.from('# Title\n')])),
-            // Past the 32K characters the preview follows as it is typed.
+            // Past the 16K characters the preview follows as it is typed.
             write(
                 'long.md',
                 `# Long notes\n\n${'A paragraph of text that repeats.\n\n'.repeat(1200)}`,
@@ -150,57 +165,95 @@ test.beforeAll(async ({ browser }) => {
             write('settings.yaml', 'name: hushos\nitems:\n  - a\n'),
             write('main.rs', 'fn main() {\n    println!("hi");\n}\n'),
             write('Cargo.toml', '[package]\nname = "hushos"\n'),
+            write('scroll.md', scrollText()),
         ]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
 });
 
-test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no code the preload didn’t', async () => {
-    // Every script a fresh load of the drive fetches, its post-unlock preload of every viewer,
-    // grammar, parser and the check's worker included.
-    const preloaded = new Set<string>();
-    const script = (request: Request) =>
-        request.resourceType() === 'script' ? request.url().split('?')[0]! : null;
-    const before = (request: Request) => {
-        const url = script(request);
-        if (url) preloaded.add(url);
+/* A script's address without its query, from a request for one; null for anything else. */
+const scriptOf = (request: Request) =>
+    request.resourceType() === 'script' ? request.url().split('?')[0]! : null;
+
+/* Every script `work` makes the page fetch (a worker's included), cached or not. */
+async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
+    const fetched = new Set<string>();
+    const listen = (request: Request) => {
+        const url = scriptOf(request);
+        if (url) fetched.add(url);
     };
-    page.on('request', before);
-    await page.reload();
-    await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
-        timeout: 90_000,
+    p.on('request', listen);
+    try {
+        await work();
+    } finally {
+        p.off('request', listen);
+    }
+    return fetched;
+}
+
+/* A fresh load of the drive and its post-unlock preload of every viewer, with what it fetched. */
+async function freshDrive(p: Page) {
+    return scriptsDuring(p, async () => {
+        await p.reload();
+        await expect(p.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
+            timeout: 90_000,
+        });
+        await expect(p.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 60_000 });
+        // The preload's workers (the thumbnailer's) may still be fetching their own imports once
+        // its last step returned: what they fetch belongs to the preload too.
+        await p.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
     });
-    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
-    // The preload's workers (the thumbnailer's) may still be fetching their own imports once its
-    // last step returned: what they fetch belongs to the preload too, whatever is opened later.
-    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-    page.off('request', before);
-    // From here, opening a file of any kind fetches no script the preload didn't, so what a device
-    // fetches never says which kind was edited. A production build fetches nothing at all: each
-    // chunk and the worker's one file come from the cache. The development server can't show
-    // that: every new worker asks again for its own unbundled imports (the browser reports each
-    // ask, cached or not), and those are exactly the ones the preload's worker fetched. So the
-    // check, for each kind on its own: nothing outside what the preload fetched.
-    // Markdown too: its preview beside the source is the viewer's renderer, already preloaded.
-    for (const name of ['config.json', 'settings.yaml', 'main.rs', 'Cargo.toml', 'preview.md']) {
-        const fetched = new Set<string>();
-        const listen = (request: Request) => {
-            const url = script(request);
-            if (url) fetched.add(url);
-        };
-        page.on('request', listen);
-        await openEditor(page, name);
-        // Long enough for its colouring and its structured-text check to have started.
-        await page.waitForTimeout(1_500);
-        await close(page);
-        page.off('request', listen);
+}
+
+/* Opens `name` in the editor and closes it again, long enough for its colouring and check to start. */
+async function editAndClose(p: Page, name: string) {
+    await openEditor(p, name);
+    await p.waitForTimeout(1_500);
+    await close(p);
+}
+
+/* The editor's own modules (production chunk names): none of them may come before an Edit. */
+const EDITOR_ONLY = ['text-editor', 'editor-preview', 'text-check.worker'].map(appModule);
+
+test('the editor’s code comes whole with the first Edit, the same for every kind of file, and nothing after', async ({
+    browserName,
+}) => {
+    // Before any Edit: the viewers' preload has fetched nothing of the editor's.
+    const preloaded = await freshDrive(page);
+    for (const module of EDITOR_ONLY)
         expect(
-            [...fetched].filter((url) => !preloaded.has(url)),
+            [...preloaded].filter((url) => module.test(url)),
+            String(module),
+        ).toEqual([]);
+    // The first Edit, of a JSON file, fetches the editor with every grammar, parser and the
+    // preview's renderer: the fixed set, whatever the file.
+    const first = [...(await scriptsDuring(page, () => editAndClose(page, 'config.json')))].filter(
+        (url) => !preloaded.has(url),
+    );
+    for (const module of EDITOR_ONLY)
+        expect(first.filter((url) => module.test(url)).length, String(module)).toBeGreaterThan(0);
+    // A later Edit of any other kind fetches nothing the first didn't, so what a device fetches
+    // never says which kind was edited.
+    const known = new Set([...preloaded, ...first]);
+    for (const name of ['settings.yaml', 'main.rs', 'Cargo.toml', 'preview.md']) {
+        const fetched = await scriptsDuring(page, () => editAndClose(page, name));
+        expect(
+            [...fetched].filter((url) => !known.has(url)),
             name,
         ).toEqual([]);
     }
+    // On a fresh page, the first Edit of a Markdown file fetches what the JSON file's did. WebKit
+    // answers modules it already holds from its memory cache after a reload without a request to
+    // see, so there it can only be shown to fetch nothing else.
+    const again = await freshDrive(page);
+    const markdownFirst = [
+        ...(await scriptsDuring(page, () => editAndClose(page, 'preview.md'))),
+    ].filter((url) => !again.has(url));
+    if (browserName === 'webkit')
+        expect(markdownFirst.filter((url) => !first.includes(url))).toEqual([]);
+    else expect([...markdownFirst].sort()).toEqual([...first].sort());
 });
 
 test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async () => {
@@ -216,7 +269,7 @@ test('a fenced block typed in the Markdown preview before the preload finishes f
     };
     page.on('request', listen);
     await page.reload();
-    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 60_000 });
     // Every editor fetches the preview's renderer with its other assets, a JSON file's too: an Edit
     // before the preload never fetches it for Markdown only.
     const previewModule = page.waitForRequest(appModule('editor-preview'));
@@ -438,7 +491,197 @@ test('Markdown shows the viewer’s rendering beside the source, live, and fetch
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
-test('past 32K characters the preview follows typing only on Refresh preview', async () => {
+test('the preview follows typing as it goes, without waiting for a pause', async () => {
+    await openEditor(page, 'preview.md');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByRole('heading', { name: 'Notes' })).toBeVisible();
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText('\n## ');
+    const typedHeading = preview.locator('h2').last();
+    const word = 'abcdefghijklmnopqrstuvwxyz';
+    // A key every 50 ms: never a pause a debounce would wait for.
+    let typing = true;
+    const typed = (async () => {
+        for (const key of word) {
+            await page.keyboard.type(key);
+            await page.waitForTimeout(50);
+        }
+        typing = false;
+    })();
+    const seen = new Set<string>();
+    while (typing) seen.add((await typedHeading.textContent().catch(() => null)) ?? '');
+    await typed;
+    // Many different texts shown while the keys were still coming, each a part of the word.
+    const partial = [...seen].filter((text) => text && text.length < word.length);
+    expect(partial.length).toBeGreaterThan(5);
+    for (const text of partial) expect(word.startsWith(text)).toBe(true);
+    await expect(typedHeading).toHaveText(word);
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+});
+
+/* The source's scroller (CodeMirror's) and the preview's, inside the open editor. */
+const sourceScroller = (p: Page) => dialog(p).locator('[data-text-editor] .cm-scroller');
+const previewScroller = (p: Page) => dialog(p).locator('[data-markdown-preview]');
+
+/* The line number at the top of the source's view, from its gutter. */
+const sourceTopLine = (p: Page) =>
+    sourceScroller(p).evaluate((scroller) => {
+        const top = scroller.getBoundingClientRect().top + 1;
+        for (const element of scroller.querySelectorAll('.cm-lineNumbers .cm-gutterElement')) {
+            const box = element.getBoundingClientRect();
+            if (box.height && box.bottom > top && /^\d+$/.test(element.textContent ?? ''))
+                return Number(element.textContent);
+        }
+        return null;
+    });
+
+/*
+ * The preview's blocks with their source lines, and where the preview's view begins, in the
+ * preview's own coordinates.
+ */
+const previewLayout = (p: Page) =>
+    previewScroller(p).evaluate((scroller) => {
+        const base = scroller.getBoundingClientRect().top;
+        return {
+            blocks: [...scroller.querySelectorAll<HTMLElement>('[data-source-line]')].map(
+                (element) => {
+                    const box = element.getBoundingClientRect();
+                    return {
+                        start: Number(element.dataset.sourceLine),
+                        end: Number(element.dataset.sourceEnd),
+                        top: box.top - base,
+                        bottom: box.bottom - base,
+                    };
+                },
+            ),
+        };
+    });
+
+/*
+ * Whether the preview's view begins on the block holding source line `line` (the innermost block
+ * starting at or before it), or between that block and the next: false while either is unknown.
+ */
+async function previewAtLine(p: Page, line: number | null) {
+    if (line === null) return false;
+    const { blocks } = await previewLayout(p);
+    const holding = blocks.filter((block) => block.start <= line).at(-1);
+    if (!holding) return false;
+    const next = blocks.find((block) => block.start > line);
+    return holding.top <= 1 && (next ? next.top : holding.bottom) >= -1;
+}
+
+/* Whether the source's top line is that of the preview block at the top of its view, or one before the next block. */
+async function sourceAtPreview(p: Page) {
+    const line = await sourceTopLine(p);
+    const { blocks } = await previewLayout(p);
+    const atTop = blocks.filter((block) => block.top <= 1).at(-1);
+    if (line === null || !atTop) return false;
+    const next = blocks.find((block) => block.top > 1);
+    return line >= atTop.start && line <= (next ? next.start : atTop.end + 1);
+}
+
+/* Sets a scroller's position as a person's scroll would: the page sees an ordinary scroll event. */
+const scrollTo = (scroller: ReturnType<Page['locator']>, top: number) =>
+    scroller.evaluate((element, value) => {
+        element.scrollTop = value;
+        // Where it landed, as the person left it.
+        return element.scrollTop;
+    }, top);
+
+test('the source and the preview scroll together, both ways', async () => {
+    await openEditor(page, 'scroll.md');
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByRole('heading', { name: 'Part 60' })).toBeAttached();
+    const source = sourceScroller(page);
+    const shown = previewScroller(page);
+
+    // The source scrolled: the block holding its top line comes to the top of the preview.
+    await scrollTo(source, 5_000);
+    await expect.poll(async () => previewAtLine(page, await sourceTopLine(page))).toBe(true);
+    expect(await shown.evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
+
+    // The preview scrolled with the wheel: the source follows to the block now at its top.
+    const box = (await shown.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, 1_500);
+    await expect.poll(() => sourceAtPreview(page)).toBe(true);
+    // The wheel's smooth scroll has finished: two reads a moment apart agree.
+    await expect
+        .poll(async () => {
+            const before = await shown.evaluate((element) => element.scrollTop);
+            await page.waitForTimeout(200);
+            return (await shown.evaluate((element) => element.scrollTop)) === before;
+        })
+        .toBe(true);
+
+    // Scrolled into the blank lines past the last block, the preview stops at its end. Its own
+    // scroll coming back must not move the source (to the line at the preview's end, or anywhere).
+    // The source's end first, so CodeMirror has measured it, then back to the middle.
+    await scrollTo(source, 1_000_000);
+    await page.waitForTimeout(300);
+    const end = await source.evaluate((element) => element.scrollHeight - element.clientHeight);
+    await scrollTo(source, 3_000);
+    await expect
+        .poll(() =>
+            shown.evaluate(
+                (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+        )
+        .toBeGreaterThan(500);
+    const kept = await scrollTo(source, end - 1_500);
+    await expect
+        .poll(() =>
+            shown.evaluate(
+                (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+            ),
+        )
+        .toBeLessThan(2);
+    await page.waitForTimeout(500);
+    expect(await source.evaluate((element) => element.scrollTop)).toBe(kept);
+    const lastBlock = Math.max(...(await previewLayout(page)).blocks.map((block) => block.end));
+    expect(await sourceTopLine(page)).toBeGreaterThan(lastBlock);
+
+    // Typing keeps the preview near the cursor: a heading typed mid-file appears in its view.
+    await scrollTo(source, 3_000);
+    await page.waitForTimeout(300);
+    await dialog(page).locator('[data-text-editor] .cm-line').nth(8).click();
+    await page.keyboard.press('End');
+    await page.keyboard.insertText('\n\n## Typed in the middle\n\n');
+    const typedHeading = preview.getByRole('heading', { name: 'Typed in the middle' });
+    await expect(typedHeading).toBeInViewport();
+
+    await dialog(page).getByRole('button', { name: 'Close preview' }).click();
+    await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+});
+
+test('on a narrow screen, switching between Source and Preview keeps the place', async () => {
+    const size = page.viewportSize()!;
+    await openEditor(page, 'scroll.md');
+    await page.setViewportSize({ width: 390, height: 800 });
+    const source = sourceScroller(page);
+    await expect(dialog(page).getByRole('button', { name: 'Preview', exact: true })).toBeVisible();
+    await scrollTo(source, 6_000);
+    await page.waitForTimeout(300);
+    const line = (await sourceTopLine(page))!;
+    await dialog(page).getByRole('button', { name: 'Preview', exact: true }).click();
+    const preview = dialog(page).getByRole('region', { name: 'Preview' });
+    await expect(preview.getByRole('heading', { name: 'Part 1', exact: true })).toBeAttached();
+    // The block holding that line is at the top of the preview.
+    await expect.poll(() => previewAtLine(page, line)).toBe(true);
+    // And back: the source shows about the same line at its top.
+    await dialog(page).getByRole('button', { name: 'Source', exact: true }).click();
+    await expect
+        .poll(async () => Math.abs((await sourceTopLine(page))! - line))
+        .toBeLessThanOrEqual(2);
+    await close(page);
+    await page.setViewportSize(size);
+});
+
+test('past 16K characters the preview follows typing only on Refresh preview', async () => {
     await openEditor(page, 'long.md');
     const preview = dialog(page).getByRole('region', { name: 'Preview' });
     const refresh = preview.getByRole('button', { name: 'Refresh preview' });
@@ -473,7 +716,7 @@ test('a preview whose renderer can’t load says so, and the text typed beside i
     const editorPreview = appModule('editor-preview');
     await page.route(editorPreview, (route) => route.fulfill({ status: 500, body: '' }));
     await page.reload();
-    await expect(page.locator('[data-node-id]')).toHaveCount(14, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 60_000 });
     await openEditor(page, 'preview.md');
     const preview = dialog(page).getByRole('region', { name: 'Preview' });
     await expect(preview.getByText('The preview couldn’t be shown.')).toBeVisible();

@@ -58,17 +58,9 @@ const LOADERS: Record<string, Loader> = {
 };
 
 /*
- * Every language at once, for the post-unlock preload (lib/preload.ts): fetched for whatever file
- * is opened later, so which grammar a device fetched never says what kind of file was edited.
- */
-export async function preloadLanguages() {
-    for (const load of Object.values(LOADERS)) await load().catch(() => {});
-}
-
-/*
  * Every grammar, all at once and in one fixed order, once per page: what the editor asks for
- * before its file's own grammar (loadLanguage). An Edit pressed before the post-unlock preload
- * reached the grammars then fetches all of them, never the one that names the file's language.
+ * before its file's own grammar (loadLanguage). The first Edit fetches all of them, never the one
+ * that names the file's language.
  */
 let everyLanguage: Promise<void> | null = null;
 export function allLanguages() {
