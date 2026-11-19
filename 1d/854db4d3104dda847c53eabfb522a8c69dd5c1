@@ -1,0 +1,33 @@
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_2e385c6e9bec6f 250-251
+apps/ios/App/AppModel.swift
+  s_c60e24772e04af::t_016e6719bc0370 340-341
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_cc48243f4d8294 131-135,447-448
+apps/ios/App/EditorPreview.swift
+  s_c60e24772e04af::t_3a94ef703162ae 38,171-185
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_5a4bd663047ad6 106-107,143-144,154-155,187-188,447-448,459-504,507-512,714-746,790-802,817-819,845-854,878,892,902-909,927-940
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_cc9ead1bcfe5de 61-65,206,210-217
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/EditorParking.swift
+  s_c60e24772e04af::t_ae884f3ce0ba44 1-53
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/EditorParkingTests.swift
+  s_c60e24772e04af::t_67eef4c8849911 1-74
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1d854db4d3104dda847c53eabfb522a8c69dd5c1",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
