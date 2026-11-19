@@ -97,6 +97,7 @@ fn the_fixtures_carry_what_the_cutter_must_cut() {
         ("between-scans.jpg", b"HushCanaryCam"),
         ("mpf-trailer.jpg", b"HUSHOS-CANARY-MPF"),
         ("progressive.jpg", b"HUSHOS-CANARY-COM"),
+        ("jfif-thumbnail.jpg", b"HUSHOS-CANARY-JFIF"),
     ] {
         assert!(contains(&fixture(name), needle), "{name}");
     }
@@ -455,4 +456,35 @@ fn a_phone_decodes_as_many_pixels_as_its_memory_allows() {
     assert_eq!(images_pdf_max_pixels(2 << 30), 33_554_432);
     assert_eq!(images_pdf_max_pixels(512 << 20), 16_000_000, "never under 16 megapixels");
     assert_eq!(images_pdf_max_pixels(64 << 30), IMAGES_PDF_MAX_PIXELS, "never over the web's 100");
+}
+
+#[test]
+fn an_image_past_the_limit_is_refused_before_the_pdf_grows() {
+    let control = RunControl::new(30_000, None);
+    // Noise does not compress: 256x256 of it is about 196 KiB of RGB, past a 50,000-byte PDF.
+    let mut seed = 7u32;
+    let rgba: Vec<u8> = (0..256 * 256 * 4)
+        .map(|i| {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            if i % 4 == 3 {
+                255
+            } else {
+                (seed >> 16) as u8
+            }
+        })
+        .collect();
+    let writer = ImagesPdfWriter::with_limit(PageSize::Fit, false, 50_000);
+    let before = lock(&writer.state).out.len();
+    assert_eq!(
+        writer.add_pixels(rgba, 256, 256, false, control.clone()),
+        Err(ImagesPdfError::Refused { code: "too-large".into() })
+    );
+    assert_eq!(lock(&writer.state).out.len(), before, "nothing of it was written");
+    // A JPEG larger than what is left, likewise.
+    let writer = ImagesPdfWriter::with_limit(PageSize::Fit, false, 2_000);
+    assert_eq!(
+        writer.add_jpeg(fixture("plain.jpg"), control),
+        Err(ImagesPdfError::Refused { code: "too-large".into() })
+    );
+    assert_eq!(lock(&writer.state).out.len(), before);
 }

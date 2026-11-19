@@ -102,13 +102,29 @@ public enum ImagesPdf {
     final class Lease: @unchecked Sendable {
         private let lock = NSLock()
         private var held: (bytes: UInt64, generation: UInt64)?
-        func take(_ bytes: UInt64, _ generation: UInt64) { lock.withLock { held = (bytes, generation) } }
+        /* Once released it stays released: a charge taken after that is given back at once. */
+        private var released = false
+        private let giveBack: @Sendable (UInt64, UInt64) -> Void
+
+        init(giveBack: @escaping @Sendable (UInt64, UInt64) -> Void = { ToolRuns.budget.release(bytes: $0, generation: $1) }) {
+            self.giveBack = giveBack
+        }
+
+        func take(_ bytes: UInt64, _ generation: UInt64) {
+            let late = lock.withLock { () -> Bool in
+                if !released { held = (bytes, generation) }
+                return released
+            }
+            if late { giveBack(bytes, generation) }
+        }
+
         func release() {
-            guard let charge = lock.withLock({ () -> (bytes: UInt64, generation: UInt64)? in
+            let charge = lock.withLock { () -> (bytes: UInt64, generation: UInt64)? in
+                released = true
                 defer { held = nil }
                 return held
-            }) else { return }
-            ToolRuns.budget.release(bytes: charge.bytes, generation: charge.generation)
+            }
+            if let charge { giveBack(charge.bytes, charge.generation) }
         }
     }
 

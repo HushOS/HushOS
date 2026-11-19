@@ -8,9 +8,10 @@ import { nodeSize } from '@/lib/drive';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { toolRunRows } from '@/lib/tool-run-rows';
 import { TOOL_FAILED } from '@/lib/tools/protocol';
-import { startToolRun, ToolCancelled, type ToolRun } from '@/lib/tools/run';
+import { startToolRun, ToolCancelled, type ToolRun, type ToolRunState } from '@/lib/tools/run';
 import { driveSource } from '@/lib/tools/sources';
 import type { PageSize } from './geometry';
+import { MIXED_FOLDERS } from './limits';
 import { PDF_MAX_BYTES, THUMBNAIL, type ImagesPdfInput, type ImagesPdfSummary } from './protocol';
 
 /*
@@ -33,10 +34,6 @@ export type ImagesPdfJob = {
 
 const THUMBNAIL_EDGE = 512;
 
-/* Images from more than one folder (search results can hold them): refused, never converted in part. */
-export const MIXED_FOLDERS =
-    'These images are in different folders. Make a PDF from one folder at a time.';
-
 /* The person's words for each refusal the worker may send, image by image. */
 export function imagesPdfRefusals(names: readonly string[]): Record<string, string> {
     const words: Record<string, string> = {
@@ -49,6 +46,7 @@ export function imagesPdfRefusals(names: readonly string[]): Record<string, stri
         words[`heic:${index}`] =
             `This browser can’t open HEIC photos such as “${name}”. Use Safari, or HushOS on your phone.`;
         words[`too-many-pixels:${index}`] = `“${name}” is too large to put in a PDF here.`;
+        words[`animated:${index}`] = `“${name}” is animated. HushOS can’t put it in a PDF.`;
         words[`too-large-to-decode:${index}`] =
             `“${name}” is too large to convert here. Save it as a JPEG or PNG first.`;
     });
@@ -150,7 +148,7 @@ export async function makeImagesPdf(queryClient: QueryClient, job: ImagesPdfJob)
             },
         });
         const images = job.images.length;
-        tool.subscribe((state) => {
+        const show = (state: ToolRunState) => {
             if (cancelled) return;
             if (state.status === 'waiting')
                 row.update({
@@ -165,13 +163,22 @@ export async function makeImagesPdf(queryClient: QueryClient, job: ImagesPdfJob)
                     progress: { value: state.done, max: state.total ?? images + 1 },
                 });
             }
-        });
+        };
+        // As it is now (waiting behind another run, perhaps), then as it changes.
+        show(tool.getState());
+        tool.subscribe(show);
         await tool.result;
         if (!saving) throw new Error(TOOL_FAILED);
         await saving;
-        if (!(await endRun(save)))
-            throw new Error('This device couldn’t keep a record of this save.');
-        row.update({ phase: 'done', line: `Saved in ${job.folderName}`, progress: null });
+        // Saved either way: a record this device wouldn't retire only means the next open asks about it.
+        const retired = await endRun(save);
+        row.update({
+            phase: 'done',
+            line: retired
+                ? `Saved in ${job.folderName}`
+                : `Saved in ${job.folderName}. You may be asked about it next time.`,
+            progress: null,
+        });
     } catch (error) {
         tool?.cancel();
         const stopped = save ? await save.cancel().catch(() => null) : null;

@@ -1,4 +1,6 @@
 import { useSyncExternalStore } from 'react';
+import { authClient } from '@/lib/auth-client';
+import { onSignedOutElsewhere } from '@/lib/device-data';
 
 /*
  * A tool's runs as the transfers panel lists them (docs/file-tools-design.md, section 2, "Runs in
@@ -53,9 +55,10 @@ export const toolRunRows = {
             },
         };
     },
-    /* Cancels a run that is still going; the row says how it stopped once it has. */
+    /* Cancels a run that is still going; the row says how it stopped once it has. One that ended meanwhile is left as it is. */
     cancel(id: string) {
-        rows.find((row) => row.id === id)?.cancel();
+        const row = rows.find((each) => each.id === id);
+        if (row && !ended(row.phase)) row.cancel();
     },
     /* Takes a run that ended off the list. */
     remove(id: string) {
@@ -82,3 +85,32 @@ const EMPTY: readonly Live[] = [];
 export function useToolRunRows() {
     return useSyncExternalStore(toolRunRows.subscribe, toolRunRows.getState, () => EMPTY);
 }
+
+type UnlockStore = {
+    subscribe(
+        listener: (
+            state: { unlockedUserId: string | null },
+            previous: { unlockedUserId: string | null },
+        ) => void,
+    ): () => void;
+};
+
+/*
+ * What names files must not outlive the account it was made under in this tab: `forget` runs when
+ * the account locks, when another account unlocks, and when another tab signs out (the tab that
+ * signs out itself forgets in lib/sign-out.ts). So nothing is shown while locked, and nothing of
+ * one account is shown to the next.
+ */
+export function forgetOnLeaving(
+    store: UnlockStore,
+    elsewhere: (listener: () => unknown) => unknown,
+    forget: () => void,
+) {
+    store.subscribe((state, previous) => {
+        if (previous.unlockedUserId !== null && state.unlockedUserId !== previous.unlockedUserId)
+            forget();
+    });
+    elsewhere(forget);
+}
+
+forgetOnLeaving(authClient.store, onSignedOutElsewhere, () => toolRunRows.forget());

@@ -110,9 +110,7 @@ test.afterAll(async () => {
 test('three images reordered make a three-page PDF in that order', async () => {
     await onePdf(page, ['page-1.jpg', 'page-2.jpg', 'page-3.jpg']);
     const form = dialog(page);
-    await expect(form).toContainText(
-        'Location, camera and other photo details are left out. The colour profile is kept.',
-    );
+    await expect(form).toContainText('Location, camera and other photo details are left out.');
     const name = form.getByRole('textbox', { name: 'Name' });
     await expect(name).toHaveValue('page-1.pdf');
     // page-3 to the front with its own button (the keyboard's way), then page-1 to the end.

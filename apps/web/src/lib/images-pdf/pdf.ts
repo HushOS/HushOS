@@ -9,6 +9,7 @@ import {
     pushGraphicsState,
 } from '@cantoo/pdf-lib';
 import { cutJpeg, JpegRefused } from './jpeg';
+import { preparePng, PngRefused } from './png';
 import { pageLayout, type PageSize } from './geometry';
 import { MAX_PIXELS, PDF_MAX_BYTES } from './protocol';
 
@@ -37,7 +38,8 @@ export class ImageRefused extends Error {
             | 'unsupported'
             | 'heic'
             | 'too-many-pixels'
-            | 'too-large-to-decode',
+            | 'too-large-to-decode'
+            | 'animated',
         readonly index: number,
     ) {
         super(`${reason}:${index}`);
@@ -133,9 +135,19 @@ export class ImagesPdf {
         const size = pngSize(bytes);
         if (!size) throw new ImageRefused('damaged', index);
         if (size.width * size.height > MAX_PIXELS) throw new ImageRefused('too-many-pixels', index);
+        // Checked and stripped before pdf-lib decodes it (png.ts): no animation, no bomb, no chunks the
+        // picture doesn't need, and its eXIf orientation read for the page.
+        let prepared;
+        try {
+            prepared = preparePng(bytes);
+        } catch (error) {
+            if (error instanceof PngRefused && error.reason === 'animated')
+                throw new ImageRefused('animated', index);
+            throw new ImageRefused('damaged', index);
+        }
         let image;
         try {
-            image = await this.doc.embedPng(bytes);
+            image = await this.doc.embedPng(prepared.png);
             await image.embed();
         } catch {
             throw new ImageRefused('damaged', index);
@@ -143,7 +155,7 @@ export class ImagesPdf {
         // Counted by what pdf-lib wrote, its pixels and their soft mask compressed again: a PNG's own
         // size bounds neither (a palette or a filter expands), so the PDF stops growing here, never at save.
         this.#grow(this.#streamBytes(image.ref));
-        this.#page(image.ref, image.width, image.height, 1);
+        this.#page(image.ref, image.width, image.height, prepared.orientation);
     }
 
     /* An image stream's bytes and its soft mask's, as written into the document. */

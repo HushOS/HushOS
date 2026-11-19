@@ -39,6 +39,7 @@ CANARY_XMP = b"HUSHOS-CANARY-XMP-7d41"
 CANARY_IPTC = b"HUSHOS-CANARY-IPTC-2c90"
 CANARY_COMMENT = b"HUSHOS-CANARY-COM-913a"
 CANARY_TRAILER = b"HUSHOS-CANARY-MPF-4e07"
+CANARY_JFIF = b"HUSHOS-CANARY-JFIF-8c2b"
 # The GPS latitude 51 deg 30' 26.5" as little-endian rationals, the bytes a GPS IFD carries.
 GPS_LATITUDE_LE = struct.pack("<6I", 51, 1, 30, 1, 2650, 100)
 GPS_LATITUDE_BE = struct.pack(">6I", 51, 1, 30, 1, 2650, 100)
@@ -95,7 +96,8 @@ class Fixture:
         return b"".join(part for part, _ in self.parts)
 
     def expected(self):
-        return b"".join(part for part, kept in self.parts if kept)
+        # `kept` is True (as it is), False (cut), or the bytes the cutter writes in its place.
+        return b"".join(part if kept is True else kept for part, kept in self.parts if kept)
 
 
 def from_libjpeg(jpeg, extra_after_jfif=(), extra_before_sos=()):
@@ -381,6 +383,20 @@ def main():
         note="a phone photo held upright: stored sideways, orientation 6, with GPS",
     )
 
+    # A JFIF header carrying its own thumbnail (raw RGB, here spelling a canary): a second picture
+    # the page never shows. The header stays, rewritten to its 16 bytes with no thumbnail; version,
+    # units and density are kept.
+    segments, scan = split(encode(photo))
+    pixels = (CANARY_JFIF * 2)[: 4 * 3 * 3]
+    jfif_payload = b"JFIF\x00" + b"\x01\x02" + b"\x01" + struct.pack(">HH", 300, 300) + b"\x04\x03" + pixels
+    canonical = seg(0xE0, jfif_payload[:12] + b"\x00\x00")
+    thumbnailed = Fixture().add(b"\xff\xd8", True).add(seg(0xE0, jfif_payload), canonical)
+    for segment in segments:
+        if segment[1] != 0xE0:
+            thumbnailed.add(segment, kept_header(segment))
+    thumbnailed.add(scan, True)
+    ok("jfif-thumbnail.jpg", thumbnailed, note="a JFIF thumbnail: the header kept, its thumbnail cut")
+
     # Two EXIF blocks that disagree: the first decides, as browsers decide.
     ok(
         "two-exif.jpg",
@@ -475,7 +491,7 @@ def main():
         json.dump(
             {
                 "canaries": {
-                    "text": [s.decode() for s in (CANARY_MAKE, CANARY_XMP, CANARY_IPTC, CANARY_COMMENT, CANARY_TRAILER)],
+                    "text": [s.decode() for s in (CANARY_MAKE, CANARY_XMP, CANARY_IPTC, CANARY_COMMENT, CANARY_TRAILER, CANARY_JFIF)],
                     "gpsLatitudeHex": [GPS_LATITUDE_LE.hex(), GPS_LATITUDE_BE.hex()],
                 },
                 "cut": cases,

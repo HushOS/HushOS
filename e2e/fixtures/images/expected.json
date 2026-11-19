@@ -5,7 +5,8 @@
             "HUSHOS-CANARY-XMP-7d41",
             "HUSHOS-CANARY-IPTC-2c90",
             "HUSHOS-CANARY-COM-913a",
-            "HUSHOS-CANARY-MPF-4e07"
+            "HUSHOS-CANARY-MPF-4e07",
+            "HUSHOS-CANARY-JFIF-8c2b"
         ],
         "gpsLatitudeHex": [
             "33000000010000001e000000010000005a0a000064000000",
@@ -240,6 +241,18 @@
             "orientation": 6,
             "adobe": false,
             "note": "a phone photo held upright: stored sideways, orientation 6, with GPS"
+        },
+        {
+            "file": "jfif-thumbnail.jpg",
+            "outcome": "ok",
+            "sha256": "a60d42e32b009c181f22f834df48c84b32e135baf2c492490a87b0a2c8c8eb63",
+            "length": 2701,
+            "width": 240,
+            "height": 160,
+            "components": 3,
+            "orientation": 1,
+            "adobe": false,
+            "note": "a JFIF thumbnail: the header kept, its thumbnail cut"
         },
         {
             "file": "two-exif.jpg",

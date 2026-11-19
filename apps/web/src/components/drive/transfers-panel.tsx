@@ -466,7 +466,8 @@ function RunRowView({
                     </>
                 }
             />
-            <AlertDialog open={asking} onOpenChange={setAsking}>
+            {/* A run that ended while this was open: nothing left to stop, so the question goes. */}
+            <AlertDialog open={asking && !over} onOpenChange={setAsking}>
                 <AlertDialogContent>
                     <AlertDialogHeader>
                         <AlertDialogTitle>{row.cancelQuestion}</AlertDialogTitle>

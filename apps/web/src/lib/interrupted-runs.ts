@@ -1,6 +1,9 @@
 import type { RunRow } from '@hushos/drive/journal';
 import type { QueryClient } from '@tanstack/react-query';
 import { useSyncExternalStore } from 'react';
+import { authClient } from '@/lib/auth-client';
+import { onSignedOutElsewhere } from '@/lib/device-data';
+import { forgetOnLeaving } from '@/lib/tool-run-rows';
 
 /*
  * Runs a closed tab left behind (docs/file-tools-design.md, section 3, "Cancellation and failure
@@ -57,3 +60,6 @@ export function useInterruptedRuns() {
         () => rows,
     );
 }
+
+// Nothing of this account's offered while locked, or to the next account, or after another tab signs out.
+forgetOnLeaving(authClient.store, onSignedOutElsewhere, forgetInterrupted);

@@ -54,6 +54,7 @@ test('the fixtures carry what the cutter must cut', () => {
     has('between-scans.jpg', 'HushCanaryCam');
     has('mpf-trailer.jpg', 'HUSHOS-CANARY-MPF');
     has('progressive.jpg', 'HUSHOS-CANARY-COM');
+    has('jfif-thumbnail.jpg', 'HUSHOS-CANARY-JFIF');
     const icc = new TextEncoder().encode('ICC_PROFILE\0');
     expect(contains(cutJpeg(fixture('icc.jpg')).bytes, icc)).toBe(true);
     expect(

@@ -283,7 +283,10 @@ val LocalFootBars = androidx.compose.runtime.compositionLocalOf { 0.dp }
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, secure: Boolean = false, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, secure: Boolean = false,
+          /* Asked before a swipe or a tap outside hides the sheet: true keeps it up (and may ask the person why, as a run's Stop does). */
+          stayOpen: (() -> Boolean)? = null,
+          content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
     val alpine = Alpine.colors
     // Whether the keyboard is up in the sheet's own window, where its fields are: read inside, kept here.
     val keyboard = remember { androidx.compose.runtime.mutableStateOf(false) }
@@ -300,7 +303,11 @@ fun Sheet(onDismissRequest: () -> Unit, full: Boolean = false, secure: Boolean =
     var contentPx by remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val contentMax = limit?.let { sheetContentMax(it, with(density) { sheetPx.toDp().value }, with(density) { contentPx.toDp().value }) }
     // `full`: a sheet with its own header and long content opens at full height, not half way.
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = full || belowFold != null)
+    val holding = androidx.compose.runtime.rememberUpdatedState(stayOpen)
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(
+        skipPartiallyExpanded = full || belowFold != null,
+        confirmValueChange = { value -> value != androidx.compose.material3.SheetValue.Hidden || holding.value?.invoke() != true },
+    )
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismissRequest, sheetState = sheetState, containerColor = alpine.surface,
         // Dark: a deeper backdrop, so a field behind the sheet's top never reads as a second sheet (owner, 2026-11-01).

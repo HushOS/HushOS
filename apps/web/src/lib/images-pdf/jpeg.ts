@@ -5,7 +5,8 @@
  *
  * It walks every segment, between the scans of a progressive JPEG too, and keeps the frame
  * header, the tables, the restart interval and the scans, plus three application segments:
- * APP0 `JFIF`, APP2 `ICC_PROFILE` (the colour profile) and APP14 `Adobe` (how CMYK is stored).
+ * APP0 `JFIF` (rewritten without its thumbnail), APP2 `ICC_PROFILE` (the colour profile) and APP14
+ * `Adobe` (how CMYK is stored).
  * Every other application segment (EXIF, XMP, IPTC, MPF, makers' own) and every comment is cut,
  * and so is anything after the end of the image (a second picture, as MPF files carry). The
  * scans are copied unchanged, so the picture is the same to the bit.
@@ -191,6 +192,16 @@ export function cutJpeg(input: Uint8Array): CutJpeg {
             }
             keep = keeps(marker, payload);
             if (keep && marker === 0xee) adobe = true;
+            if (keep && marker === 0xe0) {
+                // JFIF's header, rewritten to its 16 bytes with no thumbnail (a second picture the
+                // page never shows): version, units and density kept. One too short to be JFIF goes.
+                if (payload.length >= 14) {
+                    out.pushBytes(0xff, 0xe0, 0x00, 0x10);
+                    out.push(payload.subarray(0, 12));
+                    out.pushBytes(0x00, 0x00);
+                }
+                keep = false;
+            }
         } else {
             throw damaged();
         }

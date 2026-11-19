@@ -138,12 +138,29 @@ object ImagesPdf {
      */
     fun maxPixels(deviceMemory: Long, heapBytes: Long): Long = minOf(maxPixels(deviceMemory), heapBytes / 3 / 4)
 
-    /* A PDF's charge in ToolRuns.budget: taken on the run's thread, given back exactly once, however the run ends. */
-    class Lease {
-        private val held = AtomicReference<Pair<ULong, ULong>?>(null)
-        fun take(bytes: ULong, generation: ULong) = held.set(bytes to generation)
+    /*
+     * A PDF's charge in ToolRuns.budget: taken on the run's thread, given back exactly once, however the run
+     * ends. Once released it stays released: a charge taken after that (the run's thread still producing
+     * when Stop already returned to the caller) is given back at once, never left for nobody to release.
+     */
+    class Lease(private val giveBack: (ULong, ULong) -> Unit = { bytes, generation -> ToolRuns.budget.release(bytes, generation) }) {
+        private var held: Pair<ULong, ULong>? = null
+        private var released = false
+
+        fun take(bytes: ULong, generation: ULong) {
+            val late = synchronized(this) {
+                if (!released) held = bytes to generation
+                released
+            }
+            if (late) giveBack(bytes, generation)
+        }
+
         fun release() {
-            held.getAndSet(null)?.let { (bytes, generation) -> ToolRuns.budget.release(bytes, generation) }
+            val charge = synchronized(this) {
+                released = true
+                held.also { held = null }
+            }
+            charge?.let { (bytes, generation) -> giveBack(bytes, generation) }
         }
     }
 

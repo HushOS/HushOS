@@ -30,33 +30,45 @@ test('sizes come from every kind’s header', () => {
     expect(imageSize(fixture('photo-lossless.webp'))).toEqual({ width: 240, height: 160 });
     expect(imageSize(fixture('photo.gif'))).toEqual({ width: 240, height: 160 });
     expect(imageSize(fixture('photo.bmp'))).toEqual({ width: 240, height: 160 });
-    // HEIF: the largest ispe (a grid's), not a tile's.
-    const box = (width: number, height: number) => {
-        const out = new Uint8Array(20);
-        const view = new DataView(out.buffer);
-        view.setUint32(0, 20);
-        out.set(new TextEncoder().encode('ispe'), 4);
-        view.setUint32(12, width);
-        view.setUint32(16, height);
+    // HEIF: the primary item's ispe, found through meta, pitm, iprp, ipco and ipma, not a text
+    // search: a decoy "ispe" in the media data first, and a tile's ispe beside the primary's.
+    const box = (type: string, ...parts: (Uint8Array | number[])[]) => {
+        const body = parts.flatMap((part) => [...part]);
+        const out = new Uint8Array(8 + body.length);
+        new DataView(out.buffer).setUint32(0, out.length);
+        out.set(new TextEncoder().encode(type), 4);
+        out.set(body, 8);
         return out;
     };
-    const heic = new Uint8Array([
-        0,
-        0,
-        0,
-        16,
-        ...new TextEncoder().encode('ftypheic'),
-        0,
-        0,
-        0,
-        0,
-        ...box(512, 512),
-        ...box(4032, 3024),
-    ]);
-    expect(imageSize(heic)).toEqual({ width: 4032, height: 3024 });
-    expect(
-        imageSize(new Uint8Array([0, 0, 0, 16, ...new TextEncoder().encode('ftypheic')])),
-    ).toBeNull();
+    const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+    const ispe = (w: number, h: number) => box('ispe', [0, 0, 0, 0], u32(w), u32(h));
+    const heif = (decoy: boolean, primary: number) =>
+        new Uint8Array([
+            ...box('ftyp', new TextEncoder().encode('heic'), [0, 0, 0, 0]),
+            ...(decoy
+                ? box(
+                      'mdat',
+                      new TextEncoder().encode('ispe'),
+                      [0, 0, 0, 0],
+                      u32(90_000),
+                      u32(90_000),
+                  )
+                : []),
+            ...box(
+                'meta',
+                [0, 0, 0, 0],
+                box('pitm', [0, 0, 0, 0], [0, primary]),
+                box(
+                    'iprp',
+                    box('ipco', ispe(512, 512), ispe(4032, 3024)),
+                    // Item 1 has property 1 (the tile's size), item 2 property 2.
+                    box('ipma', [0, 0, 0, 0], u32(2), [0, 1, 1, 0x81], [0, 2, 1, 0x82]),
+                ),
+            ),
+        ]);
+    expect(imageSize(heif(true, 2))).toEqual({ width: 4032, height: 3024 });
+    expect(imageSize(heif(false, 1))).toEqual({ width: 512, height: 512 });
+    expect(imageSize(heif(false, 3))).toBeNull();
     expect(imageSize(new TextEncoder().encode('not an image at all'))).toBeNull();
 });
 

@@ -4,6 +4,9 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,8 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DragHandle
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -32,7 +33,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.retain.retain
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -98,15 +98,18 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
         order.add(to, order.removeAt(from))
     }
 
-    Sheet(onDismissRequest = { if (!busy) { model.forgetImagesPdf(); dismiss() } }, full = true) {
-        Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S4),
+    // While it runs, a swipe or a tap outside never hides the sheet (its progress and Stop with it): it asks to Stop.
+    val rowHeight = 64.dp
+    val rowPx = with(LocalDensity.current) { rowHeight.toPx() }
+    Sheet(onDismissRequest = { if (!busy) { model.forgetImagesPdf(); dismiss() } }, full = true,
+        stayOpen = { busy.also { if (it) askingStop = true } }) {
+        // A list drawn as it scrolls: only the rows on screen are composed, and only their thumbnails asked for.
+        LazyColumn(Modifier.padding(horizontal = AlpineSpace.S4), contentPadding = PaddingValues(bottom = AlpineSpace.S4),
             verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
-            Text("One PDF", style = MaterialTheme.typography.titleLarge)
-            Text("Order", style = MaterialTheme.typography.titleSmall)
-            val rowHeight = 64.dp
-            val rowPx = with(LocalDensity.current) { rowHeight.toPx() }
-            Column {
-                order.forEachIndexed { index, item -> key(item.id) {
+            item { Text("One PDF", style = MaterialTheme.typography.titleLarge) }
+            item { Text("Order", style = MaterialTheme.typography.titleSmall) }
+            items(order, key = { it.id }) { item ->
+                    val index = order.indexOf(item)
                     // Keyed by the image, so its row (and a drag under way) moves with it when the order changes.
                     var lifted by remember { mutableFloatStateOf(0f) }
                     var dragging by remember { mutableStateOf(false) }
@@ -126,7 +129,9 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                     ) {
                         LaunchedEffect(thumbnailKey(item)) { model.thumbnail(item) }
                         val thumbnail = state.thumbnails[thumbnailKey(item)]
-                        val bitmap = remember(thumbnail) { thumbnail?.let { android.graphics.BitmapFactory.decodeByteArray(it, 0, it.size)?.asImageBitmap() } }
+                        // Decoded at the size it is drawn, not the stored 512 px.
+                        val edge = with(LocalDensity.current) { 40.dp.roundToPx() }
+                        val bitmap = remember(thumbnail, edge) { thumbnail?.let { smallBitmap(it, edge) } }
                         Mark(item, bitmap, box = 40.dp)
                         Spacer(Modifier.width(AlpineSpace.S3))
                         Text(item.name, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -153,8 +158,8 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                                 }
                             })
                     }
-                } }
             }
+            item { Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
             Text("Page size", style = MaterialTheme.typography.titleSmall)
             val sizes = listOf(PageSize.FIT to "Fit to each image", PageSize.A4 to "A4", PageSize.LETTER to "US Letter")
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -171,7 +176,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                 }
             }
             OutlinedTextField(name, { typed = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, label = { Text("Name") })
-            Text("Location, camera and other photo details are left out. The colour profile is kept.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Text("Location, camera and other photo details are left out.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             when (stage) {
                 ImagesPdf.Stage.OFFER -> Text("These images are ${formatBytes(total)}. Making the PDF uses a lot of memory and may be slow on this phone.")
                 ImagesPdf.Stage.CEILING -> Text("These images are too many or too large for one PDF here: at most ${ImagesPdf.limits.maxImages} images and 256 MB.",
@@ -199,6 +204,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                     Text(if (stage == ImagesPdf.Stage.OFFER) "Continue" else "Make PDF")
                 }
             }
+            } }
         }
     }
     if (askingStop) AlertDialog(
@@ -214,6 +220,16 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
         },
         dismissButton = { TextButton(onClick = { askingStop = false }) { Text("Keep going") } },
     )
+}
+
+/* A thumbnail decoded to about `edge` pixels across (a power-of-two step down), not its stored size. */
+private fun smallBitmap(bytes: ByteArray, edge: Int): androidx.compose.ui.graphics.ImageBitmap? {
+    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sample = 1
+    while (minOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= edge) sample *= 2
+    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+    return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
 }
 
 /* Convert's choices for an image: for now, One PDF. */

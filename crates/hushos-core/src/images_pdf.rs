@@ -318,7 +318,18 @@ pub fn cut_jpeg(input: &[u8]) -> Result<CutJpeg, ImageRefusal> {
                 if keep && marker == 0xEE {
                     adobe = true;
                 }
-                keep
+                if keep && marker == 0xE0 {
+                    // JFIF's header, rewritten to its 16 bytes with no thumbnail (a second picture the
+                    // page never shows): version, units and density kept. One too short to be JFIF goes.
+                    if payload.len() >= 14 {
+                        out.extend_from_slice(&[0xFF, 0xE0, 0x00, 0x10]);
+                        out.extend_from_slice(&payload[..12]);
+                        out.extend_from_slice(&[0x00, 0x00]);
+                    }
+                    false
+                } else {
+                    keep
+                }
             }
             _ => return Err(Damaged),
         };
@@ -521,6 +532,19 @@ impl WriterState {
         self.pages.push(page);
     }
 
+    /* What the PDF may still grow by before it passes its limit. */
+    fn room(&self) -> u64 {
+        self.max_output.saturating_sub(self.out.len() as u64)
+    }
+
+    /* Whether `bytes` more of streams (and their objects' few hundred bytes) still fit. */
+    fn room_for(&self, bytes: usize) -> Result<(), ImageRefusal> {
+        if bytes as u64 + 1024 > self.room() {
+            return Err(ImageRefusal::TooLarge);
+        }
+        Ok(())
+    }
+
     fn check_size(&self) -> Result<(), ImageRefusal> {
         if self.out.len() as u64 > self.max_output {
             return Err(ImageRefusal::TooLarge);
@@ -589,6 +613,8 @@ impl ImagesPdfWriter {
             4 => "/DeviceCMYK",
             _ => "/DeviceRGB",
         };
+        // Refused before a byte of it is copied, never after the PDF grew past its limit.
+        state.room_for(cut_bytes.len())?;
         let image = state.reserve();
         state.stream(
             image,
@@ -629,6 +655,8 @@ impl ImagesPdfWriter {
             return Err(ImageRefusal::Damaged.into());
         }
         let row = width as usize * 4;
+        // What the PDF may still grow by: each compressed stream is cut off past it as it is made.
+        let room = lock(&self.state).room();
         let opaque = rgba.as_chunks::<4>().0.iter().all(|pixel| pixel[3] == 255);
         let mut colour = ZlibEncoder::new(Vec::new(), Compression::default());
         let mut line = Zeroizing::new(vec![0u8; width as usize * 3]);
@@ -646,6 +674,9 @@ impl ImagesPdfWriter {
                 }
             }
             colour.write_all(&line).map_err(|_| ImageRefusal::Damaged)?;
+            if colour.get_ref().len() as u64 > room {
+                return Err(ImageRefusal::TooLarge.into());
+            }
             if (index as u32 + 1).is_multiple_of(ROWS_PER_PROGRESS) {
                 control.progress()?;
             }
@@ -658,6 +689,9 @@ impl ImagesPdfWriter {
             for (index, source) in rgba.chunks_exact(row).enumerate() {
                 let alphas: Vec<u8> = source.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).collect();
                 mask.write_all(&alphas).map_err(|_| ImageRefusal::Damaged)?;
+                if (colour.len() + mask.get_ref().len()) as u64 > room {
+                    return Err(ImageRefusal::TooLarge.into());
+                }
                 if (index as u32 + 1).is_multiple_of(ROWS_PER_PROGRESS) {
                     control.progress()?;
                 }
@@ -669,6 +703,7 @@ impl ImagesPdfWriter {
         if state.finished {
             return Err(ImagesPdfError::Failed { reason: "The PDF is already made.".into() });
         }
+        state.room_for(colour.len() + mask.as_ref().map_or(0, |mask| mask.len()))?;
         let soft_mask = match mask {
             Some(mask) => {
                 let object = state.reserve();

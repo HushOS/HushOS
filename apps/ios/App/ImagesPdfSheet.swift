@@ -80,7 +80,7 @@ struct ImagesPdfSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } footer: {
-                    Text("Location, camera and other photo details are left out. The colour profile is kept.")
+                    Text("Location, camera and other photo details are left out.")
                 }
                 .disabled(busy)
                 switch stage {

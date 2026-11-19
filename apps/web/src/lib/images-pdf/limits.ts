@@ -62,3 +62,7 @@ export function pdfNameFor(first: string) {
     const base = (dot > 0 ? first.slice(0, dot) : first).trim();
     return `${base || 'Images'}.pdf`;
 }
+
+/* Images from more than one folder (search results, Home): refused, never converted in part. */
+export const MIXED_FOLDERS =
+    'These images are in different folders. Make a PDF from one folder at a time.';

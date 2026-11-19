@@ -15,9 +15,6 @@ const ascii = (bytes: Uint8Array, at: number, text: string) => {
     return true;
 };
 
-/* Where `heif` and `avif` keep their sizes: an image spatial extents box, within the first MiB. */
-const ISPE_WINDOW = 1024 * 1024;
-
 export function imageSize(bytes: Uint8Array): Size | null {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const valid = (width: number, height: number) =>
@@ -73,17 +70,85 @@ export function imageSize(bytes: Uint8Array): Size | null {
         }
         return null;
     }
-    // HEIF and AVIF: `ftyp`, then the largest `ispe` in the meta box (a grid's, not a tile's).
-    if (ascii(bytes, 4, 'ftyp')) {
-        let largest: Size | null = null;
-        const end = Math.min(bytes.length, ISPE_WINDOW) - 16;
-        for (let at = 0; at <= end; at++) {
-            if (!ascii(bytes, at, 'ispe')) continue;
-            const size = valid(view.getUint32(at + 8), view.getUint32(at + 12));
-            if (size && (!largest || size.width * size.height > largest.width * largest.height))
-                largest = size;
+    // HEIF and AVIF: the primary item's spatial extents, found by walking the boxes.
+    if (ascii(bytes, 4, 'ftyp')) return heifSize(bytes, view);
+    return null;
+}
+
+type Box = { type: string; start: number; end: number };
+
+/* The boxes between `start` and `end`, each by its own size (32-bit, 64-bit, or to the end). */
+function boxes(bytes: Uint8Array, view: DataView, start: number, end: number): Box[] | null {
+    const out: Box[] = [];
+    for (let at = start; at < end;) {
+        if (at + 8 > end) return null;
+        let size = view.getUint32(at);
+        let header = 8;
+        if (size === 1) {
+            if (at + 16 > end) return null;
+            size = view.getUint32(at + 8) * 2 ** 32 + view.getUint32(at + 12);
+            header = 16;
+        } else if (size === 0) size = end - at;
+        if (size < header || at + size > end) return null;
+        out.push({
+            type: String.fromCharCode(...bytes.subarray(at + 4, at + 8)),
+            start: at + header,
+            end: at + size,
+        });
+        at += size;
+    }
+    return out;
+}
+
+/*
+ * HEIF's size: `meta` (a full box) holds `pitm` (the primary item), and `iprp` holds `ipco` (the
+ * properties, numbered from 1) and `ipma` (which properties each item has). The primary item's
+ * `ispe` is its width and height. Null when any of it is missing or out of place.
+ */
+function heifSize(bytes: Uint8Array, view: DataView): Size | null {
+    const top = boxes(bytes, view, 0, bytes.length);
+    const meta = top?.find((box) => box.type === 'meta');
+    if (!meta) return null;
+    const inner = boxes(bytes, view, meta.start + 4, meta.end);
+    const pitm = inner?.find((box) => box.type === 'pitm');
+    const iprp = inner?.find((box) => box.type === 'iprp');
+    if (!pitm || !iprp) return null;
+    const pitmVersion = bytes[pitm.start]!;
+    const primary =
+        pitmVersion === 0 ? view.getUint16(pitm.start + 4) : view.getUint32(pitm.start + 4);
+    const parts = boxes(bytes, view, iprp.start, iprp.end);
+    const ipco = parts?.find((box) => box.type === 'ipco');
+    const ipma = parts?.find((box) => box.type === 'ipma');
+    if (!ipco || !ipma) return null;
+    const properties = boxes(bytes, view, ipco.start, ipco.end);
+    if (!properties) return null;
+    const version = bytes[ipma.start]!;
+    const wide = (bytes[ipma.start + 3]! & 1) === 1;
+    let at = ipma.start + 4;
+    const entries = view.getUint32(at);
+    at += 4;
+    for (let entry = 0; entry < entries; entry++) {
+        if (at + (version < 1 ? 3 : 5) > ipma.end) return null;
+        const item = version < 1 ? view.getUint16(at) : view.getUint32(at);
+        at += version < 1 ? 2 : 4;
+        const count = bytes[at]!;
+        at += 1;
+        for (let i = 0; i < count; i++) {
+            if (at + (wide ? 2 : 1) > ipma.end) return null;
+            const index = wide ? view.getUint16(at) & 0x7fff : bytes[at]! & 0x7f;
+            at += wide ? 2 : 1;
+            if (item !== primary) continue;
+            const property = properties[index - 1];
+            if (property?.type === 'ispe' && property.start + 12 <= property.end)
+                return valid(
+                    view.getUint32(property.start + 4),
+                    view.getUint32(property.start + 8),
+                );
         }
-        return largest;
     }
     return null;
+}
+
+function valid(width: number, height: number) {
+    return width > 0 && height > 0 ? { width, height } : null;
 }

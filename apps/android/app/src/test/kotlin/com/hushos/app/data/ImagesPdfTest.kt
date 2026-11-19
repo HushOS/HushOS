@@ -174,6 +174,24 @@ class ImagesPdfTest {
     }
 
     @Test
+    fun aChargeTakenAfterTheLeaseWasReleasedIsGivenBackAtOnce() {
+        val given = mutableListOf<Pair<ULong, ULong>>()
+        // Stop returned to the caller, which released the lease; then the run's thread charged the PDF.
+        val late = ImagesPdf.Lease { bytes, generation -> given += bytes to generation }
+        late.release()
+        late.take(5uL, 1uL)
+        assertEquals(listOf(5uL to 1uL), given)
+        // In order: given back once, when released, never twice.
+        given.clear()
+        val lease = ImagesPdf.Lease { bytes, generation -> given += bytes to generation }
+        lease.take(7uL, 2uL)
+        assertEquals(emptyList<Pair<ULong, ULong>>(), given)
+        lease.release()
+        lease.release()
+        assertEquals(listOf(7uL to 2uL), given)
+    }
+
+    @Test
     fun limitsNamesAndPaper() {
         assertEquals(ImagesPdf.Stage.FINE, ImagesPdf.stage(3, 64L shl 20))
         assertEquals(ImagesPdf.Stage.OFFER, ImagesPdf.stage(3, (64L shl 20) + 1))

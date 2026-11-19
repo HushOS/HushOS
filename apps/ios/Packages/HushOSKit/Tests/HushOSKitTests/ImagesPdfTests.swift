@@ -157,6 +157,25 @@ import UniformTypeIdentifiers
         #expect(data[Int(65 << 20)] == 64 && data[Int(size) - 1] == 64, "each piece where it was read from")
     }
 
+    @Test func aChargeTakenAfterTheLeaseWasReleasedIsGivenBackAtOnce() {
+        final class Given: @unchecked Sendable {
+            let lock = NSLock()
+            var list: [UInt64] = []
+            func add(_ bytes: UInt64) { lock.withLock { list.append(bytes) } }
+        }
+        let given = Given()
+        // Stop returned to the caller, which released the lease; then the run's thread charged the PDF.
+        let late = ImagesPdf.Lease { bytes, _ in given.add(bytes) }
+        late.release()
+        late.take(5, 1)
+        #expect(given.list == [5])
+        let lease = ImagesPdf.Lease { bytes, _ in given.add(bytes) }
+        lease.take(7, 2)
+        lease.release()
+        lease.release()
+        #expect(given.list == [5, 7], "given back once, when released")
+    }
+
     @Test func limitsNamesAndPaper() {
         #expect(ImagesPdf.stage(count: 3, bytes: 64 << 20) == .fine)
         #expect(ImagesPdf.stage(count: 3, bytes: (64 << 20) + 1) == .offer)
