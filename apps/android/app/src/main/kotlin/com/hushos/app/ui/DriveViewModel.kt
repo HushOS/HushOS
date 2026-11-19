@@ -1063,6 +1063,8 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     override fun onCleared() {
         archiveBrowse?.close()
+        // The model going (not a rotation, which keeps it): the editor's session closes, its text and its work with it.
+        endTextEdit()
         runCatching { connectivity.unregisterNetworkCallback(network) }
         super.onCleared()
     }

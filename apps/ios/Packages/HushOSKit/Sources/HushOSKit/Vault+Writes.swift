@@ -725,6 +725,10 @@ extension Vault {
                        moveOf: MoveSource? = nil, expected: String?? = nil, keepName: Bool = false, held: NodeRef? = nil) async throws -> Begun {
         _ = try await loadWorkspace()
         var replacing = given
+        // The folder the replaced file was written into, as the caller named it: taken before a family's look again
+        // swaps in the row this vault holds now, which may already show the file moved (the request would then name
+        // the folder it went to, and the version land there).
+        let expectedParent = held?.nodeId ?? given?.node.parentId ?? parentId
         // The folder written into: `held`, a save run's checked destination, as the very row it names (workspace and all),
         // never looked up again by id (which answers with the own Drive's row first); else the folder its id resolves to.
         func destination() async throws -> Opened {
@@ -784,7 +788,7 @@ extension Vault {
             // Every new version is held to the folder it was written into (a save’s checked `held`, else the folder the file is in): a
             // file moved away since, at begin or before completion, publishes nothing (stale, or conflicted with no version).
             // An editor's save and an ordinary replacement send the same, so the server can't tell them apart.
-            nodeInput["expectedParentId"] = held?.nodeId ?? replacing.node.parentId ?? parentId
+            nodeInput["expectedParentId"] = expectedParent
             // A new version has a new size and date; the sealed metadata says so too, as the lists read it.
             final = keepName ? replacing.metadata
                 : NodeMetadata(name: replacing.metadata.name, mime: mime ?? replacing.metadata.mime, size: plaintextSize, modified: modified,

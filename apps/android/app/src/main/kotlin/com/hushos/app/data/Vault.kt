@@ -2147,8 +2147,11 @@ class Vault(internal val context: Context, val api: DriveApi) {
         do {
             val page = try {
                 api.children(folderId, workspaceId, after)
+            } catch (gone: NotFound) {
+                // DriveApi answers a 404 so, never as an ApiError.
+                return null
             } catch (error: ApiError) {
-                if (error.status == 404 || (error.status == 409 && error.code == "trashed")) return null
+                if (error.status == 409 && error.code == "trashed") return null
                 throw error
             }
             page.children.firstOrNull { it.id == id }?.let { return it }

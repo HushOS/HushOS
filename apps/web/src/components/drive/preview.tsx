@@ -27,7 +27,7 @@ import {
 } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
 import { SavedFromLinkLine, UnverifiedMark } from '@/components/drive/unverified-mark';
-import { markedRow, type EditorRead } from '@/lib/editor-marks';
+import { headerRow, type EditorRead } from '@/lib/editor-marks';
 import {
     LargeFile,
     LargeFileBar,
@@ -198,10 +198,7 @@ export function Preview({
             : editing.target
         : current;
     // The marks while editing: of the version the editor holds, never a newer one the listing shows.
-    const marked =
-        editing && shown
-            ? { ...markedRow(current, editing.target, editing.read), name: shown.name }
-            : shown;
+    const marked = headerRow(shown, current, editing);
     const index = current ? files.findIndex((file) => file.id === current.id) : -1;
     const previous = !version && !editing && index > 0 ? files[index - 1] : undefined;
     const next =
@@ -368,9 +365,10 @@ export function Preview({
                                 <div className="flex min-w-0 items-center gap-2">
                                     <DialogTitle
                                         className="flex min-w-0 text-[15px] font-bold"
-                                        title={shown.name}
+                                        title={(marked ?? shown).name}
                                     >
-                                        <MiddleName name={shown.name} />
+                                        {/* The name and its mark from one row: while editing, the version the text is. */}
+                                        <MiddleName name={(marked ?? shown).name} />
                                     </DialogTitle>
                                     {/* An earlier version is marked in the versions list, not here. */}
                                     {!version && marked && <UnverifiedMark node={marked} />}

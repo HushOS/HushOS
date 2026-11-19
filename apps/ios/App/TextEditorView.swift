@@ -42,6 +42,13 @@ struct TextEditorScreen: View {
     @State private var source: Opened?
     /* The workspace and folder the file was opened in (EditDestination): every save and copy lists and writes there. */
     @State private var destination: EditDestination?
+    /*
+     * The row the header names and marks: the one the text was read from, moved on only by a save or a copy whose row
+     * lists the very version it published (TextEditing.speaksFor). Its name and its mark always come from this one row.
+     */
+    @State private var marked: Opened?
+    /* The text as last opened or saved: typing then undoing it is no change (Save sends nothing, Close asks nothing). */
+    @State private var savedText = ""
     @State private var edited = false
     @State private var saving = false
     @State private var status: String?
@@ -72,7 +79,7 @@ struct TextEditorScreen: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(shown.name)
+                .navigationTitle((marked ?? shown).name)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .background(Alpine.ground.ignoresSafeArea())
@@ -85,6 +92,7 @@ struct TextEditorScreen: View {
             session.close()
             work?.cancel()
             editor.drop()
+            savedText = ""
             dismiss()
         }
         .onChange(of: leaveAsked) { _, _ in requestClose() }
@@ -93,7 +101,7 @@ struct TextEditorScreen: View {
             closing = false
             // Not landed (it failed, or someone else's version is current): the editor stays, saying why.
             guard failure == nil, stale == nil else { return onStay() }
-            if edited { confirmLeave = true } else { close() }
+            if changed() { confirmLeave = true } else { close() }
         }
         // Up: a link or a notification waits for this editor (DriveStore.route), whatever covers or uncovers the viewer.
         .onAppear { store.editorOpen = true }
@@ -102,6 +110,7 @@ struct TextEditorScreen: View {
             session.close()
             work?.cancel()
             editor.drop()
+            savedText = ""
             // Gone: what waited for it goes on, once.
             store.editorClosed()
         }
@@ -137,7 +146,25 @@ struct TextEditorScreen: View {
         }
     }
 
+    /* The name and, under it, the verdict on the version the text is, as the viewer's title marks a file. */
+    private var header: some View {
+        let row = marked ?? shown
+        return VStack(spacing: 1) {
+            Text(row.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
+            if let provenance = store.provenance(of: row) {
+                UnverifiedMark(provenance: provenance).frame(minHeight: 16)
+            } else if let saved = store.savedCopy(of: row) {
+                Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let seen = store.seenBy(of: row) {
+                Text("Added by \(seen.shown) · Not verified").font(.caption).foregroundStyle(Alpine.inkMuted).lineLimit(1).truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, Alpine.Space.s2)
+    }
+
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) { header }
         ToolbarItem(placement: .cancellationAction) {
             Button { requestClose() } label: { HeaderWord(text: EditorWords.close) }
         }
@@ -191,7 +218,17 @@ struct TextEditorScreen: View {
 
     /* Close: while a save is on its way it waits for it (`closing`); with changes it asks first. */
     private func requestClose() {
-        if saving { closing = true } else if edited { confirmLeave = true } else { close() }
+        if saving { closing = true } else if changed() { confirmLeave = true } else { close() }
+    }
+
+    /* Changes to lose or save: typed, and not back to what was last opened or saved (typed, then undone). */
+    private func changed() -> Bool {
+        guard edited else { return false }
+        if TextEditing.same(editor.text, savedText) {
+            edited = false
+            return false
+        }
+        return true
     }
 
     /*
@@ -202,6 +239,7 @@ struct TextEditorScreen: View {
         session.close()
         work?.cancel()
         editor.drop()
+        savedText = ""
         edited = false
         dismiss()
     }
@@ -233,10 +271,12 @@ struct TextEditorScreen: View {
             startedFrom = file.node.currentVersion?.id
             source = file
             destination = at
+            marked = file
             edited = false
             switch TextEditing.open(data) {
             case .editable(let text):
                 editor.open(text)
+                savedText = text
                 phase = .editing
             case .readOnly(let reason, let text):
                 phase = .readOnly(reason, text)
@@ -271,6 +311,8 @@ struct TextEditorScreen: View {
     /* Save, and Save on top (`onTopOf`: the version current now). */
     private func save(onTopOf: String? = nil) async {
         guard phase == .editing, !saving, let file = target else { return }
+        // Back to the text as opened or saved: nothing to send, and no version that pushes out an older one.
+        if onTopOf == nil, !changed() { return }
         // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
         guard let token = session.take(store.vault) else { return }
         let vault = token.owner
@@ -301,6 +343,8 @@ struct TextEditorScreen: View {
                     startedFrom = versionId
                     onSaved(landed)
                 }
+                if TextEditing.speaksFor(landed, versionId: versionId, at: destination) { marked = landed }
+                savedText = text
                 // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
                 edited = !TextEditing.same(editor.text, text)
                 status = EditorWords.saved
@@ -333,6 +377,8 @@ struct TextEditorScreen: View {
             // the next save finds it gone from here.
             target = made.file
             startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
+            if TextEditing.speaksFor(made.file, versionId: made.versionId, at: destination) { marked = made.file }
+            savedText = text
             edited = !TextEditing.same(editor.text, text)
             status = EditorWords.savedCopy(made.file.name)
             await store.refresh(folder: folder.id)
@@ -349,6 +395,7 @@ struct TextEditorScreen: View {
         session.reopened()
         work?.cancel()
         editor.drop()
+        savedText = ""
         edited = false
         status = nil
         failure = nil

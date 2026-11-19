@@ -127,6 +127,16 @@ public enum TextEditing {
         return (folder, file)
     }
 
+    /*
+     * Whether a row a save or a copy answered with speaks for the editor's text (its header's name and marks): only when
+     * it lists the very version that was published (`versionId`), in the editor's folder. A row already showing someone
+     * else's newer version, or the file elsewhere, never takes the marks off the version the text is.
+     */
+    public static func speaksFor(_ row: Opened, versionId: String?, at destination: EditDestination?) -> Bool {
+        guard let versionId, let destination else { return false }
+        return row.node.currentVersion?.id == versionId && destination.holds(row)
+    }
+
     public static func target(in listing: Listing, for file: Opened,
                               at destination: EditDestination? = nil) throws -> (folder: NodeView, file: NodeView?) {
         let at = destination ?? EditDestination(of: file)

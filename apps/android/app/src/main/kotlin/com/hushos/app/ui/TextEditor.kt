@@ -138,6 +138,17 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 
     var phase by mutableStateOf<Phase>(Phase.Loading); private set
     var target by mutableStateOf(item); private set
+    /*
+     * The row the header names and marks: the one the text was read from, moved on only by a save or a copy whose row
+     * lists the very version it published (its checks are of that version). Another device's newer version, checked or
+     * not, says nothing of the text on screen; its name and its mark always come from this one row.
+     */
+    var marked by mutableStateOf(item); private set
+
+    /* `row` speaks for the text when it lists the version this editor just published, in the editor's folder. */
+    private fun markWith(row: Opened, versionId: String?) {
+        if (TextEditing.speaksFor(row, versionId, destination)) marked = row
+    }
     private var startedFrom: String? = item.node.currentVersion?.id
     /*
      * The row the text's bytes were read from: a copy is signed as it is (an Unverified file's copy stays Unverified). Set only
@@ -150,6 +161,18 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     /* The text, edited in place by the EditText: never copied per keystroke, never put in a Bundle. */
     val buffer = SpannableStringBuilder()
     var edited by mutableStateOf(false); private set
+    /* The text as last opened or saved: typing then undoing it is no change (Save sends nothing, Close asks nothing). */
+    private var savedText: String? = null
+
+    /* Changes to lose or save: typed, and not back to what was last opened or saved. */
+    fun changed(): Boolean {
+        if (!edited) return false
+        if (savedText?.let { TextEditing.same(buffer, it) } == true) {
+            edited = false
+            return false
+        }
+        return true
+    }
     var saving by mutableStateOf(false); private set
     var status by mutableStateOf<String?>(null); private set
     var failure by mutableStateOf<String?>(null); private set
@@ -220,13 +243,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             }
             val (file, text) = loaded
             target = file
+            marked = file
             startedFrom = file.node.currentVersion?.id
             source = file
             edited = false
             buffer.clear()
             buffer.clearSpans()
             phase = when (text) {
-                is TextEditing.Open.Editable -> Phase.Editing.also { buffer.append(text.text) }
+                is TextEditing.Open.Editable -> Phase.Editing.also { buffer.append(text.text); savedText = text.text }
                 is TextEditing.Open.ReadOnly -> Phase.ReadOnly(text.reason, text.text)
             }
         }
@@ -235,6 +259,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     /* Save, and Save on top (`onTopOf`: the version current now). */
     fun save(onTopOf: String? = null) {
         if (phase != Phase.Editing || saving) return
+        // Back to the text as opened or saved (typed, then undone): nothing to send, no version that pushes out an older one.
+        if (onTopOf == null && !changed()) return
         // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
         val token = session.take() ?: return
         val vault = token.owner
@@ -270,7 +296,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                             target = done.item
                             startedFrom = done.versionId
                         }
+                        markWith(done.item, done.versionId)
                         // Typed while it saved: still changed.
+                        savedText = text
                         edited = !TextEditing.same(buffer, text)
                         status = EditorWords.SAVED
                         saved(done.item.node.parentId)
@@ -311,6 +339,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 // on from, and the next save finds it gone from here.
                 target = made.file
                 startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
+                markWith(made.file, made.versionId)
+                savedText = text
                 edited = !TextEditing.same(buffer, text)
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
@@ -328,6 +358,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         failure = null
         edited = false
         buffer.clear()
+        savedText = null
         load(target)
     }
 
@@ -339,6 +370,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         reading?.cancel()
         buffer.clear()
         buffer.clearSpans()
+        savedText = null
         phase = Phase.Loading
     }
 }
@@ -349,7 +381,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
  * on the phone. Save in the bar; Back and Close ask first when there are changes.
  */
 @Composable
-fun TextEditorScreen(edit: TextEdit, close: () -> Unit) {
+fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Opened) -> Unit = {}) {
     val alpine = Alpine.colors
     var leaving by remember { mutableStateOf(false) }
     var confirmTheirs by remember { mutableStateOf(false) }
@@ -357,24 +389,28 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit) {
     val tryClose = {
         when {
             edit.saving -> edit.closeWhenSaved()
-            edit.edited -> leaving = true
+            edit.changed() -> leaving = true
             else -> close()
         }
     }
     LaunchedEffect(edit.closeAfter) {
         val landed = edit.closeAfter ?: return@LaunchedEffect
         edit.closeHandled()
-        if (landed) { if (edit.edited) leaving = true else close() }
+        if (landed) { if (edit.changed()) leaving = true else close() }
     }
     Dialog(onDismissRequest = tryClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(
             containerColor = alpine.ground,
             topBar = {
-                DestinationBar(edit.target.name, onBack = tryClose) {
-                    if (edit.phase == TextEdit.Phase.Editing) {
-                        if (edit.saving) CircularProgressIndicator(Modifier.padding(horizontal = AlpineSpace.S4).size(22.dp), color = alpine.primary, strokeWidth = 2.5.dp)
-                        else TextButton(enabled = edit.edited, onClick = { edit.save() }) { Text(EditorWords.SAVE) }
+                Column {
+                    // The name and its marks from one row: the version the text is (TextEdit.marked), as the viewer marks it.
+                    DestinationBar(edit.marked.name, onBack = tryClose) {
+                        if (edit.phase == TextEdit.Phase.Editing) {
+                            if (edit.saving) CircularProgressIndicator(Modifier.padding(horizontal = AlpineSpace.S4).size(22.dp), color = alpine.primary, strokeWidth = 2.5.dp)
+                            else TextButton(enabled = edit.edited, onClick = { edit.save() }) { Text(EditorWords.SAVE) }
+                        }
                     }
+                    marks(edit.marked)
                 }
             },
         ) { padding ->
@@ -428,6 +464,23 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit) {
             confirmButton = { TextButton(onClick = { leaving = false; close() }) { Text(EditorWords.DISCARD, color = alpine.danger) } },
             dismissButton = { TextButton(onClick = { leaving = false }) { Text(EditorWords.KEEP_EDITING) } },
         )
+    }
+}
+
+/*
+ * The verdict on the version the editor read (or last published), under its name: Unverified or Couldn't check as the
+ * viewer's rows mark it, a family's mark by its member list, and "Saved from a link" in plain words.
+ */
+@Composable
+fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
+    val alpine = Alpine.colors
+    val family = model.families.familyOf(row) != null
+    LaunchedEffect(row.node) { if (family) model.families.judge(listOf(row)) }
+    val saved = remember(row.node, state.trust) { com.hushos.app.data.savedLineOf(row.node, state.trust) }
+    if (!model.marked(row, state) && saved == null) return
+    Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S2)) {
+        UnverifiedMark(model, state, row)
+        saved?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted) }
     }
 }
 

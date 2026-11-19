@@ -205,6 +205,24 @@ class TextEditingTest {
         assertEquals(1, bench.versions.getValue(file.id).size)
     }
 
+    /*
+     * The editor's header names and marks the version its text is: a row a save answered with takes over only when it lists
+     * the version that save published, in the editor's folder. Fails if someone else's newer version (verified or not)
+     * would take the marks off the text read, or a row elsewhere would.
+     */
+    @Test fun onlyARowListingThePublishedVersionInItsFolderSpeaksForTheText() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        val destination = TextEditing.Destination.of(file)
+        val mine = bench.file(file.id)
+        assertTrue(TextEditing.speaksFor(mine, mine.node.currentVersion!!.id, destination))
+        bench.theirs(file.id, "theirs")
+        val theirs = bench.file(file.id)
+        assertTrue(!TextEditing.speaksFor(theirs, mine.node.currentVersion!!.id, destination))
+        assertTrue(!TextEditing.speaksFor(mine, null, destination))
+        assertTrue(!TextEditing.speaksFor(mine, mine.node.currentVersion!!.id, TextEditing.Destination("ws", "elsewhere")))
+    }
+
     @Test fun aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() {
         val bench = Bench()
         val file = bench.add("notes.txt", "start\n")

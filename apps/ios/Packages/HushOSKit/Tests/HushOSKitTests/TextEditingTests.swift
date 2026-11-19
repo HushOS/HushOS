@@ -312,6 +312,24 @@ actor TextBench: SaveRunWriter {
         #expect(await bench.versions[file.id]?.count == 1)
     }
 
+    /*
+     * The editor's header names and marks the version its text is: a row a save answered with takes over only when it
+     * lists the version that save published, in the editor's folder. Fails if someone else's newer version (verified or
+     * not), or a row elsewhere, would take the marks off the text read.
+     */
+    @Test func onlyARowListingThePublishedVersionInItsFolderSpeaksForTheText() async throws {
+        let bench = TextBench()
+        let file = await bench.add("notes.txt", "a")
+        let destination = EditDestination(of: file)
+        let mine = try #require(file.node.currentVersion?.id)
+        #expect(TextEditing.speaksFor(file, versionId: mine, at: destination))
+        _ = await bench.theirs(file.id, "theirs")
+        let theirs = await bench.file(file.id)
+        #expect(!TextEditing.speaksFor(theirs, versionId: mine, at: destination))
+        #expect(!TextEditing.speaksFor(file, versionId: nil, at: destination))
+        #expect(!TextEditing.speaksFor(file, versionId: mine, at: EditDestination(of: opened("x", parent: "elsewhere", version: "v", name: "x"))))
+    }
+
     /* Someone else saved right after this landed: the next save must start from this save's version, not theirs. */
     @Test func aSaveNamesTheVersionItPublishedNotTheReplyRowsCurrentOne() async throws {
         let bench = TextBench()

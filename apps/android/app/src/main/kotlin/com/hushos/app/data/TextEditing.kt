@@ -95,6 +95,14 @@ object TextEditing {
         }
     }
 
+    /*
+     * Whether a row a save or a copy answered with speaks for the editor's text (its header's name and marks): only when it
+     * lists the very version that was published (`versionId`), in the editor's folder. A row already showing someone
+     * else's newer version, or the file elsewhere, never takes the marks off the version the text is.
+     */
+    fun speaksFor(row: Opened, versionId: String?, destination: Destination?): Boolean =
+        versionId != null && row.node.currentVersion?.id == versionId && destination?.holds(row) == true
+
     fun held(folder: Opened, file: Opened?, original: Opened, at: Destination? = Destination.of(original)): Pair<Opened, Opened?> {
         val parent = at?.parentId
         val ws = at?.workspaceId ?: original.node.workspaceId

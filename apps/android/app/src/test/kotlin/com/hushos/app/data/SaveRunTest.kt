@@ -2228,6 +2228,33 @@ class SaveResultTest {
     }
 
     /*
+     * A save whose file moved away while its folder was then deleted outright: the folder's listing answers 404, which is
+     * the file gone from where it was saved (stale, naming no version), never a failure. Fails if the 404 escapes as an
+     * error instead of the moved-or-deleted choices.
+     */
+    @Test
+    fun aNewVersionWhoseFolderWasDeletedMeanwhileIsStale() {
+        val folder = server.folder(server.root, "Notes")
+        val elsewhere = server.folder(server.root, "Elsewhere")
+        val id = server.file(folder, "doc.txt", "first".toByteArray())
+        vault.listChildren(server.root)
+        val doc = vault.listChildren(folder).single { it.id == id }
+        val startedFrom = doc.node.currentVersion!!.id
+        server.beforeAnswer = { method, path ->
+            if (method == "POST" && path.endsWith("/complete")) {
+                server.moveAs(id, elsewhere)
+                server.purgeAs(folder)
+            }
+        }
+        val raced = assertThrows(SaveStale::class.java) {
+            vault.uploadResult("mine".toByteArray(), doc.name, null, folder, doc, startedFrom, copy = null)
+        }
+        server.beforeAnswer = null
+        assertNull(raced.currentVersionId)
+        assertEquals(startedFrom, server.node(id).version?.id)
+    }
+
+    /*
      * The editor's folder is the one it opened the file in, never one a later row names: a landed row that shows the file
      * moved elsewhere sets nothing, and looking the file up for the next save lists the editor's folder, where it is gone
      * (the moved-file case). Fails if a moved row's folder becomes where the next save writes.

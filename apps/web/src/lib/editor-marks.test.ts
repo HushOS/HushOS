@@ -1,6 +1,6 @@
 import type { DriveNode } from '@hushos/drive/client';
 import { describe, expect, test } from 'vitest';
-import { markedRow } from '@/lib/editor-marks';
+import { headerRow, markedRow } from '@/lib/editor-marks';
 
 /*
  * While the editor is open the viewer's Unverified mark speaks for the text on screen. Fails if a
@@ -8,11 +8,16 @@ import { markedRow } from '@/lib/editor-marks';
  * unverified one, or if a save's own version never gets its marks.
  */
 
-const row = (version: string, verdict: 'verified' | 'unverified', workspaceId = 'w') =>
+const row = (
+    version: string,
+    verdict: 'verified' | 'unverified',
+    workspaceId = 'w',
+    name = 'notes.txt',
+) =>
     ({
         id: 'f',
         kind: 'file',
-        name: 'notes.txt',
+        name,
         workspaceId,
         parentId: 'root',
         currentVersion: { id: version },
@@ -38,5 +43,25 @@ describe('the marks while editing', () => {
     test('a row with the file’s id in another drive is not the file', () => {
         const elsewhere = row('v1', 'verified', 'other');
         expect(markedRow(elsewhere, opened, { row: opened, versionId: 'v1' })).toBe(opened);
+    });
+
+    test('a rename and a new version from another device: the header’s name and mark come from one row', () => {
+        const read = row('v1', 'verified');
+        // Renamed by someone whose name record doesn't check, with a new version: the listing now.
+        const listed = {
+            ...row('v2', 'verified', 'w', 'renamed.txt'),
+            integrity: { metadata: 'unverified', version: 'verified' },
+        } as unknown as DriveNode;
+        const header = headerRow(listed, listed, {
+            target: read,
+            read: { row: read, versionId: 'v1' },
+        });
+        // Never the new name under the old name's verdict: both are the row the text came from.
+        expect(header).toBe(read);
+        expect(header?.name).toBe('notes.txt');
+        // Without an editor, the listing's row as it is: the new name with its own Unverified record.
+        const viewing = headerRow(listed, listed, null);
+        expect(viewing?.name).toBe('renamed.txt');
+        expect(viewing?.integrity?.metadata).toBe('unverified');
     });
 });

@@ -172,7 +172,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         },
         confirmButton = { TextButton(onClick = model::clearSignedOut) { Text("Sign in") } },
     )
-    state.editing?.let { id -> model.textEdit?.takeIf { it.item.id == id }?.let { edit -> TextEditorScreen(edit, close = model::closeEditor) } }
+    state.editing?.let { id -> model.textEdit?.takeIf { it.item.id == id }?.let { edit -> TextEditorScreen(edit, close = model::closeEditor, marks = { row -> EditorMarks(model, state, row) }) } }
     state.archive?.let { item -> model.archiveBrowse?.takeIf { it.id == item.id }?.let { browse -> ArchiveScreen(model, browse, close = model::closeArchive) } }
     state.reading?.let { reading ->
         val context = LocalContext.current

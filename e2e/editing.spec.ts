@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Request } from '@playwright/test';
 import {
     addContact,
     grip,
@@ -111,38 +111,48 @@ test.beforeAll(async ({ browser }) => {
             write('config.json', '{\n  "a": 1\n}\n'),
             // No extension and no type: the viewer reads it to find it is text.
             write('README', 'Read me first\n'),
+            // One of each language and parser the preload brings, for its test.
+            write('settings.yaml', 'name: hushos\nitems:\n  - a\n'),
+            write('main.rs', 'fn main() {\n    println!("hi");\n}\n'),
+            write('Cargo.toml', '[package]\nname = "hushos"\n'),
         ]);
-    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 90_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 90_000 });
 });
 test.afterAll(async () => {
     await page.context().close();
 });
 
-test('the editor, its grammars and its parsers come with the post-unlock preload, before any edit', async () => {
-    // Every request from a fresh load of the drive (the browser's own timing list fills up in development).
-    const fetched: string[] = [];
-    const listen = (request: { url(): string }) => fetched.push(request.url());
-    page.on('request', listen);
+test('after the post-unlock preload, opening YAML, Rust and TOML fetches no further code', async () => {
+    // A fresh load of the drive, and its preload of every viewer, grammar and parser.
     await page.reload();
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
     });
-    page.off('request', listen);
-    // What a device fetched never says which kind of file was edited: all of them, once.
-    for (const name of [
-        /text-editor/,
-        /lang[-_]yaml/,
-        /lang[-_]rust/,
-        /legacy[-_]modes/,
-        /smol[-_]toml/,
-        // The structured-text check's worker, started and let go.
-        /text-check\.worker/,
-    ])
+    await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 60_000 });
+    // What a device fetches from here never says which kind of file was opened or edited. A
+    // checked file (JSON) starts the structured-text check's worker, whose script (and, in
+    // development, its unbundled imports) is the same for every checked kind: what opening it
+    // fetches is the baseline. Opening YAML, Rust or TOML fetches no script beyond it, whatever
+    // the build names its chunks.
+    const scripts = async (name: string) => {
+        const fetched = new Set<string>();
+        const listen = (request: Request) => {
+            if (request.resourceType() === 'script') fetched.add(request.url().split('?')[0]!);
+        };
+        page.on('request', listen);
+        await openEditor(page, name);
+        // Long enough for its colouring and its structured-text check to have started.
+        await page.waitForTimeout(1_500);
+        await close(page);
+        page.off('request', listen);
+        return fetched;
+    };
+    const baseline = await scripts('config.json');
+    for (const name of ['settings.yaml', 'main.rs', 'Cargo.toml'])
         expect(
-            fetched.some((url) => name.test(url)),
-            String(name),
-        ).toBe(true);
-    await expect(page.locator('[data-node-id]')).toHaveCount(6, { timeout: 60_000 });
+            [...(await scripts(name))].filter((url) => !baseline.has(url)),
+            name,
+        ).toEqual([]);
 });
 
 test('a save is a new version that changes only the edited bytes', async () => {

@@ -32,3 +32,17 @@ export function markedRow(
         return listed;
     return read.row;
 }
+
+/*
+ * The row the viewer's header shows, its name and its marks together: the listing's row when no
+ * editor is open, the marked row while one is. A name taken from one row and a mark from another
+ * would let a verified old name stand over an unverified new one.
+ */
+export function headerRow(
+    shown: DriveNode | null,
+    listed: DriveNode | null,
+    editing: { target: DriveNode; read: EditorRead } | null,
+): DriveNode | null {
+    if (!editing || !shown) return shown;
+    return markedRow(listed, editing.target, editing.read);
+}

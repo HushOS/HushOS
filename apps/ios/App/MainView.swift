@@ -144,8 +144,15 @@ struct MainView: View {
                     switch target {
                     case .transfers: TransferNotices.shared.opening = nil; store.whenEditorAllows { showingTransfers = true }
                     case let .folder(id): TransferNotices.shared.opening = nil; store.route = .files(folder: id, preview: nil)
-                    // Home pushes On this phone and clears it.
-                    case .phone: store.whenEditorAllows { tab = .home }
+                    // Home pushes On this phone and clears it. With an editor open the notice itself waits (Home would
+                    // push it under the editor): taken back now, put back only if the editor closes.
+                    case .phone:
+                        if store.editorOpen {
+                            TransferNotices.shared.opening = nil
+                            store.whenEditorAllows { TransferNotices.shared.opening = .phone; tab = .home }
+                        } else {
+                            tab = .home
+                        }
                     }
                 }
                 // A tapped notice: Shared for a share, Account for devices (pushed there), two-step sign-in and families, else as it was.
