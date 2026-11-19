@@ -1,0 +1,58 @@
+apps/web/src/lib/mermaid.ts
+  s_c60e24772e04af::t_fc2c6b08f7136f 7-11,14-17,19-22,24,28,30-39,50-56,58-59,61-66,71-103,105,107-114,116-119,122-124,126,128,130-131
+apps/web/src/lib/mermaid.test.ts
+  s_c60e24772e04af::t_ff57e0bd80974e 1-102
+  s_c60e24772e04af::t_dc2bdc7647c537 103-104
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_bc41a62064acf3 373
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_21cbf2e285c18b 48,278-285,288-289,295-301,310-316,675,680,687,692,783,789-792,891-895,899-911
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_55e396c771f32b 250
+apps/ios/App/AppModel.swift
+  s_c60e24772e04af::t_ed1a045200756d 341
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_2c50d5993ffdee 136-157,227-229,310-312,474
+apps/ios/App/EditorPreview.swift
+  s_c60e24772e04af::t_5e6f7af9369b39 13-14,20-27,40-41,167-174
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_6e9a1f46513bcc 147,163-164,167-168,190-191,287,296,346,349-350,360-361,421,458,483-484,488-492,495,516-521,524-540,726-727,745-749,818,839,844-848
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_b9776180012b75 63,74-75,208,214,222-236
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/EditorParking.swift
+  s_c60e24772e04af::t_e90de8c319771d 4-12,30-43,45,47,50-57,60,76-119
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/EditorParkingTests.swift
+  s_c60e24772e04af::t_60e38a98a0aa38 74-143
+apps/web/src/components/drive/rich-text.tsx
+  s_c60e24772e04af::t_452a9079bfda33 34,203-205,207,209,213-214,233-234,261-262,273
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_7c7560f138f8e2 53
+apps/web/src/lib/mermaid-svg.test.ts
+  s_c60e24772e04af::t_3098774a20e21e 45-50,62-71
+apps/web/src/lib/mermaid-svg.ts
+  s_c60e24772e04af::t_83c02cde91b3b9 92-209,213-215,232-234
+apps/web/src/lib/scroll-sync.test.ts
+  s_c60e24772e04af::t_f835a43da50403 4,134-135,170-195
+apps/web/src/lib/scroll-sync.ts
+  s_c60e24772e04af::t_7286b7721f4e66 12-30,147-148,150-151,221
+docs/editing-design.md
+  s_c60e24772e04af::t_47defaf8cd85e5 162-163
+e2e/editing.spec.ts
+  s_c60e24772e04af::t_daf271fc949b8a 54
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cedf9db6e33fffc36c1f75247d9731fd335c2312",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
