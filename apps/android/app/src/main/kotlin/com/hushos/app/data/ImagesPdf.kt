@@ -69,7 +69,7 @@ object ImagesPdf {
     fun words(code: String, name: String): String = when (code) {
         "unsupported" -> "“$name” is a kind of JPEG HushOS can’t put in a PDF."
         "too-many-pixels" -> "“$name” is too large to put in a PDF on this device."
-        "too-large" -> "The PDF would be larger than 256 MB. Choose fewer images."
+        "too-large" -> "The PDF would be too large to make on this phone. Choose fewer images."
         else -> "“$name” is damaged, or isn’t an image HushOS can put in a PDF."
     }
 
@@ -80,11 +80,17 @@ object ImagesPdf {
      * order of `names`. Every core call is under `control`, which a cancel or the watchdog ends.
      */
     fun build(names: List<String>, size: PageSize, margin: Boolean, maxPixels: Long, control: RunControl,
-              read: (Int) -> ByteArray, progress: (Int) -> Unit = {}): Made {
+              read: (Int) -> ByteArray, progress: (Int) -> Unit = {}, maxOutput: Long = Long.MAX_VALUE): Made {
         val writer = ImagesPdfWriter(size, margin)
+        // The PDF comes back as one array on this app's heap: never larger than it can take.
+        writer.limitOutput(maxOutput.coerceAtLeast(0).toULong())
         var thumbnail: ByteArray? = null
         names.forEachIndexed { index, name ->
-            val bytes = read(index)
+            val bytes = try {
+                read(index)
+            } catch (refused: Images.Refused) {
+                throw ImagesPdfRefused(words(refused.code, name))
+            }
             if (index == 0) thumbnail = Images.thumbnail(bytes)
             try {
                 if (Images.isJpeg(bytes)) writer.addJpeg(bytes, control)
@@ -119,7 +125,10 @@ object ImagesPdf {
     const val READ_PIECE: Long = 8L shl 20
 
     /* A file's `size` bytes, read in pieces of at most `piece`, never in one read the core would refuse. */
-    fun readWhole(size: Long, piece: Long = READ_PIECE, read: (offset: Long, length: Long) -> ByteArray): ByteArray {
+    fun readWhole(size: Long, piece: Long = READ_PIECE, maxBytes: Long = Long.MAX_VALUE,
+                  read: (offset: Long, length: Long) -> ByteArray): ByteArray {
+        // One array on the app's heap: refused when it can't take it, before a byte is read.
+        if (size > maxBytes) throw Images.Refused("too-many-pixels")
         val out = ByteArray(Math.toIntExact(size))
         var offset = 0L
         while (offset < size) {
@@ -207,9 +216,13 @@ object ImagesPdf {
                 ToolRuns.shared.run("Making $name") { control ->
                     try {
                         val made = build(images.map { it.name }, size, margin, maxPixels, control, read = { index ->
-                            val reader = vault.toolReader(images[index], control, refused = session)
-                            readWhole(reader.size().toLong()) { offset, length -> reader.readAt(offset.toULong(), length.toULong()) }
-                        }, progress = { progress(it, images.size) })
+                            // Each reader let go of (its chunks and key) as soon as its image is read.
+                            vault.toolReader(images[index], control, refused = session).use { reader ->
+                                readWhole(reader.size().toLong(), maxBytes = heapBytes / 3) { offset, length ->
+                                    reader.readAt(offset.toULong(), length.toULong())
+                                }
+                            }
+                        }, progress = { progress(it, images.size) }, maxOutput = heapBytes / 3)
                         // Waits while the process holds 512 MB of results not yet uploaded.
                         lease.take(made.pdf.size.toULong(), ToolRuns.budget.produce(made.pdf.size.toULong(), control))
                         made

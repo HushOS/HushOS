@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'vitest';
-import { cutJpeg, exifOrientation, JpegRefused } from './jpeg';
+import { cutJpeg, exifOrientation, iccProfile, JpegRefused } from './jpeg';
 import { contains, expected, fixture, leaks } from './pdf-reader.testkit';
 
 /*
@@ -41,6 +41,10 @@ describe('every fixture cuts as expected.json says', () => {
             adobe: c.adobe,
         });
         expect(leaks(cut.bytes)).toEqual([]);
+        // The profile the PDF may draw it in, as make.py found it on its own: or none.
+        const profile = iccProfile(cut.bytes, cut.components);
+        if (!c.icc) expect(profile).toBeNull();
+        else expect(profile && sha256(profile)).toBe(c.icc.sha256);
     });
 });
 

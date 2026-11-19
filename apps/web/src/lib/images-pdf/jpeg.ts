@@ -233,3 +233,46 @@ export function cutJpeg(input: Uint8Array): CutJpeg {
         }
     }
 }
+
+/*
+ * The ICC profile a cut JPEG carries, when the PDF may use it as the image's colour space: every
+ * APP2 `ICC_PROFILE` chunk there once and in sequence, the profile's declared length and `acsp`
+ * signature right, and its colour space (`GRAY`, `RGB `, `CMYK`) matching the image's components.
+ * Null otherwise, and the writer uses the device space. Twin of `jpeg_icc_profile` in the core.
+ */
+export function iccProfile(cut: Uint8Array, components: number): Uint8Array | null {
+    let chunks: (Uint8Array | null)[] = [];
+    let pos = 2;
+    while (pos + 4 <= cut.length && cut[pos] === 0xff) {
+        const marker = cut[pos + 1]!;
+        if (marker === 0xda) break;
+        const end = pos + 2 + ((cut[pos + 2]! << 8) | cut[pos + 3]!);
+        if (end > cut.length) return null;
+        const payload = cut.subarray(pos + 4, end);
+        if (marker === 0xe2 && startsWith(payload, 'ICC_PROFILE\0') && payload.length >= 14) {
+            const seq = payload[12]!;
+            const total = payload[13]!;
+            if (chunks.length === 0) chunks = Array.from({ length: total }, () => null);
+            if (seq === 0 || total !== chunks.length || chunks[seq - 1]) return null;
+            chunks[seq - 1] = payload.subarray(14);
+        }
+        pos = end;
+    }
+    if (chunks.length === 0 || chunks.some((part) => !part)) return null;
+    const profile = new Uint8Array(chunks.reduce((sum, part) => sum + part!.length, 0));
+    let at = 0;
+    for (const part of chunks) {
+        profile.set(part!, at);
+        at += part!.length;
+    }
+    const view = new DataView(profile.buffer);
+    if (
+        profile.length < 128 ||
+        view.getUint32(0) !== profile.length ||
+        !startsWith(profile.subarray(36), 'acsp')
+    )
+        return null;
+    const space = String.fromCharCode(...profile.subarray(16, 20));
+    const n = space === 'GRAY' ? 1 : space === 'RGB ' ? 3 : space === 'CMYK' ? 4 : 0;
+    return n === components ? profile : null;
+}

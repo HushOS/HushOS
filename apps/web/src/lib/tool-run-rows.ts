@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { onSignedOutElsewhere } from '@/lib/device-data';
+import { transfers } from '@/lib/transfers';
 
 /*
  * A tool's runs as the transfers panel lists them (docs/file-tools-design.md, section 2, "Runs in
@@ -66,11 +67,20 @@ export const toolRunRows = {
         rows = rows.filter((row) => row.id !== id || !ended(row.phase));
         if (rows.length !== before) changed();
     },
-    /* Sign-out: every row goes, names and all (a run still going is cancelled first). */
+    /*
+     * A lock, a sign-out or another account: every row goes, names and all (a run still going is
+     * cancelled first), and the uploads they claimed with them, which would otherwise show the PDF's
+     * name as rows of their own. One still on its way is cancelled, then removed once it has settled.
+     */
     forget() {
+        const claimed = rows.flatMap((row) => (row.uploadId ? [row.uploadId] : []));
         for (const row of rows) if (!ended(row.phase)) row.cancel();
         rows = [];
         changed();
+        for (const id of claimed)
+            void Promise.resolve(transfers.cancel(id))
+                .catch(() => {})
+                .then(() => transfers.remove(id));
     },
     clearFinished() {
         const before = rows.length;

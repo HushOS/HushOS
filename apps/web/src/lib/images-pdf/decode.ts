@@ -85,11 +85,12 @@ export async function decodeForPdf(bytes: Uint8Array, index: number): Promise<En
  */
 export async function thumbnailOf(bytes: Uint8Array, edge: number, maxBytes: number) {
     if (bytes.byteLength > DECODE_BLOB_MAX) return null;
-    const size = imageSize(bytes);
-    if (!size || size.width * size.height > MAX_PIXELS) return null;
     let bitmap: ImageBitmap | null = null;
     let canvas: OffscreenCanvas | null = null;
     try {
+        // Read inside the try: a damaged header makes no thumbnail, never a failed run.
+        const size = imageSize(bytes);
+        if (!size || size.width * size.height > MAX_PIXELS) return null;
         bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), {
             imageOrientation: 'from-image',
         });

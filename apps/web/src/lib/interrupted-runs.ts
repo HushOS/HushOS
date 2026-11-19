@@ -19,18 +19,17 @@ function set(next: readonly RunRow[]) {
     for (const listener of listeners) listener();
 }
 
-let looking = false;
+/* Moves on at every forget (a lock, a sign-out, another account): a look begun before one is never published after it. */
+let unlock = 0;
 /* Once a drive open: the rows to offer, settled ones handled quietly by the save path. */
 export async function lookForInterrupted(queryClient: QueryClient) {
-    if (looking) return;
-    looking = true;
+    const at = unlock;
     try {
         const { interruptedSaveRuns } = await import('@/lib/save-runs');
-        set(await interruptedSaveRuns(queryClient));
+        const found = await interruptedSaveRuns(queryClient);
+        if (at === unlock) set(found);
     } catch {
         // Nothing to offer this time; the next open looks again.
-    } finally {
-        looking = false;
     }
 }
 
@@ -47,6 +46,7 @@ export async function answerInterrupted(
 
 /* A sign-out: nothing of this account's is offered to the next. */
 export function forgetInterrupted() {
+    unlock++;
     set([]);
 }
 

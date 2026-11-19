@@ -89,6 +89,31 @@ test('image data that inflates past what its header says is refused as it inflat
     expect(rawSize(16, 16, 8, 4, false)).toBe(16 * (1 + 64));
 });
 
+test('a header the specification doesn’t allow is refused before it can widen the bound', () => {
+    // A palette image claiming 16 bits a sample, its data inflating to exactly what that would allow:
+    // twice what a real palette image of its size holds.
+    const header = (depth: number, type: number, rest = [0, 0, 0]) => {
+        const data = new Uint8Array(13);
+        const view = new DataView(data.buffer);
+        view.setUint32(0, 16);
+        view.setUint32(4, 16);
+        data.set([depth, type, ...rest], 8);
+        return chunk('IHDR', data);
+    };
+    const widened = new Uint8Array(rawSize(16, 16, 16, 1, false));
+    const file = (ihdrChunk: Uint8Array) =>
+        join(
+            SIGNATURE,
+            ihdrChunk,
+            chunk('PLTE', new Uint8Array(3)),
+            chunk('IDAT', deflateSync(widened)),
+            chunk('IEND', new Uint8Array(0)),
+        );
+    expect(() => preparePng(file(header(16, 3)))).toThrow(new PngRefused('damaged'));
+    expect(() => preparePng(file(header(8, 3, [1, 0, 0])))).toThrow(new PngRefused('damaged')); // compression 1
+    expect(() => preparePng(file(header(8, 3, [0, 0, 2])))).toThrow(new PngRefused('damaged')); // interlace 2
+});
+
 test('only the chunks the picture needs reach pdf-lib', () => {
     const text = chunk('tEXt', new TextEncoder().encode('Comment\0HUSHOS-CANARY-PNG-TEXT'));
     const prepared = preparePng(png(4, 4, () => [255, 0, 0, 255], [text]));

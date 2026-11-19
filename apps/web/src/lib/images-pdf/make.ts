@@ -188,7 +188,7 @@ export async function makeImagesPdf(queryClient: QueryClient, job: ImagesPdfJob)
             phase: 'failed',
             line: failureWords(error, stopped, cancelled),
             progress: null,
-            uploadId: null,
+            // Its upload, if one began, stays claimed: one failed row, never a second with the PDF's name.
         });
     }
 }

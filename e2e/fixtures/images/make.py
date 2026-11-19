@@ -260,6 +260,33 @@ def write(name, data):
         f.write(data)
 
 
+def icc_of(jpeg, components):
+    """The ICC profile a PDF may use as the image's colour space: every APP2 ICC_PROFILE chunk present
+    once and in sequence, its declared length and `acsp` signature right, its colour space matching
+    the image's components. None otherwise (the writers fall back to the device space)."""
+    segments, _ = split(jpeg)
+    chunks = {}
+    count = None
+    for segment in segments:
+        payload = segment[4:]
+        if segment[1] != 0xE2 or not payload.startswith(b"ICC_PROFILE\x00") or len(payload) < 14:
+            continue
+        seq, total = payload[12], payload[13]
+        if seq == 0 or seq in chunks or (count is not None and total != count):
+            return None
+        count = total
+        chunks[seq] = payload[14:]
+    if not chunks or sorted(chunks) != list(range(1, count + 1)):
+        return None
+    profile = b"".join(chunks[i] for i in range(1, count + 1))
+    if len(profile) < 128 or struct.unpack(">I", profile[:4])[0] != len(profile) or profile[36:40] != b"acsp":
+        return None
+    spaces = {b"GRAY": 1, b"RGB ": 3, b"CMYK": 4}
+    if spaces.get(profile[16:20]) != components:
+        return None
+    return profile
+
+
 def ok(name, fixture, orientation=1, adobe=False, eoi_added=False, note=""):
     data = fixture.file()
     expected = fixture.expected() + (b"\xff\xd9" if eoi_added else b"")
@@ -279,6 +306,9 @@ def ok(name, fixture, orientation=1, adobe=False, eoi_added=False, note=""):
             "components": components,
             "orientation": orientation,
             "adobe": adobe,
+            "icc": (lambda profile: profile and {"n": components, "sha256": hashlib.sha256(profile).hexdigest()})(
+                icc_of(expected, components)
+            ),
             "note": note,
         }
     )
@@ -314,6 +344,13 @@ def main():
         "icc.jpg",
         from_libjpeg(encode(photo, icc_profile=srgb), [(exif(), False)]),
         note="ICC profile kept, EXIF dropped",
+    )
+
+    # An RGB profile on a greyscale JPEG: kept as a segment, but no use as the image's colour space.
+    ok(
+        "icc-mismatch.jpg",
+        from_libjpeg(encode(upright(120, 90, "L"), icc_profile=srgb)),
+        note="an RGB profile on one component: the device space instead",
     )
 
     cmyk = encode(upright(200, 120, "CMYK"))

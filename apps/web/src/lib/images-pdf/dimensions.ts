@@ -108,12 +108,14 @@ function boxes(bytes: Uint8Array, view: DataView, start: number, end: number): B
 function heifSize(bytes: Uint8Array, view: DataView): Size | null {
     const top = boxes(bytes, view, 0, bytes.length);
     const meta = top?.find((box) => box.type === 'meta');
-    if (!meta) return null;
+    if (!meta || meta.start + 4 > meta.end) return null;
     const inner = boxes(bytes, view, meta.start + 4, meta.end);
     const pitm = inner?.find((box) => box.type === 'pitm');
     const iprp = inner?.find((box) => box.type === 'iprp');
     if (!pitm || !iprp) return null;
+    // Each full box's fixed fields only when they fit inside it.
     const pitmVersion = bytes[pitm.start]!;
+    if (pitm.start + (pitmVersion === 0 ? 6 : 8) > pitm.end) return null;
     const primary =
         pitmVersion === 0 ? view.getUint16(pitm.start + 4) : view.getUint32(pitm.start + 4);
     const parts = boxes(bytes, view, iprp.start, iprp.end);
@@ -122,6 +124,7 @@ function heifSize(bytes: Uint8Array, view: DataView): Size | null {
     if (!ipco || !ipma) return null;
     const properties = boxes(bytes, view, ipco.start, ipco.end);
     if (!properties) return null;
+    if (ipma.start + 8 > ipma.end) return null;
     const version = bytes[ipma.start]!;
     const wide = (bytes[ipma.start + 3]! & 1) === 1;
     let at = ipma.start + 4;

@@ -133,3 +133,15 @@ test('kinds are told by their bytes', () => {
     const avif = new Uint8Array([0, 0, 0, 24, ...new TextEncoder().encode('ftypavif'), 0, 0, 0, 0]);
     expect(isHeic(avif)).toBe(false);
 });
+
+test('a JPEG with a whole profile that fits it is drawn in that profile; one without, or with one that doesn’t fit, in the device space', async () => {
+    const dictionary = async (name: string) =>
+        new TextDecoder('latin1').decode(await build([name]));
+    const tagged = await dictionary('icc.jpg');
+    expect(tagged).toMatch(/\/ColorSpace \[ ?\/ICCBased \d+ 0 R ?\]/);
+    expect(tagged).toMatch(/\/N 3/);
+    expect(await dictionary('icc-mismatch.jpg')).not.toContain('/ICCBased');
+    expect(await dictionary('plain.jpg')).not.toContain('/ICCBased');
+    // pdf.js draws it all the same.
+    expect(looksUpright((await readPdf(await build(['icc.jpg'])))[0]!)).toBe(true);
+});

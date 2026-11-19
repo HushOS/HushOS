@@ -23,8 +23,9 @@ class ImagesPdfTest {
     private val fixtures = File("../../../e2e/fixtures/images")
     private fun fixture(name: String) = File(fixtures, name).readBytes()
 
-    private fun build(vararg images: Pair<String, ByteArray>, size: PageSize = PageSize.FIT, control: RunControl = RunControl(30_000uL, null)) =
-        ImagesPdf.build(images.map { it.first }, size, false, 100_000_000L, control, read = { images[it].second })
+    private fun build(vararg images: Pair<String, ByteArray>, size: PageSize = PageSize.FIT, control: RunControl = RunControl(30_000uL, null),
+                      maxOutput: Long = Long.MAX_VALUE) =
+        ImagesPdf.build(images.map { it.first }, size, false, 100_000_000L, control, read = { images[it].second }, maxOutput = maxOutput)
 
     private fun ByteArray.has(needle: ByteArray): Boolean {
         outer@ for (i in 0..size - needle.size) {
@@ -171,6 +172,29 @@ class ImagesPdfTest {
     @Test
     fun stopJustAfterThePdfLandedRemovesIt() {
         assertEquals(emptyMap<String, String>(), stopWhileSaving { shelf, stop -> shelf.afterLanding = stop })
+    }
+
+    @Test
+    fun whatTheHeapCantTakeIsRefusedBeforeItIsReadOrWritten() {
+        // An app heap of 12 KiB, say: a third of it for one image's bytes, a third for the PDF.
+        val heap = 12L shl 10
+        var reads = 0
+        try {
+            ImagesPdf.build(listOf("large.jpg"), PageSize.FIT, false, 100_000_000L, RunControl(30_000uL, null), read = {
+                ImagesPdf.readWhole(5_000L, maxBytes = heap / 3) { _, length -> reads++; ByteArray(length.toInt()) }
+            })
+            fail("read an image past the heap")
+        } catch (refused: ImagesPdfRefused) {
+            assertEquals("“large.jpg” is too large to put in a PDF on this device.", refused.message)
+        }
+        assertEquals("refused before a byte was read", 0, reads)
+        // Two images whose PDF would pass what the heap takes: refused before the second is written.
+        try {
+            build("a.jpg" to fixture("plain.jpg"), "b.jpg" to fixture("plain.jpg"), maxOutput = heap / 3)
+            fail("made a PDF past the heap")
+        } catch (refused: ImagesPdfRefused) {
+            assertEquals("The PDF would be too large to make on this phone. Choose fewer images.", refused.message)
+        }
     }
 
     @Test

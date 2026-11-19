@@ -77,9 +77,9 @@ pub use groups::*;
 pub use identity::*;
 pub use ids::*;
 pub use images_pdf::{
-    cut_jpeg, images_pdf_limits, images_pdf_max_pixels, page_layout, CutJpeg, ImageRefusal, ImagesPdfError,
-    ImagesPdfLimits, ImagesPdfWriter, PageLayout, PageSize, IMAGES_PDF_CARD_BYTES, IMAGES_PDF_MAX_IMAGES,
-    IMAGES_PDF_MAX_INPUT_BYTES, IMAGES_PDF_MAX_OUTPUT_BYTES, IMAGES_PDF_MAX_PIXELS,
+    cut_jpeg, images_pdf_limits, images_pdf_max_pixels, jpeg_icc_profile, page_layout, CutJpeg, ImageRefusal,
+    ImagesPdfError, ImagesPdfLimits, ImagesPdfWriter, PageLayout, PageSize, IMAGES_PDF_CARD_BYTES,
+    IMAGES_PDF_MAX_IMAGES, IMAGES_PDF_MAX_INPUT_BYTES, IMAGES_PDF_MAX_OUTPUT_BYTES, IMAGES_PDF_MAX_PIXELS,
 };
 pub use join::*;
 pub use ledger_settings::*;

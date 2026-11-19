@@ -628,6 +628,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     /* The app leaves the session it had, as it does when one ends, with what the phone holds kept: for a sign-in screen that follows this phone's own change. */
     private fun leaveSession() {
         if (state.value.gate != Gate.SIGNED_IN) return
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -956,6 +957,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
 
     fun signOut() {
         endTwoStepFlow()
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -995,6 +997,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         // answered. "You've been signed out" would be wrong, and would take the words off the screen.
         if (ownChange.mutesSessionEnd) return
         endTwoStepFlow()
+        endImagesPdf()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -2595,6 +2598,16 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private val _pdfRun = kotlinx.coroutines.flow.MutableStateFlow(PdfRun())
     val pdfRun: kotlinx.coroutines.flow.StateFlow<PdfRun> = _pdfRun
     private var pdfJob: kotlinx.coroutines.Job? = null
+    /* Moves on when the session ends: a run's late progress or outcome from before is never shown after. */
+    private var pdfSession = 0
+
+    /* The session ends (a sign-out, a refused session, leaving): the run stops and cleans up, and nothing of it stays. */
+    private fun endImagesPdf() {
+        pdfSession++
+        pdfJob?.cancel()
+        pdfJob = null
+        _pdfRun.value = PdfRun()
+    }
 
     /*
      * Convert, then One PDF (data/ImagesPdf.kt): the PDF of `order` into the folder the `selection` is in (worked out
@@ -2603,9 +2616,12 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun startImagesPdf(selection: List<Opened>, order: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean, name: String) {
         if (pdfJob?.isActive == true) return
         _pdfRun.value = PdfRun(running = true, progress = 0 to order.size)
+        val session = pdfSession
         pdfJob = viewModelScope.launch {
-            val said = makeImagesPdf(selection, order, size, margin, name) { done, all -> _pdfRun.update { it.copy(progress = done to all) } }
-            _pdfRun.value = PdfRun(failure = said, done = said == null)
+            val said = makeImagesPdf(selection, order, size, margin, name) { done, all ->
+                if (session == pdfSession) _pdfRun.update { it.copy(progress = done to all) }
+            }
+            if (session == pdfSession) _pdfRun.value = PdfRun(failure = said, done = said == null)
         }
     }
 

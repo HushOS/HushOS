@@ -8,7 +8,7 @@ import {
     popGraphicsState,
     pushGraphicsState,
 } from '@cantoo/pdf-lib';
-import { cutJpeg, JpegRefused } from './jpeg';
+import { cutJpeg, iccProfile, JpegRefused } from './jpeg';
 import { preparePng, PngRefused } from './png';
 import { pageLayout, type PageSize } from './geometry';
 import { MAX_PIXELS, PDF_MAX_BYTES } from './protocol';
@@ -108,19 +108,26 @@ export class ImagesPdf {
             if (error instanceof JpegRefused) throw new ImageRefused(error.code, index);
             throw error;
         }
-        this.#grow(cut.bytes.byteLength);
+        // Its own colour profile when it carries a whole one that fits it; the device space otherwise.
+        const profile = iccProfile(cut.bytes, cut.components);
+        this.#grow(cut.bytes.byteLength + (profile?.byteLength ?? 0));
         const context = this.doc.context;
+        const device =
+            cut.components === 1 ? 'DeviceGray' : cut.components === 4 ? 'DeviceCMYK' : 'DeviceRGB';
+        const space = profile
+            ? [
+                  'ICCBased',
+                  context.register(
+                      context.stream(profile, { N: cut.components, Alternate: device }),
+                  ),
+              ]
+            : device;
         const stream = context.stream(cut.bytes, {
             Type: 'XObject',
             Subtype: 'Image',
             Width: cut.width,
             Height: cut.height,
-            ColorSpace:
-                cut.components === 1
-                    ? 'DeviceGray'
-                    : cut.components === 4
-                      ? 'DeviceCMYK'
-                      : 'DeviceRGB',
+            ColorSpace: space,
             BitsPerComponent: 8,
             Filter: 'DCTDecode',
             // Adobe's CMYK is stored complemented (its APP14 says so): turned back here. Plain CMYK is not.

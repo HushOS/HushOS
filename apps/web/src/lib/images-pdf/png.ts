@@ -27,6 +27,14 @@ export class PngRefused extends Error {
 }
 
 const KEPT = new Set(['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND']);
+/* The bit depths each colour type allows (PNG specification, 11.2.2). */
+const DEPTHS: Record<number, readonly number[]> = {
+    0: [1, 2, 4, 8, 16],
+    2: [8, 16],
+    3: [1, 2, 4, 8],
+    4: [8, 16],
+    6: [8, 16],
+};
 /* Channels by colour type: grey, RGB, palette, grey and alpha, RGBA. */
 const CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 /* Image data is fed to the inflater this much at a time, so one push never makes more than about a MiB. */
@@ -92,6 +100,17 @@ export function preparePng(bytes: Uint8Array): PreparedPng {
                 type: body[9]!,
                 interlaced: body[12] === 1,
             };
+            // Only what the specification allows, before any of it bounds the inflation: a depth too
+            // deep for its colour type would let more data through than a real image could hold.
+            if (
+                header.width === 0 ||
+                header.height === 0 ||
+                !DEPTHS[header.type]?.includes(header.depth) ||
+                body[10] !== 0 ||
+                body[11] !== 0 ||
+                body[12]! > 1
+            )
+                throw new PngRefused('damaged');
         } else if (!header) throw new PngRefused('damaged');
         if (type === 'acTL') throw new PngRefused('animated');
         if (type === 'eXIf') orientation = exifOrientation(body) ?? 1;

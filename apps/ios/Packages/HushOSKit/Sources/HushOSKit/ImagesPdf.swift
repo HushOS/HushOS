@@ -314,7 +314,13 @@ extension ImagesPdf {
                 made = try await ToolRuns.shared.run("Making \(name)") { control in
                     do {
                         let made = try build(names: names, size: size, margin: margin, maxPixels: maxPixels, control: control, read: { index in
-                            let reader = try blocking { try await vault.toolReader(images[index], control: control, refusals: refusals) }
+                            // A 401 asking for the object's address, before any range is read, is kept as itself too.
+                            let reader = try blocking {
+                                do { return try await vault.toolReader(images[index], control: control, refusals: refusals) } catch {
+                                    refusals.note(error)
+                                    throw error
+                                }
+                            }
                             return try readWhole(size: reader.size()) { offset, length in try reader.readAt(offset: offset, length: length) }
                         }, progress: { progress($0, images.count) })
                         // Waits while the process holds 512 MB of results not yet uploaded.

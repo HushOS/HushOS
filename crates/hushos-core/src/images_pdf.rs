@@ -207,6 +207,55 @@ fn exif_orientation(tiff: &[u8]) -> Option<u8> {
     None
 }
 
+/// The ICC profile a cut JPEG carries, when the PDF may use it as the image's colour space: every
+/// APP2 `ICC_PROFILE` chunk there once and in sequence, the profile's declared length and `acsp`
+/// signature right, and its colour space (`GRAY`, `RGB `, `CMYK`) matching the image's components.
+/// None otherwise, and the writer uses the device space. Twin of `iccProfile` in
+/// `apps/web/src/lib/images-pdf/jpeg.ts`; both are held to `expected.json`'s `icc`.
+pub fn jpeg_icc_profile(cut: &[u8], components: u8) -> Option<Vec<u8>> {
+    let mut chunks: Vec<Option<&[u8]>> = Vec::new();
+    let mut pos = 2;
+    while pos + 4 <= cut.len() && cut[pos] == 0xFF {
+        let marker = cut[pos + 1];
+        if marker == 0xDA {
+            break;
+        }
+        let end = pos + 2 + u16_be(cut, pos + 2) as usize;
+        if end > cut.len() {
+            return None;
+        }
+        let payload = &cut[pos + 4..end];
+        if marker == 0xE2 && payload.starts_with(b"ICC_PROFILE\0") && payload.len() >= 14 {
+            let (seq, total) = (payload[12] as usize, payload[13] as usize);
+            if chunks.is_empty() {
+                chunks = vec![None; total];
+            }
+            if seq == 0 || total != chunks.len() || chunks[seq - 1].is_some() {
+                return None;
+            }
+            chunks[seq - 1] = Some(&payload[14..]);
+        }
+        pos = end;
+    }
+    if chunks.is_empty() || chunks.iter().any(Option::is_none) {
+        return None;
+    }
+    let profile: Vec<u8> = chunks.into_iter().flatten().flatten().copied().collect();
+    if profile.len() < 128
+        || u32::from_be_bytes(profile[..4].try_into().ok()?) as usize != profile.len()
+        || &profile[36..40] != b"acsp"
+    {
+        return None;
+    }
+    let n = match &profile[16..20] {
+        b"GRAY" => 1,
+        b"RGB " => 3,
+        b"CMYK" => 4,
+        _ => return None,
+    };
+    (n == components).then_some(profile)
+}
+
 /// A cut JPEG, ended with its end-of-image marker (one the file stopped short of is added).
 fn ended(
     mut out: Vec<u8>,
@@ -606,15 +655,26 @@ impl ImagesPdfWriter {
         if state.finished {
             return Err(ImagesPdfError::Failed { reason: "The PDF is already made.".into() });
         }
-        let colour = match cut.components {
+        let device = match cut.components {
             1 => "/DeviceGray",
-            // Adobe's CMYK is stored complemented (its APP14 says so); plain CMYK is not.
-            4 if cut.adobe => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]",
             4 => "/DeviceCMYK",
             _ => "/DeviceRGB",
         };
+        // Its own colour profile when it carries a whole one that fits it; the device space otherwise.
+        let profile = jpeg_icc_profile(&cut_bytes, cut.components);
         // Refused before a byte of it is copied, never after the PDF grew past its limit.
-        state.room_for(cut_bytes.len())?;
+        state.room_for(cut_bytes.len() + profile.as_ref().map_or(0, |profile| profile.len()))?;
+        let space = match profile {
+            Some(profile) => {
+                let object = state.reserve();
+                state.stream(object, &format!("/N {} /Alternate {device}", cut.components), &profile);
+                format!("[/ICCBased {object} 0 R]")
+            }
+            None => device.to_string(),
+        };
+        // Adobe's CMYK is stored complemented (its APP14 says so); plain CMYK is not.
+        let decode = if cut.components == 4 && cut.adobe { " /Decode [1 0 1 0 1 0 1 0]" } else { "" };
+        let colour = format!("{space}{decode}");
         let image = state.reserve();
         state.stream(
             image,
@@ -731,6 +791,14 @@ impl ImagesPdfWriter {
         state.check_size()?;
         control.progress()?;
         Ok(())
+    }
+
+    /// Lowers the most the PDF may grow to (never raises it past 256 MiB): a phone whose app heap
+    /// can't take a PDF that large sets what it can, and an image that would pass it is refused
+    /// before any of it is written, as one past 256 MiB is.
+    pub fn limit_output(&self, bytes: u64) {
+        let mut state = lock(&self.state);
+        state.max_output = state.max_output.min(bytes);
     }
 
     /// Pages so far.

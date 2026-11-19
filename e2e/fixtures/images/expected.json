@@ -24,6 +24,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "JFIF only: unchanged"
         },
         {
@@ -36,6 +37,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "EXIF with GPS, Make and Model: dropped"
         },
         {
@@ -48,6 +50,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "XMP and extended XMP: dropped"
         },
         {
@@ -60,6 +63,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "IPTC in Photoshop APP13: dropped"
         },
         {
@@ -72,7 +76,24 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": {
+                "n": 3,
+                "sha256": "34efca496c838031330fdf805e0f2ae65234c79f88e126a6b5a26c2c0eae8d7b"
+            },
             "note": "ICC profile kept, EXIF dropped"
+        },
+        {
+            "file": "icc-mismatch.jpg",
+            "outcome": "ok",
+            "sha256": "e9e26748d558887ca4488478163632a1b9dfccf254193922e995f10cc0e0c954",
+            "length": 1653,
+            "width": 120,
+            "height": 90,
+            "components": 1,
+            "orientation": 1,
+            "adobe": false,
+            "icc": null,
+            "note": "an RGB profile on one component: the device space instead"
         },
         {
             "file": "adobe-cmyk.jpg",
@@ -84,6 +105,7 @@
             "components": 4,
             "orientation": 1,
             "adobe": true,
+            "icc": null,
             "note": "CMYK with the Adobe marker kept, EXIF dropped"
         },
         {
@@ -96,6 +118,7 @@
             "components": 4,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "CMYK without the Adobe marker: not complemented"
         },
         {
@@ -108,6 +131,7 @@
             "components": 1,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "one component"
         },
         {
@@ -120,6 +144,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "progressive, EXIF, XMP and a comment dropped"
         },
         {
@@ -132,6 +157,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "EXIF and a comment between scans: dropped"
         },
         {
@@ -144,6 +170,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -156,6 +183,7 @@
             "components": 3,
             "orientation": 2,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -168,6 +196,7 @@
             "components": 3,
             "orientation": 3,
             "adobe": false,
+            "icc": null,
             "note": "big-endian TIFF"
         },
         {
@@ -180,6 +209,7 @@
             "components": 3,
             "orientation": 4,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -192,6 +222,7 @@
             "components": 3,
             "orientation": 5,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -204,6 +235,7 @@
             "components": 3,
             "orientation": 6,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -216,6 +248,7 @@
             "components": 3,
             "orientation": 7,
             "adobe": false,
+            "icc": null,
             "note": ""
         },
         {
@@ -228,6 +261,7 @@
             "components": 3,
             "orientation": 8,
             "adobe": false,
+            "icc": null,
             "note": "big-endian TIFF"
         },
         {
@@ -240,6 +274,7 @@
             "components": 3,
             "orientation": 6,
             "adobe": false,
+            "icc": null,
             "note": "a phone photo held upright: stored sideways, orientation 6, with GPS"
         },
         {
@@ -252,6 +287,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "a JFIF thumbnail: the header kept, its thumbnail cut"
         },
         {
@@ -264,6 +300,7 @@
             "components": 3,
             "orientation": 6,
             "adobe": false,
+            "icc": null,
             "note": "the first EXIF block's orientation, both dropped"
         },
         {
@@ -276,6 +313,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "MPF in APP2 and a second image after the end: dropped"
         },
         {
@@ -288,6 +326,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "APP3, APP12, APP15, JFXX, a comment and fill bytes: dropped"
         },
         {
@@ -300,6 +339,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "restart markers inside the scans"
         },
         {
@@ -317,6 +357,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "ends inside the image data: kept, end marker added"
         },
         {
@@ -374,6 +415,7 @@
             "components": 3,
             "orientation": 1,
             "adobe": false,
+            "icc": null,
             "note": "unreadable EXIF: orientation 1, dropped"
         }
     ]

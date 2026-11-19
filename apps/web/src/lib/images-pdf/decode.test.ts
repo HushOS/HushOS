@@ -69,6 +69,14 @@ test('sizes come from every kind’s header', () => {
     expect(imageSize(heif(true, 2))).toEqual({ width: 4032, height: 3024 });
     expect(imageSize(heif(false, 1))).toEqual({ width: 512, height: 512 });
     expect(imageSize(heif(false, 3))).toBeNull();
+    // A pitm cut short inside its box: null, never a read into its neighbour or a thrown RangeError.
+    const truncated = heif(false, 2);
+    const at = truncated.findIndex(
+        (_, i) => String.fromCharCode(...truncated.subarray(i, i + 4)) === 'pitm',
+    );
+    new DataView(truncated.buffer).setUint32(at - 4, 12);
+    expect(() => imageSize(truncated)).not.toThrow();
+    expect(imageSize(truncated)).toBeNull();
     expect(imageSize(new TextEncoder().encode('not an image at all'))).toBeNull();
 });
 

@@ -78,6 +78,15 @@ fn every_jpeg_cuts_as_expected_json_says() {
                 assert_eq!(cut.orientation as u64, case["orientation"].as_u64().unwrap(), "{name}");
                 assert_eq!(cut.adobe, case["adobe"].as_bool().unwrap(), "{name}");
                 assert_eq!(leaks(&cut.bytes), Vec::<String>::new(), "{name}");
+                let profile = jpeg_icc_profile(&cut.bytes, cut.components);
+                match &case["icc"] {
+                    Value::Null => assert_eq!(profile, None, "{name}"),
+                    icc => assert_eq!(
+                        hex(&Sha256::digest(profile.expect(name))),
+                        icc["sha256"].as_str().unwrap(),
+                        "{name}"
+                    ),
+                }
             }
             code => {
                 let refusal = result.expect_err(name);
@@ -487,4 +496,43 @@ fn an_image_past_the_limit_is_refused_before_the_pdf_grows() {
         Err(ImagesPdfError::Refused { code: "too-large".into() })
     );
     assert_eq!(lock(&writer.state).out.len(), before);
+}
+
+#[test]
+fn a_jpeg_with_its_profile_is_drawn_in_it() {
+    let control = RunControl::new(30_000, None);
+    for (name, icc) in [("icc.jpg", true), ("icc-mismatch.jpg", false), ("plain.jpg", false)] {
+        let writer = ImagesPdfWriter::new(PageSize::Fit, false);
+        writer.add_jpeg(fixture(name), control.clone()).unwrap();
+        let pdf = writer.finish().unwrap();
+        let found = objects(&pdf);
+        let image =
+            found.iter().map(|(_, body)| body).find(|body| find(body, b"/DCTDecode").is_some()).unwrap();
+        let dictionary = stream_data(image).0;
+        assert_eq!(dictionary.contains("/ColorSpace [/ICCBased"), icc, "{name}: {dictionary}");
+        if icc {
+            let cut = cut_jpeg(&fixture(name)).unwrap();
+            let profile = jpeg_icc_profile(&cut.bytes, cut.components).unwrap();
+            let stream = found
+                .iter()
+                .filter(|(_, body)| find(body, b"/N 3 /Alternate /DeviceRGB").is_some())
+                .map(|(_, body)| stream_data(body))
+                .next()
+                .unwrap();
+            assert_eq!(stream.1, profile, "the profile as the JPEG carries it");
+        }
+    }
+}
+
+#[test]
+fn a_lowered_limit_refuses_what_the_256_mib_one_would_take() {
+    let control = RunControl::new(30_000, None);
+    let writer = ImagesPdfWriter::new(PageSize::Fit, false);
+    writer.limit_output(3_000);
+    writer.limit_output(u64::MAX);
+    assert_eq!(
+        writer.add_jpeg(fixture("plain.jpg"), control),
+        Err(ImagesPdfError::Refused { code: "too-large".into() }),
+        "a later, higher figure never raises it again"
+    );
 }

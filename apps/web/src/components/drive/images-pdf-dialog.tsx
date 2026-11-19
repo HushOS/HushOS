@@ -12,7 +12,7 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { formatBytes, nodeSize } from '@/lib/drive';
+import { driveKeys, formatBytes, nodeSize } from '@/lib/drive';
 import { defaultPageSize, type PageSize } from '@/lib/images-pdf/geometry';
 import {
     IMAGES_PDF_MAX_BYTES,
@@ -99,7 +99,8 @@ function ImagesPdfForm({
     const listId = useId();
     const first = order[0]!;
     const suggested = useQuery({
-        queryKey: ['images-pdf-name', folder.id, first.id],
+        // Under Drive's keys, so a lock clears the name with the listings it came from.
+        queryKey: [...driveKeys.all, 'images-pdf-name', folder.id, first.id],
         queryFn: () => suggestedName(queryClient, folder, pdfNameFor(first.name)),
         staleTime: 0,
     });
@@ -148,81 +149,84 @@ function ImagesPdfForm({
                 </DialogTitle>
             </DialogHeader>
             <div className="flex min-w-0 flex-col gap-5">
-                <section
-                    aria-labelledby={`${listId}-label`}
-                    className="flex min-w-0 flex-col gap-2"
-                >
-                    <h3 id={`${listId}-label`} className="text-sm font-semibold">
-                        Order
-                    </h3>
-                    <ol
-                        className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-2"
+                {/* Past the ceiling only the refusal shows: no row (or thumbnail read) for thousands of images. */}
+                {stage !== 'ceiling' && (
+                    <section
                         aria-labelledby={`${listId}-label`}
+                        className="flex min-w-0 flex-col gap-2"
                     >
-                        {order.map((node, index) => (
-                            // Dragging is the pointer's way; each item's Move buttons are the keyboard's and a screen reader's.
-                            // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
-                            <li
-                                key={node.id}
-                                draggable
-                                onDragStart={(event) => {
-                                    event.dataTransfer.effectAllowed = 'move';
-                                    // Firefox starts no drag without some data.
-                                    event.dataTransfer.setData('text/plain', node.id);
-                                    setDragging(index);
-                                }}
-                                onDragEnd={() => setDragging(null)}
-                                onDragOver={(event) => {
-                                    if (dragging === null) return;
-                                    event.preventDefault();
-                                    event.dataTransfer.dropEffect = 'move';
-                                }}
-                                onDrop={(event) => onDrop(event, index)}
-                                data-image-id={node.id}
-                                className={cn(
-                                    'group relative flex w-[104px] shrink-0 cursor-grab snap-start flex-col items-center gap-1.5 rounded-lg border border-edge bg-card p-2 select-none active:cursor-grabbing',
-                                    dragging === index && 'opacity-50',
-                                )}
-                            >
-                                <span className="absolute top-1.5 left-2 text-xs font-semibold text-muted-foreground tabular-nums">
-                                    {index + 1}
-                                </span>
-                                <FileMark node={node} size="large" />
-                                <span
-                                    className="w-full truncate text-center text-xs"
-                                    title={node.name}
+                        <h3 id={`${listId}-label`} className="text-sm font-semibold">
+                            Order
+                        </h3>
+                        <ol
+                            className="-mx-1 flex snap-x gap-2 overflow-x-auto px-1 pb-2"
+                            aria-labelledby={`${listId}-label`}
+                        >
+                            {order.map((node, index) => (
+                                // Dragging is the pointer's way; each item's Move buttons are the keyboard's and a screen reader's.
+                                // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+                                <li
+                                    key={node.id}
+                                    draggable
+                                    onDragStart={(event) => {
+                                        event.dataTransfer.effectAllowed = 'move';
+                                        // Firefox starts no drag without some data.
+                                        event.dataTransfer.setData('text/plain', node.id);
+                                        setDragging(index);
+                                    }}
+                                    onDragEnd={() => setDragging(null)}
+                                    onDragOver={(event) => {
+                                        if (dragging === null) return;
+                                        event.preventDefault();
+                                        event.dataTransfer.dropEffect = 'move';
+                                    }}
+                                    onDrop={(event) => onDrop(event, index)}
+                                    data-image-id={node.id}
+                                    className={cn(
+                                        'group relative flex w-[104px] shrink-0 cursor-grab snap-start flex-col items-center gap-1.5 rounded-lg border border-edge bg-card p-2 select-none active:cursor-grabbing',
+                                        dragging === index && 'opacity-50',
+                                    )}
                                 >
-                                    {node.name}
-                                </span>
-                                <span className="flex gap-0.5">
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-sm"
-                                        aria-label={`Move ${node.name} earlier`}
-                                        disabled={index === 0}
-                                        onClick={() => move(index, index - 1)}
+                                    <span className="absolute top-1.5 left-2 text-xs font-semibold text-muted-foreground tabular-nums">
+                                        {index + 1}
+                                    </span>
+                                    <FileMark node={node} size="large" />
+                                    <span
+                                        className="w-full truncate text-center text-xs"
+                                        title={node.name}
                                     >
-                                        <ChevronLeftIcon />
-                                    </Button>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-sm"
-                                        aria-label={`Move ${node.name} later`}
-                                        disabled={index === order.length - 1}
-                                        onClick={() => move(index, index + 1)}
-                                    >
-                                        <ChevronRightIcon />
-                                    </Button>
-                                </span>
-                            </li>
-                        ))}
-                    </ol>
-                    <p className="sr-only" aria-live="polite">
-                        {announcement}
-                    </p>
-                </section>
+                                        {node.name}
+                                    </span>
+                                    <span className="flex gap-0.5">
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            aria-label={`Move ${node.name} earlier`}
+                                            disabled={index === 0}
+                                            onClick={() => move(index, index - 1)}
+                                        >
+                                            <ChevronLeftIcon />
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            variant="ghost"
+                                            size="icon-sm"
+                                            aria-label={`Move ${node.name} later`}
+                                            disabled={index === order.length - 1}
+                                            onClick={() => move(index, index + 1)}
+                                        >
+                                            <ChevronRightIcon />
+                                        </Button>
+                                    </span>
+                                </li>
+                            ))}
+                        </ol>
+                        <p className="sr-only" aria-live="polite">
+                            {announcement}
+                        </p>
+                    </section>
+                )}
                 <div className="flex flex-col gap-2">
                     <h3 className="text-sm font-semibold">Page size</h3>
                     <Segmented label="Page size" options={SIZES} value={size} onChange={setSize} />
