@@ -1,0 +1,21 @@
+apps/ios/App/EditorPreview.swift
+  s_c60e24772e04af::t_43d68e23a9631b 57-59
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_d5b31fd6e8f861 135,156,378
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "be3d0cea4e90d7623403cf79d60507381d096c05",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
