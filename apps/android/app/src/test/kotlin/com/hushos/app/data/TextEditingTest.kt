@@ -223,6 +223,27 @@ class TextEditingTest {
         assertTrue(!TextEditing.speaksFor(mine, mine.node.currentVersion!!.id, TextEditing.Destination("ws", "elsewhere")))
     }
 
+    /*
+     * The editor closes (its session ends) while a save's bytes are going up: cancelling its coroutine can't stop the
+     * blocking upload, so the run asks the session right before completing, and nothing lands. Fails if the version is
+     * published after the editor has gone, for a save or a copy.
+     */
+    @Test fun aSaveOrCopyWhoseEditorWentWhileItUploadedNeverCompletes() {
+        val bench = Bench()
+        val file = bench.add("notes.txt", "a")
+        // On through the checks before and after the run starts, gone by the time it would complete.
+        fun closingAfterStart(): () -> Boolean { var asked = 0; return { ++asked <= 2 } }
+        assertThrows(Exception::class.java) {
+            TextSave.version("b", file, folder, file.node.currentVersion?.id, start(bench), stillOn = closingAfterStart())
+        }
+        assertEquals(1, bench.versions.getValue(file.id).size)
+        val files = bench.versions.size
+        assertThrows(Exception::class.java) {
+            TextSave.copy("c", file, folder, SaveSources.OwnWriting, start(bench), stillOn = closingAfterStart())
+        }
+        assertEquals(files, bench.versions.size)
+    }
+
     @Test fun aSaveAfterSomeoneElsesIsStaleAndPublishesNothing() {
         val bench = Bench()
         val file = bench.add("notes.txt", "start\n")

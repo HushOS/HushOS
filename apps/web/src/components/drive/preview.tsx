@@ -323,12 +323,15 @@ export function Preview({
             onOpenChange={(value, details) => {
                 if (value) return;
                 if (!editing) return onChange(null);
-                // Escape inside the editor is the editor's (its search panel closes on it).
-                const target = details.event?.target;
+                // Escape is the editor's only when it handled it (its search panel closing, which
+                // marks the key handled and may already have taken the panel, focus and all, off the
+                // page) or still has a panel open; otherwise it is Close, with Close's own guards.
+                const event = details.event;
+                const target = event?.target;
+                const inEditor = target instanceof Element && target.closest('[data-text-editor]');
                 if (
                     details.reason === 'escape-key' &&
-                    target instanceof Element &&
-                    target.closest('[data-text-editor]')
+                    (event?.defaultPrevented || (inEditor && inEditor.querySelector('.cm-panel')))
                 ) {
                     details.cancel();
                     return;

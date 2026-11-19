@@ -324,7 +324,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 runCatching {
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file, destination)
-                    TextSave.copy(text, file, folder, writer.copySources(from), TextSave.runs(writer, SaveRunJournal.of(context)),
+                    TextSave.copy(text, file, folder, writer.copySources(from, named = file), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
             }

@@ -2255,6 +2255,26 @@ class SaveResultTest {
     }
 
     /*
+     * Save as a copy takes its name and type from the row the editor writes to (a save adopted since, perhaps renamed by
+     * someone whose name record doesn't check) and its text from the version read: the copy is signed as the weakest of
+     * both, each checked now. Fails if the renamed row's Unverified name is signed as the verified original's.
+     */
+    @Test
+    fun aCopyNamedFromARenamedRowIsNeverSignedAsTheVerifiedSource() {
+        val id = server.file(server.root, "doc.txt", "first".toByteArray())
+        val doc = vault.listChildren(server.root).single { it.id == id }
+        val writer = VaultSaveWriter(vault) { StorageAllowance(1L shl 40, 0L, 1L shl 40) }
+        val alone = SaveRuns.signing(writer.copySources(doc))!!
+        assertEquals(Integrity.VERIFIED, alone.metadata)
+        // The same file, renamed under a signature this phone can't check.
+        val renamed = Opened(doc.node.copy(metadataSigner = Signer(java.util.UUID.randomUUID().toString()), metadataSignature = "AAAA"),
+            doc.metadata.copy(name = "renamed.txt"))
+        val both = SaveRuns.signing(writer.copySources(doc, named = renamed))!!
+        assertTrue("the renamed row's name was signed as verified", both.metadata != Integrity.VERIFIED)
+        assertEquals(alone.version, both.version)
+    }
+
+    /*
      * The editor's folder is the one it opened the file in, never one a later row names: a landed row that shows the file
      * moved elsewhere sets nothing, and looking the file up for the next save lists the editor's folder, where it is gone
      * (the moved-file case). Fails if a moved row's folder becomes where the next save writes.

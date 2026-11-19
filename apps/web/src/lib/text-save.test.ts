@@ -1,5 +1,6 @@
 import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
+import type { NodeIntegrity } from '@hushos/drive/trust';
 import {
     RecordNotUpdated,
     resultSignatures,
@@ -261,6 +262,65 @@ describe('when someone else saved first', () => {
                 metadata: 'resealed',
                 version: 'resealed',
             });
+    });
+
+    test('a copy named from a renamed row takes that row’s name verdict, not the source’s', async () => {
+        const b = bench();
+        const id = b.add('notes.txt', 'start');
+        const source = {
+            ...b.asNode(id),
+            integrity: { metadata: 'verified', version: 'verified' },
+        } as unknown as DriveNode;
+        // A save adopted a row renamed since by someone whose name record doesn't check.
+        const renamed = {
+            ...b.asNode(id),
+            name: 'renamed.txt',
+            currentVersion: { id: 'v-later' },
+            integrity: { metadata: 'unverified', version: 'verified' },
+        } as unknown as DriveNode;
+        const check = async (nodes: DriveNode[]) =>
+            new Map(nodes.map((node) => [node.id, node.integrity] as const));
+        await saveCopy(
+            b.start,
+            { file: renamed, source, folder: b.folder, text: 'mine' },
+            { check },
+        );
+        // The copy's name record is never vouched for: re-sealed, Unverified as the name it took.
+        expect(resultSignatures(b.sources.at(-1) as ResultSources).metadata).toBe('resealed');
+    });
+
+    test('trust withdrawn after the editor opened: the copy is checked now, never vouched for', async () => {
+        const b = bench();
+        const id = b.add('notes.txt', 'start');
+        // Verified when it opened...
+        const opened = {
+            ...b.asNode(id),
+            integrity: { metadata: 'verified', version: 'verified' },
+        } as unknown as DriveNode;
+        // ...and the writer's keys retired since: checked now, the records no longer verify.
+        const check = async (nodes: DriveNode[]) =>
+            new Map(
+                nodes.map(
+                    (node) =>
+                        [node.id, { metadata: 'retired-key', version: 'retired-key' }] as const,
+                ),
+            ) as Map<string, NodeIntegrity | null>;
+        await saveCopy(
+            b.start,
+            { file: opened, source: opened, folder: b.folder, text: 'mine' },
+            { check },
+        );
+        expect(resultSignatures(b.sources.at(-1) as ResultSources)).toEqual({
+            metadata: 'resealed',
+            version: 'resealed',
+        });
+        // A check that can't run re-seals too.
+        await saveCopy(
+            b.start,
+            { file: opened, source: opened, folder: b.folder, text: 'mine again' },
+            { check: () => Promise.reject(new Error('offline')) },
+        );
+        expect(resultSignatures(b.sources.at(-1) as ResultSources).version).toBe('resealed');
     });
 
     test('a file gone from its folder is stale with no version to save on top of', async () => {

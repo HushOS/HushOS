@@ -1976,6 +1976,30 @@ extension OnFakeDrive {
             #expect(Set(edited.keys) == Set(ordinary.keys))
         }
 
+        /*
+         * Save as a copy takes its name and type from the row the editor writes to (a save adopted since, perhaps renamed
+         * by someone whose name record doesn't check) and its text from the version read: the copy is signed as the
+         * weakest of both, each checked now. Fails if the renamed row's Unverified name is signed as the verified
+         * original's.
+         */
+        @Test func aCopyNamedFromARenamedRowIsNeverSignedAsTheVerifiedSource() async throws {
+            let server = try FakeDrive()
+            let vault = try await vault(server)
+            _ = try await vault.children(of: server.root)
+            let g = try await vault.children(of: server.b).first { $0.id == server.g }!
+            let alone = try SaveRuns.signing(try await vault.copySources(of: g))
+            #expect(alone.metadata == .copy(.verified))
+            // The same file, renamed under a signature this phone can't check.
+            var node = g.node
+            node.metadataSigner = Signer(id: UUID().uuidString.lowercased())
+            node.metadataSignature = "AAAA"
+            let renamed = Opened(node: node, metadata: NodeMetadata(name: "renamed.txt", mime: g.metadata.mime, size: nil, modified: nil,
+                                                                   attributes: [:]), nodeKey: nil)
+            let both = try SaveRuns.signing(try await vault.copySources(of: g, named: renamed))
+            #expect(both.metadata != .copy(.verified))
+            #expect(both.version == alone.version)
+        }
+
         func moveG(_ server: FakeDrive, to parent: String) {
             let old = server.nodes[server.g]!
             var updated = NodeView(id: old.id, workspaceId: old.workspaceId, parentId: parent, kind: old.kind, keyEpoch: old.keyEpoch,

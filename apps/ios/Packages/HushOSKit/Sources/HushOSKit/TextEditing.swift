@@ -384,16 +384,28 @@ extension Vault {
 
     /*
      * What a copy of `file` is signed with: its records' verdicts as a copy across takes them (a family
-     * folder's by its member list), so an Unverified file's copy stays Unverified.
+     * folder's by its member list), so an Unverified file's copy stays Unverified; with `named`'s records
+     * too when the copy's name and type come from that row.
      */
-    public func copySources(of file: Opened) async throws -> SaveSources {
+    public func copySources(of file: Opened, named: Opened? = nil) async throws -> SaveSources {
+        // The text's own version (`file`, the row it was read from) and, when the copy takes its name and type from another
+        // row (`named`: a save adopted since, perhaps renamed), that row's records too: each checked now, against the trust
+        // and members as they are at the copy, and the copy signed as the weakest of them (SaveRun.signing).
+        var rows = [file]
+        if let named, named.node != file.node { rows.append(named) }
+        var sources: [SaveSource] = []
+        for row in rows { sources.append(try await copySource(of: row)) }
+        return .from(sources)
+    }
+
+    private func copySource(of file: Opened) async throws -> SaveSource {
         guard let version = file.node.currentVersion else { throw DriveAPIError.notFound("This file has no content yet.") }
         if isFamilyWorkspace(file.node.workspaceId) {
             let metadata = try await familyPrior(FamilySync.metadataRecord(of: file.node), in: file.node.workspaceId, copying: true)
             let current = try await familyPrior(FamilySync.versionRecord(version, of: file.node), in: file.node.workspaceId, copying: true)
-            return .from([.file(metadata: metadata, version: current, fromLink: false)])
+            return .file(metadata: metadata, version: current, fromLink: false)
         }
         let trusted = try await copySigners()
-        return .from([.file(metadata: trusted.metadata(of: file.node), version: trusted.version(version, of: file.node), fromLink: false)])
+        return .file(metadata: trusted.metadata(of: file.node), version: trusted.version(version, of: file.node), fromLink: false)
     }
 }

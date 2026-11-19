@@ -122,22 +122,37 @@ test.afterAll(async () => {
     await page.context().close();
 });
 
-test('after the post-unlock preload, opening YAML, Rust and TOML fetches no further code', async () => {
-    // A fresh load of the drive, and its preload of every viewer, grammar and parser.
+test('after the post-unlock preload, opening JSON, YAML, Rust or TOML fetches no code the preload didn’t', async () => {
+    // Every script a fresh load of the drive fetches, its post-unlock preload of every viewer,
+    // grammar, parser and the check's worker included.
+    const preloaded = new Set<string>();
+    const script = (request: Request) =>
+        request.resourceType() === 'script' ? request.url().split('?')[0]! : null;
+    const before = (request: Request) => {
+        const url = script(request);
+        if (url) preloaded.add(url);
+    };
+    page.on('request', before);
     await page.reload();
     await expect(page.locator('html[data-viewers-preloaded="true"]')).toHaveCount(1, {
         timeout: 90_000,
     });
     await expect(page.locator('[data-node-id]')).toHaveCount(9, { timeout: 60_000 });
-    // What a device fetches from here never says which kind of file was opened or edited. A
-    // checked file (JSON) starts the structured-text check's worker, whose script (and, in
-    // development, its unbundled imports) is the same for every checked kind: what opening it
-    // fetches is the baseline. Opening YAML, Rust or TOML fetches no script beyond it, whatever
-    // the build names its chunks.
-    const scripts = async (name: string) => {
+    // The preload's workers (the thumbnailer's) may still be fetching their own imports once its
+    // last step returned: what they fetch belongs to the preload too, whatever is opened later.
+    await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+    page.off('request', before);
+    // From here, opening a file of any kind fetches no script the preload didn't, so what a device
+    // fetches never says which kind was edited. A production build fetches nothing at all: each
+    // chunk and the worker's one file come from the cache. The development server can't show
+    // that: every new worker asks again for its own unbundled imports (the browser reports each
+    // ask, cached or not), and those are exactly the ones the preload's worker fetched. So the
+    // check, for each kind on its own: nothing outside what the preload fetched.
+    for (const name of ['config.json', 'settings.yaml', 'main.rs', 'Cargo.toml']) {
         const fetched = new Set<string>();
         const listen = (request: Request) => {
-            if (request.resourceType() === 'script') fetched.add(request.url().split('?')[0]!);
+            const url = script(request);
+            if (url) fetched.add(url);
         };
         page.on('request', listen);
         await openEditor(page, name);
@@ -145,14 +160,11 @@ test('after the post-unlock preload, opening YAML, Rust and TOML fetches no furt
         await page.waitForTimeout(1_500);
         await close(page);
         page.off('request', listen);
-        return fetched;
-    };
-    const baseline = await scripts('config.json');
-    for (const name of ['settings.yaml', 'main.rs', 'Cargo.toml'])
         expect(
-            [...(await scripts(name))].filter((url) => !baseline.has(url)),
+            [...fetched].filter((url) => !preloaded.has(url)),
             name,
         ).toEqual([]);
+    }
 });
 
 test('a save is a new version that changes only the edited bytes', async () => {
@@ -285,6 +297,22 @@ test('closing while a save is on its way never offers Discard: it waits, then cl
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0, { timeout: 60_000 });
     await restore();
     expect((await downloaded(page, 'config.json')).toString()).toBe('{"finished": true}');
+});
+
+test('Escape closes the editor, unless its search panel is open, which it closes first', async () => {
+    await openEditor(page, 'notes.txt');
+    await editor(page).click();
+    await page.keyboard.press('ControlOrMeta+f');
+    const search = dialog(page).locator('.cm-search');
+    await expect(search).toBeVisible();
+    await page.keyboard.press('Escape');
+    // The panel went; the editor stays.
+    await expect(search).toHaveCount(0);
+    await expect(editor(page)).toBeVisible();
+    // Nothing to close inside it now: Escape is Close.
+    await editor(page).click();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
 });
 
 test('leaving with changes asks first', async () => {

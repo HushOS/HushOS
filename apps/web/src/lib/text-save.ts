@@ -1,5 +1,6 @@
 import type { NodeView } from '@hushos/drive/api';
 import type { DriveNode } from '@hushos/drive/client';
+import type { NodeIntegrity } from '@hushos/drive/trust';
 import { endRun, OWN_WRITING, type RunPlan, type SaveRun } from '@hushos/drive/save-runs';
 import { encodeText } from '@/lib/text-edit';
 
@@ -135,6 +136,12 @@ export async function saveVersion(
 export type TextCopy = { node: NodeView | null; versionId: string | null };
 
 /*
+ * Who wrote rows' records, checked at this moment against the trust (or family members) as it is
+ * now: the drive client's checkNow. Absent, the rows' own verdicts stand (tests that don't sign).
+ */
+export type CheckNow = (nodes: DriveNode[]) => Promise<Map<string, NodeIntegrity | null>>;
+
+/*
  * A new file beside `file` in `folder`, under the next free name, holding `text`, signed as
  * `source` (the row the text was read from) is. Its version is the one the upload minted, never
  * the reply row's: a repeated completion answers with the node as it is by then, which may already
@@ -143,9 +150,26 @@ export type TextCopy = { node: NodeView | null; versionId: string | null };
 export async function saveCopy(
     start: StartRun,
     edit: { file: DriveNode; source: DriveNode; folder: DriveNode; text: string },
-    { stillOn = () => true, pause }: SaveOptions = {},
+    { stillOn = () => true, pause, check }: SaveOptions & { check?: CheckNow } = {},
 ): Promise<TextCopy> {
     const bytes = encodeText(edit.text);
+    // Signed as the weakest of what it is made from, each checked now: the text's own version
+    // (`source`) and, when they differ, the row its name and type come from (`file`, which a save
+    // may have adopted renamed). A check that can't run re-seals rather than vouches.
+    const rows = edit.file === edit.source ? [edit.source] : [edit.source, edit.file];
+    // One row a check: the two may be the same file at two versions, and an answer is keyed by id.
+    const now = async (row: DriveNode): Promise<DriveNode> => {
+        if (!check) return row;
+        const checked = await check([row]).catch(() => null);
+        return {
+            ...row,
+            integrity: checked?.get(row.id) ?? {
+                metadata: 'unchecked',
+                version: row.currentVersion ? 'unchecked' : null,
+            },
+        };
+    };
+    const sources = await Promise.all(rows.map(async (row) => ({ node: await now(row) })));
     if (!stillOn()) throw new SessionEnded();
     const run = await start({
         targets: [edit.folder],
@@ -160,7 +184,7 @@ export async function saveCopy(
         name: edit.file.name,
         bytes,
         mime: edit.file.metadata?.mime ?? null,
-        sources: [{ node: edit.source, source: 'drive' }],
+        sources: sources.map(({ node }) => ({ node, source: 'drive' as const })),
         into: edit.folder,
         onVersion: (minted) => {
             versionId = minted;

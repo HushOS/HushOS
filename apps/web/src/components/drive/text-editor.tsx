@@ -43,7 +43,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { unlockedNow } from '@/lib/auth-view';
 import { deviceSession } from '@/lib/device-session';
-import { driveError, folderQueryOptions, invalidateFolders, nodeSize } from '@/lib/drive';
+import {
+    clientFor,
+    driveError,
+    folderQueryOptions,
+    invalidateFolders,
+    nodeSize,
+} from '@/lib/drive';
 import {
     allLanguages,
     editorLanguage,
@@ -56,7 +62,7 @@ import { openReader, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
 import { openText, READ_ONLY_WORDS, TEXT_EDIT_LIMIT, type ReadOnlyReason } from '@/lib/text-edit';
 import { startCheck, type Check } from '@/lib/text-check';
-import { parseWarning, preloadParsers, structuredKind } from '@/lib/text-parse';
+import { parseWarning, preloadParsers, structuredKindOf } from '@/lib/text-parse';
 import {
     editTargetOf,
     openedTarget,
@@ -378,7 +384,8 @@ export function TextEditor({
     /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
     const [ended, setEnded] = useState(false);
     const language = editorLanguage(loadFrom.name);
-    const checks = structuredKind(language);
+    // By the name's language, or the recorded type when the name gives none (an extensionless JSON file).
+    const checks = structuredKindOf(language, loadFrom.metadata?.mime);
 
     const markDirty = useCallback(
         (value: boolean) => {
@@ -746,7 +753,11 @@ export function TextEditor({
             const made = await saveCopy(
                 start,
                 { file, source, folder: listing.folder, text: doc.toString() },
-                { stillOn: () => live(taken) },
+                {
+                    stillOn: () => live(taken),
+                    // Who wrote what the copy is made from, as trust stands now (not when it opened).
+                    check: (nodes) => clientFor(file.workspaceId).checkNow(nodes),
+                },
             );
             if (!live(taken)) return;
             // From here on the editor writes the copy: the file someone else saved is left as theirs.

@@ -37,6 +37,32 @@ export function structuredKind(language: string | null): StructuredKind | null {
     return null;
 }
 
+/* Recorded types that name a structured format, for a file whose name gives no language. */
+const BY_TYPE: Record<string, StructuredKind> = {
+    'application/json': 'json',
+    'text/json': 'json',
+    'application/yaml': 'yaml',
+    'application/x-yaml': 'yaml',
+    'text/yaml': 'yaml',
+    'text/x-yaml': 'yaml',
+    'application/toml': 'toml',
+    'text/toml': 'toml',
+    'application/xml': 'xml',
+    'text/xml': 'xml',
+    'image/svg+xml': 'xml',
+};
+
+/*
+ * Which check a file gets: by its name's language, or, when the name gives none (an extensionless
+ * file), by the type its row records ("application/json; charset=utf-8" included).
+ */
+export function structuredKindOf(language: string | null, mime: string | null | undefined) {
+    const named = structuredKind(language);
+    if (named || language !== null) return named;
+    const type = mime?.split(';')[0]?.trim().toLowerCase();
+    return (type && BY_TYPE[type]) || null;
+}
+
 /* The warning's words: "This YAML doesn’t parse at line 14." */
 export function parseWarning(kind: StructuredKind, line: number | null) {
     return line === null

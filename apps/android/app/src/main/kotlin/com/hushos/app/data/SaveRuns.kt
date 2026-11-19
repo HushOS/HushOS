@@ -1061,7 +1061,19 @@ class SaveRun private constructor(
     }
 
     /* A completion is about to be sent; once the run stopped it is not sent (the vault aborts the upload). */
+    /*
+     * Whether whoever started the run is still there to take its results (the text editor's session): asked right before
+     * each completion is sent, so nothing lands once it has gone. A coroutine's cancel can't stop a blocking upload; this
+     * stops its completion, and the run's stop aborts it.
+     */
+    @Volatile private var holds: () -> Boolean = { true }
+
+    fun holdTo(stillOn: () -> Boolean) {
+        holds = stillOn
+    }
+
     private fun completingNow(uploadId: String) = synchronized(lock) {
+        if (!holds()) throw IllegalStateException("This was closed before the save finished.")
         if (sealed) throw IllegalStateException("This save run is stopping.")
         completing += uploadId
         nodeOfUpload[uploadId]?.let { published += it }
@@ -1552,7 +1564,13 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
     }
 
     /* What a copy of `file` is signed with: its records' verdicts as a copy takes them, so an Unverified file's copy stays so. */
-    fun copySources(file: Opened): SaveSources = SaveSources.From(listOf(SaveSource.of(vault.copyPrior(file))))
+    /*
+     * What a copy of `file` (the row the text was read from) is signed with, its records checked now against the trust and
+     * members as they are at the copy; with `named`'s records too when the copy takes its name and type from that row (a
+     * save adopted since, perhaps renamed): the copy is signed as the weakest of them (signing).
+     */
+    fun copySources(file: Opened, named: Opened? = null): SaveSources =
+        SaveSources.From(listOfNotNull(file, named?.takeIf { it.node != file.node }).map { SaveSource.of(vault.copyPrior(it)) })
 
     override fun refreshFolder(folder: Opened): Opened {
         resync(folder.node.workspaceId)

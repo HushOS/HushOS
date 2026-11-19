@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { lineAt, parseFailure, parseWarning, structuredKind } from '@/lib/text-parse';
+import {
+    lineAt,
+    parseFailure,
+    parseWarning,
+    structuredKind,
+    structuredKindOf,
+} from '@/lib/text-parse';
 
 /*
  * The warning beside Save names the line a person has to fix. A wrong line
@@ -48,5 +54,19 @@ describe('the structured-text check', () => {
         expect(structuredKind('svg')).toBe('xml');
         expect(lineAt('a\nb\nc', 4)).toBe(3);
         expect(lineAt('a\nb\nc', 1)).toBe(1);
+    });
+
+    test('a file whose name gives no language is checked by the type its row records', () => {
+        // An extensionless file recorded as JSON (or YAML, TOML, XML) still gets its warning.
+        expect(structuredKindOf(null, 'application/json')).toBe('json');
+        expect(structuredKindOf(null, 'application/json; charset=utf-8')).toBe('json');
+        expect(structuredKindOf(null, 'application/yaml')).toBe('yaml');
+        expect(structuredKindOf(null, 'application/toml')).toBe('toml');
+        expect(structuredKindOf(null, 'text/xml')).toBe('xml');
+        // Plain text stays unchecked, and a name's own language wins over its recorded type.
+        expect(structuredKindOf(null, 'text/plain')).toBeNull();
+        expect(structuredKindOf(null, null)).toBeNull();
+        expect(structuredKindOf('yaml', 'application/json')).toBe('yaml');
+        expect(structuredKindOf('rust', 'application/json')).toBeNull();
     });
 });

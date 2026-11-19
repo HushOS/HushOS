@@ -196,6 +196,8 @@ object TextSave {
             end(run, pause = pause)
             throw TextEditing.SessionEnded()
         }
+        // Its completion asks the session too: a save whose editor went while its bytes were going up never lands.
+        run.holdTo(stillOn)
         val saved = run.version(bytes, file, folder, startedFrom, SaveSources.OwnWriting, file.metadata.mime)
         // Its only result is in, saved or not: the row goes.
         end(run, pause = pause)
@@ -216,6 +218,7 @@ object TextSave {
             throw TextEditing.SessionEnded()
         }
         val minted = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        run.holdTo(stillOn)
         val made = run.file(bytes, file.name, file.metadata.mime, sources, folder = folder, minted = minted)
         end(run, pause = pause)
         return TextCopy(made, minted.get())

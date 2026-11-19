@@ -54,6 +54,12 @@ struct TextEditorScreen: View {
     @State private var status: String?
     @State private var failure: String?
     @State private var stale: StaleVersion?
+    /*
+     * Whether the conflict choices are on screen. Apart from `stale` (what they are about), which stays until the person
+     * picks one or cancels: going to Open theirs' confirmation hides the choices without losing them, and Cancel there
+     * shows them again.
+     */
+    @State private var choosing = false
     @State private var confirmTheirs = false
     @State private var confirmLeave = false
     /*
@@ -120,12 +126,11 @@ struct TextEditorScreen: View {
             store.editorClosed()
         }
         .confirmationDialog(stale?.currentVersionId == nil ? EditorWords.goneTitle : EditorWords.staleTitle,
-                            isPresented: Binding(get: { stale != nil && !confirmTheirs }, set: { if !$0 { stale = nil } }),
-                            titleVisibility: .visible, presenting: stale) { choice in
+                            isPresented: $choosing, titleVisibility: .visible, presenting: stale) { choice in
             if let current = choice.currentVersionId {
                 Button(EditorWords.onTop) { stale = nil; begin { await save(onTopOf: current) } }
                 Button(EditorWords.copy) { stale = nil; begin { await saveCopy() } }
-                Button(EditorWords.theirs, role: .destructive) { confirmTheirs = true }
+                Button(EditorWords.theirs, role: .destructive) { choosing = false; confirmTheirs = true }
             } else {
                 Button(EditorWords.copy) { stale = nil; begin { await saveCopy() } }
             }
@@ -139,7 +144,7 @@ struct TextEditorScreen: View {
                 Task { await openTheirs() }
             }
             // Back to the three choices: nothing was discarded.
-            Button(EditorWords.cancel, role: .cancel) {}
+            Button(EditorWords.cancel, role: .cancel) { choosing = stale != nil }
         } message: {
             Text(EditorWords.theirsText)
         }
@@ -343,6 +348,7 @@ struct TextEditorScreen: View {
             guard stillOn(token) else { return }
             guard let listed else {
                 stale = StaleVersion(currentVersionId: nil)
+                choosing = true
                 return
             }
             let saved = try await TextSave.version(text, of: listed, in: folder, startedFrom: onTopOf ?? startedFrom,
@@ -351,6 +357,7 @@ struct TextEditorScreen: View {
             switch saved {
             case .stale(let current):
                 stale = StaleVersion(currentVersionId: current)
+                choosing = true
             case .saved(let landed, let versionId):
                 // The version this save published, never the reply row's (which may already be someone else's):
                 // unknown, the next save asks the stale question. Only a row still in the editor's folder sets it: one
@@ -383,7 +390,7 @@ struct TextEditorScreen: View {
         defer { saving = false }
         do {
             let (folder, _) = try await vault.editTarget(file, at: destination)
-            let sources = try await vault.copySources(of: from)
+            let sources = try await vault.copySources(of: from, named: file)
             guard stillOn(token) else { return }
             let made = try await TextSave.copy(text, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
                                                stillOn: { @MainActor in stillOn(token) })
