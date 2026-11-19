@@ -1,3 +1,5 @@
+import { PREVIEW_LIMITS } from '@/lib/preview-limits';
+import { imageSize } from './dimensions';
 import { ImageRefused, isHeic } from './pdf';
 import { MAX_PIXELS } from './protocol';
 
@@ -11,8 +13,22 @@ import { MAX_PIXELS } from './protocol';
  * image conversion (step 11, wasm-vips) and replaces this one function; nothing else here knows
  * how an image was decoded. Until then the colour profile is not carried over (the canvas draws
  * in sRGB), and the encoded bytes are held in a Blob for the moment the browser decodes them:
- * at most one image, and only a kind the PDF can't take as it is.
+ * one image at a time, only a kind the PDF can't take as it is, and never one larger than an
+ * image preview may be (PREVIEW_LIMITS.image), the size below which Chromium keeps a Blob in
+ * memory as it does a preview's. Its size is read from its header first, so a file that would
+ * decode to more than MAX_PIXELS is refused before the browser allocates a pixel of it.
  */
+
+/* The most an image may be to be handed to the browser's decoder, as a Blob: what a preview may hold. */
+export const DECODE_BLOB_MAX = PREVIEW_LIMITS.image;
+
+/* An image's size from its header, refused when unreadable or past MAX_PIXELS, before any decode. */
+function checkedSize(bytes: Uint8Array, index: number) {
+    const size = imageSize(bytes);
+    if (!size) throw new ImageRefused(isHeic(bytes) ? 'heic' : 'damaged', index);
+    if (size.width * size.height > MAX_PIXELS) throw new ImageRefused('too-many-pixels', index);
+    return size;
+}
 
 export type Encoded = { kind: 'jpeg' | 'png'; bytes: Uint8Array };
 
@@ -20,6 +36,8 @@ export type Encoded = { kind: 'jpeg' | 'png'; bytes: Uint8Array };
 const ROWS = 256;
 
 export async function decodeForPdf(bytes: Uint8Array, index: number): Promise<Encoded> {
+    checkedSize(bytes, index);
+    if (bytes.byteLength > DECODE_BLOB_MAX) throw new ImageRefused('too-large-to-decode', index);
     let bitmap: ImageBitmap;
     try {
         bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>]), {
@@ -60,8 +78,15 @@ export async function decodeForPdf(bytes: Uint8Array, index: number): Promise<En
     }
 }
 
-/* A small JPEG of the first image, for the PDF's thumbnail in the folder; null when it can't be made. */
+/*
+ * A small JPEG of the first image, for the PDF's thumbnail in the folder; null when it can't be
+ * made, and not made at all for an image past the preview limit or MAX_PIXELS (the thumbnail is
+ * optional; the Blob it needs is not).
+ */
 export async function thumbnailOf(bytes: Uint8Array, edge: number, maxBytes: number) {
+    if (bytes.byteLength > DECODE_BLOB_MAX) return null;
+    const size = imageSize(bytes);
+    if (!size || size.width * size.height > MAX_PIXELS) return null;
     let bitmap: ImageBitmap | null = null;
     let canvas: OffscreenCanvas | null = null;
     try {

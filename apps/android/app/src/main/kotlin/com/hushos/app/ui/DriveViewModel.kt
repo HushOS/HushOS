@@ -2588,24 +2588,56 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     /*
-     * Convert, then One PDF (data/ImagesPdf.kt): the PDF of `images` beside the first of them, as `name` (the next free one
-     * there). Null once saved, else what to say; a cancel of the calling coroutine stops it and cleans up what was made.
+     * One PDF's run, held here and not by its sheet, so a rotation or a fold keeps it going and the sheet
+     * finds it again: progress (images done of all), what to say when it failed or stopped, and done.
      */
-    suspend fun makeImagesPdf(images: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean, name: String,
-                              progress: (Int, Int) -> Unit): String? {
+    data class PdfRun(val running: Boolean = false, val progress: Pair<Int, Int>? = null, val failure: String? = null, val done: Boolean = false)
+    private val _pdfRun = kotlinx.coroutines.flow.MutableStateFlow(PdfRun())
+    val pdfRun: kotlinx.coroutines.flow.StateFlow<PdfRun> = _pdfRun
+    private var pdfJob: kotlinx.coroutines.Job? = null
+
+    /*
+     * Convert, then One PDF (data/ImagesPdf.kt): the PDF of `order` into the folder the `selection` is in (worked out
+     * from the selection as it came, never from the order), as `name` (the next free one there).
+     */
+    fun startImagesPdf(selection: List<Opened>, order: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean, name: String) {
+        if (pdfJob?.isActive == true) return
+        _pdfRun.value = PdfRun(running = true, progress = 0 to order.size)
+        pdfJob = viewModelScope.launch {
+            val said = makeImagesPdf(selection, order, size, margin, name) { done, all -> _pdfRun.update { it.copy(progress = done to all) } }
+            _pdfRun.value = PdfRun(failure = said, done = said == null)
+        }
+    }
+
+    /* Stop: the run cancels, through its upload, and its clean-up removes what was made; the sheet says how it ended. */
+    fun stopImagesPdf() {
+        pdfJob?.cancel()
+    }
+
+    /* The sheet went: a run that ended is forgotten (a running one keeps going until it ends or is stopped). */
+    fun forgetImagesPdf() {
+        if (pdfJob?.isActive != true) _pdfRun.value = PdfRun()
+    }
+
+    /* Null once saved, else what to say; a cancel of the calling coroutine stops it and cleans up what was made. */
+    private suspend fun makeImagesPdf(selection: List<Opened>, images: List<Opened>, size: com.hushos.core.PageSize, margin: Boolean,
+                                      name: String, progress: (Int, Int) -> Unit): String? {
         val opening = vault ?: return com.hushos.core.toolFailedMessage()
+        if (!com.hushos.app.data.ImagesPdf.oneFolder(selection)) return com.hushos.app.data.ImagesPdf.MIXED_FOLDERS
         // The account session this run began under: a 401 ends it only while it is still the one in use.
         val signedIn = Shared.session(context)
-        val memory = android.app.ActivityManager.MemoryInfo().also {
-            (context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager).getMemoryInfo(it)
-        }.totalMem
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memory = android.app.ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }.totalMem
+        // The app's own heap, which a decoded image's pixels must fit in: the large one when the app asks for it.
+        val large = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_LARGE_HEAP != 0
+        val heap = (if (large) manager.largeMemoryClass else manager.memoryClass).toLong() shl 20
         var stopped: com.hushos.app.data.SaveRunStopped? = null
         val result = runCatching {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 val writer = com.hushos.app.data.VaultSaveWriter(opening, storage = { Auth.storage(context) })
-                val (folder, _) = writer.editTarget(images.first())
+                val (folder, _) = writer.editTarget(selection.first())
                 val saved = com.hushos.app.data.ImagesPdf.make(writer, opening, com.hushos.app.data.SaveRunJournal.of(context), images, folder,
-                    size, margin, name, memory, progress, stopped = { stopped = it })
+                    size, margin, name, memory, heap, progress, stopped = { stopped = it })
                 folder to saved
             }
         }
@@ -2616,7 +2648,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         }
         val error = result.exceptionOrNull()!!
         if (sessionGone(error, signedIn)) return null
-        // Stopped (Stop, or the sheet going): how the run's clean-up ended, in its words.
+        // Stopped (Stop, or the run cancelled): how the run's clean-up ended, in its words.
         if (error is kotlinx.coroutines.CancellationException) return stopped?.message ?: com.hushos.app.data.SaveRuns.CANCELLED
         return (error as? com.hushos.app.data.ImagesPdfRefused)?.message
             ?: com.hushos.app.data.SaveRuns.reason(error)

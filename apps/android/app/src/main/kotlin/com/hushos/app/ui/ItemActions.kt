@@ -243,7 +243,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             // A family folder's text file, while this phone may write there.
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             // Convert, then One PDF: a new file beside it, while this phone may write the family's folder.
-            if (canEdit && com.hushos.app.data.ImagesPdf.takes(item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
+            if (com.hushos.app.data.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
             if (canEdit) {
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
@@ -308,7 +308,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             // own: its folder can't be listed, and a save needs it.
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             // Convert, then One PDF: a new file beside it, for whoever may add one there.
-            if (canEdit && com.hushos.app.data.ImagesPdf.takes(item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
+            if (com.hushos.app.data.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }

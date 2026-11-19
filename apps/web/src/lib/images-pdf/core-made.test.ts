@@ -11,14 +11,15 @@ test('pdf.js opens the core’s PDF, every page upright and nothing of the image
     const bytes = fixture('core-made.pdf');
     expect(leaks(bytes)).toEqual([]);
     const pages = await readPdf(bytes);
-    expect(pages).toHaveLength(6);
+    expect(pages).toHaveLength(7);
     // A4 with 12 mm margins, each page turned to its (wider than tall) image.
     for (const page of pages) {
         expect(page.width).toBeCloseTo(841.89, 1);
         expect(page.height).toBeCloseTo(595.28, 1);
     }
-    const [page1, phone, cmyk, grey, gps, disc] = pages;
-    for (const page of [page1, phone, cmyk, gps]) expect(looksUpright(page!)).toBe(true);
+    const [page1, phone, cmyk, grey, gps, plainCmyk, disc] = pages;
+    // Both CMYKs in their own colours: Adobe's complemented one turned back, the plain one as it is.
+    for (const page of [page1, phone, cmyk, gps, plainCmyk]) expect(looksUpright(page!)).toBe(true);
     // The phone photo is stored sideways: the reader turns it upright with the page's matrix.
     expect(phone!.image).toEqual({ width: 300, height: 400 });
     const [x, y, w, h] = imageBox(grey!);

@@ -20,6 +20,9 @@ struct ImagesPdfSheet: View {
     @State private var phase = Phase.choosing
     @State private var work: Task<Void, Never>?
     @State private var askingStop = false
+    /* Where the PDF goes, worked out once from the selection as it came (never from the order): the images' own folder. */
+    @State private var folder: Opened?
+    @State private var problem: String?
 
     enum Phase: Equatable {
         case choosing
@@ -28,7 +31,12 @@ struct ImagesPdfSheet: View {
         case failed(String)
     }
 
-    init(images: [Opened]) { _order = State(initialValue: images) }
+    private let selection: [Opened]
+
+    init(images: [Opened]) {
+        selection = images
+        _order = State(initialValue: images)
+    }
 
     private var name: String { typed ?? ImagesPdf.pdfName(for: order.first?.name ?? "") }
     private var total: UInt64 { order.reduce(0) { $0 + ($1.size ?? 0) } }
@@ -72,7 +80,7 @@ struct ImagesPdfSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } footer: {
-                    Text("Location and camera details are left out.")
+                    Text("Location, camera and other photo details are left out. The colour profile is kept.")
                 }
                 .disabled(busy)
                 switch stage {
@@ -100,7 +108,7 @@ struct ImagesPdfSheet: View {
                 case let .failed(message):
                     Section { Text(message).foregroundStyle(Alpine.danger) }
                 case .choosing:
-                    EmptyView()
+                    if let problem { Section { Text(problem).foregroundStyle(Alpine.danger) } }
                 }
             }
             // The handles are the drag; the list's order is the PDF's.
@@ -117,7 +125,8 @@ struct ImagesPdfSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(stage == .offer ? "Continue" : "Make PDF") { make() }
-                        .disabled(busy || stage == .ceiling || name.trimmingCharacters(in: .whitespaces).isEmpty || name.contains("/"))
+                        .disabled(busy || folder == nil || stage == .ceiling || name.trimmingCharacters(in: .whitespaces).isEmpty
+                            || name.contains("/"))
                 }
             }
             .confirmationDialog("Stop making the PDF?", isPresented: $askingStop, titleVisibility: .visible) {
@@ -128,6 +137,24 @@ struct ImagesPdfSheet: View {
             }
         }
         .interactiveDismissDisabled(busy)
+        .task {
+            // One folder for all of them, or nothing is converted (search results can mix folders).
+            guard ImagesPdf.oneFolder(selection) else { problem = ImagesPdf.mixedFolders; return }
+            do {
+                folder = try await store.vault.editTarget(selection[0]).folder
+            } catch {
+                if sessionRefused(error) { dismiss(); return }
+                problem = ErrorWords.say(error) ?? toolFailedMessage()
+            }
+        }
+    }
+
+    /* A 401 under the conversion: the app's session check, never a line in the sheet. */
+    private func sessionRefused(_ error: Error) -> Bool {
+        let refusal: Error? = endsSession(error) ? error : (error as? SaveRunStopped)?.sessionRefusal
+        guard let refusal else { return false }
+        store.report(refusal)
+        return true
     }
 
     private func move(_ from: Int, to: Int) {
@@ -136,13 +163,13 @@ struct ImagesPdfSheet: View {
     }
 
     private func make() {
+        guard let folder else { return }
         let images = order, size = size, margin = margin
         let name = name.trimmingCharacters(in: .whitespaces)
         let vault = store.vault
         phase = .making(done: 0, total: images.count)
         work = Task {
             do {
-                let (folder, _) = try await vault.editTarget(images[0])
                 let saved = try await ImagesPdf.make(vault: vault, images: images, folder: folder, size: size, margin: margin, name: name) { done, total in
                     Task { @MainActor in phase = done < total ? .making(done: done, total: total) : .saving }
                 }
@@ -150,6 +177,7 @@ struct ImagesPdfSheet: View {
                 store.notify("Saved “\(saved.name)”.")
                 dismiss()
             } catch {
+                if sessionRefused(error) { work = nil; dismiss(); return }
                 // A tool's own failure (the watchdog, a file it couldn't read) says so in its own words.
                 phase = .failed((error as? ToolFailed)?.message ?? ErrorWords.say(error) ?? toolFailedMessage())
             }

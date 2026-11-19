@@ -40,6 +40,31 @@ public enum ImagesPdf {
         return extensions.contains((item.name as NSString).pathExtension.lowercased())
     }
 
+    /* Images from more than one folder (search results can hold them): refused, never converted in part. */
+    public static let mixedFolders = "These images are in different folders. Make a PDF from one folder at a time."
+
+    /* Whether every image is in one folder of one workspace, where the PDF goes. */
+    public static func oneFolder(_ images: [Opened]) -> Bool {
+        guard let first = images.first else { return false }
+        return images.allSatisfy { $0.node.parentId == first.node.parentId && $0.node.workspaceId == first.node.workspaceId }
+    }
+
+    /* The most one read asks of a version reader: the core refuses a read past 64 MiB. */
+    public static let readPiece: UInt64 = 8 << 20
+
+    /* A file's `size` bytes, read in pieces of at most `piece`, never in one read the core would refuse. */
+    public static func readWhole(size: UInt64, piece: UInt64 = readPiece, read: (UInt64, UInt64) throws -> Data) throws -> Data {
+        var out = Data(capacity: Int(size))
+        var offset: UInt64 = 0
+        while offset < size {
+            let part = try read(offset, min(piece, size - offset))
+            guard !part.isEmpty else { throw ImagesPdfRefused(toolFailedMessage()) }
+            out.append(part)
+            offset += UInt64(part.count)
+        }
+        return out
+    }
+
     /* The first image's name with `.pdf` in place of its extension. */
     public static func pdfName(for first: String) -> String {
         let base = ((first as NSString).deletingPathExtension).trimmingCharacters(in: .whitespaces)
@@ -69,10 +94,22 @@ public enum ImagesPdf {
         public let thumbnail: Data?
     }
 
-    /* A PDF counted in the process's produced-plaintext budget (ToolRuns.budget) until the save has it. */
-    struct Counted: Sendable {
-        let made: Made
-        let generation: UInt64
+    /*
+     * A PDF's charge in the process's produced-plaintext budget (ToolRuns.budget): taken on the run's
+     * thread, given back exactly once, after the save has the PDF or however the run ended (a Stop
+     * that discards the result included), so no charge outlives its bytes.
+     */
+    final class Lease: @unchecked Sendable {
+        private let lock = NSLock()
+        private var held: (bytes: UInt64, generation: UInt64)?
+        func take(_ bytes: UInt64, _ generation: UInt64) { lock.withLock { held = (bytes, generation) } }
+        func release() {
+            guard let charge = lock.withLock({ () -> (bytes: UInt64, generation: UInt64)? in
+                defer { held = nil }
+                return held
+            }) else { return }
+            ToolRuns.budget.release(bytes: charge.bytes, generation: charge.generation)
+        }
     }
 
     /* A refusal of one image (by its place in the order) or of the whole PDF, kept apart from ToolRuns, which turns errors into ToolFailed. */
@@ -241,6 +278,7 @@ extension ImagesPdf {
         vault: Vault, images: [Opened], folder: Opened, size: PageSize, margin: Bool, name: String,
         progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in }
     ) async throws -> Opened {
+        guard oneFolder(images), images.allSatisfy({ $0.node.parentId == folder.id }) else { throw ImagesPdfRefused(mixedFolders) }
         let total = images.reduce(UInt64(0)) { $0 + ($1.size ?? 0) }
         let run = try await SaveRun.start(writer: vault, targets: [folder], results: [.fromSources(sourcesSize: total, thumbnail: true)])
         do {
@@ -251,31 +289,36 @@ extension ImagesPdf {
             let refusal = Refusal()
             let names = images.map(\.name)
             let maxPixels = Self.maxPixels
-            let counted: Counted
+            let lease = Lease()
+            defer { lease.release() }
+            // A 401 renewing an address mid-read: thrown as itself, for the session check, never as the core's read failure.
+            let refusals = SessionRefusals()
+            let made: Made
             do {
-                counted = try await ToolRuns.shared.run("Making \(name)") { control in
+                made = try await ToolRuns.shared.run("Making \(name)") { control in
                     do {
                         let made = try build(names: names, size: size, margin: margin, maxPixels: maxPixels, control: control, read: { index in
-                            let reader = try blocking { try await vault.toolReader(images[index], control: control) }
-                            return try reader.readAt(offset: 0, length: reader.size())
+                            let reader = try blocking { try await vault.toolReader(images[index], control: control, refusals: refusals) }
+                            return try readWhole(size: reader.size()) { offset, length in try reader.readAt(offset: offset, length: length) }
                         }, progress: { progress($0, images.count) })
                         // Waits while the process holds 512 MB of results not yet uploaded.
-                        let generation = try ToolRuns.budget.produce(bytes: UInt64(made.pdf.count), control: control)
-                        return Counted(made: made, generation: generation)
+                        lease.take(UInt64(made.pdf.count), try ToolRuns.budget.produce(bytes: UInt64(made.pdf.count), control: control))
+                        return made
                     } catch let refused as ImagesPdfRefused {
                         refusal.set(refused)
                         throw refused
                     }
                 }
             } catch {
+                if let refused = refusals.refused { throw refused }
                 if let refused = refusal.value { throw refused }
                 throw error
             }
             progress(images.count, images.count)
-            // Its room in the budget goes back once the save has it, saved or not.
-            defer { ToolRuns.budget.release(bytes: UInt64(counted.made.pdf.count), generation: counted.generation) }
-            let saved = try await run.file(counted.made.pdf, name: name, mime: "application/pdf", sources: .from(sources),
-                                           thumbnail: counted.made.thumbnail, in: folder)
+            let saved = try await run.file(made.pdf, name: name, mime: "application/pdf", sources: .from(sources),
+                                           thumbnail: made.thumbnail, in: folder)
+            // Stopped while it uploaded: what landed goes (the catch below cancels the run), never kept.
+            try Task.checkCancellation()
             _ = await TextSave.end(run)
             return saved
         } catch {

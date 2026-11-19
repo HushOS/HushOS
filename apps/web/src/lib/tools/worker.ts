@@ -111,6 +111,8 @@ export function rangeSource(
             if (closed) return;
             closed = true;
             port.onmessage = null;
+            // The page closes its reader now (its chunks and key), not at the run's end.
+            port.postMessage({ type: 'done' } satisfies RangeRequest);
             port.close();
             for (const waiter of pending.values())
                 waiter.reject(new Error('The read was stopped.'));

@@ -86,6 +86,18 @@
             "note": "CMYK with the Adobe marker kept, EXIF dropped"
         },
         {
+            "file": "plain-cmyk.jpg",
+            "outcome": "ok",
+            "sha256": "7918a19c7338944e0f903f45e1773cd183566a9edbe7db40025b64788ae4f7e0",
+            "length": 3530,
+            "width": 200,
+            "height": 120,
+            "components": 4,
+            "orientation": 1,
+            "adobe": false,
+            "note": "CMYK without the Adobe marker: not complemented"
+        },
+        {
             "file": "grey.jpg",
             "outcome": "ok",
             "sha256": "0a9aa1e408a34770fd6952b0aeb69cf67c5797929cdc7c20be8749adac5febf6",

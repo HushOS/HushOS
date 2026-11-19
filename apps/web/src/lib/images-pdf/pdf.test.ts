@@ -88,8 +88,12 @@ test('A4 and Letter turn to the image and keep the margins', async () => {
 });
 
 test('a PNG keeps its transparency, and CMYK and grey JPEGs show their colours', async () => {
-    const pages = await readPdf(await build(['alpha.png', 'adobe-cmyk.jpg', 'grey.jpg']));
-    const [disc, cmyk, grey] = pages;
+    const pages = await readPdf(
+        await build(['alpha.png', 'adobe-cmyk.jpg', 'grey.jpg', 'plain-cmyk.jpg']),
+    );
+    const [disc, cmyk, grey, plainCmyk] = pages;
+    // CMYK without Adobe's marker is not complemented: inverting it would show cyan for red.
+    expect(looksUpright(plainCmyk!)).toBe(true);
     expect(disc!.at(32, 24)?.[0]).toBeGreaterThan(150);
     expect(disc!.at(1, 1)).toBeNull();
     expect(looksUpright(cmyk!)).toBe(true);

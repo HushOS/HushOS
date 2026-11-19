@@ -31,11 +31,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.retain.retain
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
@@ -55,8 +59,6 @@ import com.hushos.app.data.ImagesPdf
 import com.hushos.app.data.Opened
 import com.hushos.core.PageSize
 import com.hushos.tokens.AlpineSpace
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 
 /*
  * Convert, then One PDF (docs/file-tools-design.md, feature (b)): the images in a list to put in
@@ -67,17 +69,25 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened>, dismiss: () -> Unit) {
-    val order: SnapshotStateList<Opened> = remember(images) { images.toMutableStateList() }
-    var size by remember { mutableStateOf(ImagesPdf.defaultSize()) }
-    var margin by remember { mutableStateOf(false) }
+    // The order and the typed name (file names) are kept in memory across a rotation or a fold; the page size and
+    // margins, which say nothing of the files, are saved with the screen's state.
+    val order: SnapshotStateList<Opened> = retain { images.toMutableStateList() }
+    var size by rememberSaveable { mutableStateOf(ImagesPdf.defaultSize()) }
+    var margin by rememberSaveable { mutableStateOf(false) }
     // What the person typed; until then the name follows the first image.
-    var typed by remember { mutableStateOf<String?>(null) }
-    var progress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    var failure by remember { mutableStateOf<String?>(null) }
-    var askingStop by remember { mutableStateOf(false) }
-    var job by remember { mutableStateOf<Job?>(null) }
-    val scope = rememberCoroutineScope()
-    val busy = job != null
+    var typed by retain { mutableStateOf<String?>(null) }
+    var askingStop by rememberSaveable { mutableStateOf(false) }
+    // The run itself lives in the view model, so a rotation neither loses nor stops it.
+    val run by model.pdfRun.collectAsState()
+    val busy = run.running
+    val progress = run.progress.takeIf { busy }
+    val failure = run.failure
+    LaunchedEffect(run.done) {
+        if (run.done) {
+            model.forgetImagesPdf()
+            dismiss()
+        }
+    }
     val name = typed ?: ImagesPdf.pdfName(order.firstOrNull()?.name.orEmpty())
     val total = order.sumOf { it.size ?: 0L }
     val stage = ImagesPdf.stage(order.size, total)
@@ -88,7 +98,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
         order.add(to, order.removeAt(from))
     }
 
-    Sheet(onDismissRequest = { if (!busy) dismiss() }, full = true) {
+    Sheet(onDismissRequest = { if (!busy) { model.forgetImagesPdf(); dismiss() } }, full = true) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S4),
             verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
             Text("One PDF", style = MaterialTheme.typography.titleLarge)
@@ -96,9 +106,11 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
             val rowHeight = 64.dp
             val rowPx = with(LocalDensity.current) { rowHeight.toPx() }
             Column {
-                order.forEachIndexed { index, item ->
-                    var lifted by remember(item.id) { mutableFloatStateOf(0f) }
-                    var dragging by remember(item.id) { mutableStateOf(false) }
+                order.forEachIndexed { index, item -> key(item.id) {
+                    // Keyed by the image, so its row (and a drag under way) moves with it when the order changes.
+                    var lifted by remember { mutableFloatStateOf(0f) }
+                    var dragging by remember { mutableStateOf(false) }
+                    val locked by rememberUpdatedState(busy)
                     Row(
                         Modifier.fillMaxWidth().height(rowHeight)
                             .graphicsLayer { translationY = lifted; shadowElevation = if (dragging) 8f else 0f }
@@ -126,13 +138,13 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                         }
                         // Long-press the handle, then drag: the row swaps with each neighbour it passes half way.
                         Icon(Icons.Outlined.DragHandle, null, tint = alpine.inkMuted, modifier = Modifier.size(44.dp).padding(10.dp)
-                            .pointerInput(item.id, busy) {
-                                if (busy) return@pointerInput
+                            .pointerInput(item.id) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { dragging = true },
                                     onDragEnd = { dragging = false; lifted = 0f },
                                     onDragCancel = { dragging = false; lifted = 0f },
                                 ) { change, amount ->
+                                    if (locked) return@detectDragGesturesAfterLongPress
                                     change.consume()
                                     lifted += amount.y
                                     val at = order.indexOfFirst { it.id == item.id }
@@ -141,7 +153,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                                 }
                             })
                     }
-                }
+                } }
             }
             Text("Page size", style = MaterialTheme.typography.titleSmall)
             val sizes = listOf(PageSize.FIT to "Fit to each image", PageSize.A4 to "A4", PageSize.LETTER to "US Letter")
@@ -159,7 +171,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                 }
             }
             OutlinedTextField(name, { typed = it }, Modifier.fillMaxWidth(), enabled = !busy, singleLine = true, label = { Text("Name") })
-            Text("Location and camera details are left out.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Text("Location, camera and other photo details are left out. The colour profile is kept.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
             when (stage) {
                 ImagesPdf.Stage.OFFER -> Text("These images are ${formatBytes(total)}. Making the PDF uses a lot of memory and may be slow on this phone.")
                 ImagesPdf.Stage.CEILING -> Text("These images are too many or too large for one PDF here: at most ${ImagesPdf.limits.maxImages} images and 256 MB.",
@@ -170,24 +182,17 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
                 Text(if (done < all) "$done of $all ${if (all == 1) "image" else "images"}" else "Saving")
                 LinearProgressIndicator(progress = { done.toFloat() / all.coerceAtLeast(1) }, modifier = Modifier.fillMaxWidth())
             }
+            // One folder for all of them, or nothing is converted (search results can mix folders).
+            val oneFolder = remember(images) { ImagesPdf.oneFolder(images) }
+            if (!oneFolder) Text(ImagesPdf.MIXED_FOLDERS, color = alpine.danger)
             failure?.let { Text(it, color = alpine.danger) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 if (busy) TextButton(onClick = { askingStop = true }) { Text("Stop") }
-                else TextButton(onClick = dismiss) { Text("Cancel") }
+                else TextButton(onClick = { model.forgetImagesPdf(); dismiss() }) { Text("Cancel") }
                 val trimmed = name.trim()
                 TextButton(
-                    enabled = !busy && stage != ImagesPdf.Stage.CEILING && trimmed.isNotEmpty() && '/' !in trimmed,
-                    onClick = {
-                        failure = null
-                        progress = 0 to order.size
-                        val picked = order.toList()
-                        job = scope.launch {
-                            val said = model.makeImagesPdf(picked, size, margin, trimmed) { done, all -> progress = done to all }
-                            job = null
-                            progress = null
-                            if (said == null) dismiss() else failure = said
-                        }
-                    },
+                    enabled = !busy && oneFolder && stage != ImagesPdf.Stage.CEILING && trimmed.isNotEmpty() && '/' !in trimmed,
+                    onClick = { model.startImagesPdf(images, order.toList(), size, margin, trimmed) },
                 ) {
                     Icon(Icons.Outlined.PictureAsPdf, null, Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
@@ -204,7 +209,7 @@ fun ImagesPdfSheet(model: DriveViewModel, state: DriveState, images: List<Opened
             TextButton(onClick = {
                 askingStop = false
                 // The run cleans up and says how it stopped; the sheet shows that.
-                job?.cancel()
+                model.stopImagesPdf()
             }) { Text("Stop", color = Alpine.colors.danger) }
         },
         dismissButton = { TextButton(onClick = { askingStop = false }) { Text("Keep going") } },

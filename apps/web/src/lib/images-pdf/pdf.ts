@@ -2,7 +2,9 @@ import {
     concatTransformationMatrix,
     drawObject,
     PDFDocument,
-    type PDFRef,
+    PDFName,
+    PDFRawStream,
+    PDFRef,
     popGraphicsState,
     pushGraphicsState,
 } from '@cantoo/pdf-lib';
@@ -30,7 +32,12 @@ export { MAX_PIXELS, PDF_MAX_BYTES };
 /* A refusal of one image, by its place in the order: `damaged:2`. The page puts it into words. */
 export class ImageRefused extends Error {
     constructor(
-        readonly reason: 'damaged' | 'unsupported' | 'heic' | 'too-many-pixels',
+        readonly reason:
+            | 'damaged'
+            | 'unsupported'
+            | 'heic'
+            | 'too-many-pixels'
+            | 'too-large-to-decode',
         readonly index: number,
     ) {
         super(`${reason}:${index}`);
@@ -114,8 +121,8 @@ export class ImagesPdf {
                       : 'DeviceRGB',
             BitsPerComponent: 8,
             Filter: 'DCTDecode',
-            // As pdf-lib and pdfkit store CMYK: complemented, which is how Adobe's JPEGs hold it.
-            ...(cut.components === 4 ? { Decode: [1, 0, 1, 0, 1, 0, 1, 0] } : {}),
+            // Adobe's CMYK is stored complemented (its APP14 says so): turned back here. Plain CMYK is not.
+            ...(cut.components === 4 && cut.adobe ? { Decode: [1, 0, 1, 0, 1, 0, 1, 0] } : {}),
         });
         this.#page(context.register(stream), cut.width, cut.height, cut.orientation);
         return cut;
@@ -126,8 +133,6 @@ export class ImagesPdf {
         const size = pngSize(bytes);
         if (!size) throw new ImageRefused('damaged', index);
         if (size.width * size.height > MAX_PIXELS) throw new ImageRefused('too-many-pixels', index);
-        // Its Flate stream is at most about its own size again; counted before it is decoded.
-        this.#grow(bytes.byteLength);
         let image;
         try {
             image = await this.doc.embedPng(bytes);
@@ -135,7 +140,21 @@ export class ImagesPdf {
         } catch {
             throw new ImageRefused('damaged', index);
         }
+        // Counted by what pdf-lib wrote, its pixels and their soft mask compressed again: a PNG's own
+        // size bounds neither (a palette or a filter expands), so the PDF stops growing here, never at save.
+        this.#grow(this.#streamBytes(image.ref));
         this.#page(image.ref, image.width, image.height, 1);
+    }
+
+    /* An image stream's bytes and its soft mask's, as written into the document. */
+    #streamBytes(ref: PDFRef) {
+        const context = this.doc.context;
+        const size = (object: unknown) =>
+            object instanceof PDFRawStream ? object.getContentsSize() : 0;
+        const image = context.lookup(ref);
+        const mask =
+            image instanceof PDFRawStream ? image.dict.get(PDFName.of('SMask')) : undefined;
+        return size(image) + (mask instanceof PDFRef ? size(context.lookup(mask)) : 0);
     }
 
     async save() {

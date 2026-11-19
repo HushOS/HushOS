@@ -270,6 +270,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // Search results stay rows whatever the choice: each needs its "In …" line.
     val grid = view == "grid" && words.isEmpty()
     val chosen = here.filter { it.id in picked }
+    // What is picked, as the list shows it (sorted, filtered, search results from folders below included): what Convert
+    // takes, in this order. Images from more than one folder are refused whole by the sheet, never converted in part.
+    val shown = items.filter { it.id in picked }
     // Whose folder this is: someone else's that this account can only view takes no adds, moves or trash.
     val owner = (current ?: state.rootId?.let { model.item(it) })?.let { ownerOf(model, state, it) } ?: Owner.ME
     val clip = state.clipboard
@@ -314,8 +317,8 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 if (owner == Owner.ME) DropdownMenuItem(text = { Text("Tags") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.Label, null) }, enabled = chosen.isNotEmpty(),
                                     onClick = { selectMenu = false; taggingMany = chosen; clearSelection() })
                                 if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Convert") }, leadingIcon = { Icon(Icons.Outlined.Transform, null) },
-                                    enabled = chosen.isNotEmpty() && chosen.all { com.hushos.app.data.ImagesPdf.takes(it) },
-                                    onClick = { selectMenu = false; convertingMany = chosen; clearSelection() })
+                                    enabled = shown.isNotEmpty() && shown.all { com.hushos.app.data.ImagesPdf.takes(it) && mayEditText(model, state, it) },
+                                    onClick = { selectMenu = false; convertingMany = shown; clearSelection() })
                                 if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Colour") }, leadingIcon = { Icon(Icons.Outlined.Palette, null) }, enabled = chosen.isNotEmpty() && chosen.all { it.isFolder },
                                     onClick = { selectMenu = false; colouringMany = chosen; clearSelection() })
                                 if (owner != Owner.ME && !family) DropdownMenuItem(text = { Text("Save a copy to my files") }, leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null) }, enabled = chosen.isNotEmpty(),

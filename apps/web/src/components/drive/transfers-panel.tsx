@@ -450,7 +450,11 @@ function RunRowView({
                             <IconAction
                                 label={`Remove ${row.title} from the list`}
                                 icon={XIcon}
-                                onClick={() => toolRunRows.remove(row.id)}
+                                onClick={() => {
+                                    toolRunRows.remove(row.id);
+                                    // Its upload goes with it, or it would come back as a row of its own.
+                                    if (row.uploadId) transfers.remove(row.uploadId);
+                                }}
                             />
                         ) : row.phase !== 'stopping' ? (
                             <IconAction
@@ -500,6 +504,7 @@ export function TransfersPanel() {
         ? { ...all, uploads: all.uploads.filter((item) => !claimed.has(item.id)) }
         : all;
     const liveRuns = runs.filter((row) => !ended(row.phase));
+    const counted = state.uploads.length + down.downloads.length;
     if (!state.uploads.length && !down.downloads.length && !runs.length) return null;
     const settled = (status: string) => status === 'done' || status === 'cancelled';
     const doneUploads = state.uploads.filter((item) => item.status === 'done').length;
@@ -518,35 +523,51 @@ export function TransfersPanel() {
     });
     // A run going is what the panel is about: its headline, unless other files move beside it.
     const run = liveRuns[0] ?? null;
-    const title = run && headline.moving === 0 ? run.title : headline.title;
-    const mode = run && headline.mode !== 'moving' ? 'moving' : headline.mode;
+    // Only runs that ended are listed (their uploads under them): the headline is theirs.
+    const endedRuns = runs.filter((row) => ended(row.phase));
+    const onlyEnded = !run && endedRuns.length > 0 && counted === 0;
+    const unmade = endedRuns.filter((row) => row.phase === 'failed').length;
+    const title = onlyEnded
+        ? unmade > 0
+            ? `${unmade === 1 ? '1 file' : `${unmade} files`} not made`
+            : `${endedRuns.length === 1 ? '1 file' : `${endedRuns.length} files`} made`
+        : run && headline.moving === 0
+          ? run.title
+          : headline.title;
+    const mode = onlyEnded
+        ? unmade > 0
+            ? 'failed'
+            : 'done'
+        : run && headline.mode !== 'moving'
+          ? 'moving'
+          : headline.mode;
     const active = headline.moving + liveRuns.length;
     const rate = state.bytesPerSecond + down.bytesPerSecond;
-    const counted = state.uploads.length + down.downloads.length;
     // Under the headline: files done of all, and the time left once the rate has settled.
-    const summary =
-        run && headline.moving === 0
-            ? run.line
-            : active > 0
-              ? [
-                    batch.files.total > 1
-                        ? `${batch.files.done} of ${batch.files.total} files`
-                        : `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
-                    // Nothing moves while offline, so no estimate.
-                    offline
-                        ? null
-                        : timeLeft !== null
-                          ? formatTimeLeft(timeLeft)
-                          : rate > 0
-                            ? formatRate(rate)
-                            : null,
-                ]
-                    .filter(Boolean)
-                    .join(' · ')
-              : // Waiting for a key change: nothing to count yet; each row says what it waits for.
-                mode === 'waiting'
-                ? null
-                : `${doneUploads + doneDownloads} of ${counted} files`;
+    const summary = onlyEnded
+        ? null
+        : run && headline.moving === 0
+          ? run.line
+          : active > 0
+            ? [
+                  batch.files.total > 1
+                      ? `${batch.files.done} of ${batch.files.total} files`
+                      : `${formatBytes(batch.bytes.loaded)} of ${formatBytes(batch.bytes.total)}`,
+                  // Nothing moves while offline, so no estimate.
+                  offline
+                      ? null
+                      : timeLeft !== null
+                        ? formatTimeLeft(timeLeft)
+                        : rate > 0
+                          ? formatRate(rate)
+                          : null,
+              ]
+                  .filter(Boolean)
+                  .join(' · ')
+            : // Waiting for a key change: nothing to count yet; each row says what it waits for.
+              mode === 'waiting'
+              ? null
+              : `${doneUploads + doneDownloads} of ${counted} files`;
     // Failed items first: the reason the panel is still open is what to look at.
     const uploadRows = [
         ...state.uploads.filter((item) => item.status === 'failed'),
@@ -564,6 +585,9 @@ export function TransfersPanel() {
     function removeEverything() {
         for (const item of state.uploads) transfers.remove(item.id);
         for (const item of down.downloads) downloads.remove(item.id);
+        // Finished runs' uploads, which the rows above leave out, go with their runs.
+        for (const row of runs)
+            if (ended(row.phase) && row.uploadId) transfers.remove(row.uploadId);
         toolRunRows.clearFinished();
     }
     async function cancelEverything() {

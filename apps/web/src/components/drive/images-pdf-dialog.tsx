@@ -246,7 +246,8 @@ function ImagesPdfForm({
                     maxLength={255}
                 />
                 <p className="text-sm text-muted-foreground">
-                    Location and camera details are left out.
+                    Location, camera and other photo details are left out. The colour profile is
+                    kept.
                 </p>
                 {stage === 'offer' && (
                     <p className="text-sm">

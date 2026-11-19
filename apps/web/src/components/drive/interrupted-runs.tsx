@@ -20,26 +20,35 @@ import { answerInterrupted, useInterruptedRuns } from '@/lib/interrupted-runs';
 export function InterruptedRuns() {
     const queryClient = useQueryClient();
     const rows = useInterruptedRuns();
-    // The row answered: the dialog's closing must not answer it a second time.
-    const answered = useRef<string | null>(null);
+    // An answer on its way: a second click waits for it. Only while it is in flight, so a row the
+    // journal offers again (after `busy` or `left`) can be answered again.
+    const inFlight = useRef<string | null>(null);
     const row = rows[0];
     if (!row) return null;
     const count = row.nodeIds.length;
     async function answer(choice: 'delete' | 'keep') {
-        if (answered.current === row!.id) return;
-        answered.current = row!.id;
-        const outcome = await answerInterrupted(queryClient, row!, choice).catch(
-            () => 'left' as const,
-        );
-        const unfinished = outcome === 'left' || outcome === 'busy' || outcome === 'not-recorded';
-        if (unfinished)
-            toast.add({
-                type: 'error',
-                title:
-                    choice === 'delete'
-                        ? 'Not everything it made could be deleted. You’ll be asked again next time.'
-                        : 'This couldn’t be recorded. You’ll be asked again next time.',
-            });
+        if (inFlight.current === row!.id) return;
+        inFlight.current = row!.id;
+        try {
+            const outcome = await answerInterrupted(queryClient, row!, choice).catch(
+                () => 'left' as const,
+            );
+            if (outcome === 'no-access')
+                toast.add({
+                    type: 'error',
+                    title: 'You can no longer change that folder, so what was made may still be there.',
+                });
+            else if (outcome === 'left' || outcome === 'busy' || outcome === 'not-recorded')
+                toast.add({
+                    type: 'error',
+                    title:
+                        choice === 'delete'
+                            ? 'Not everything it made could be deleted. You’ll be asked again next time.'
+                            : 'This couldn’t be recorded. You’ll be asked again next time.',
+                });
+        } finally {
+            inFlight.current = null;
+        }
     }
     return (
         // Closed only by an answer: each button says which.

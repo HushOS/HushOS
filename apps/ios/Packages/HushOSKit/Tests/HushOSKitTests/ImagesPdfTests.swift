@@ -143,6 +143,20 @@ import UniformTypeIdentifiers
         }
     }
 
+    @Test func aLargeImageIsReadInPiecesTheCoreAccepts() throws {
+        // The core refuses one read past 64 MiB: a 70 MiB image must arrive in pieces, whole and in order.
+        let size: UInt64 = 70 << 20
+        var longest: UInt64 = 0
+        let data = try ImagesPdf.readWhole(size: size) { offset, length in
+            guard length <= 64 << 20 else { throw ImagesPdfRefused("The read was too long.") }
+            longest = max(longest, length)
+            return Data(repeating: UInt8((offset >> 20) & 0xFF), count: Int(length))
+        }
+        #expect(data.count == Int(size))
+        #expect(longest <= ImagesPdf.readPiece)
+        #expect(data[Int(65 << 20)] == 64 && data[Int(size) - 1] == 64, "each piece where it was read from")
+    }
+
     @Test func limitsNamesAndPaper() {
         #expect(ImagesPdf.stage(count: 3, bytes: 64 << 20) == .fine)
         #expect(ImagesPdf.stage(count: 3, bytes: (64 << 20) + 1) == .offer)

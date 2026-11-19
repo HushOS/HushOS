@@ -33,6 +33,10 @@ export type ImagesPdfJob = {
 
 const THUMBNAIL_EDGE = 512;
 
+/* Images from more than one folder (search results can hold them): refused, never converted in part. */
+export const MIXED_FOLDERS =
+    'These images are in different folders. Make a PDF from one folder at a time.';
+
 /* The person's words for each refusal the worker may send, image by image. */
 export function imagesPdfRefusals(names: readonly string[]): Record<string, string> {
     const words: Record<string, string> = {
@@ -45,6 +49,8 @@ export function imagesPdfRefusals(names: readonly string[]): Record<string, stri
         words[`heic:${index}`] =
             `This browser can’t open HEIC photos such as “${name}”. Use Safari, or HushOS on your phone.`;
         words[`too-many-pixels:${index}`] = `“${name}” is too large to put in a PDF here.`;
+        words[`too-large-to-decode:${index}`] =
+            `“${name}” is too large to convert here. Save it as a JPEG or PNG first.`;
     });
     return words;
 }
@@ -84,6 +90,14 @@ export async function makeImagesPdf(queryClient: QueryClient, job: ImagesPdfJob)
     );
     const total = job.images.reduce((sum, node) => sum + (nodeSize(node) ?? 0), 0);
     try {
+        // The PDF goes beside its images: all of them in this one folder, or none is converted.
+        if (
+            job.images.some(
+                (node) =>
+                    node.parentId !== job.folder.id || node.workspaceId !== job.folder.workspaceId,
+            )
+        )
+            throw new Error(MIXED_FOLDERS);
         save = await startSaveRun(queryClient, {
             targets: [job.folder],
             results: [{ sourcesSize: total }],

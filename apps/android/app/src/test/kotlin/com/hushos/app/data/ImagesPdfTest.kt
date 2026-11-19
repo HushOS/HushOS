@@ -1,8 +1,10 @@
 package com.hushos.app.data
 
+import com.hushos.core.NodeMetadata
 import com.hushos.core.PageSize
 import com.hushos.core.RunControl
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,6 +98,82 @@ class ImagesPdfTest {
     }
 
     @Test
+    fun aLargeImageIsReadInPiecesTheCoreAccepts() {
+        // The core refuses one read past 64 MiB: a 70 MiB image must arrive in pieces, whole and in order.
+        val size = 70L shl 20
+        var longest = 0L
+        val bytes = ImagesPdf.readWhole(size) { offset, length ->
+            if (length > (64L shl 20)) throw ToolFailed("The read was too long.")
+            longest = maxOf(longest, length)
+            ByteArray(length.toInt()) { (offset shr 20).toByte() }
+        }
+        assertEquals(size.toInt(), bytes.size)
+        assertTrue(longest <= ImagesPdf.READ_PIECE)
+        assertEquals("each piece where it was read from", 64.toByte(), bytes[(65 shl 20)])
+    }
+
+    /* A folder as the save path sees it: files land when their upload completes, and go when purged. */
+    private class Shelf : SaveRunWriter {
+        override val account: String? = "me"
+        val files = mutableMapOf<String, String>()
+        /* Run as the upload lands, before its completion: what a Stop pressed then does. */
+        var whileLanding: () -> Unit = {}
+        /* Run once it has landed, before the save path hears of it. */
+        var afterLanding: () -> Unit = {}
+        private var count = 0
+        override fun refusal(target: Opened): String? = null
+        override fun room(workspaceId: String): SaveRoom = SaveRoom.Own(1L shl 40)
+        override fun names(folder: Opened): List<String> = files.values.toList()
+        override fun makeFolder(folder: Opened, name: String, copy: Prior?, minted: (String) -> Unit): Opened = error("not asked")
+        override fun uploadResult(bytes: ByteArray, name: String, mime: String?, folder: Opened, replacing: Opened?, startedFrom: String?, copy: Prior?,
+                                  thumbnail: ByteArray?, onBegun: (Vault.BegunIds) -> Unit, onCompleting: (String) -> Unit): Opened {
+            val n = ++count
+            val id = "n$n"
+            onBegun(Vault.BegunIds("ws", "up-$n", id, "v$n"))
+            whileLanding()
+            onCompleting("up-$n")
+            files[id] = name
+            afterLanding()
+            return Opened(NodeView(id, "ws", "f", "file", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata(name, mime, null, null, emptyMap()))
+        }
+        override fun fresh(file: Opened, folder: Opened): Opened? = null
+        override fun lookFolder(id: String, workspaceId: String): FolderCount? = null
+        override fun refreshFolder(folder: Opened): Opened = folder
+        override fun abortUpload(uploadId: String, workspaceId: String) = SaveAbortFate.ABORTED
+        override fun trash(ids: List<String>, workspaceId: String) = ids.associateWith { files.remove(it); SaveItemFate.DONE }
+        override fun purge(ids: List<String>, workspaceId: String) = ids.associateWith { files.remove(it); SaveItemFate.DONE }
+        override fun mayPurge(workspaceId: String): Boolean? = true
+    }
+
+    private val folder = Opened(NodeView("f", "ws", "root", "folder", 1uL, 1uL, "", 1uL, "", null, null, null, null), NodeMetadata("f", null, null, null, emptyMap()))
+
+    /* What a Stop at `when` leaves in the folder: the save, then (as make does on any failure) the run's cancel. */
+    private fun stopWhileSaving(stopAt: (Shelf, () -> Unit) -> Unit): Map<String, String> {
+        val shelf = Shelf()
+        var on = true
+        stopAt(shelf) { on = false }
+        val journal = SaveRunJournal(Files.createTempDirectory("images-pdf").resolve(SaveRunJournal.FILE).toFile(), SaveRunJournal.Epoch())
+        val run = SaveRun.start(shelf, listOf(folder), listOf(com.hushos.core.PlannedResult.FromSources(1uL, false)), journal)
+        try {
+            ImagesPdf.saveMade(run, ImagesPdf.Made(byteArrayOf(1, 2, 3), null), "Trip.pdf", SaveSources.OwnWriting, folder) { on }
+            fail("saved though stopped")
+        } catch (_: Exception) {
+            run.cancel()
+        }
+        return shelf.files
+    }
+
+    @Test
+    fun stopWhileTheUploadIsOnItsWayLeavesNothing() {
+        assertEquals(emptyMap<String, String>(), stopWhileSaving { shelf, stop -> shelf.whileLanding = stop })
+    }
+
+    @Test
+    fun stopJustAfterThePdfLandedRemovesIt() {
+        assertEquals(emptyMap<String, String>(), stopWhileSaving { shelf, stop -> shelf.afterLanding = stop })
+    }
+
+    @Test
     fun limitsNamesAndPaper() {
         assertEquals(ImagesPdf.Stage.FINE, ImagesPdf.stage(3, 64L shl 20))
         assertEquals(ImagesPdf.Stage.OFFER, ImagesPdf.stage(3, (64L shl 20) + 1))
@@ -107,5 +185,7 @@ class ImagesPdfTest {
         assertEquals(PageSize.LETTER, ImagesPdf.defaultSize("CA"))
         assertEquals(PageSize.A4, ImagesPdf.defaultSize("FR"))
         assertEquals(67_108_864L, ImagesPdf.maxPixels(4L shl 30))
+        // A 256 MiB heap holds a decoded image of a third of it at four bytes a pixel, whatever the device's memory.
+        assertEquals((256L shl 20) / 12, ImagesPdf.maxPixels(8L shl 30, 256L shl 20))
     }
 }

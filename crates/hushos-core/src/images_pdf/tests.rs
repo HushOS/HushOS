@@ -248,7 +248,8 @@ fn disc(premultiplied: bool) -> (Vec<u8>, u32, u32) {
 fn core_made() -> Vec<u8> {
     let control = RunControl::new(30_000, None);
     let writer = ImagesPdfWriter::new(PageSize::A4, true);
-    for name in ["page-1.jpg", "phone-rotated.jpg", "adobe-cmyk.jpg", "grey.jpg", "gps.jpg"] {
+    for name in ["page-1.jpg", "phone-rotated.jpg", "adobe-cmyk.jpg", "grey.jpg", "gps.jpg", "plain-cmyk.jpg"]
+    {
         writer.add_jpeg(fixture(name), control.clone()).unwrap();
     }
     let (rgba, width, height) = disc(true);
@@ -262,7 +263,8 @@ fn the_pdf_holds_each_cut_jpeg_byte_for_byte_and_nothing_it_cut() {
     assert!(pdf.starts_with(b"%PDF-1.7\n"));
     assert!(pdf.ends_with(b"%%EOF\n"));
     let found = objects(&pdf);
-    for name in ["page-1.jpg", "phone-rotated.jpg", "adobe-cmyk.jpg", "grey.jpg", "gps.jpg"] {
+    for name in ["page-1.jpg", "phone-rotated.jpg", "adobe-cmyk.jpg", "grey.jpg", "gps.jpg", "plain-cmyk.jpg"]
+    {
         let cut = cut_jpeg(&fixture(name)).unwrap();
         let stream = found
             .iter()
@@ -272,9 +274,11 @@ fn the_pdf_holds_each_cut_jpeg_byte_for_byte_and_nothing_it_cut() {
             .find(|(_, data)| *data == cut.bytes);
         let (dictionary, _) = stream.unwrap_or_else(|| panic!("{name} is not in the PDF as cut"));
         assert!(dictionary.contains(&format!("/Width {} /Height {}", cut.width, cut.height)), "{name}");
+        // Only Adobe's complemented CMYK is turned back by /Decode; plain CMYK reads as it is.
         let space = match cut.components {
             1 => "/DeviceGray /Bits",
-            4 => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]",
+            4 if cut.adobe => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]",
+            4 => "/DeviceCMYK /Bits",
             _ => "/DeviceRGB /Bits",
         };
         assert!(dictionary.contains(space), "{name}: {dictionary}");
@@ -282,7 +286,7 @@ fn the_pdf_holds_each_cut_jpeg_byte_for_byte_and_nothing_it_cut() {
     assert_eq!(leaks(&pdf), Vec::<String>::new());
     assert!(!contains(&pdf, b"/Info"), "no document information");
     let tree = found.iter().find(|(number, _)| *number == PAGE_TREE).unwrap();
-    assert!(String::from_utf8_lossy(&tree.1).contains("/Count 6"));
+    assert!(String::from_utf8_lossy(&tree.1).contains("/Count 7"));
 }
 
 #[test]
@@ -292,8 +296,8 @@ fn pages_turn_to_their_images_and_the_rotated_photo_stands_up() {
     let landscape = format!("0 0 {} {}", a4.1, a4.0);
     // page-1 is 300x200 (landscape); the phone photo is stored 300x400 and shown 400x300
     // (landscape: its orientation 6 is applied); the CMYK one 200x120; grey 120x90; gps 240x160;
-    // the disc 64x48.
-    assert_eq!(page_boxes(&pdf), vec![landscape; 6]);
+    // plain-cmyk 200x120; the disc 64x48.
+    assert_eq!(page_boxes(&pdf), vec![landscape; 7]);
     let drawings: Vec<String> = objects(&pdf)
         .into_iter()
         .filter_map(|(_, body)| {

@@ -110,7 +110,9 @@ test.afterAll(async () => {
 test('three images reordered make a three-page PDF in that order', async () => {
     await onePdf(page, ['page-1.jpg', 'page-2.jpg', 'page-3.jpg']);
     const form = dialog(page);
-    await expect(form).toContainText('Location and camera details are left out.');
+    await expect(form).toContainText(
+        'Location, camera and other photo details are left out. The colour profile is kept.',
+    );
     const name = form.getByRole('textbox', { name: 'Name' });
     await expect(name).toHaveValue('page-1.pdf');
     // page-3 to the front with its own button (the keyboard's way), then page-1 to the end.
@@ -214,9 +216,12 @@ test('a run cancelled while its PDF uploads leaves nothing', async () => {
     // Nothing of it on the server either: no node named by an open upload, no upload left open.
     const database = new SQL(e2eDatabase().url);
     try {
+        // This account's workspace only, from the held part's object key: other files run in parallel.
+        const workspace = /\/ws\/([0-9a-f-]{36})\//.exec(held[0]!.request().url())?.[1];
+        expect(workspace).toBeTruthy();
         const open = await database`
             select count(*)::int as n from drive_uploads
-            where status in ('open', 'completing') and created_at > ${new Date(started)}`;
+            where workspace_id = ${workspace!} and status in ('open', 'completing')`;
         expect(open[0].n).toBe(0);
     } finally {
         await database.close();
@@ -239,70 +244,83 @@ function storage() {
 }
 
 test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the private file system or the profile', async () => {
-    const canaries = [PDF_CANARY.toString('latin1'), SOURCE_CANARY.toString('latin1')];
-    const found = await page.evaluate(async (needles) => {
-        const hits: string[] = [];
-        const holds = (bytes: ArrayBuffer | ArrayBufferView) => {
-            const text = new TextDecoder('latin1').decode(
-                bytes instanceof ArrayBuffer
-                    ? bytes
-                    : new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
-            );
-            return needles.some((needle) => text.includes(needle));
-        };
-        const visit = async (value: unknown, where: string, depth = 0): Promise<void> => {
-            if (depth > 8 || value === null || value === undefined) return;
-            if (typeof value === 'string') {
-                if (needles.some((needle) => value.includes(needle))) hits.push(where);
-            } else if (value instanceof Blob) {
-                if (holds(await value.arrayBuffer())) hits.push(where);
-            } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
-                if (holds(value)) hits.push(where);
-            } else if (typeof value === 'object')
-                for (const inner of Object.values(value as Record<string, unknown>))
-                    await visit(inner, where, depth + 1);
-        };
-        for (const info of await indexedDB.databases()) {
-            if (!info.name) continue;
-            const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                const request = indexedDB.open(info.name!);
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
-            });
-            for (const store of db.objectStoreNames) {
-                const values = await new Promise<unknown[]>((resolve, reject) => {
-                    const request = db.transaction(store).objectStore(store).getAll();
+    // Byte for byte: a browser's 'latin1' decoder is Windows-1252, which would miss bytes 0x80 to 0x9F.
+    const canaries = [[...PDF_CANARY], [...SOURCE_CANARY]];
+    const scan = () =>
+        page.evaluate(async (needles) => {
+            const hits: string[] = [];
+            const holds = (data: ArrayBuffer | ArrayBufferView) => {
+                const bytes =
+                    data instanceof ArrayBuffer
+                        ? new Uint8Array(data)
+                        : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+                return needles.some((needle) => {
+                    outer: for (let i = 0; i + needle.length <= bytes.length; i++) {
+                        for (let j = 0; j < needle.length; j++)
+                            if (bytes[i + j] !== needle[j]) continue outer;
+                        return true;
+                    }
+                    return false;
+                });
+            };
+            // A string holds bytes as code points 0 to 255, as a page that kept them in one would.
+            const asText = needles.map((needle) => String.fromCharCode(...needle));
+            const visit = async (value: unknown, where: string, depth = 0): Promise<void> => {
+                if (depth > 8 || value === null || value === undefined) return;
+                if (typeof value === 'string') {
+                    if (asText.some((needle) => value.includes(needle))) hits.push(where);
+                } else if (value instanceof Blob) {
+                    if (holds(await value.arrayBuffer())) hits.push(where);
+                } else if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+                    if (holds(value)) hits.push(where);
+                } else if (typeof value === 'object')
+                    for (const inner of Object.values(value as Record<string, unknown>))
+                        await visit(inner, where, depth + 1);
+            };
+            for (const info of await indexedDB.databases()) {
+                if (!info.name) continue;
+                const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                    const request = indexedDB.open(info.name!);
                     request.onsuccess = () => resolve(request.result);
                     request.onerror = () => reject(request.error);
                 });
-                for (const value of values) await visit(value, `idb ${info.name}/${store}`);
+                for (const store of db.objectStoreNames) {
+                    const values = await new Promise<unknown[]>((resolve, reject) => {
+                        const request = db.transaction(store).objectStore(store).getAll();
+                        request.onsuccess = () => resolve(request.result);
+                        request.onerror = () => reject(request.error);
+                    });
+                    for (const value of values) await visit(value, `idb ${info.name}/${store}`);
+                }
+                db.close();
             }
-            db.close();
-        }
-        for (const name of await caches.keys()) {
-            const cache = await caches.open(name);
-            for (const request of await cache.keys()) {
-                const response = await cache.match(request);
-                if (response && holds(await response.arrayBuffer()))
-                    hits.push(`cache ${name} ${request.url}`);
+            for (const name of await caches.keys()) {
+                const cache = await caches.open(name);
+                for (const request of await cache.keys()) {
+                    const response = await cache.match(request);
+                    if (response && holds(await response.arrayBuffer()))
+                        hits.push(`cache ${name} ${request.url}`);
+                }
             }
-        }
-        const walk = async (dir: FileSystemDirectoryHandle, path: string) => {
-            for await (const [name, handle] of (
-                dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }
-            ).entries()) {
-                if (handle.kind === 'directory')
-                    await walk(handle as FileSystemDirectoryHandle, `${path}/${name}`);
-                else if (
-                    holds(await (await (handle as FileSystemFileHandle).getFile()).arrayBuffer())
-                )
-                    hits.push(`opfs ${path}/${name}`);
-            }
-        };
-        const root = await navigator.storage.getDirectory().catch(() => null);
-        if (root) await walk(root, '');
-        return hits;
-    }, canaries);
+            const walk = async (dir: FileSystemDirectoryHandle, path: string) => {
+                for await (const [name, handle] of (
+                    dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }
+                ).entries()) {
+                    if (handle.kind === 'directory')
+                        await walk(handle as FileSystemDirectoryHandle, `${path}/${name}`);
+                    else if (
+                        holds(
+                            await (await (handle as FileSystemFileHandle).getFile()).arrayBuffer(),
+                        )
+                    )
+                        hits.push(`opfs ${path}/${name}`);
+                }
+            };
+            const root = await navigator.storage.getDirectory().catch(() => null);
+            if (root) await walk(root, '');
+            return hits;
+        }, canaries);
+    const found = await scan();
     expect(found).toEqual([]);
 
     // Every object written since this file began, the PDFs' among them: ciphertext only.
@@ -328,7 +346,7 @@ test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the
 
     // The browser's own files on disk (a Blob paged out would land here); downloads are kept apart.
     const hits: string[] = [];
-    const scan = (dir: string) => {
+    const scanDisk = (dir: string) => {
         let names: string[] = [];
         try {
             names = readdirSync(dir);
@@ -339,7 +357,7 @@ test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the
             const path = join(dir, name);
             try {
                 const info = lstatSync(path);
-                if (info.isDirectory()) scan(path);
+                if (info.isDirectory()) scanDisk(path);
                 else if (info.isFile()) {
                     const bytes = readFileSync(path);
                     if (bytes.includes(PDF_CANARY) || bytes.includes(SOURCE_CANARY))
@@ -350,6 +368,43 @@ test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the
             }
         }
     };
-    scan(profile!);
+    scanDisk(profile!);
     expect(hits).toEqual([]);
+    // Last, once nothing was found anywhere: the scanner finds what it looks for (planted after the disk scan,
+    // which a database's own log on disk would otherwise trip): the PDF's bytes planted in IndexedDB and the private file system.
+    await page.evaluate(
+        async (bytes) => {
+            const planted = new Uint8Array(bytes);
+            await new Promise<void>((resolve, reject) => {
+                const request = indexedDB.open('hushos-canary-probe');
+                request.onupgradeneeded = () => request.result.createObjectStore('probe');
+                request.onsuccess = () => {
+                    const tx = request.result.transaction('probe', 'readwrite');
+                    tx.objectStore('probe').put({ bytes: planted }, 'one');
+                    tx.oncomplete = () => (request.result.close(), resolve());
+                    tx.onerror = () => reject(tx.error);
+                };
+                request.onerror = () => reject(request.error);
+            });
+            const root = await navigator.storage.getDirectory().catch(() => null);
+            if (root) {
+                const writable = await (
+                    await root.getFileHandle('canary-probe', { create: true })
+                ).createWritable();
+                await writable.write(planted);
+                await writable.close();
+            }
+        },
+        [...PDF_CANARY],
+    );
+    const planted = await scan();
+    expect(planted).toContain('idb hushos-canary-probe/probe');
+    await page.evaluate(async () => {
+        await new Promise((resolve) => {
+            const request = indexedDB.deleteDatabase('hushos-canary-probe');
+            request.onsuccess = request.onerror = request.onblocked = resolve;
+        });
+        const root = await navigator.storage.getDirectory().catch(() => null);
+        await root?.removeEntry('canary-probe').catch(() => {});
+    });
 });

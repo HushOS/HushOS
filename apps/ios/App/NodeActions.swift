@@ -229,7 +229,7 @@ struct NodeMenu: View {
             }
             if !mine && !family { Button("Save a copy to my files", systemImage: "plus.square.on.square") { Task { await store.saveCopy(item) } } }
             // A new file beside it: only where this person may add one.
-            if canEdit && ImagesPdf.takes(item) {
+            if ImagesPdf.takes(item) && store.mayEdit(item) {
                 Menu("Convert", systemImage: "photo.on.rectangle") {
                     Button("One PDF", systemImage: "doc.richtext") { action = .onePdf([item]) }
                 }

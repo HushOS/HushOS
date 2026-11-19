@@ -322,6 +322,21 @@ def main():
         note="CMYK with the Adobe marker kept, EXIF dropped",
     )
 
+    # CMYK without the Adobe marker: samples in the plain sense (ink 0 is none), as some tools
+    # write it. Pillow stores Adobe's complemented samples, so the picture is complemented first
+    # and the marker left out: the file then reads right without it.
+    from PIL import ImageChops
+
+    plain_cmyk = encode(ImageChops.invert(upright(200, 120, "CMYK")))
+    segments, scan = split(plain_cmyk)
+    no_adobe = Fixture().add(b"\xff\xd8", True)
+    for segment in segments:
+        if segment[1] != 0xEE:
+            no_adobe.add(segment, kept_header(segment))
+    no_adobe.add(exif(), False)
+    no_adobe.add(scan, True)
+    ok("plain-cmyk.jpg", no_adobe, note="CMYK without the Adobe marker: not complemented")
+
     ok("grey.jpg", from_libjpeg(encode(upright(120, 90, "L")), [(exif(), False)]), note="one component")
 
     comment = seg(0xFE, b"Shot on a " + CANARY_COMMENT)
@@ -452,6 +467,9 @@ def main():
     ImageDraw.Draw(alpha).ellipse([4, 4, 59, 43], fill=(200, 30, 30, 255))
     alpha.save(os.path.join(HERE, "alpha.png"))
     photo.save(os.path.join(HERE, "photo.webp"), "WEBP", quality=90)
+    photo.save(os.path.join(HERE, "photo-lossless.webp"), "WEBP", lossless=True)
+    photo.save(os.path.join(HERE, "photo.gif"), "GIF")
+    photo.save(os.path.join(HERE, "photo.bmp"), "BMP")
 
     with open(os.path.join(HERE, "expected.json"), "w") as f:
         json.dump(

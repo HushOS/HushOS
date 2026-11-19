@@ -75,7 +75,10 @@ export type ToPage =
     | { type: 'fail'; code: string | null };
 
 /* Over a source's port. */
-export type RangeRequest = { type: 'read'; id: number; offset: number; length: number };
+export type RangeRequest =
+    | { type: 'read'; id: number; offset: number; length: number }
+    /* The worker will read this source no more: the page closes it now rather than at the run's end. */
+    | { type: 'done' };
 export type RangeAnswer =
     | { type: 'data'; id: number; bytes: ArrayBuffer }
     | { type: 'fail'; id: number; message: string };

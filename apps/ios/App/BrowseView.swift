@@ -638,7 +638,7 @@ private struct SelectBar: View {
                 Menu("Convert", systemImage: "photo.on.rectangle") {
                     Button("One PDF", systemImage: "doc.richtext") { action = .onePdf(items); done() }
                 }
-                .disabled(!items.allSatisfy { ImagesPdf.takes($0) && store.role(of: $0) != .viewer })
+                .disabled(!items.allSatisfy { ImagesPdf.takes($0) && store.mayEdit($0) })
             } label: {
                 label("More", "ellipsis")
             }

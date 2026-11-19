@@ -106,55 +106,115 @@ object ImagesPdf {
         }
     }
 
+    /* Images from more than one folder (search results can hold them): refused, never converted in part. */
+    const val MIXED_FOLDERS = "These images are in different folders. Make a PDF from one folder at a time."
+
+    /* Whether every image is in one folder of one workspace, where the PDF goes. */
+    fun oneFolder(images: List<Opened>): Boolean {
+        val first = images.firstOrNull() ?: return false
+        return images.all { it.node.parentId == first.node.parentId && it.node.workspaceId == first.node.workspaceId }
+    }
+
+    /* The most one read asks of a version reader: the core refuses a read past 64 MiB. */
+    const val READ_PIECE: Long = 8L shl 20
+
+    /* A file's `size` bytes, read in pieces of at most `piece`, never in one read the core would refuse. */
+    fun readWhole(size: Long, piece: Long = READ_PIECE, read: (offset: Long, length: Long) -> ByteArray): ByteArray {
+        val out = ByteArray(Math.toIntExact(size))
+        var offset = 0L
+        while (offset < size) {
+            val part = read(offset, minOf(piece, size - offset))
+            if (part.isEmpty()) throw ToolFailed()
+            part.copyInto(out, offset.toInt())
+            offset += part.size
+        }
+        return out
+    }
+
+    /*
+     * The most pixels one image may be decoded to here: the core's cap from the device's memory, and
+     * what the app's own heap holds, since the decoded RGBA is a Java array beside the image's file and
+     * the PDF so far: a third of the heap for it, at four bytes a pixel.
+     */
+    fun maxPixels(deviceMemory: Long, heapBytes: Long): Long = minOf(maxPixels(deviceMemory), heapBytes / 3 / 4)
+
+    /* A PDF's charge in ToolRuns.budget: taken on the run's thread, given back exactly once, however the run ends. */
+    class Lease {
+        private val held = AtomicReference<Pair<ULong, ULong>?>(null)
+        fun take(bytes: ULong, generation: ULong) = held.set(bytes to generation)
+        fun release() {
+            held.getAndSet(null)?.let { (bytes, generation) -> ToolRuns.budget.release(bytes, generation) }
+        }
+    }
+
+    /* Stopped (Stop, or the sheet's work cancelled) after the PDF landed: the run's clean-up removes it. */
+    class StoppedWhileSaving : Exception("Stopped.")
+
+    /*
+     * The made PDF saved in `run` as a new file, unless `stillOn` turns false first (Stop): then its
+     * upload is never completed (holdTo), and one that landed just before is refused here, so the
+     * caller's cancel of the run removes it. Nothing stays that the person stopped.
+     */
+    fun saveMade(run: SaveRun, made: Made, name: String, sources: SaveSources, folder: Opened, stillOn: () -> Boolean): Opened {
+        run.holdTo(stillOn)
+        val saved = run.file(made.pdf, name, "application/pdf", sources, made.thumbnail, folder)
+        if (!stillOn()) throw StoppedWhileSaving()
+        TextSave.end(run)
+        return saved
+    }
+
     /*
      * One PDF of `images` into `folder` as `name` (the next free one there): the room checked and the
      * run recorded first, the PDF built in a tool run, then saved. Blocking but for the run, which
-     * suspends; call it from a coroutine on Dispatchers.IO. Any failure, a cancel included, cleans up
-     * what was made and throws: SaveRefused (nothing was started), ImagesPdfRefused, CancellationException
-     * (after the clean-up), ToolFailed or SaveRunStopped.
+     * suspends; call it from a coroutine on Dispatchers.IO. Any failure, a cancel included (through the
+     * upload: `stillOn` is the calling job), cleans up what was made and throws: SaveRefused (nothing was
+     * started), ImagesPdfRefused, NotAuthenticated (a 401 under a read), CancellationException (after the
+     * clean-up), ToolFailed or SaveRunStopped.
      */
     suspend fun make(writer: VaultSaveWriter, vault: Vault, journal: SaveRunJournal, images: List<Opened>, folder: Opened,
-                     size: PageSize, margin: Boolean, name: String, deviceMemory: Long,
+                     size: PageSize, margin: Boolean, name: String, deviceMemory: Long, heapBytes: Long,
                      progress: (Int, Int) -> Unit = { _, _ -> }, stopped: (SaveRunStopped) -> Unit = {}): Opened {
+        if (!oneFolder(images) || images.any { it.node.parentId != folder.id }) throw ImagesPdfRefused(MIXED_FOLDERS)
+        val job = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+        val stillOn = { job?.isActive != false }
         val total = images.sumOf { it.size ?: 0L }
         val run = SaveRun.start(writer, listOf(folder), listOf(PlannedResult.FromSources(total.toULong(), true)), journal)
+        val lease = Lease()
         try {
             val sources = SaveSources.From(images.flatMap { (writer.copySources(it) as SaveSources.From).sources })
             val refusal = AtomicReference<ImagesPdfRefused?>(null)
-            val maxPixels = maxPixels(deviceMemory)
-            val counted = try {
+            // A 401 renewing an address mid-read: thrown as itself, for the session check, not as the core's read failure.
+            val session = AtomicReference<NotAuthenticated?>(null)
+            val maxPixels = maxPixels(deviceMemory, heapBytes)
+            val made = try {
                 ToolRuns.shared.run("Making $name") { control ->
                     try {
                         val made = build(images.map { it.name }, size, margin, maxPixels, control, read = { index ->
-                            val reader = vault.toolReader(images[index], control)
-                            reader.readAt(0uL, reader.size())
+                            val reader = vault.toolReader(images[index], control, refused = session)
+                            readWhole(reader.size().toLong()) { offset, length -> reader.readAt(offset.toULong(), length.toULong()) }
                         }, progress = { progress(it, images.size) })
                         // Waits while the process holds 512 MB of results not yet uploaded.
-                        made to ToolRuns.budget.produce(made.pdf.size.toULong(), control)
+                        lease.take(made.pdf.size.toULong(), ToolRuns.budget.produce(made.pdf.size.toULong(), control))
+                        made
                     } catch (refused: ImagesPdfRefused) {
                         refusal.set(refused)
                         throw refused
                     }
                 }
             } catch (error: ToolFailed) {
-                throw refusal.get() ?: error
+                throw session.get() ?: refusal.get() ?: error
             }
-            val (made, generation) = counted
-            try {
-                progress(images.size, images.size)
-                val saved = run.file(made.pdf, name, "application/pdf", sources, made.thumbnail, folder)
-                TextSave.end(run)
-                return saved
-            } finally {
-                // Its room in the budget goes back once the save has it, saved or not.
-                ToolRuns.budget.release(made.pdf.size.toULong(), generation)
-            }
+            progress(images.size, images.size)
+            return saveMade(run, made, name, sources, folder, stillOn)
         } catch (error: Throwable) {
             // How it stopped is said even when the caller was cancelled, which rethrows the cancel itself.
             val how = run.cancel()
             stopped(how)
-            if (error is kotlinx.coroutines.CancellationException) throw how
+            if (error is kotlinx.coroutines.CancellationException || error is StoppedWhileSaving) throw how
             throw error
+        } finally {
+            // Its room in the budget goes back once the save has it, or the run ended without it.
+            lease.release()
         }
     }
 
@@ -190,25 +250,35 @@ object ImagesPdf {
                 throw Refused("damaged")
             }
             try {
+                // Opaque and not a PNG: compressed straight from the bitmap, no copy of its pixels on the heap.
+                if (!isPng(bytes) && !transparent(bitmap)) return Decoded.Jpeg(jpeg(bitmap))
                 val argb = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap else bitmap.copy(Bitmap.Config.ARGB_8888, false)
                     ?: throw Refused("damaged")
                 val rgba = ByteArray(argb.width * argb.height * 4)
                 // ARGB_8888 is R, G, B, A in memory.
                 argb.copyPixelsToBuffer(ByteBuffer.wrap(rgba))
                 if (argb !== bitmap) argb.recycle()
-                var transparent = false
-                var i = 3
-                while (i < rgba.size) {
-                    if (rgba[i] != 0xFF.toByte()) { transparent = true; break }
-                    i += 4
-                }
-                if (isPng(bytes) || transparent) return Decoded.Pixels(rgba, bitmap.width, bitmap.height)
-                val out = ByteArrayOutputStream()
-                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)) throw Refused("damaged")
-                return Decoded.Jpeg(out.toByteArray())
+                return Decoded.Pixels(rgba, bitmap.width, bitmap.height)
             } finally {
                 bitmap.recycle()
             }
+        }
+
+        /* Whether any pixel is less than opaque, read a row at a time (never the whole bitmap at once). */
+        private fun transparent(bitmap: Bitmap): Boolean {
+            if (!bitmap.hasAlpha()) return false
+            val row = IntArray(bitmap.width)
+            for (y in 0 until bitmap.height) {
+                bitmap.getPixels(row, 0, bitmap.width, 0, y, bitmap.width, 1)
+                if (row.any { (it ushr 24) != 0xFF }) return true
+            }
+            return false
+        }
+
+        private fun jpeg(bitmap: Bitmap): ByteArray {
+            val out = ByteArrayOutputStream()
+            if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)) throw Refused("damaged")
+            return out.toByteArray()
         }
 
         /* The PDF's thumbnail: the first image, upright, at most 512 px and 64 KB of JPEG; null when it can't be made. */

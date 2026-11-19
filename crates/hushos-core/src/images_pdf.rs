@@ -584,7 +584,9 @@ impl ImagesPdfWriter {
         }
         let colour = match cut.components {
             1 => "/DeviceGray",
-            4 => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]",
+            // Adobe's CMYK is stored complemented (its APP14 says so); plain CMYK is not.
+            4 if cut.adobe => "/DeviceCMYK /Decode [1 0 1 0 1 0 1 0]",
+            4 => "/DeviceCMYK",
             _ => "/DeviceRGB",
         };
         let image = state.reserve();
