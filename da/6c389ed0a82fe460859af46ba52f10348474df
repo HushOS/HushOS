@@ -1,0 +1,40 @@
+crates/hushos-core/AGENTS.md
+  s_c60e24772e04af::t_647f54523d2eab 75-77
+  s_c60e24772e04af::t_2971baf89edec2 64,78-110
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_cdcea1be057ba7 747
+docs/devices-design.md
+  s_c60e24772e04af::t_c3762e6be0e3de 426
+docs/editing-design.md
+  s_c60e24772e04af::t_d6e9a66c48292d 146,154
+docs/file-tools-design.md
+  s_c60e24772e04af::t_819b4f8aa3a086 405,563
+docs/groups-invariants.md
+  s_c60e24772e04af::t_6fbb972c23d924 3
+docs/groups-mobile-plan.md
+  s_c60e24772e04af::t_6afcf64ffb9c68 26,53,62,96,122,138
+docs/integrity-design.md
+  s_c60e24772e04af::t_d0193de08ccb1d 224
+docs/optional-verification.md
+  s_c60e24772e04af::t_e861e5dcb26c0f 71,222
+docs/push-relay-plan.md
+  s_c60e24772e04af::t_bfe2e88650ffa9 17
+docs/two-step-design.md
+  s_c60e24772e04af::t_d3d8b26b351069 549,931
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "da6c389ed0a82fe460859af46ba52f10348474df",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
