@@ -1,0 +1,122 @@
+{
+    "accountKey": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",
+    "userId": "6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b",
+    "workspaceId": "0d4f2a1b-9c8e-4f7a-b6d5-e4c3b2a1f0e9",
+    "nodeId": "5f0c1d2e-3a4b-4c5d-9e6f-7a8b9c0d1e2f",
+    "keyInfo": "[\"hushos/drafts/v1\",\"6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b\",\"0d4f2a1b-9c8e-4f7a-b6d5-e4c3b2a1f0e9\",\"5f0c1d2e-3a4b-4c5d-9e6f-7a8b9c0d1e2f\"]",
+    "key": "i3Qv_0a0DYTYmOI-RPQIX2fvv9jRwfQJF-h3RR6P3JA",
+    "slot": "AoryqQ4hNnH9KklxFbvPsw",
+    "draft": {
+        "frame": {
+            "baseVersionId": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "encoding": "utf-16le",
+            "lineEnding": "crlf",
+            "mixed": true,
+            "savedAt": 1763650440000
+        },
+        "text": "Draft canary 🦀 über\nsecond line\n",
+        "selection": {
+            "from": 14,
+            "to": 20
+        }
+    },
+    "associatedData": "[\"hushos/drafts\",1,\"6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b\",\"0d4f2a1b-9c8e-4f7a-b6d5-e4c3b2a1f0e9\",\"5f0c1d2e-3a4b-4c5d-9e6f-7a8b9c0d1e2f\",\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"utf-16le\",\"crlf\",1,1763650440000]",
+    "nonce": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3",
+    "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}",
+    "refusals": [
+        {
+            "name": "another user",
+            "userId": "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+        },
+        {
+            "name": "another workspace",
+            "workspaceId": "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+        },
+        {
+            "name": "another node",
+            "nodeId": "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5"
+        },
+        {
+            "name": "another account key",
+            "accountKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk"
+        },
+        {
+            "name": "another base version",
+            "record": "{\"v\":1,\"base\":\"1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "another encoding",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-8\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "another line ending",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"lf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "not mixed",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":false,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "another time",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440001,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "a changed ciphertext byte",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgQ-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "cut short",
+            "record": "{\"v\":1,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7va\"}"
+        },
+        {
+            "name": "another record version",
+            "record": "{\"v\":2,\"base\":\"9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d\",\"encoding\":\"utf-16le\",\"lineEnding\":\"crlf\",\"mixed\":true,\"savedAt\":1763650440000,\"sealed\":\"AaChoqOkpaanqKmqq6ytrq-wsbKztLW2txq4OgU-ALXRy-q93tcEIYqNGttwi7kEWS8Q0YXRCGZiTONmbzr2fzAVDUcn0cT41cPlkG6kbfd__7vaUg\"}"
+        },
+        {
+            "name": "not a record",
+            "record": "draft"
+        }
+    ],
+    "offers": [
+        {
+            "name": "nothing changed since: restored as an edit",
+            "draftBase": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "draftText": "mine",
+            "openedVersion": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "openedText": "theirs",
+            "offer": "current"
+        },
+        {
+            "name": "the same version in capitals is still current",
+            "draftBase": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "draftText": "mine",
+            "openedVersion": "9A8B7C6D-5E4F-4A3B-8C2D-1E0F9A8B7C6D",
+            "openedText": "theirs",
+            "offer": "current"
+        },
+        {
+            "name": "someone saved since: the stale choices",
+            "draftBase": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "draftText": "mine",
+            "openedVersion": "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5",
+            "openedText": "theirs",
+            "offer": "stale"
+        },
+        {
+            "name": "no version to compare: the stale choices",
+            "draftBase": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "draftText": "mine",
+            "openedVersion": null,
+            "openedText": "theirs",
+            "offer": "stale"
+        },
+        {
+            "name": "the file already holds the text: dropped",
+            "draftBase": "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+            "draftText": "same",
+            "openedVersion": "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5",
+            "openedText": "same",
+            "offer": "same"
+        }
+    ]
+}

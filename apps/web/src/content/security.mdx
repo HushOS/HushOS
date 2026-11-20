@@ -219,8 +219,12 @@ Folder and file keys hang off the workspace key, not off your account key. That 
             'The highest settings and identity versions this browser has seen, so an older copy from the server is refused. Sealed with XChaCha20-Poly1305 under a key derived from your settings key, which a new account key keeps, so a locked browser holds ciphertext; a mark that does not open stops the check rather than count as none',
         ],
         [
+            'Editor drafts',
+            'Text you typed in the editor and have not saved, kept on this device a couple of seconds after each change so a closed tab or a lock loses nothing. Sealed with XChaCha20-Poly1305 under a key derived from your account key for that one file, with the version it started from bound in, so a locked browser holds ciphertext and the unlock brings the offer back. Found by a name only your unlocked account can work out, so a locked browser shows how many drafts there are and when each was written, never which file. Never sent to the server. Saving, discarding and signing out delete it; it lasts at most 30 days, 50 at most are kept, and the iPhone and Android apps keep them the same way, out of backups',
+        ],
+        [
             'Signing out',
-            'Deletes everything this browser kept for the account, databases included rather than emptied: the remembered unlock, the device key, the rollback marks, the tree mirror, the upload journal and stash, family records, a saved return to a link, and the email address a sign-up link went to. Only display settings stay: theme, contrast, sounds, list or grid, and sort order',
+            'Deletes everything this browser kept for the account, databases included rather than emptied: the remembered unlock, the device key, the rollback marks, the tree mirror, the upload journal and stash, the editor’s drafts, family records, a saved return to a link, and the email address a sign-up link went to. Only display settings stay: theme, contrast, sounds, list or grid, and sort order',
         ],
     ]}
 />

@@ -121,6 +121,7 @@ describe('signing out of this browser', () => {
             'hushos-drive-mirror',
             'hushos-groups',
             'hushos-contact-guard',
+            'hushos-drafts',
             `hushos-drive-mirror:${WORKSPACE}`,
             'someone-elses-database',
         ])

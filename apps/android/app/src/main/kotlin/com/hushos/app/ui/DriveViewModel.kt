@@ -2685,8 +2685,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         return false
     }
 
+    /* The person closed the editor (Discard, nothing to keep, saved), or the file's family cleared out: its draft goes too. */
     fun closeEditor() {
-        endTextEdit()
+        textEdit?.closed()
+        textEdit = null
         _state.update { it.copy(editing = null) }
     }
 

@@ -43,6 +43,8 @@ class AccountStoreTest {
         // The rollback marks, sealed, and the plaintext ones an earlier version kept across sign-outs.
         File(noBackup, "marks/dm3BIs9g8rvG3OeM5lsOQA.json"),
         File(noBackup, "settings-seen.json"),
+        // An editor's draft, sealed.
+        File(noBackup, "drafts/AoryqQ4hNnH9KklxFbvPsw.json"),
     )
 
     @Before

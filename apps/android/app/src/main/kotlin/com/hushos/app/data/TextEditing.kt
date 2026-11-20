@@ -76,6 +76,9 @@ object TextEditing {
         /* After a save of `text` landed as `bytes`: what the next one compares with. */
         fun saved(text: String, bytes: ByteArray) = SaveState(format, text, bytes)
 
+        /* The same text and bytes, saved in `format` from here: a draft restored brings the format it was typed under. */
+        fun inFormat(format: TextFormat) = SaveState(format, text, bytes)
+
         companion object {
             /* The session of `bytes`, already opened as `opened`: never decoded a second time. */
             fun opening(opened: Open.Editable, bytes: ByteArray) = SaveState(opened.format, opened.text, bytes)

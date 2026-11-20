@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from '@/components/ui/toast';
 import { UnlockDevice } from '@/components/unlock-device';
 import { authClient } from '@/lib/auth-client';
+import { flushDrafts } from '@/lib/draft-flush';
 import { useAuthView } from '@/lib/auth-view';
 import { cue } from '@/lib/sounds';
 
@@ -28,6 +29,8 @@ export function openDeviceDialog() {
 /* Locks at once, without asking: for a choice the person has already made, like "Lock instead". */
 export async function lockDevice() {
     try {
+        // An open editor's unsaved text is sealed first: the lock drops it, and its draft brings it back.
+        await flushDrafts();
         await authClient.lock();
         cue('close');
         toast.add({ title: 'HushOS is locked on this browser' });

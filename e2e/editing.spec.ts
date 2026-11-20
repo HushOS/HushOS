@@ -20,7 +20,7 @@ import {
  * can't keep byte for byte opens read-only, Markdown shows a preview beside the source that
  * fetches nothing, a save after someone else's offers Save on top, Save as a copy and Open
  * theirs and each does what it says, leaving with changes asks first, a lock drops the editor's
- * text, and only those who may change a file are offered Edit.
+ * text (its draft offers it back), and only those who may change a file are offered Edit.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -1038,9 +1038,32 @@ test.describe('when someone else saved first', () => {
     });
 });
 
-test('locking drops the editor’s text', async () => {
+test('locking drops the editor’s text, and its draft offers it back after the unlock', async () => {
     await openEditor(page, 'notes.txt');
     await retype(page, 'typed before the lock');
+    // Its draft is kept before the lock comes (e2e/drafts.spec.ts covers drafts themselves).
+    await expect
+        .poll(
+            () =>
+                page.evaluate(async () => {
+                    const names = (await indexedDB.databases()).map(({ name }) => name);
+                    if (!names.includes('hushos-drafts')) return 0;
+                    return new Promise<number>((resolve, reject) => {
+                        const request = indexedDB.open('hushos-drafts');
+                        request.onsuccess = () => {
+                            const db = request.result;
+                            const count = db.transaction('drafts').objectStore('drafts').count();
+                            count.onsuccess = () => {
+                                db.close();
+                                resolve(count.result);
+                            };
+                        };
+                        request.onerror = () => reject(request.error);
+                    });
+                }),
+            { timeout: 15_000 },
+        )
+        .toBeGreaterThanOrEqual(1);
     // Locked from another tab while this one holds unsaved changes.
     const locker = await page.context().newPage();
     await locker.goto('/app/drive');
@@ -1073,6 +1096,12 @@ test('locking drops the editor’s text', async () => {
     await expect(page.locator('.cm-editor')).toHaveCount(0);
     await dialog(page).getByRole('button', { name: 'Edit', exact: true }).click();
     await expect(editor(page)).toContainText('theirs to open', { timeout: 60_000 });
+    await expect(editor(page)).not.toContainText('typed before the lock');
+    // The draft is offered; discarded, it goes and the file's text stays.
+    const offer = page.locator('[data-draft-offer]');
+    await expect(offer).toContainText('Restore your unsaved changes from');
+    await offer.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(offer).toHaveCount(0);
     await expect(editor(page)).not.toContainText('typed before the lock');
     await close(page);
 });

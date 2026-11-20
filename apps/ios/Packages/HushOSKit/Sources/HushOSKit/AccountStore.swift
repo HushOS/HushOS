@@ -29,12 +29,12 @@ public struct AccountStore: Sendable {
 
     /* Under the group container: kept files, the queue's copies, Save to HushOS's staged copies, the
      * lists of kept files, the last folder, recent searches and the last email (`Unbacked.state`), the
-     * node-to-parent index, the families' records, the contact guard, and the rollback marks (sealed, and the plaintext
+     * node-to-parent index, the families' records, the contact guard, the editor's drafts (sealed), and the rollback marks (sealed, and the plaintext
      * files earlier versions kept across sign-outs): a phone signed back in trusts the server as a new
      * device does, the cost the web accepted too (docs/integrity-design.md, "Rollback marks"). */
     static let accountFiles = [
         "offline", "transfers", "share-staging", "state", "local/files-parents.json", "local/groups", "local/marks", "local/guard",
-        "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
+        "local/drafts", "local/settings-marks.json", "local/settings-marks.json.lock", "local/identity-marks.json", "local/identity-marks.json.lock",
     ]
 
     private var ownerFile: URL { root.appendingPathComponent("local/account-owner") }
@@ -130,6 +130,8 @@ public struct AccountStore: Sendable {
         // The contact guard too, under its own lock, so an act's write that waited through the sign-out writes nothing back.
         ContactGuardStore(folder: root.appendingPathComponent("local/guard", isDirectory: true), owner: AccountOwner(userId: "", origin: ""),
                           generation: guardGeneration).deleteAll()
+        // The editor's drafts, under their lock, so a write asked for before the sign-out keeps nothing after it.
+        DraftStore.wipe(folder: root.appendingPathComponent("local/drafts", isDirectory: true))
         // Decrypted copies before the family records that tie them to their families: a stop in between never leaves
         // family copies with nothing that names them.
         for item in (try? files.contentsOfDirectory(at: temporary, includingPropertiesForKeys: nil)) ?? [] {
