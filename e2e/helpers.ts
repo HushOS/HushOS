@@ -12,6 +12,8 @@ import {
     type BrowserType,
     type Locator,
     type Page,
+    type Request,
+    type Worker,
 } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
 import * as XLSX from 'xlsx';
@@ -580,4 +582,52 @@ export async function openWaiting(page: Page, text: string | RegExp) {
     await expect(waiting).toBeVisible({ timeout: 60_000 });
     await waiting.getByRole('button', { name: 'Open', exact: true }).click();
     await expect(waiting).toHaveCount(0, { timeout: 60_000 });
+}
+
+/*
+ * One of the app's modules as the browser fetches it: by its source path from the development
+ * server (`/src/components/drive/pdf-viewer.tsx`), or as its chunk from a production build
+ * (`/assets/pdf-viewer-<hash>.js`), which is what CI runs the suite against.
+ */
+export const appModule = (name: string) =>
+    new RegExp(`/(${name}\\.tsx?|${name}-[\\w-]+\\.js)(\\?|$)`);
+
+/*
+ * A script's address without its query, from a request for one; null for anything else. WebKit
+ * reports a module worker's own script as 'xhr', not 'script' (a CI trace showed the editor's
+ * text-check worker fetched, 200, as xhr), so there an xhr for a script file counts as a script
+ * too. Chromium reports it as 'script', and only that counts there.
+ */
+const scriptOf = (request: Request) => {
+    const url = request.url().split('?')[0]!;
+    const type = request.resourceType();
+    if (type === 'script') return url;
+    const webkit = test.info().project.use.browserName === 'webkit';
+    return webkit && type === 'xhr' && /\.m?[jt]sx?$/.test(url) ? url : null;
+};
+
+/*
+ * Every script `work` makes the page fetch (a worker's included), cached or not, and every worker
+ * it starts: WebKit can start a worker from its memory cache with no request to see, but every
+ * browser reports the worker itself (e2e/README.md, "Writing e2e for CI").
+ */
+export async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
+    const fetched = new Set<string>();
+    const listen = (request: Request) => {
+        const url = scriptOf(request);
+        if (url) fetched.add(url);
+    };
+    const started = (worker: Worker) => {
+        const url = worker.url();
+        if (url.startsWith('http')) fetched.add(url.split('?')[0]!);
+    };
+    p.on('request', listen);
+    p.on('worker', started);
+    try {
+        await work();
+    } finally {
+        p.off('request', listen);
+        p.off('worker', started);
+    }
+    return fetched;
 }
