@@ -222,12 +222,13 @@ struct FileViewer: View {
     /*
      * The editor whose work an unfold or a resize left waiting (DriveStore.editorWork), presented again over the file it
      * was editing (the viewer pages there when it lists it; a rebuilt viewer starts on the file it was first opened on).
-     * Work for a file this person may no longer edit (a family removed, a share revoked) is emptied instead.
+     * Work for a file this person can no longer edit (a family removed, a share revoked) is emptied instead, and its
+     * close finished (DriveStore.parkedEditorDropped); access that couldn't be confirmed keeps it, with saves stopped.
      */
     @discardableResult private func presentHeldEditor() -> Bool {
         guard editing == nil,
-              let (key, work) = store.editorWork.waiting(owner: store.vault, allowed: { _, work in store.mayRestoreEditor(work) },
-                                                         dropped: { $0.box.forget() }) else { return false }
+              let (key, work) = store.editorWork.waiting(owner: store.vault, access: { _, work in store.editAccess(work) },
+                                                         dropped: { store.parkedEditorDropped($0) }) else { return false }
         if let page = items.first(where: { $0.ref == key }) { current = page }
         store.editorOpen = true
         editing = work.file

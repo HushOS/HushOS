@@ -14,8 +14,11 @@ import type { DiagramOutcome } from '@/lib/mermaid-render';
 
 /* How long one diagram may take, from the moment the worker is given it. */
 export const DIAGRAM_TIMEOUT = 8_000;
-/* How long the preload waits for the worker to say it has loaded. */
-const PRELOAD_TIMEOUT = 30_000;
+/*
+ * How long a worker may take to say it has loaded, the first or a replacement. One that hasn't by then
+ * is ended as one that couldn't start: diagrams are off, and every diagram waiting says it failed.
+ */
+export const STARTUP_TIMEOUT = 30_000;
 
 /* Whether diagrams can be drawn: waiting for the preload, ready, or failed (the worker couldn't start). */
 export type DiagramsState = 'waiting' | 'ready' | 'failed';
@@ -26,8 +29,12 @@ const settled = new Promise<void>((resolve) => {
     announce = resolve;
 });
 let started = false;
-/* The diagram worker, and whether it has said it loaded: one that fails before then is not started again. */
-let worker: { worker: Worker; loaded: boolean } | null = null;
+/*
+ * The diagram worker, whether it has said it loaded, and its startup deadline (cleared once it has): one
+ * that fails or stalls before then is not started again.
+ */
+let worker: { worker: Worker; loaded: boolean; startup: ReturnType<typeof setTimeout> } | null =
+    null;
 let next = 0;
 
 type Job = {
@@ -54,13 +61,20 @@ function startWorker() {
         type: 'module',
         name: 'mermaid',
     });
-    const entry = { worker: made, loaded: false };
+    const entry = {
+        worker: made,
+        loaded: false,
+        startup: setTimeout(() => {
+            if (worker === entry && !entry.loaded) giveUp();
+        }, STARTUP_TIMEOUT),
+    };
     made.onmessage = (
         event: MessageEvent<{ kind: 'ready' } | { id: number; outcome: DiagramOutcome }>,
     ) => {
         if (worker !== entry) return;
         const message = event.data;
         if ('kind' in message) {
+            clearTimeout(entry.startup);
             entry.loaded = true;
             settle('ready');
             pump();
@@ -85,10 +99,17 @@ function startWorker() {
     return entry;
 }
 
+/* The worker ends: its startup deadline goes with it. */
+function endWorker() {
+    if (!worker) return;
+    clearTimeout(worker.startup);
+    worker.worker.terminate();
+    worker = null;
+}
+
 /* The worker can't start: diagrams say they couldn't be drawn, now and from here on. */
 function giveUp() {
-    worker?.worker.terminate();
-    worker = null;
+    endWorker();
     if (running) {
         clearTimeout(running.timer);
         running.job.settle({ failure: 'failed' });
@@ -101,8 +122,7 @@ function giveUp() {
 
 /* The running diagram fails; a new worker takes the rest once it has loaded. */
 function restart() {
-    worker?.worker.terminate();
-    worker = null;
+    endWorker();
     if (running) {
         clearTimeout(running.timer);
         running.job.settle({ failure: 'failed' });
@@ -127,8 +147,8 @@ function pump() {
 
 /*
  * The worker and every diagram type, fetched once after unlock with the other viewers. Settles as soon
- * as the worker says it has loaded, or at once if it can't start, so the preloads after it never wait on
- * a failure already known.
+ * as the worker says it has loaded, at once if it can't start, and at its startup deadline if it stalls,
+ * so the preloads after it never wait on a failure already known.
  */
 export function preloadMermaid() {
     if (!started) {
@@ -141,10 +161,7 @@ export function preloadMermaid() {
                 giveUp();
             }
     }
-    return Promise.race([
-        settled,
-        new Promise<void>((resolve) => setTimeout(resolve, PRELOAD_TIMEOUT)),
-    ]);
+    return settled;
 }
 
 export const diagramsState = () => state;

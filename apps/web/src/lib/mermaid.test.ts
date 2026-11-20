@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 /*
  * The diagram worker's client (lib/mermaid.ts). Fails if a diagram's time starts while it waits behind
  * others (valid diagrams time out in a queue), if one diagram that never finishes takes the rest down
- * with it, or if a worker that can't start holds the viewers' preload for its whole wait.
+ * with it, or if a worker that can't start, or never says it loaded (the first or a replacement), holds
+ * the preload or the diagrams waiting on it.
  */
 
 type Message = { kind: 'preload' } | { id: number; source: string };
@@ -14,6 +15,9 @@ class FakeWorker {
     static failToStart = false;
     /* Workers after this many fail to load their script (onerror before ready). */
     static loadFailsAfter = Infinity;
+    /* Workers after this many never say anything once asked to load (a stalled script). */
+    static stallAfter = Infinity;
+    static terminated = 0;
     static posted: string[] = [];
     onmessage: ((event: MessageEvent) => void) | null = null;
     onerror: (() => void) | null = null;
@@ -26,6 +30,7 @@ class FakeWorker {
 
     postMessage(message: Message) {
         if ('kind' in message) {
+            if (FakeWorker.made > FakeWorker.stallAfter) return;
             if (FakeWorker.made > FakeWorker.loadFailsAfter) setTimeout(() => this.onerror?.(), 0);
             else setTimeout(() => this.reply({ kind: 'ready' }), 0);
             return;
@@ -40,6 +45,7 @@ class FakeWorker {
     }
 
     terminate() {
+        if (!this.dead) FakeWorker.terminated++;
         this.dead = true;
     }
 
@@ -62,6 +68,8 @@ beforeEach(() => {
     FakeWorker.made = 0;
     FakeWorker.failToStart = false;
     FakeWorker.loadFailsAfter = Infinity;
+    FakeWorker.stallAfter = Infinity;
+    FakeWorker.terminated = 0;
     FakeWorker.posted = [];
     vi.stubGlobal('Worker', FakeWorker);
 });
@@ -134,6 +142,57 @@ describe('drawing diagrams in the worker', () => {
         // The first, and one replacement that failed to load: no more.
         expect(FakeWorker.made).toBe(2);
         expect(mermaid.diagramsState()).toBe('failed');
+    });
+
+    test('a worker that never says it loaded is ended at its deadline, and diagrams say they failed', async () => {
+        FakeWorker.stallAfter = 0;
+        const mermaid = await import('@/lib/mermaid');
+        let done = false;
+        void mermaid.preloadMermaid().then(() => {
+            done = true;
+        });
+        // Fences wait on this: it must settle, not hang with the code shown and no sentence.
+        let settled = false;
+        void mermaid.diagramsSettled.then(() => {
+            settled = true;
+        });
+        await vi.advanceTimersByTimeAsync(mermaid.STARTUP_TIMEOUT - 100);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(200);
+        expect(done).toBe(true);
+        expect(settled).toBe(true);
+        expect(mermaid.diagramsState()).toBe('failed');
+        expect(FakeWorker.terminated).toBe(1);
+        expect(await mermaid.drawDiagram('wait:1').result).toEqual({ failure: 'failed' });
+    });
+
+    test('a replacement worker that stalls is ended too, and the diagrams waiting on it fail', async () => {
+        FakeWorker.stallAfter = 1;
+        const mermaid = await loaded();
+        const stuck = mermaid.drawDiagram('hang').result;
+        const waiting = mermaid.drawDiagram('wait:10').result;
+        let after: unknown = null;
+        void waiting.then((outcome) => {
+            after = outcome;
+        });
+        await vi.advanceTimersByTimeAsync(mermaid.DIAGRAM_TIMEOUT + 100);
+        expect(await stuck).toEqual({ failure: 'failed' });
+        // The replacement is loading; the waiting diagram waits for it, but not forever.
+        expect(after).toBe(null);
+        await vi.advanceTimersByTimeAsync(mermaid.STARTUP_TIMEOUT);
+        expect(after).toEqual({ failure: 'failed' });
+        expect(mermaid.diagramsState()).toBe('failed');
+        expect(FakeWorker.made).toBe(2);
+        expect(FakeWorker.terminated).toBe(2);
+    });
+
+    test('a worker that loaded is not ended when its startup deadline would have passed', async () => {
+        const mermaid = await loaded();
+        await vi.advanceTimersByTimeAsync(mermaid.STARTUP_TIMEOUT * 2);
+        const drawn = mermaid.drawDiagram('wait:10').result;
+        await vi.advanceTimersByTimeAsync(20);
+        expect(await drawn).toEqual({ svg: '<svg/>', width: 1, height: 1 });
+        expect(FakeWorker.terminated).toBe(0);
     });
 
     test('a Markdown view off the drive starts the bundle, and inside the drive leaves it to the preload', async () => {

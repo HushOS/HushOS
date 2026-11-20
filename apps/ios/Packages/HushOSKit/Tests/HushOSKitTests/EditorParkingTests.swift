@@ -103,14 +103,14 @@ import Testing
         parking.hold(work, key: family.ref, owner: session)
         // The store hears of the removal: files in that workspace may no longer be edited.
         parking.park(key: family.ref)
-        let gone = parking.check { key, _ in key.workspaceId != "family-area" }
+        let gone = parking.check { key, _ in key.workspaceId == "family-area" ? .lost : .allowed }
         #expect(gone?.value === work)
         #expect(gone?.presented == false)
         #expect(parking.waiting(owner: session) == nil)
         // A check that still allows the file keeps it.
         let kept = Work("own")
         parking.hold(kept, key: notes, owner: session)
-        #expect(parking.check { _, _ in true } == nil)
+        #expect(parking.check { _, _ in .allowed } == nil)
         #expect(parking.held(key: notes, owner: session) === kept)
     }
 
@@ -121,7 +121,7 @@ import Testing
         let work = Work("words")
         parking.hold(work, key: notes, owner: session)
         var emptied: Work?
-        #expect(parking.held(key: notes, owner: session, allowed: { _, _ in false }, dropped: { emptied = $0 }) == nil)
+        #expect(parking.held(key: notes, owner: session, access: { _, _ in .lost }, dropped: { emptied = $0 }) == nil)
         #expect(emptied === work)
         #expect(parking.isEmpty)
     }
@@ -155,7 +155,7 @@ import Testing
         let work = Work("family plaintext")
         parking.hold(work, key: family.ref, owner: session)
         // Whatever page a viewer shows, the check is asked of the work's file.
-        let gone = parking.check { key, _ in key.workspaceId != "family-area" }
+        let gone = parking.check { key, _ in key.workspaceId == "family-area" ? .lost : .allowed }
         #expect(gone?.value === work)
         #expect(gone?.presented == true)
         #expect(parking.isEmpty)
@@ -179,5 +179,56 @@ import Testing
         guard case .adopt(let state) = parked.restore else { Issue.record("expected the state, not another read"); return }
         #expect(state == "editing their copy, typed")
         #expect(parked.reloadFrom == nil)
+    }
+
+    /*
+     * A refresh that couldn't tell (the share listed but its folder not opened, the guard unreadable, a network error):
+     * the text stays, on screen or parked, and a rebuild still hands it over. Only a confirmed loss empties it.
+     */
+    @Test func aRefreshThatCouldNotTellKeepsTheText() {
+        let parking = EditorParking<Session, Work>()
+        let session = Session()
+        let shared = file("notes", workspace: "theirs")
+        let work = Work("typed into their file, not saved")
+        parking.hold(work, key: shared.ref, owner: session)
+        // The listing answered with the grant, but its folder couldn't be opened this time.
+        let listing = [EditAccess.Grant(id: "grant-1", role: "editor", opened: false)]
+        #expect(parking.check { _, _ in EditAccess.share(grant: "grant-1", listing: listing) } == nil)
+        #expect(work.text == "typed into their file, not saved")
+        #expect(parking.presented)
+        // Parked by an unfold, then a restore while still unsure: handed over, not emptied.
+        parking.park(key: shared.ref)
+        var emptied: Work?
+        let back = parking.held(key: shared.ref, owner: session,
+                                access: { _, _ in EditAccess.share(grant: "grant-1", listing: listing) },
+                                dropped: { emptied = $0 })
+        #expect(back === work)
+        #expect(emptied == nil)
+        // The next listing that answers without the grant: confirmed revoked, and only now it goes.
+        let gone = parking.check { _, _ in EditAccess.share(grant: "grant-1", listing: []) }
+        #expect(gone?.value === work)
+        #expect(parking.isEmpty)
+    }
+
+    /* What counts as a confirmed loss of a share, and what only couldn't be checked. */
+    @Test func aShareIsLostOnlyWhenAListingSaysSo() {
+        let editor = EditAccess.Grant(id: "g", role: "editor", opened: true)
+        #expect(EditAccess.share(grant: "g", listing: [editor]) == .allowed)
+        // Revoked: a listing that answered no longer has it.
+        #expect(EditAccess.share(grant: "g", listing: [EditAccess.Grant(id: "other", role: "editor", opened: true)]) == .lost)
+        // Made a viewer's.
+        #expect(EditAccess.share(grant: "g", listing: [EditAccess.Grant(id: "g", role: "viewer", opened: true)]) == .lost)
+        // Listed but not opened (the guard unreadable, the granter not checked): can't tell.
+        #expect(EditAccess.share(grant: "g", listing: [EditAccess.Grant(id: "g", role: "editor", opened: false)]) == .uncertain)
+        // No listing has answered yet, or no grant was recorded: can't tell.
+        #expect(EditAccess.share(grant: "g", listing: nil) == .uncertain)
+        #expect(EditAccess.share(grant: nil, listing: [editor]) == .uncertain)
+    }
+
+    /* A family folder: removal is a loss; a folder not writable here right now only stops saves (never offered Save back). */
+    @Test func aFamilyFileIsLostOnlyWhenTheFamilyIsRemoved() {
+        #expect(EditAccess.family(removed: true, writable: true) == .lost)
+        #expect(EditAccess.family(removed: false, writable: true) == .allowed)
+        #expect(EditAccess.family(removed: false, writable: false) == .uncertain)
     }
 }

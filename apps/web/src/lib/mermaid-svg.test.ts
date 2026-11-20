@@ -73,6 +73,31 @@ describe('a diagram from a file', () => {
             expect(safeDiagramSvg(bad), bad).toBe(false);
     });
 
+    test('a node may be called anything CSS has a word for: names are names, not CSS', () => {
+        // Names the CSS checks refuse in a style (behavior, expression, url) are still drawn when
+        // they only name a node, a message, a slice or an entity.
+        for (const source of [
+            'flowchart LR\n  Input --> Behavior\n  Behavior --> expression\n  expression --> url',
+            'sequenceDiagram\n  Behavior->>expression: url(x)',
+            'stateDiagram-v2\n  Behavior --> expression',
+            'erDiagram\n  Behavior ||--o{ expression : has',
+            'classDiagram\n  class Behavior',
+            'pie title Behavior\n  "expression" : 3\n  "url" : 2',
+        ]) {
+            const drawn = drawDiagram(source);
+            expect('svg' in drawn, source).toBe(true);
+        }
+        // The attributes that aren't CSS still keep to their own syntax.
+        for (const bad of [
+            '<svg xmlns="http://www.w3.org/1999/xhtml"><g/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><g class="a;b:url(x)"/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg" role="img;x"><g/></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><text xml:space="x">a</text></svg>',
+            '<svg xmlns="http://www.w3.org/2000/svg"><g data-id="&nbsp;"/></svg>',
+        ])
+            expect(safeDiagramSvg(bad), bad).toBe(false);
+    });
+
     test('colours that could break out of their style are left out', () => {
         const palette: DiagramPalette = {
             background: 'oklch(0.99 0 0)',

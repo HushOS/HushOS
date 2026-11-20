@@ -200,10 +200,28 @@ function styleSafe(style: string) {
     return true;
 }
 
-/* One attribute's value, decoded as an SVG reader and its CSS would read it. */
+/*
+ * The attributes nothing reads as CSS or as an address, each checked by its own syntax: names and
+ * labels from the diagram's text (a node called "Behavior" or "expression" is just a name), pele's
+ * class tokens, ARIA words and the namespace. Every other attribute is a style or presentation
+ * attribute, read as CSS, and gets the CSS checks.
+ */
+const INERT: Record<string, (value: string) => boolean> = {
+    'data-id': () => true,
+    'aria-label': () => true,
+    'aria-roledescription': (value) => /^[A-Za-z]*$/.test(value),
+    role: (value) => /^[a-z -]*$/.test(value),
+    class: (value) => /^[\w -]*$/.test(value),
+    xmlns: (value) => value === 'http://www.w3.org/2000/svg',
+    'xml:space': (value) => value === 'preserve' || value === 'default',
+};
+
+/* One attribute's value, decoded as an SVG reader (and, for a CSS attribute, its CSS) would read it. */
 function attributeSafe(key: string, raw: string) {
     const value = decodeAttribute(raw);
     if (value === null) return false;
+    const inert = INERT[key];
+    if (inert) return inert(value);
     if (key === 'style') return styleSafe(value);
     return cssValueSafe(decodeCss(value));
 }

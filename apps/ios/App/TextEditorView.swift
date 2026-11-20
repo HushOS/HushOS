@@ -286,7 +286,7 @@ struct TextEditorScreen: View {
                 Button { begin { await save() } } label: {
                     if saving { ProgressView() } else { HeaderWord(text: EditorWords.save) }
                 }
-                .disabled(!edited || saving)
+                .disabled(!edited || saving || accessUnsure)
                 .accessibilityLabel(saving ? EditorWords.saving : EditorWords.save)
             }
         }
@@ -318,6 +318,7 @@ struct TextEditorScreen: View {
                     note(line, failed: !closing && failure != nil)
                 }
                 if let mixed = format.flatMap(TextEditing.mixedNote) { note(mixed) }
+                if accessUnsure { accessNote }
                 // The text view stays while the preview shows: it holds the text and its undo.
                 sourceAndPreview(PlainTextView(box: editor, text: editor.opening, editable: true, onChange: {
                     if !edited { edited = true }
@@ -449,6 +450,34 @@ struct TextEditorScreen: View {
         EditorPreviewPane(pieces: pieces, unavailable: sideBySide && previewTooLong, position: $previewPosition, scroll: scroll)
     }
 
+    /*
+     * Whether access to this file couldn't be confirmed (DriveStore.editAccess: a share listed but not opened, a
+     * listing or a family check that failed, a family folder not writable here right now): the text stays, and
+     * nothing is saved until access is confirmed again. Read from the store's observed shares and families.
+     */
+    private var accessUnsure: Bool {
+        guard let work = heldWork() else { return false }
+        return store.editAccess(work) == .uncertain
+    }
+
+    /* Saves are off while access is unconfirmed: said once, with Try again (the shares' listing or the family's check). */
+    private var accessNote: some View {
+        HStack(spacing: Alpine.Space.s3) {
+            Text(EditorWords.accessUnsure)
+                .font(Theme.Text.footnote)
+                .foregroundStyle(Alpine.inkMuted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(EditorWords.tryAgain) {
+                let file = item
+                Task { await store.recheckEditorAccess(file) }
+            }
+            .font(Theme.Text.footnote)
+            .tint(Alpine.primary)
+        }
+        .padding(.horizontal, Alpine.Space.s4).padding(.vertical, Alpine.Space.s2)
+        .background(Alpine.surface)
+    }
+
     private func note(_ text: String, failed: Bool = false) -> some View {
         Text(text)
             .font(Theme.Text.footnote)
@@ -509,7 +538,8 @@ struct TextEditorScreen: View {
                                 destination: destination, marked: marked, savedText: savedText, saveState: saveState,
                                 format: format, edited: edited, status: status, previewing: pane == .preview,
                                 askingLeave: confirmLeave)
-        let work = heldWork() ?? EditorWork(file: item, box: editor)
+        // The share that let this person edit, recorded once: a later listing says whether that grant itself went.
+        let work = heldWork() ?? EditorWork(file: item, box: editor, grant: store.editGrant(for: item))
         work.remember(state)
         store.editorWork.hold(work, key: item.ref, owner: store.vault)
     }
@@ -555,10 +585,15 @@ struct TextEditorScreen: View {
     private func load() async {
         // Presented again after a rebuild: the work the store held, never a fresh read of the old version (which would
         // drop what was typed); after Open theirs, their version is read again, never the old baseline over an empty box.
-        // Only while this person may still edit the file: otherwise the held text is emptied and nothing is shown.
+        // Not once access to the file is confirmed lost: the held text is emptied and this editor ends (its close lets a
+        // held link go on). Access that couldn't be confirmed keeps it, with saves stopped (accessUnsure).
+        var lost = false
         if loadFrom == nil, phase == .loading,
-           let work = store.editorWork.held(key: item.ref, owner: store.vault, allowed: { _, work in store.mayRestoreEditor(work) },
-                                            dropped: { $0.box.forget() }),
+           let work = store.editorWork.held(key: item.ref, owner: store.vault, access: { _, work in store.editAccess(work) },
+                                            dropped: { [ref = item.ref] work in
+                                                work.box.forget()
+                                                if work.file.ref == ref { lost = true }
+                                            }),
            work.box !== editor {
             switch work.restore {
             case .adopt(let state):
@@ -570,6 +605,11 @@ struct TextEditorScreen: View {
             case .fresh:
                 take(work)
             }
+        }
+        if lost {
+            ending = true
+            dismiss()
+            return
         }
         let from = loadFrom ?? item
         // Read under the vault this editor opened with, and shown only while its session lasts.
@@ -643,7 +683,7 @@ struct TextEditorScreen: View {
 
     /* Save, and Save on top (`onTopOf`: the version current now). */
     private func save(onTopOf: String? = nil) async {
-        guard phase == .editing, !saving, let file = target else { return }
+        guard phase == .editing, !saving, !accessUnsure, let file = target else { return }
         // Back to the text as opened or saved: nothing to send, and no version that pushes out an older one.
         if onTopOf == nil, !changed() { return }
         // The session it starts in: the vault the editor opened with and its journal, never a replacement's.
@@ -699,7 +739,7 @@ struct TextEditorScreen: View {
     }
 
     private func saveCopy() async {
-        guard let file = target, let from = source, let token = session.take(store.vault) else { return }
+        guard !accessUnsure, let file = target, let from = source, let token = session.take(store.vault) else { return }
         let vault = token.owner
         let text = editor.text
         guard let state = saveState else { return }
@@ -833,6 +873,7 @@ enum EditorWords {
     static let source = "Source"
     static let preview = "Preview"
     static let previewTooLong = "This file is too long to preview while you edit."
+    static let accessUnsure = "Your access to this file couldn’t be checked. Saving is off until it can be."
 }
 
 private extension View {

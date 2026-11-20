@@ -6,7 +6,7 @@ import Foundation
  * tabs' controllers: what they presented is torn down, with no chance to save anything on the way out, and
  * SwiftUI presents the viewer again, new. The viewer finds the editor's work here and presents it again;
  * the editor takes the same text view back, with its text, cursor, scroll and undo. Only in memory, only
- * for the session (the vault) it was held under, and only while this person may still edit the file: a
+ * for the session (the vault) it was held under, and until this person's access to the file is confirmed lost: a
  * Close, a sign-out, another session or a loss of access (a family's removal, a share revoked) lets it go
  * (DriveStore), and nothing is kept on the phone. One editor's work at a time: a new one is never opened
  * over work not yet taken back (the viewer presents that one first).
@@ -37,20 +37,20 @@ import Foundation
 
     /*
      * The work held for `key` under `owner`, for the editor presented again; nil for another file. Work held
-     * under another session, or for a file `allowed` now refuses, is let go (and handed to `dropped` to be
-     * emptied), never handed over.
+     * under another session, or for a file whose access is now confirmed lost, is let go (and handed to `dropped`
+     * to be emptied and closed), never handed over. Access that couldn't be confirmed keeps it (EditAccess).
      */
-    public func held(key: NodeRef, owner: Owner, allowed: (NodeRef, Value) -> Bool = { _, _ in true },
+    public func held(key: NodeRef, owner: Owner, access: (NodeRef, Value) -> EditAccess = { _, _ in .allowed },
                      dropped: (Value) -> Void = { _ in }) -> Value? {
-        guard let work = waiting(owner: owner, allowed: allowed, dropped: dropped) else { return nil }
+        guard let work = waiting(owner: owner, access: access, dropped: dropped) else { return nil }
         return work.key == key ? work.value : nil
     }
 
-    /* Whatever work waits under `owner` and is still allowed, whichever file: the viewer presents it before any other editor. */
-    public func waiting(owner: Owner, allowed: (NodeRef, Value) -> Bool = { _, _ in true },
+    /* Whatever work waits under `owner` and isn't lost, whichever file: the viewer presents it before any other editor. */
+    public func waiting(owner: Owner, access: (NodeRef, Value) -> EditAccess = { _, _ in .allowed },
                         dropped: (Value) -> Void = { _ in }) -> (key: NodeRef, value: Value)? {
         guard let current else { return nil }
-        guard current.owner == ObjectIdentifier(owner), allowed(current.key, current.value) else {
+        guard current.owner == ObjectIdentifier(owner), access(current.key, current.value) != .lost else {
             self.current = nil
             presented = false
             dropped(current.value)
@@ -60,11 +60,13 @@ import Foundation
     }
 
     /*
-     * Access changed (a family's removal, a share revoked): work for a file `allowed` refuses goes now, on
-     * screen or parked. Returns it and whether its editor was on screen (which must then end too).
+     * Access changed (a family's removal, a share revoked, or a refresh that couldn't tell): work whose access is
+     * confirmed lost goes now, on screen or parked; work whose access couldn't be confirmed stays, text and all.
+     * Returns what went and whether its editor was on screen (which must then end; parked, its close is the
+     * caller's to finish).
      */
-    @discardableResult public func check(allowed: (NodeRef, Value) -> Bool) -> (value: Value, presented: Bool)? {
-        guard let current, !allowed(current.key, current.value) else { return nil }
+    @discardableResult public func check(access: (NodeRef, Value) -> EditAccess) -> (value: Value, presented: Bool)? {
+        guard let current, access(current.key, current.value) == .lost else { return nil }
         self.current = nil
         let wasPresented = presented
         presented = false
@@ -98,12 +100,15 @@ import Foundation
 @MainActor public final class ParkedEdit<Box: AnyObject, State> {
     public let file: Opened
     public let box: Box
+    /* The share that let this person edit `file` when Edit was chosen (its id); nil for their own file or a family's. */
+    public let grant: String?
     public private(set) var state: State?
     public private(set) var reloadFrom: Opened?
 
-    public init(file: Opened, box: Box) {
+    public init(file: Opened, box: Box, grant: String? = nil) {
         self.file = file
         self.box = box
+        self.grant = grant
     }
 
     /* What the editor shows now. */
@@ -131,5 +136,49 @@ import Foundation
         if let state { return .adopt(state) }
         if let reloadFrom { return .read(reloadFrom) }
         return .fresh
+    }
+}
+
+/*
+ * Whether held editor work may stay, as this phone knows access now. Only a confirmed loss empties it: the share that
+ * let this person edit is gone from a listing that answered, or now a viewer's; the file's family removed. A refresh
+ * that couldn't tell (the share listed but its folder not opened, its guard unreadable, a network error, a family
+ * folder not writable here right now) keeps the text and stops saves until access is confirmed again.
+ */
+public enum EditAccess: Sendable, Equatable {
+    case allowed
+    case uncertain
+    case lost
+
+    /* One share as the last listing that answered had it: its id, its role, and whether its folder opened. */
+    public struct Grant: Sendable, Equatable {
+        public let id: String
+        public let role: String
+        public let opened: Bool
+        public init(id: String, role: String, opened: Bool) {
+            self.id = id
+            self.role = role
+            self.opened = opened
+        }
+    }
+
+    /*
+     * A file edited through the share `grant` (nil when none was recorded). `listing`: the shares the last listing that
+     * answered held, nil before one has.
+     */
+    public static func share(grant: String?, listing: [Grant]?) -> EditAccess {
+        guard let grant, let listing else { return .uncertain }
+        guard let held = listing.first(where: { $0.id == grant }) else { return .lost }
+        guard held.opened else { return .uncertain }
+        return held.role == "editor" ? .allowed : .lost
+    }
+
+    /*
+     * A family folder's file: its family removed (the server said so, or the member list forked or refused it) is a
+     * loss; otherwise the folder's write verdict now, the same one that offers Edit.
+     */
+    public static func family(removed: Bool, writable: Bool) -> EditAccess {
+        if removed { return .lost }
+        return writable ? .allowed : .uncertain
     }
 }
