@@ -1,0 +1,47 @@
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Platform/Checkout.swift
+  s_c60e24772e04af::t_401f94432af6fc 1-16
+apps/android/app/src/main/kotlin/com/hushos/app/data/DeviceApproval.kt
+  s_c60e24772e04af::t_85c053aad3b262 80
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DeviceApprovalUi.kt
+  s_c60e24772e04af::t_d4b02acfcdaf63 111
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account/DeviceApproval.swift
+  s_c60e24772e04af::t_64efd38b062022 25
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Account/Passkeys.swift
+  s_c60e24772e04af::t_097147641cdec1 8
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Account/DeviceApprovalTests.swift
+  s_c60e24772e04af::t_062c9e74b27820 1120
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Account/PasskeyStepTests.swift
+  s_c60e24772e04af::t_06458d4ad0d488 267
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Editor/TextEditingTests.swift
+  s_c60e24772e04af::t_553167bd565e21 38
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Platform/AppGroupTests.swift
+  s_c60e24772e04af::t_4eb527502b1d32 14
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Transfers/ArchiveSessionsTests.swift
+  s_c60e24772e04af::t_7086e06682d3e0 12
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Transfers/ImagesPdfTests.swift
+  s_c60e24772e04af::t_6a6302929ac24d 18
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Trust/FingerprintWordsTests.swift
+  s_c60e24772e04af::t_bd9cf1ced8b00c 26
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Vault/MasterKeyRotationTests.swift
+  s_c60e24772e04af::t_03fe90a2a19e66 21
+apps/ios/project.yml
+  s_c60e24772e04af::t_2e538dfee49714 170-171,244-245
+apps/web/src/lib/archives/words.ts
+  s_c60e24772e04af::t_4c449520a85915 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ad8a80a81f8b3e13b323daec0b794fd52b323e69",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
