@@ -221,8 +221,17 @@ struct PageNode {
     leaf: Dictionary,
     /* Its object id, or None for a page written directly into its parent's /Kids. */
     id: Option<ObjectId>,
-    inherited: Vec<(&'static [u8], Object)>,
+    /* Shared with its tree's other pages: one copy of what a node gives all below it. */
+    inherited: Arc<Inherited>,
     info: PdfPage,
+}
+
+type Inherited = Vec<(&'static [u8], Object)>;
+
+/* Optional content (layers): every group of the catalog's /OCProperties, and those off by default. */
+struct Layers {
+    groups: Vec<ObjectId>,
+    off: HashSet<ObjectId>,
 }
 
 struct Source {
@@ -230,6 +239,7 @@ struct Source {
     pages: Vec<PageNode>,
     /* Every page tree node's id, pages included: a reference to one is never copied. */
     tree: HashSet<ObjectId>,
+    layers: Option<Layers>,
 }
 
 fn resolve<'a>(doc: &'a Document, object: &'a Object) -> Option<&'a Object> {
@@ -301,11 +311,11 @@ fn walk_pages(
     let mut tree = HashSet::new();
     struct Work {
         node: Object,
-        inherited: Vec<(&'static [u8], Object)>,
+        inherited: Arc<Inherited>,
         depth: usize,
     }
     let root = catalog.get(b"Pages").cloned().unwrap_or(Object::Null);
-    let mut stack = vec![Work { node: root, inherited: Vec::new(), depth: 0 }];
+    let mut stack = vec![Work { node: root, inherited: Arc::new(Vec::new()), depth: 0 }];
     while let Some(Work { node, inherited, depth }) = stack.pop() {
         if depth > PAGE_TREE_MAX_DEPTH {
             return Err(PdfRefusal::Damaged.into());
@@ -324,12 +334,14 @@ fn walk_pages(
             Some(Object::Dictionary(dict)) => dict,
             _ => return Err(PdfRefusal::Damaged.into()),
         };
+        // A node that sets nothing inheritable passes its parent's on as they are, shared.
         let mut own = inherited;
         for key in INHERITED {
             if let Ok(value) = dict.get(key) {
                 if !matches!(value, Object::Null) {
-                    own.retain(|(name, _)| *name != key);
-                    own.push((key, value.clone()));
+                    let entries = Arc::make_mut(&mut own);
+                    entries.retain(|(name, _)| *name != key);
+                    entries.push((key, value.clone()));
                 }
             }
         }
@@ -341,8 +353,12 @@ fn walk_pages(
             let Some(Object::Array(kids)) = kids else {
                 return Err(PdfRefusal::Damaged.into());
             };
+            // Work waiting is bounded as pages are: past it, more pages than a run takes.
+            if stack.len() + kids.len() > max_pages + PAGE_TREE_MAX_DEPTH {
+                return Err(PdfRefusal::TooManyPages.into());
+            }
             for kid in kids.iter().rev() {
-                stack.push(Work { node: kid.clone(), inherited: own.clone(), depth: depth + 1 });
+                stack.push(Work { node: kid.clone(), inherited: Arc::clone(&own), depth: depth + 1 });
             }
             continue;
         }
@@ -351,6 +367,11 @@ fn walk_pages(
         }
         let find = |key: &[u8]| own.iter().find(|(name, _)| *name == key).map(|(_, value)| value);
         let (width, height) = size_of(doc, find(b"MediaBox"));
+        // The boxes are in the page's own units: /UserUnit points each (not inherited).
+        let unit = number(doc, dict.get(b"UserUnit").ok())
+            .filter(|unit| unit.is_finite() && *unit > 0.0)
+            .unwrap_or(1.0);
+        let (width, height) = (width * unit, height * unit);
         let rotate = rotation_of(number(doc, find(b"Rotate")));
         pages.push(PageNode {
             leaf: dict.clone(),
@@ -433,7 +454,46 @@ fn read(
     let doc = load(bytes, max_stream)?;
     control.progress()?;
     let (pages, tree) = walk_pages(&doc, max_pages, control)?;
-    Ok(Source { doc, pages, tree })
+    let layers = layers_of(&doc);
+    Ok(Source { doc, pages, tree, layers })
+}
+
+/*
+ * The catalog's optional content: every group, and those off by its default configuration (/D):
+ * with /BaseState /OFF, all but those listed /ON; otherwise those listed /OFF.
+ */
+fn layers_of(doc: &Document) -> Option<Layers> {
+    let Some(Object::Dictionary(catalog)) = doc.trailer.get(b"Root").ok().and_then(|root| resolve(doc, root))
+    else {
+        return None;
+    };
+    let Some(Object::Dictionary(properties)) = get(doc, catalog, b"OCProperties") else { return None };
+    let ids = |value: Option<&Object>| -> Vec<ObjectId> {
+        match value {
+            Some(Object::Array(items)) => items.iter().filter_map(|item| item.as_reference().ok()).collect(),
+            _ => Vec::new(),
+        }
+    };
+    let groups: Vec<ObjectId> = ids(get(doc, properties, b"OCGs"))
+        .into_iter()
+        .filter(|id| matches!(doc.objects.get(id), Some(Object::Dictionary(_))))
+        .collect();
+    if groups.is_empty() {
+        return None;
+    }
+    let settings = match get(doc, properties, b"D") {
+        Some(Object::Dictionary(settings)) => Some(settings),
+        _ => None,
+    };
+    let list = |key: &[u8]| ids(settings.and_then(|settings| get(doc, settings, key)));
+    let off: HashSet<ObjectId> =
+        if is_name(settings.and_then(|settings| get(doc, settings, b"BaseState")), b"OFF") {
+            let on: HashSet<ObjectId> = list(b"ON").into_iter().collect();
+            groups.iter().copied().filter(|group| !on.contains(group)).collect()
+        } else {
+            list(b"OFF").into_iter().filter(|group| groups.contains(group)).collect()
+        };
+    Some(Layers { groups, off })
 }
 
 fn inspection(source: &Source) -> PdfInspection {
@@ -530,6 +590,7 @@ fn build(
     planned: &[PdfPagePlan],
     max_output: u64,
     control: &RunControl,
+    flatten: bool,
 ) -> Result<Vec<u8>, PdfToolsError> {
     if planned.is_empty() || planned.len() > PDF_TOOLS_MAX_PAGES as usize {
         return Err(PdfToolsError::Failed { reason: "A PDF needs between one and the most pages.".into() });
@@ -570,9 +631,15 @@ fn build(
             if key.as_slice() == b"Parent" {
                 continue;
             }
+            // A null inherited entry is absent: the tree's value, found by the walk, is copied below.
+            if INHERITED.contains(&key.as_slice())
+                && matches!(resolve(&copier.source.doc, value), None | Some(Object::Null))
+            {
+                continue;
+            }
             leaf.set(key.clone(), copier.value(value, &mut out, 0)?);
         }
-        for (key, value) in &node.inherited {
+        for (key, value) in node.inherited.iter() {
             if !leaf.has(key) {
                 leaf.set(key.to_vec(), copier.value(value, &mut out, 0)?);
             }
@@ -581,6 +648,9 @@ fn build(
         leaf.set("Rotate", Object::Integer(page.rotate as i64));
         leaf.set("Parent", Object::Reference(tree_id));
         copier.drain(&mut out, control)?;
+        if flatten {
+            flatten_annotations(&mut out, &mut leaf);
+        }
         out.objects.insert(*target, Object::Dictionary(leaf));
     }
     let mut tree = Dictionary::new();
@@ -591,6 +661,35 @@ fn build(
     let mut catalog = Dictionary::new();
     catalog.set("Type", Object::Name(b"Catalog".to_vec()));
     catalog.set("Pages", Object::Reference(tree_id));
+    // Every layer of a source a page came from, those off still off: copied pages keep their groups,
+    // and without this a hidden layer would show.
+    let mut groups = Vec::new();
+    let mut off = Vec::new();
+    for (index, copier) in copiers.iter_mut().enumerate() {
+        let Some(layers) = &copier.source.layers else { continue };
+        if !planned.iter().any(|page| page.source as usize == index) {
+            continue;
+        }
+        for group in &layers.groups {
+            let Object::Reference(copied) = copier.reference(*group, &mut out) else { continue };
+            groups.push(Object::Reference(copied));
+            if layers.off.contains(group) {
+                off.push(Object::Reference(copied));
+            }
+        }
+        copier.drain(&mut out, control)?;
+    }
+    if !groups.is_empty() {
+        let mut settings = Dictionary::new();
+        settings.set("Order", Object::Array(groups.clone()));
+        if !off.is_empty() {
+            settings.set("OFF", Object::Array(off));
+        }
+        let mut properties = Dictionary::new();
+        properties.set("OCGs", Object::Array(groups));
+        properties.set("D", Object::Dictionary(settings));
+        catalog.set("OCProperties", Object::Dictionary(properties));
+    }
     out.objects.insert(catalog_id, Object::Dictionary(catalog));
     // The trailer names the catalog and nothing else: no Info, no ID from any source.
     out.trailer = Dictionary::new();
@@ -604,6 +703,122 @@ fn build(
     }
     control.progress()?;
     Ok(bytes)
+}
+
+/* An annotation's flags that keep it off the screen: Hidden (2) and NoView (32). Invisible (1) is for unknown types. */
+const ANNOTATION_UNSEEN: i64 = 2 | 32;
+
+fn numbers(out: &Document, value: Option<&Object>, count: usize) -> Option<Vec<f64>> {
+    let Some(Object::Array(items)) = value.and_then(|value| resolve(out, value)) else { return None };
+    if items.len() != count {
+        return None;
+    }
+    items.iter().map(|item| number(out, Some(item))).collect()
+}
+
+/*
+ * Each shown annotation's normal appearance (/AP /N, or its /AS state) drawn into the page's content where
+ * the annotation sits (PDF 32000, 12.5.5: the appearance's BBox, through its Matrix, fitted to the Rect),
+ * after the page's own content, wrapped so that content's graphics state can't leak into it; then the
+ * page's /Annots removed. Annotations without an appearance draw nothing, as most readers draw them.
+ */
+fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary) {
+    let annots: Vec<Object> = match leaf.get(b"Annots").ok().and_then(|value| resolve(out, value)) {
+        Some(Object::Array(items)) => items.clone(),
+        _ => return,
+    };
+    let mut drawn = Vec::new();
+    for annot in &annots {
+        let Some(Object::Dictionary(annot)) = resolve(out, annot) else { continue };
+        let flags = number(out, annot.get(b"F").ok()).unwrap_or(0.0) as i64;
+        if flags & ANNOTATION_UNSEEN != 0 {
+            continue;
+        }
+        let Some(Object::Dictionary(appearances)) =
+            annot.get(b"AP").ok().and_then(|value| resolve(out, value))
+        else {
+            continue;
+        };
+        let normal = appearances.get(b"N").ok();
+        // A stream, or a dictionary of streams by state, the one named by /AS.
+        let stream_id = match normal {
+            Some(Object::Reference(id)) if matches!(out.objects.get(id), Some(Object::Stream(_))) => {
+                Some(*id)
+            }
+            Some(value) => match resolve(out, value) {
+                Some(Object::Dictionary(states)) => {
+                    match annot.get(b"AS").ok().and_then(|value| resolve(out, value)) {
+                        Some(Object::Name(state)) => match states.get(state) {
+                            Ok(Object::Reference(id))
+                                if matches!(out.objects.get(id), Some(Object::Stream(_))) =>
+                            {
+                                Some(*id)
+                            }
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                }
+                _ => None,
+            },
+            None => None,
+        };
+        let Some(stream_id) = stream_id else { continue };
+        let Some(Object::Stream(form)) = out.objects.get(&stream_id) else { continue };
+        let Some(bbox) = numbers(out, form.dict.get(b"BBox").ok(), 4) else { continue };
+        let matrix = numbers(out, form.dict.get(b"Matrix").ok(), 6)
+            .unwrap_or_else(|| vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+        let Some(rect) = numbers(out, annot.get(b"Rect").ok(), 4) else { continue };
+        // The BBox's corners through the Matrix, and the box they span.
+        let corners =
+            [(bbox[0], bbox[1]), (bbox[2], bbox[1]), (bbox[0], bbox[3]), (bbox[2], bbox[3])].map(|(x, y)| {
+                (matrix[0] * x + matrix[2] * y + matrix[4], matrix[1] * x + matrix[3] * y + matrix[5])
+            });
+        let (x0, x1) = corners.iter().fold((f64::MAX, f64::MIN), |(lo, hi), (x, _)| (lo.min(*x), hi.max(*x)));
+        let (y0, y1) = corners.iter().fold((f64::MAX, f64::MIN), |(lo, hi), (_, y)| (lo.min(*y), hi.max(*y)));
+        let (rx0, rx1) = (rect[0].min(rect[2]), rect[0].max(rect[2]));
+        let (ry0, ry1) = (rect[1].min(rect[3]), rect[1].max(rect[3]));
+        if x1 - x0 <= 0.0 || y1 - y0 <= 0.0 || !(x0.is_finite() && y0.is_finite()) {
+            continue;
+        }
+        let (sx, sy) = ((rx1 - rx0) / (x1 - x0), (ry1 - ry0) / (y1 - y0));
+        drawn.push((stream_id, [sx, 0.0, 0.0, sy, rx0 - sx * x0, ry0 - sy * y0]));
+    }
+    leaf.remove(b"Annots");
+    if drawn.is_empty() {
+        return;
+    }
+    // Names of our own in the page's XObjects, which become the page's own (a shared dictionary isn't changed).
+    let mut resources = match leaf.get(b"Resources").ok().and_then(|value| resolve(out, value)) {
+        Some(Object::Dictionary(resources)) => resources.clone(),
+        _ => Dictionary::new(),
+    };
+    let mut xobjects = match resources.get(b"XObject").ok().and_then(|value| resolve(out, value)) {
+        Some(Object::Dictionary(xobjects)) => xobjects.clone(),
+        _ => Dictionary::new(),
+    };
+    let mut drawing = String::from("Q\n");
+    for (index, (stream_id, cm)) in drawn.iter().enumerate() {
+        let name = format!("HushAnnot{index}");
+        xobjects.set(name.clone(), Object::Reference(*stream_id));
+        let cm: Vec<String> = cm.iter().map(|value| format!("{value:.4}")).collect();
+        drawing.push_str(&format!("q {} cm /{name} Do Q\n", cm.join(" ")));
+    }
+    resources.set("XObject", Object::Dictionary(xobjects));
+    leaf.set("Resources", Object::Dictionary(resources));
+    let before = out.add_object(Object::Stream(Stream::new(Dictionary::new(), b"q\n".to_vec())));
+    let after = out.add_object(Object::Stream(Stream::new(Dictionary::new(), drawing.into_bytes())));
+    let mut contents = vec![Object::Reference(before)];
+    match leaf.get(b"Contents").ok().cloned() {
+        Some(Object::Array(items)) => contents.extend(items),
+        Some(Object::Reference(id)) => match out.objects.get(&id) {
+            Some(Object::Array(items)) => contents.extend(items.clone()),
+            _ => contents.push(Object::Reference(id)),
+        },
+        _ => {}
+    }
+    contents.push(Object::Reference(after));
+    leaf.set("Contents", Object::Array(contents));
 }
 
 /// Edit pages' writer: the PDFs are added in order, each read and checked as it comes (its
@@ -681,7 +896,19 @@ impl PdfPagesWriter {
         if state.closed {
             return Err(PdfToolsError::Failed { reason: "The writer is closed.".into() });
         }
-        build(&state.sources, &pages, state.max_output, &control)
+        build(&state.sources, &pages, state.max_output, &control, false)
+    }
+
+    /// One page as a PDF to draw, not to keep: turned to its rotation, its annotations' appearances
+    /// drawn into its content (as a reader shows them) and the annotations themselves left out, so a
+    /// renderer that draws only page content (PDFKit into a bitmap, for one) shows what a viewer shows.
+    /// Save as images draws from it on the phones.
+    pub fn drawable(&self, page: PdfPagePlan, control: Arc<RunControl>) -> Result<Vec<u8>, PdfToolsError> {
+        let state = lock(&self.state);
+        if state.closed {
+            return Err(PdfToolsError::Failed { reason: "The writer is closed.".into() });
+        }
+        build(&state.sources, &[page], state.max_output, &control, true)
     }
 
     /// Lowers the most an output may be (never raises it past 256 MiB): a phone whose app heap can't

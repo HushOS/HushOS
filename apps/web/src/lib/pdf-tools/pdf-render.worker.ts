@@ -2,7 +2,7 @@ import type * as Pdfjs from 'pdfjs-dist';
 import { pdfAssetOptions } from '@/lib/viewers/pdf-assets';
 import { serveTool, ToolError, type RangeSource } from '@/lib/tools/worker';
 import { THUMBNAIL } from '@/lib/images-pdf/protocol';
-import { IMAGES_MAX_PIXELS, imageSize, type RenderInput, type RenderSummary } from './protocol';
+import { IMAGES_MAX_PIXELS, type RenderInput, type RenderSummary } from './protocol';
 
 /*
  * Save as images (docs/file-tools-design.md, feature (c)): each planned page rendered by pdf.js and
@@ -50,6 +50,32 @@ async function thumbnailOf(source: OffscreenCanvas, edge: number, maxBytes: numb
     return null;
 }
 
+/* pdf.js's own canvases, made as OffscreenCanvases: its default factory asks a document for them. */
+class OffscreenCanvasFactory {
+    constructor(_options: unknown) {}
+    create(width: number, height: number) {
+        if (width <= 0 || height <= 0) throw new Error('Invalid canvas size');
+        const canvas = new OffscreenCanvas(width, height);
+        return { canvas, context: canvas.getContext('2d', { willReadFrequently: true }) };
+    }
+    reset(target: { canvas: OffscreenCanvas | null }, width: number, height: number) {
+        if (!target.canvas) throw new Error('Canvas is not specified');
+        if (width <= 0 || height <= 0) throw new Error('Invalid canvas size');
+        target.canvas.width = width;
+        target.canvas.height = height;
+    }
+    destroy(target: { canvas: OffscreenCanvas | null; context: unknown }) {
+        if (!target.canvas) throw new Error('Canvas is not specified');
+        target.canvas.width = 0;
+        target.canvas.height = 0;
+        target.canvas = null;
+        target.context = null;
+    }
+    getNoAlphaContext(canvas: OffscreenCanvas) {
+        return canvas.getContext('2d', { alpha: false, willReadFrequently: true });
+    }
+}
+
 let pdfjsModule: Promise<typeof Pdfjs> | null = null;
 function loadPdfjs() {
     pdfjsModule ??= Promise.all([
@@ -87,6 +113,8 @@ serveTool<RenderInput, RenderSummary>(async (input, context) => {
                 ...pdfAssetOptions(self.location.origin),
                 useWorkerFetch: true,
                 stopAtErrors: false,
+                // Canvases pdf.js makes for itself (a transparency group, a mask): this worker has no document.
+                CanvasFactory: OffscreenCanvasFactory,
             });
             tasks.push(task);
             try {
@@ -101,15 +129,15 @@ serveTool<RenderInput, RenderSummary>(async (input, context) => {
             if (!document || planned.page < 0 || planned.page >= document.numPages)
                 throw new ToolError(`damaged:${planned.source}`);
             const page = await document.getPage(planned.page + 1);
-            const [x1, y1, x2, y2] = page.view as [number, number, number, number];
-            const size = imageSize(
-                { width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) },
-                planned.rotate,
-                input.dpi,
-            );
-            if (size.width * size.height > IMAGES_MAX_PIXELS)
-                throw new ToolError(`too-many-pixels:${index}`);
+            // The canvas is the viewport drawn into, /UserUnit and rotation included, rounded as every
+            // client rounds (imageSize): checked against the pixel cap before a pixel is allocated.
             const viewport = page.getViewport({ scale: input.dpi / 72, rotation: planned.rotate });
+            const size = {
+                width: Math.max(1, Math.round(viewport.width)),
+                height: Math.max(1, Math.round(viewport.height)),
+            };
+            if (!(size.width * size.height <= IMAGES_MAX_PIXELS))
+                throw new ToolError(`too-many-pixels:${index}`);
             const canvas = new OffscreenCanvas(size.width, size.height);
             await page.render({
                 canvas: canvas as unknown as HTMLCanvasElement,

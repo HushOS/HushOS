@@ -454,6 +454,97 @@ def deep_array():
     return pdf.write("/Root 1 0 R"), None
 
 
+def layered(base_off=False):
+    """Two optional content groups, "Shown" and "Hidden", the second switched off: a blue square in
+    the first, a red one in the second. Copying a page must keep the second hidden."""
+    sizes = [LETTER]
+    pdf, _ = simple(sizes, catalog_extra=" /OCProperties 22 0 R")
+    layers = (
+        "q /OC /L1 BDC 0 0 1 rg 72 400 100 100 re f EMC "
+        "/OC /L2 BDC 1 0 0 rg 300 400 100 100 re f EMC Q\n"
+    ).encode()
+    pdf.add(
+        10,
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {LETTER[0]} {LETTER[1]}] "
+        "/Resources << /Font << /F1 3 0 R >> /Properties << /L1 20 0 R /L2 21 0 R >> >> /Contents [11 0 R 12 0 R] >>",
+    )
+    pdf.add(12, stream(b"", layers))
+    pdf.add(20, "<< /Type /OCG /Name (Shown) >>")
+    pdf.add(21, "<< /Type /OCG /Name (Hidden) >>")
+    config = "<< /BaseState /OFF /ON [20 0 R] /Order [20 0 R 21 0 R] >>" if base_off else "<< /OFF [21 0 R] /Order [20 0 R 21 0 R] >>"
+    pdf.add(22, f"<< /OCGs [20 0 R 21 0 R] /D {config} >>")
+    return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry(s) for s in sizes]
+
+
+def layered_base_off():
+    return layered(base_off=True)
+
+
+def null_inherited():
+    """The page's own /Resources and /MediaBox are null: both are its tree's, A4 and the font."""
+    pdf, _ = simple([LETTER], tree_extra=f" /MediaBox [0 0 {A4[0]} {A4[1]}] /Resources << /Font << /F1 3 0 R >> >>")
+    pdf.add(10, "<< /Type /Page /Parent 2 0 R /MediaBox null /Resources null /CropBox null /Contents 11 0 R >>")
+    pdf.add(11, stream(b"", content(1, A4)))
+    return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry(A4)]
+
+
+def user_unit():
+    """A 300 by 200 page in units of two points (/UserUnit 2): 600 by 400 points."""
+    size = (300, 200)
+    pdf, _ = simple([size], page_extra={0: " /UserUnit 2"})
+    return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry((600, 400))]
+
+
+def empty_wide():
+    """2,300 empty page tree nodes beside one page: more pending work than 2,000 pages allow."""
+    pdf = Pdf()
+    count = 2_300
+    kids = " ".join(f"{100 + i} 0 R" for i in range(count))
+    pdf.add(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    pdf.add(2, f"<< /Type /Pages /Kids [10 0 R {kids}] /Count 1 >>")
+    pdf.add(3, FONT)
+    for i in range(count):
+        pdf.add(100 + i, "<< /Type /Pages /Parent 2 0 R /Kids [] /Count 0 >>")
+    pdf.add(
+        10,
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {LETTER[0]} {LETTER[1]}] "
+        "/Resources << /Font << /F1 3 0 R >> >> /Contents 11 0 R >>",
+    )
+    pdf.add(11, stream(b"", content(1, LETTER)))
+    return pdf.write("/Root 1 0 R"), None
+
+
+def annotated():
+    """A square annotation filled blue, by its appearance and by its interior colour (for a reader that draws its own)."""
+    pdf, _ = simple([LETTER], page_extra={0: " /Annots [30 0 R]"})
+    pdf.add(
+        30,
+        "<< /Type /Annot /Subtype /Square /Rect [100 300 300 500] /F 4 /C [0 0 1] /IC [0 0 1] /AP << /N 31 0 R >> >>",
+    )
+    pdf.add(31, stream(b"/Type /XObject /Subtype /Form /BBox [0 0 200 200]", b"0 0 1 rg 0 0 200 200 re f"))
+    return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry(LETTER)]
+
+
+def transparency():
+    """A transparency group drawn on the page: pdf.js draws it on a canvas of its own."""
+    pdf, _ = simple([LETTER])
+    pdf.add(
+        10,
+        f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {LETTER[0]} {LETTER[1]}] "
+        "/Resources << /Font << /F1 3 0 R >> /XObject << /G1 20 0 R >> /ExtGState << /A 21 0 R >> >> /Contents [11 0 R 12 0 R] >>",
+    )
+    pdf.add(12, stream(b"", b"q /A gs 1 0 0 1 100 400 cm /G1 Do Q\n"))
+    pdf.add(
+        20,
+        stream(
+            b"/Type /XObject /Subtype /Form /BBox [0 0 200 200] /Group << /S /Transparency /I true /K true >>",
+            b"0 0.6 0 rg 0 0 200 200 re f 0 0 1 rg 50 50 100 100 re f",
+        ),
+    )
+    pdf.add(21, "<< /Type /ExtGState /ca 0.5 /CA 0.5 >>")
+    return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry(LETTER)]
+
+
 FILES = {
     "plain.pdf": (plain, "A plain three-page PDF: Letter, A4 and a small page."),
     "rotated.pdf": (rotated, "Already rotated: one page inherits 180 from its tree, one sets 90."),
@@ -470,6 +561,13 @@ FILES = {
     "reference-cycle.pdf": (reference_cycle, "Resources that reach themselves: copied once."),
     "deep-tree.pdf": (deep_tree, "A page tree 300 levels deep: refused."),
     "deep-array.pdf": (deep_array, "Arrays nested 50,000 deep in the page: refused."),
+    "layered.pdf": (layered, "Two layers, one switched off: it stays off in every copy."),
+    "layered-base-off.pdf": (layered_base_off, "Layers off unless listed on: the unlisted one stays off."),
+    "null-inherited.pdf": (null_inherited, "A page whose own /Resources and /MediaBox are null: its tree's count."),
+    "user-unit.pdf": (user_unit, "A page in units of two points: its size is twice its MediaBox."),
+    "empty-wide.pdf": (empty_wide, "2,300 empty page tree nodes: more work than 2,000 pages allow."),
+    "annotated.pdf": (annotated, "A square annotation with its own appearance: drawn in images."),
+    "transparency.pdf": (transparency, "A transparency group: drawn on a canvas of its own."),
 }
 
 FLAGS = {
@@ -484,6 +582,13 @@ REFUSED = {
     "tree-cycle.pdf": "damaged",
     "deep-tree.pdf": "damaged",
     "deep-array.pdf": "damaged",
+    "empty-wide.pdf": "too-many-pages",
+}
+
+# Optional content: how many groups a file (or an output) has, and how many of them are off.
+LAYERS = {
+    "layered.pdf": {"layers": 2, "hiddenLayers": 1},
+    "layered-base-off.pdf": {"layers": 2, "hiddenLayers": 1},
 }
 
 
@@ -530,11 +635,27 @@ def operations(files):
         "copy the reference cycle": [[page("reference-cycle.pdf", 0, 90)]],
         "copy the signed and the form": [[page("signed.pdf", 0), page("outline-form.pdf", 1), page("outline-form.pdf", 0)]],
         "copy the truncated": [[page("truncated-tail.pdf", 2), page("truncated-tail.pdf", 0)]],
+        "copy the layered page turned": [[page("layered.pdf", 0, 90)]],
+        "merge both layered PDFs": [[page("layered.pdf", 0), page("layered-base-off.pdf", 0)]],
+        "copy the null-inherited page": [[page("null-inherited.pdf", 0)]],
+        "copy the user-unit page": [[page("user-unit.pdf", 0, 270)]],
+        "copy the transparency and the annotated": [[page("transparency.pdf", 0), page("annotated.pdf", 0)]],
     }
     return [
         {
             "name": name,
-            "outputs": [{"pages": pages, "expected": expect(pages)} for pages in outputs],
+            "outputs": [
+                {
+                    "pages": pages,
+                    "expected": expect(pages),
+                    # Each layered source's groups come along, those off still off.
+                    "layers": sum(LAYERS[f]["layers"] for f in sorted({p["file"] for p in pages}) if f in LAYERS),
+                    "hiddenLayers": sum(
+                        LAYERS[f]["hiddenLayers"] for f in sorted({p["file"] for p in pages}) if f in LAYERS
+                    ),
+                }
+                for pages in outputs
+            ],
         }
         for name, outputs in plans.items()
     ]
@@ -555,6 +676,7 @@ def main():
             case["outcome"] = "ok"
             case["pages"] = pages
             case.update(FLAGS.get(name, {"signed": False, "outline": False, "form": False}))
+            case.update(LAYERS.get(name, {"layers": 0, "hiddenLayers": 0}))
             pages_of[name] = pages
         cases.append(case)
     expected = {

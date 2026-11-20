@@ -7,7 +7,7 @@ import { PDFArray, PDFDict, PDFName } from '@cantoo/pdf-lib';
 import { describe, expect, test } from 'vitest';
 import expected from '../../../../../e2e/fixtures/pdfs/expected.json';
 import { buildPdf, PdfRefused, readPdf, rotationOf, type SourcePdf } from './structure';
-import { pdfPages } from './pdf-reader.testkit';
+import { pdfLayers, pdfPages } from './pdf-reader.testkit';
 import type { Rotation } from './protocol';
 
 /*
@@ -38,6 +38,10 @@ async function outcome(name: string) {
 }
 
 const pageList = (pdf: SourcePdf) => pdf.pages.map((page) => page.info);
+const layerCount = (pdf: SourcePdf) => ({
+    layers: pdf.layers?.groups.length ?? 0,
+    hiddenLayers: pdf.layers?.off.size ?? 0,
+});
 
 /* What pdf.js shows of a PDF: each page's MediaBox size and rotation. */
 async function pdfjsPages(bytes: Uint8Array) {
@@ -84,6 +88,10 @@ describe('reading each fixture as expected.json says', () => {
                 outline: file.outline,
                 form: file.form,
             });
+            expect(layerCount(result.pdf)).toEqual({
+                layers: file.layers,
+                hiddenLayers: file.hiddenLayers,
+            });
         });
     }
 });
@@ -115,6 +123,10 @@ describe('building every operation in expected.json', () => {
                 const flags = (await readPdf(made)).flags;
                 expect(flags).toEqual({ signed: false, outline: false, form: false });
                 expect(contains(made, text('/ObjStm'))).toBe(false);
+                // Layers come along, those off still off: by this engine and by pdf.js.
+                const layers = { layers: output.layers, hiddenLayers: output.hiddenLayers };
+                expect(layerCount(await readPdf(made))).toEqual(layers);
+                expect(await pdfLayers(made)).toEqual(layers);
                 if (qpdf) expect(qpdfCheck(made)).toBe('clean');
             }
         });

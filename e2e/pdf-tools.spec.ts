@@ -19,7 +19,15 @@ import { e2eDatabase, grip, newPersistentContext, registerAccount } from './help
 test.describe.configure({ mode: 'serial' });
 
 const FIXTURES = join(__dirname, 'fixtures/pdfs');
-const FILES = ['plain.pdf', 'rotated.pdf', 'signed.pdf', 'encrypted.pdf', 'outline-form.pdf'];
+const FILES = [
+    'plain.pdf',
+    'rotated.pdf',
+    'signed.pdf',
+    'encrypted.pdf',
+    'outline-form.pdf',
+    'transparency.pdf',
+    'user-unit.pdf',
+];
 const CANARY = Buffer.from(expected.canary);
 const pagesOf = (name: string) => expected.files.find((file) => file.file === name)!.pages!;
 
@@ -255,6 +263,24 @@ test('Save as images gives one PNG a page, at 150 dpi, turned with the page', as
     await expect(row(page, 'rotated.pdf')).toBeVisible();
 });
 
+test('Save as images draws a transparency group, and a page in units of two points at its full size', async () => {
+    await editPages(page, ['transparency.pdf', 'user-unit.pdf']);
+    const form = dialog(page);
+    await expect(form.locator('[data-page]')).toHaveCount(2, { timeout: 30_000 });
+    await form.getByRole('button', { name: 'Images' }).click();
+    await form.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(transfers(page)).toContainText('Saved in My files', { timeout: 90_000 });
+    await row(page, 'transparency (images)')
+        .getByRole('link', { name: 'transparency (images)' })
+        .click();
+    await expect(row(page, 'page 002.png')).toBeVisible({ timeout: 30_000 });
+    expect(pngSize(await download(page, 'page 001.png'))).toEqual({ width: 1275, height: 1650 });
+    // 300 by 200 units of two points: 600 by 400 points, 1250 by 833 at 150 dpi, never clipped to its MediaBox.
+    expect(pngSize(await download(page, 'page 002.png'))).toEqual({ width: 1250, height: 833 });
+    await page.goBack();
+    await expect(row(page, 'plain.pdf')).toBeVisible();
+});
+
 test('the signed PDF warns before saving, a form warns, and the password PDF is refused', async () => {
     await editPages(page, ['signed.pdf']);
     let form = dialog(page);
@@ -414,8 +440,8 @@ test('no plaintext reaches storage: not the store, IndexedDB, Cache Storage, the
             join drive_objects o on o.id = v.object_id
             where n.workspace_id = ${workspace}`;
         keys = objects.map((object: { object_key: string }) => object.object_key);
-        // Five sources, the merge, two splits, a second version and two images.
-        expect(keys.length).toBeGreaterThanOrEqual(11);
+        // Seven sources, the merge, two splits, a second version and four images.
+        expect(keys.length).toBeGreaterThanOrEqual(15);
     } finally {
         await database.close();
     }

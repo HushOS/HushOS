@@ -30,7 +30,9 @@ import {
     splitName,
     tooManyPages,
 } from '@/lib/pdf-tools/names';
-import { openPageDrawer, type PageDrawer } from '@/lib/pdf-tools/page-thumbnails';
+import { openPageDrawer, type Drawing, type PageDrawer } from '@/lib/pdf-tools/page-thumbnails';
+import { toolRunRows } from '@/lib/drive/runs/tool-run-rows';
+import { TOOL_FAILED } from '@/lib/tools/protocol';
 import {
     IMAGES_MAX_PAGES,
     PDF_TOOLS_MAX_BYTES,
@@ -141,6 +143,14 @@ function PdfPagesForm({
     const [saving, setSaving] = useState(false);
     const listId = useId();
     const drawers = useRef(new Map<number, Promise<PageDrawer>>());
+    // Moves on when the dialog goes: a save still drawing its thumbnails then saves nothing.
+    const generation = useRef(0);
+    useEffect(
+        () => () => {
+            generation.current++;
+        },
+        [],
+    );
 
     // Every drawer goes with the dialog: pdf.js's documents, their readers and their keys.
     useEffect(() => {
@@ -155,58 +165,67 @@ function PdfPagesForm({
         if (reading.status !== 'reading') return;
         let active = true;
         let look: { cancel(): void } | null = null;
-        void import('@/lib/pdf-tools/make').then(({ inspectPdfs, refusalWords }) => {
-            if (!active) return;
-            const started = inspectPdfs(files);
-            look = started;
-            started.result.then(
-                (inspected) => {
-                    if (!active) return;
-                    const refused = inspected.findIndex((source) => !source.ok);
-                    if (refused >= 0) {
-                        const source = inspected[refused] as Extract<Inspected, { ok: false }>;
-                        setReading({
-                            status: 'failed',
-                            message: refusalWords(source.reason, one ? null : files[refused]!.name),
+        const failed = () => {
+            if (active) setReading({ status: 'failed', message: TOOL_FAILED });
+        };
+        // The engine's chunk not loading, or the look not starting, says so; never "Reading" for ever.
+        void import('@/lib/pdf-tools/make')
+            .then(({ inspectPdfs, refusalWords }) => {
+                if (!active) return;
+                const started = inspectPdfs(files);
+                look = started;
+                started.result.then(
+                    (inspected) => {
+                        if (!active) return;
+                        const refused = inspected.findIndex((source) => !source.ok);
+                        if (refused >= 0) {
+                            const source = inspected[refused] as Extract<Inspected, { ok: false }>;
+                            setReading({
+                                status: 'failed',
+                                message: refusalWords(
+                                    source.reason,
+                                    one ? null : files[refused]!.name,
+                                ),
+                            });
+                            return;
+                        }
+                        const ready = inspected as Extract<Inspected, { ok: true }>[];
+                        const pages = ready.reduce((sum, source) => sum + source.pages.length, 0);
+                        if (tooManyPages(pages)) {
+                            setReading({
+                                status: 'failed',
+                                message: `These PDFs have more than ${PDF_TOOLS_MAX_PAGES.toLocaleString('en')} pages together, too many to edit here.`,
+                            });
+                            return;
+                        }
+                        const list = ready.flatMap((source, s) =>
+                            source.pages.map((info, page) => ({
+                                key: `${s}:${page}`,
+                                source: s,
+                                page,
+                                rotate: info.rotate,
+                                info,
+                            })),
+                        );
+                        setItems(list);
+                        setOriginal(signature(list));
+                        setFlags({
+                            signed: ready.some((source) => source.flags.signed),
+                            outline: ready.some((source) => source.flags.outline),
+                            form: ready.some((source) => source.flags.form),
                         });
-                        return;
-                    }
-                    const ready = inspected as Extract<Inspected, { ok: true }>[];
-                    const pages = ready.reduce((sum, source) => sum + source.pages.length, 0);
-                    if (tooManyPages(pages)) {
-                        setReading({
-                            status: 'failed',
-                            message: `These PDFs have more than ${PDF_TOOLS_MAX_PAGES.toLocaleString('en')} pages together, too many to edit here.`,
-                        });
-                        return;
-                    }
-                    const list = ready.flatMap((source, s) =>
-                        source.pages.map((info, page) => ({
-                            key: `${s}:${page}`,
-                            source: s,
-                            page,
-                            rotate: info.rotate,
-                            info,
-                        })),
-                    );
-                    setItems(list);
-                    setOriginal(signature(list));
-                    setFlags({
-                        signed: ready.some((source) => source.flags.signed),
-                        outline: ready.some((source) => source.flags.outline),
-                        form: ready.some((source) => source.flags.form),
-                    });
-                    setReading({ status: 'ready', inspected: ready });
-                },
-                (error: unknown) => {
-                    if (active)
-                        setReading({
-                            status: 'failed',
-                            message: error instanceof Error ? error.message : String(error),
-                        });
-                },
-            );
-        });
+                        setReading({ status: 'ready', inspected: ready });
+                    },
+                    (error: unknown) => {
+                        if (active)
+                            setReading({
+                                status: 'failed',
+                                message: error instanceof Error ? error.message : String(error),
+                            });
+                    },
+                );
+            }, failed)
+            .catch(failed);
         return () => {
             active = false;
             look?.cancel();
@@ -317,9 +336,15 @@ function PdfPagesForm({
     async function save() {
         if (saving || items.length === 0) return;
         setSaving(true);
+        // The dialog this save began in, and the unlock: either gone while thumbnails are drawn
+        // (Cancel, Escape, a lock) and nothing is saved.
+        const opened = generation.current;
+        const epoch = toolRunRows.epoch();
+        const still = () => generation.current === opened && toolRunRows.epoch() === epoch;
         try {
             if (effective === 'images') {
                 const pages = plan(items);
+                if (!still()) return;
                 onSave({
                     kind: 'images',
                     pages,
@@ -339,6 +364,7 @@ function PdfPagesForm({
                         thumbnail: index < OUTPUT_THUMBNAILS ? await thumbnailOf(pages) : null,
                     });
                 }
+                if (!still()) return;
                 if (effective === 'version')
                     onSave({
                         kind: 'version',
@@ -645,7 +671,11 @@ function PageThumbnail({
 }) {
     const canvas = useRef<HTMLCanvasElement>(null);
     const [visible, setVisible] = useState(false);
-    const [failed, setFailed] = useState(false);
+    // The rotation whose drawing failed: a turn draws again, the failure forgotten.
+    const [failedAt, setFailedAt] = useState<Rotation | null>(null);
+    const failed = failedAt === rotate;
+    // The drawing on this canvas, so the next waits for it: pdf.js draws on a canvas once at a time.
+    const drawing = useRef<Promise<unknown>>(Promise.resolve());
     useEffect(() => {
         const element = canvas.current;
         if (!element || visible) return;
@@ -658,13 +688,23 @@ function PageThumbnail({
     useEffect(() => {
         if (!visible) return;
         let active = true;
-        void drawer(source)
-            .then((draw) =>
-                active && canvas.current ? draw.draw(page, rotate, 240, canvas.current) : undefined,
-            )
-            .catch(() => active && setFailed(true));
+        let current: Drawing | null = null;
+        const before = drawing.current;
+        const next = before
+            .catch(() => {})
+            .then(() => drawer(source))
+            .then((draw) => {
+                if (!active || !canvas.current) return;
+                current = draw.draw(page, rotate, 240, canvas.current);
+                return current.promise;
+            })
+            .catch(() => {
+                if (active) setFailedAt(rotate);
+            });
+        drawing.current = next;
         return () => {
             active = false;
+            current?.cancel();
         };
     }, [visible, source, page, rotate, drawer]);
     return (

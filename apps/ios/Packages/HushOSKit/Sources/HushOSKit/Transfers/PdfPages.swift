@@ -189,6 +189,12 @@ public enum PdfPages {
         }
         context.translateBy(x: -box.minX, y: -box.minY)
         context.drawPDFPage(cgPage)
+        // Then the annotations a viewer shows (ink, highlights, notes), each in its own appearance, in page space.
+        for annotation in pdfPage.annotations where annotation.shouldDisplay {
+            context.saveGState()
+            annotation.draw(with: .mediaBox, in: context)
+            context.restoreGState()
+        }
         return context.makeImage()
     }
 
@@ -199,7 +205,74 @@ public enum PdfPages {
         else { return nil }
         let options: [CFString: Any] = png ? [:] : [kCGImageDestinationLossyCompressionQuality: 0.92]
         CGImageDestinationAddImage(destination, image, options as CFDictionary)
-        return CGImageDestinationFinalize(destination) ? out as Data : nil
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return withoutExif(out as Data, png: png)
+    }
+
+    /* ImageIO writes an EXIF block (colour space and pixel size) into every PNG and JPEG it makes; the web's
+       canvas and Android's Bitmap write none, so it is cut: a PNG's `eXIf` chunks, a JPEG's APP1 segments
+       before its first scan. Anything not laid out as ImageIO writes it is refused (nil), never passed on. */
+    static func withoutExif(_ data: Data, png: Bool) -> Data? {
+        let bytes = [UInt8](data)
+        var out = [UInt8]()
+        out.reserveCapacity(bytes.count)
+        func be(_ at: Int, _ count: Int) -> Int { (at..<at + count).reduce(0) { $0 << 8 | Int(bytes[$1]) } }
+        if png {
+            guard bytes.count >= 8 else { return nil }
+            out += bytes[0..<8]
+            var at = 8
+            while at < bytes.count {
+                guard at + 12 <= bytes.count else { return nil }
+                let end = at + 12 + be(at, 4)
+                guard end <= bytes.count else { return nil }
+                if bytes[(at + 4)..<(at + 8)] != [0x65, 0x58, 0x49, 0x66] { out += bytes[at..<end] }  // "eXIf"
+                at = end
+            }
+            return Data(out)
+        }
+        guard bytes.count >= 4, bytes[0] == 0xFF, bytes[1] == 0xD8 else { return nil }
+        out += bytes[0..<2]
+        var at = 2
+        while at + 4 <= bytes.count, bytes[at] == 0xFF {
+            let marker = bytes[at + 1]
+            if marker == 0xDA { break }  // the first scan: the rest is image data
+            let end = at + 2 + be(at + 2, 2)
+            guard end <= bytes.count else { return nil }
+            if marker != 0xE1 { out += bytes[at..<end] }
+            at = end
+        }
+        guard at + 2 <= bytes.count, bytes[at] == 0xFF, bytes[at + 1] == 0xDA else { return nil }
+        out += bytes[at...]
+        return Data(out)
+    }
+
+    /*
+     * Each image's size, or the first page past `maxPixels` refused by its number: checked before the room is
+     * reserved, in 64-bit arithmetic (a MediaBox can make each side up to 2^32 pixels), never multiplied as Int.
+     */
+    public static func imagePlan(_ pages: [PdfPagePlan], inspections: [PdfInspection], dpi: UInt32,
+                                 maxPixels: UInt64) throws -> [(width: Int, height: Int)] {
+        try pages.enumerated().map { index, page in
+            let info = inspections[Int(page.source)].pages[Int(page.page)]
+            let size = pdfImageSize(width: info.width, height: info.height, rotate: page.rotate, dpi: dpi)
+            let (pixels, overflow) = UInt64(size[0]).multipliedReportingOverflow(by: UInt64(size[1]))
+            guard !overflow, pixels <= maxPixels else {
+                throw ImagesPdfRefused("Page \(index + 1) is too large to save as an image at this resolution. Choose 150 dpi, or fewer pages.")
+            }
+            return (Int(size[0]), Int(size[1]))
+        }
+    }
+
+    /*
+     * What a save that failed after it began says: its own reason when its clean-up removed everything,
+     * and what may still be there (or the 401, for the session check) when it didn't.
+     */
+    static func stopped(_ error: Error, _ stopped: SaveRunStopped) -> Error {
+        if error is ToolCancelled || error is CancellationError { return stopped }
+        if stopped.refusedSession != nil { return stopped }
+        guard stopped.cleanup == .left else { return error }
+        let reason = (error as? ImagesPdfRefused)?.message ?? (error as? ToolFailed)?.message ?? ErrorWords.say(error) ?? toolFailedMessage()
+        return ImagesPdfRefused("\(reason) \(stopped.message)")
     }
 
     /* An image's size for a page as the core sizes it (and the web): points at `dpi`, turned with the page. */
@@ -298,14 +371,21 @@ extension PdfPages {
         }
         switch choice {
         case let .images(pages, png, dpi, folderName):
-            let sizes = pages.map { imageSize(read.inspections[Int($0.source)].pages[Int($0.page)], rotate: $0.rotate, dpi: dpi) }
+            // Every page's size first: one too large to draw is refused before anything is reserved or made.
+            let sizes = try imagePlan(pages, inspections: read.inspections, dpi: dpi, maxPixels: limits.imagesMaxPixels)
             // A guess, as conversion's is: a PNG of a page is rarely more than a byte a pixel, a JPEG a third of that.
-            let results: [PlannedResult] = sizes.map { .known(size: UInt64($0.width * $0.height) / (png ? 1 : 3), thumbnail: true) }
+            let results: [PlannedResult] = sizes.map { .known(size: UInt64($0.width) * UInt64($0.height) / (png ? 1 : 3), thumbnail: true) }
             let run = try await SaveRun.start(writer: vault, targets: [folder], results: results)
             do {
                 let into = try await run.folder(folderName, in: folder, sources: signing(pages))
-                // Opened once; drawn from one tool run at a time, never two threads at once.
-                let documents = Documents(read.data.map { PDFDocument(data: $0) })
+                // The PDFs read once into the core's writer, which makes each page a PDF to draw (its annotations
+                // drawn into it, as a viewer shows them): PDFKit draws only page content into a bitmap.
+                let writer = PdfPagesWriter()
+                defer { writer.clear() }
+                let sourceData = read.data
+                try await ToolRuns.shared.run("Reading \(files.count == 1 ? files[0].name : "\(files.count) PDFs")") { control in
+                    for bytes in sourceData { _ = try writer.add(bytes: bytes, control: control) }
+                }
                 let names = pages.indices.map { pageImageName($0, png: png) }
                 for (index, page) in pages.enumerated() {
                     let size = sizes[index]
@@ -316,13 +396,9 @@ extension PdfPages {
                     do {
                         made = try await ToolRuns.shared.run("Saving page \(index + 1) as an image") { control in
                             try control.progress()
-                            guard UInt64(size.width) * UInt64(size.height) <= limits.imagesMaxPixels else {
-                                let refused = ImagesPdfRefused("Page \(index + 1) is too large to save as an image at this resolution. Choose 150 dpi, or fewer pages.")
-                                refusal.set(refused)
-                                throw refused
-                            }
-                            guard let document = documents.list[Int(page.source)],
-                                  let image = draw(document, page: Int(page.page), rotate: page.rotate, width: size.width, height: size.height),
+                            let drawable = try writer.drawable(page: page, control: control)
+                            guard let document = PDFDocument(data: drawable),
+                                  let image = draw(document, page: 0, rotate: page.rotate, width: size.width, height: size.height),
                                   let encoded = encode(image, png: png)
                             else {
                                 let refused = ImagesPdfRefused(words(code: "damaged", name: files.count > 1 ? files[Int(page.source)].name : nil))
@@ -345,25 +421,22 @@ extension PdfPages {
                 _ = await TextSave.end(run)
                 return "Saved “\(folderName)”."
             } catch {
-                let stopped = await run.cancel()
-                if error is ToolCancelled || error is CancellationError { throw stopped }
-                throw error
+                throw stopped(error, await run.cancel())
             }
         case let .version(pages, file, startedFrom):
             let run = try await SaveRun.start(writer: vault, targets: [file], results: [.fromSources(sourcesSize: total, thumbnail: true)])
             do {
-                let made = try await buildAll(read: read, names: files.map(\.name), outputs: [pages], limits: limits, progress: progress)
-                let thumb = thumbnailOf(read: read, pages: pages)
-                let saved = try await run.version(made[0], of: file, in: folder, startedFrom: startedFrom, sources: signing(pages),
-                                                  mime: "application/pdf", thumbnail: thumb)
+                var saved: VersionSaved?
+                try await buildEach(read: read, names: files.map(\.name), outputs: [pages], limits: limits, progress: progress) { _, made in
+                    saved = try await run.version(made, of: file, in: folder, startedFrom: startedFrom, sources: signing(pages),
+                                                  mime: "application/pdf", thumbnail: thumbnailOf(read: read, pages: pages))
+                }
                 try Task.checkCancellation()
                 _ = await TextSave.end(run)
                 if case .stale = saved { throw ImagesPdfRefused(stale(file.name)) }
                 return "Saved a new version of “\(file.name)”."
             } catch {
-                let stopped = await run.cancel()
-                if error is ToolCancelled || error is CancellationError { throw stopped }
-                throw error
+                throw stopped(error, await run.cancel())
             }
         case let .files(outputs):
             let count = max(1, outputs.reduce(0) { $0 + $1.pages.count })
@@ -372,40 +445,62 @@ extension PdfPages {
             }
             let run = try await SaveRun.start(writer: vault, targets: [folder], results: results)
             do {
-                let made = try await buildAll(read: read, names: files.map(\.name), outputs: outputs.map(\.pages), limits: limits, progress: progress)
-                for (index, output) in outputs.enumerated() {
-                    _ = try await run.file(made[index], name: output.name, mime: "application/pdf", sources: signing(output.pages),
+                // Each output saved as it is made, its bytes counted in the budget until then: never all of them at once.
+                try await buildEach(read: read, names: files.map(\.name), outputs: outputs.map(\.pages), limits: limits, progress: progress) { index, made in
+                    let output = outputs[index]
+                    _ = try await run.file(made, name: output.name, mime: "application/pdf", sources: signing(output.pages),
                                            thumbnail: index < 20 ? thumbnailOf(read: read, pages: output.pages) : nil, in: folder)
                     try Task.checkCancellation()
                 }
                 _ = await TextSave.end(run)
                 return outputs.count == 1 ? "Saved “\(outputs[0].name)”." : "Saved \(outputs.count) files."
             } catch {
-                let stopped = await run.cancel()
-                if error is ToolCancelled || error is CancellationError { throw stopped }
-                throw error
+                throw stopped(error, await run.cancel())
             }
         }
     }
 
-    /* The outputs, built in a tool run; their bytes counted in the process's budget until saved. */
-    static func buildAll(read: Read, names: [String], outputs: [[PdfPagePlan]], limits: PdfToolsLimits,
-                         progress: @escaping @Sendable (Int, Int) -> Void) async throws -> [Data] {
+    /*
+     * The outputs, one at a time: the PDFs read once into one writer, then each output built in a tool run of
+     * its own, its bytes charged to `budget` (waiting while the process holds 512 MB of results) and handed
+     * to `save`, the charge given back once `save` returns or throws, before the next is built. So a split
+     * whose ranges each carry a large shared font holds one output at a time, never all of them.
+     */
+    static func buildEach(read: Read, names: [String], outputs: [[PdfPagePlan]], limits: PdfToolsLimits,
+                          budget: ToolBudget = ToolRuns.budget,
+                          progress: @escaping @Sendable (Int, Int) -> Void = { _, _ in },
+                          save: (Int, Data) async throws -> Void) async throws {
         let refusal = Refusal()
         let data = read.data
+        let writer = PdfPagesWriter()
+        defer { writer.clear() }
+        writer.limitOutput(bytes: limits.maxOutputBytes)
+        let label = outputs.count == 1 ? "Making \(names.first ?? "a PDF")" : "Splitting \(names.first ?? "a PDF")"
         do {
-            return try await ToolRuns.shared.run(outputs.count == 1 ? "Making \(names.first ?? "a PDF")" : "Splitting \(names.first ?? "a PDF")") { control in
-                var made: [Data] = []
-                do {
-                    try build(sources: data, names: names, outputs: outputs, maxOutput: limits.maxOutputBytes, control: control) { index, bytes in
-                        made.append(bytes)
-                        progress(index + 1, outputs.count)
+            try await ToolRuns.shared.run(label) { control in
+                for (index, bytes) in data.enumerated() {
+                    do { _ = try writer.add(bytes: bytes, control: control) } catch PdfToolsError.Refused(let code) {
+                        let refused = ImagesPdfRefused(words(code: code, name: data.count > 1 ? names[index] : nil))
+                        refusal.set(refused)
+                        throw refused
                     }
-                } catch let refused as ImagesPdfRefused {
-                    refusal.set(refused)
-                    throw refused
                 }
-                return made
+            }
+            for (index, pages) in outputs.enumerated() {
+                let lease = ImagesPdf.Lease(giveBack: { budget.release(bytes: $0, generation: $1) })
+                defer { lease.release() }
+                let made = try await ToolRuns.shared.run(label) { control in
+                    let bytes: Data
+                    do { bytes = try writer.build(pages: pages, control: control) } catch PdfToolsError.Refused(let code) {
+                        let refused = ImagesPdfRefused(words(code: code, name: nil))
+                        refusal.set(refused)
+                        throw refused
+                    }
+                    lease.take(UInt64(bytes.count), try budget.produce(bytes: UInt64(bytes.count), control: control))
+                    return bytes
+                }
+                progress(index + 1, outputs.count)
+                try await save(index, made)
             }
         } catch {
             if let refused = refusal.value { throw refused }
@@ -413,10 +508,12 @@ extension PdfPages {
         }
     }
 
-    /* The PDFs as PDFKit opened them, handed from run to run: each run draws on its own thread, one after another. */
-    final class Documents: @unchecked Sendable {
-        let list: [PDFDocument?]
-        init(_ list: [PDFDocument?]) { self.list = list }
+    /* One page as the core makes it to draw (annotations in its content), handed to `made`: synchronous, a tool run's work. */
+    static func drawable(sources: [Data], page: PdfPagePlan, control: RunControl, made: (Data) throws -> Void) throws {
+        let writer = PdfPagesWriter()
+        defer { writer.clear() }
+        for bytes in sources { _ = try writer.add(bytes: bytes, control: control) }
+        try made(try writer.drawable(page: page, control: control))
     }
 
     static func thumbnailOf(read: Read, pages: [PdfPagePlan]) -> Data? {

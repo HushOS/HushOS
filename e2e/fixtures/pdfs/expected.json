@@ -26,7 +26,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "rotated.pdf",
@@ -47,7 +49,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "nested.pdf",
@@ -73,7 +77,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "encrypted.pdf",
@@ -95,7 +101,9 @@
             ],
             "signed": true,
             "outline": false,
-            "form": true
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "unsigned-field.pdf",
@@ -111,7 +119,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": true
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "outline-form.pdf",
@@ -132,7 +142,9 @@
             ],
             "signed": false,
             "outline": true,
-            "form": true
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "damaged.pdf",
@@ -164,7 +176,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "object-streams.pdf",
@@ -190,7 +204,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "incremental.pdf",
@@ -216,7 +232,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "tree-cycle.pdf",
@@ -238,7 +256,9 @@
             ],
             "signed": false,
             "outline": false,
-            "form": false
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         },
         {
             "file": "deep-tree.pdf",
@@ -251,6 +271,120 @@
             "note": "Arrays nested 50,000 deep in the page: refused.",
             "sha256": "4437bec89205d191350084895f3525c9c93e7a04db515fece81d8fd2efbbdab8",
             "outcome": "damaged"
+        },
+        {
+            "file": "layered.pdf",
+            "note": "Two layers, one switched off: it stays off in every copy.",
+            "sha256": "51c8c3d96fb423153f04e31e55319dedfd1423ead339e15011551572079308c3",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 2,
+            "hiddenLayers": 1
+        },
+        {
+            "file": "layered-base-off.pdf",
+            "note": "Layers off unless listed on: the unlisted one stays off.",
+            "sha256": "34b41001bd5ddec564d2cd98f280efd45fa5772c1d7928fd879747b53a85c93a",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 2,
+            "hiddenLayers": 1
+        },
+        {
+            "file": "null-inherited.pdf",
+            "note": "A page whose own /Resources and /MediaBox are null: its tree's count.",
+            "sha256": "97041ed022386871609523f7ea375b7b441c313c28e6ec83fe7ca40f5caa91d3",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "user-unit.pdf",
+            "note": "A page in units of two points: its size is twice its MediaBox.",
+            "sha256": "ed96341594683e5fc213072d5f214cf7226420ef6af3fb5cab4d3465977d8ed1",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 600,
+                    "height": 400,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "empty-wide.pdf",
+            "note": "2,300 empty page tree nodes: more work than 2,000 pages allow.",
+            "sha256": "4efaa9cc49841a8253af7be235e7a9f550345ea149f01170a074a1537d488cf1",
+            "outcome": "too-many-pages"
+        },
+        {
+            "file": "annotated.pdf",
+            "note": "A square annotation with its own appearance: drawn in images.",
+            "sha256": "8bf95926ae6606fd7d90faa821842afdcd1a67ba5c31e59456a1d9fd92856c7b",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "transparency.pdf",
+            "note": "A transparency group: drawn on a canvas of its own.",
+            "sha256": "f7eddc831b305f62494710cbf578da183e50f130d83698cc0e30ed09330a5cf4",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         }
     ],
     "operations": [
@@ -291,7 +425,9 @@
                             "height": 600,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -332,7 +468,9 @@
                             "height": 842,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -363,7 +501,9 @@
                             "height": 600,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -394,7 +534,9 @@
                             "height": 842,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 },
                 {
                     "pages": [
@@ -410,7 +552,9 @@
                             "height": 600,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -431,7 +575,9 @@
                             "height": 792,
                             "rotate": 180
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 },
                 {
                     "pages": [
@@ -447,7 +593,9 @@
                             "height": 405,
                             "rotate": 90
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -478,7 +626,9 @@
                             "height": 405,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -569,7 +719,9 @@
                             "height": 600,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -640,7 +792,9 @@
                             "height": 842,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -661,7 +815,9 @@
                             "height": 842,
                             "rotate": 90
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -702,7 +858,9 @@
                             "height": 792,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         },
@@ -733,7 +891,144 @@
                             "height": 792,
                             "rotate": 0
                         }
-                    ]
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
+                }
+            ]
+        },
+        {
+            "name": "copy the layered page turned",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "layered.pdf",
+                            "page": 0,
+                            "rotate": 90
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 90
+                        }
+                    ],
+                    "layers": 2,
+                    "hiddenLayers": 1
+                }
+            ]
+        },
+        {
+            "name": "merge both layered PDFs",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "layered.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "layered-base-off.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 4,
+                    "hiddenLayers": 2
+                }
+            ]
+        },
+        {
+            "name": "copy the null-inherited page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "null-inherited.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
+                }
+            ]
+        },
+        {
+            "name": "copy the user-unit page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "user-unit.pdf",
+                            "page": 0,
+                            "rotate": 270
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 600,
+                            "height": 400,
+                            "rotate": 270
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
+                }
+            ]
+        },
+        {
+            "name": "copy the transparency and the annotated",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "transparency.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "annotated.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0
                 }
             ]
         }

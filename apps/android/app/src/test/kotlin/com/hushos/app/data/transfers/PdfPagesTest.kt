@@ -139,4 +139,31 @@ class PdfPagesTest {
         assertEquals(PdfPages.Stage.OFFER, PdfPages.imagesStage(51, roomy))
         assertEquals(PdfPages.Stage.CEILING, PdfPages.imagesStage(501, roomy))
     }
+
+    @Test
+    fun aPageTooLargeIsRefusedBeforeAnythingIsPlanned() {
+        val letter = com.hushos.core.PdfPage(612.0, 792.0, 0u)
+        val huge = com.hushos.core.PdfPage(1e15, 1e15, 0u)
+        val inspection = com.hushos.core.PdfInspection(listOf(letter, huge), false, false, false)
+        assertEquals(listOf(1275 to 1650), PdfPages.imagePlan(listOf(plan(0, 0, 0)), listOf(inspection), 150u, 40_000_000L))
+        // Each side of the huge page is 2^32 pixels, past an Int: refused by its number, never wrapped below the cap.
+        try {
+            PdfPages.imagePlan(listOf(plan(0, 0, 0), plan(0, 1, 0)), listOf(inspection), 150u, 40_000_000L)
+            fail("a page past the cap was planned")
+        } catch (refused: ImagesPdfRefused) {
+            assertEquals("Page 2 is too large to save as an image at this resolution. Choose 150 dpi, or fewer pages.", refused.message)
+        }
+    }
+
+    @Test
+    fun aFailedSaveSaysWhatMayStillBeThere() {
+        val reason = ImagesPdfRefused("Page 2 is too large.")
+        val left = SaveRunStopped(SaveRunStopped.Reason.FAILED, "Some of what was made may still be there.", SaveCleanup.LEFT)
+        assertEquals("Page 2 is too large. Some of what was made may still be there.", PdfPages.afterStop(reason, left).message)
+        val clean = SaveRunStopped(SaveRunStopped.Reason.FAILED, "Nothing was saved.", SaveCleanup.DELETED)
+        assertTrue(PdfPages.afterStop(reason, clean) === reason)
+        val session = SaveRunStopped(SaveRunStopped.Reason.FAILED, "Signed out.", SaveCleanup.DELETED, sessionRefused = true)
+        assertTrue(PdfPages.afterStop(reason, session) === session)
+        assertTrue(PdfPages.afterStop(kotlinx.coroutines.CancellationException(), clean) === clean)
+    }
 }

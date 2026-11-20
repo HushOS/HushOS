@@ -88,7 +88,11 @@ export type SourcePdf = {
     flags: PdfFlags;
     /* Every page tree node's reference, pages included: a reference to one is never copied. */
     treeRefs: Set<string>;
+    /* Its optional content groups (layers) and those switched off, or null without any. */
+    layers: Layers | null;
 };
+
+export type Layers = { groups: PDFRef[]; off: Set<string> };
 
 const tag = (ref: PDFRef) => `${ref.objectNumber} ${ref.generationNumber}`;
 const name = (value: string) => PDFName.of(value);
@@ -146,7 +150,54 @@ export async function readPdf(
     const catalog = resolve(context, context.trailerInfo.Root);
     if (!(catalog instanceof PDFDict)) throw new PdfRefused('damaged');
     const { pages, treeRefs } = walkPages(context, catalog, maxPages, onProgress);
-    return { context, pages, flags: flagsOf(context, catalog), treeRefs };
+    return {
+        context,
+        pages,
+        flags: flagsOf(context, catalog),
+        treeRefs,
+        layers: layersOf(context, catalog),
+    };
+}
+
+/*
+ * The catalog's optional content: every group, and those off by its default configuration (/D):
+ * with /BaseState /OFF, all but those listed /ON; otherwise those listed /OFF. Copied pages keep
+ * their groups, so an output says the same groups are off, or a hidden layer would show.
+ */
+function layersOf(context: PDFContext, catalog: PDFDict): Layers | null {
+    const properties = resolve(context, catalog.get(name('OCProperties')));
+    if (!(properties instanceof PDFDict)) return null;
+    const list = (value: PDFObject | undefined) => {
+        const array = resolve(context, value);
+        if (!(array instanceof PDFArray)) return [];
+        return array.asArray().filter((item): item is PDFRef => item instanceof PDFRef);
+    };
+    const groups = list(properties.get(name('OCGs'))).filter(
+        (ref) => context.lookup(ref) instanceof PDFDict,
+    );
+    if (groups.length === 0) return null;
+    const config = resolve(context, properties.get(name('D')));
+    const settings = config instanceof PDFDict ? config : null;
+    const base = settings ? resolve(context, settings.get(name('BaseState'))) : undefined;
+    const known = new Set(groups.map(tag));
+    let off: Set<string>;
+    if (base === name('OFF')) {
+        const on = new Set(list(settings?.get(name('ON'))).map(tag));
+        off = new Set([...known].filter((group) => !on.has(group)));
+    } else {
+        off = new Set(
+            list(settings?.get(name('OFF')))
+                .map(tag)
+                .filter((group) => known.has(group)),
+        );
+    }
+    return { groups, off };
+}
+
+/* A page's own /UserUnit: points in one unit of its boxes, a positive number, or 1. */
+function userUnitOf(context: PDFContext, dict: PDFDict) {
+    const unit = numberOf(resolve(context, dict.get(name('UserUnit'))));
+    return unit !== null && Number.isFinite(unit) && unit > 0 ? unit : 1;
 }
 
 function walkPages(
@@ -184,12 +235,17 @@ function walkPages(
         if (isTree) {
             if (!(kids instanceof PDFArray)) throw new PdfRefused('damaged');
             const items = kids.asArray();
+            // Work waiting is bounded as pages are: past it, more pages than a run takes.
+            if (stack.length + items.length > maxPages + PAGE_TREE_MAX_DEPTH)
+                throw new PdfRefused('too-many-pages');
             for (let index = items.length - 1; index >= 0; index--)
                 stack.push({ node: items[index], inherited: own, depth: depth + 1 });
             continue;
         }
         if (pages.length >= maxPages) throw new PdfRefused('too-many-pages');
-        const size = sizeOf(context, own.MediaBox);
+        const box = sizeOf(context, own.MediaBox);
+        const unit = userUnitOf(context, dict);
+        const size = { width: box.width * unit, height: box.height * unit };
         pages.push({
             leaf: dict,
             ref,
@@ -274,6 +330,9 @@ export async function buildPdf(
         const map = new Map<PDFName, PDFObject>();
         for (const [key, value] of node.leaf.entries()) {
             if (key === name('Parent')) continue;
+            // A null inherited entry is absent: the tree's value, found by the walk, is copied below.
+            if (INHERITED.some((inherited) => key === name(inherited)) && isNull(source, value))
+                continue;
             map.set(key, copier.value(value, 0));
         }
         for (const key of INHERITED) {
@@ -290,6 +349,29 @@ export async function buildPdf(
         onPage();
         await Promise.resolve();
     }
+    // Every layer of a source a page came from, those off still off.
+    const groups: PDFObject[] = [];
+    const off: PDFObject[] = [];
+    for (const [index, source] of sources.entries()) {
+        if (!source.layers || !planned.some((page) => page.source === index)) continue;
+        const copier = copiers[index]!;
+        for (const group of source.layers.groups) {
+            const copied = copier.ref(group);
+            if (copied === PDFNull) continue;
+            groups.push(copied);
+            if (source.layers.off.has(tag(group))) off.push(copied);
+        }
+        copier.drain();
+    }
+    if (groups.length) {
+        const settings = PDFDict.withContext(dest);
+        settings.set(name('Order'), dest.obj(groups));
+        if (off.length) settings.set(name('OFF'), dest.obj(off));
+        const properties = PDFDict.withContext(dest);
+        properties.set(name('OCGs'), dest.obj(groups));
+        properties.set(name('D'), settings);
+        doc.catalog.set(name('OCProperties'), properties);
+    }
     const made = await doc.save({
         useObjectStreams: false,
         addDefaultPage: false,
@@ -297,6 +379,11 @@ export async function buildPdf(
     });
     if (made.byteLength > maxBytes) throw new PdfRefused('too-large');
     return made;
+}
+
+function isNull(source: SourcePdf, value: PDFObject) {
+    const resolved = resolve(source.context, value);
+    return resolved === undefined || resolved === PDFNull;
 }
 
 /* Copies objects of one source into the new document: each reference once, without recursing into references. */

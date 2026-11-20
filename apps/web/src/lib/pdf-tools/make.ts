@@ -20,7 +20,6 @@ import {
     PDF_MAX_BYTES,
     PDF_TOOLS_MAX_FILES,
     PDF_TOOLS_MAX_PAGES,
-    imageSize,
     parsePages,
     type PageInfo,
     type PagePlan,
@@ -32,6 +31,7 @@ import {
 } from './protocol';
 import { THUMBNAIL } from '@/lib/images-pdf/protocol';
 import { MIXED_FOLDERS } from './names';
+import { imagesPlan, OutputLedger, OutputMismatch, sourcesFor } from './outputs';
 
 /*
  * Edit pages on the page (docs/file-tools-design.md, feature (c)).
@@ -80,6 +80,7 @@ export function inspectPdfs(nodes: readonly DriveNode[]) {
         viewer: true,
         maxOutputs: 1,
         maxTotalBytes: 1,
+        refusals: { 'too-many-pages-together': TOO_MANY_TOGETHER },
     });
     const result = run.result.then((summary): Inspected[] => {
         const sources = (summary as { sources?: unknown }).sources;
@@ -109,6 +110,8 @@ export function inspectPdfs(nodes: readonly DriveNode[]) {
     });
     return { result, cancel: () => run.cancel() };
 }
+
+export const TOO_MANY_TOGETHER = `These PDFs have more than ${PDF_TOOLS_MAX_PAGES.toLocaleString('en')} pages together, too many to edit here.`;
 
 /* The person's words for a refused PDF: one alone, or one of several by its name. */
 export function refusalWords(
@@ -187,8 +190,7 @@ const lower = (label: string) => label.charAt(0).toLowerCase() + label.slice(1);
 
 /* The PDFs a set of pages came from, as the save path signs them (the weakest of them). */
 function sourcesOf(job: PdfPagesJob, pages: readonly PagePlan[]) {
-    const used = [...new Set(pages.map((page) => page.source))].sort((a, b) => a - b);
-    return used.map((index) => ({ node: job.sources[index]!, source: 'drive' as const }));
+    return sourcesFor(job.sources, pages);
 }
 
 function titleOf(job: PdfPagesJob) {
@@ -227,6 +229,8 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
         },
     );
     const total = job.sources.reduce((sum, node) => sum + (nodeSize(node) ?? 0), 0);
+    // Set when a worker hands back what it wasn't asked for: the save stops, as a failure.
+    let mismatch = false;
     try {
         if (job.sources.length === 0 || job.sources.length > PDF_TOOLS_MAX_FILES)
             throw new Error(TOOL_FAILED);
@@ -248,17 +252,13 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
         if (job.kind === 'images') {
             if (job.pages.length === 0 || job.pages.length > IMAGES_MAX_PAGES)
                 throw new Error(TOOL_FAILED);
-            const results: PlannedResult[] = job.pages.map((page, index) => {
-                const size = imageSize(
-                    job.sizes[index] ?? { width: 612, height: 792 },
-                    page.rotate,
-                    job.dpi,
-                );
+            // Every page's size first: one too large to draw is refused before anything is reserved or made.
+            const results: PlannedResult[] = imagesPlan(job.pages, job.sizes, job.dpi).map(
                 // A guess, as conversion's is: a PNG of a page is rarely more than a byte a pixel.
-                return {
+                (size) => ({
                     size: Math.ceil(size.width * size.height * (job.format === 'png' ? 1 : 0.3)),
-                };
-            });
+                }),
+            );
             save = await startSaveRun(queryClient, { targets: [job.folder], results });
             if (cancelled) throw new ToolCancelled();
             const run = save;
@@ -269,6 +269,8 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             if (cancelled) throw new ToolCancelled();
             let thumbnail: Uint8Array | null = null;
             const count = job.pages.length;
+            const mime = job.format === 'png' ? 'image/png' : 'image/jpeg';
+            const ledger = new OutputLedger(job.names, mime);
             const render = startToolRun<RenderInput, RenderSummary>({
                 label: titleOf(job),
                 worker: pdfRenderWorker,
@@ -293,9 +295,13 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                         output.release();
                         return;
                     }
-                    const mime = job.format === 'png' ? 'image/png' : 'image/jpeg';
-                    if (output.mime !== mime || !job.names.includes(output.name)) {
+                    let index: number;
+                    try {
+                        index = ledger.take(output.name, output.mime);
+                    } catch {
                         output.release();
+                        mismatch = true;
+                        tool?.cancel();
                         return;
                     }
                     const own = thumbnail;
@@ -306,7 +312,8 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                                 name: output.name,
                                 bytes: new Uint8Array(output.bytes),
                                 mime,
-                                sources: sourcesOf(job, job.pages),
+                                // Signed by its own PDF, never the weakest of every PDF in the run.
+                                sources: sourcesOf(job, [job.pages[index]!]),
                                 thumbnail: own,
                                 into,
                             })
@@ -316,6 +323,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             });
             tool = render;
             await follow(render, row, () => cancelled, count, 'page');
+            ledger.complete();
         } else {
             const outputs = job.kind === 'version' ? [job.output] : job.outputs;
             const pageCount = outputs.reduce((sum, output) => sum + output.pages.length, 0);
@@ -332,7 +340,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             if (cancelled) throw new ToolCancelled();
             const run = save;
             const names = outputs.map((output) => output.name);
-            let next = 0;
+            const ledger = new OutputLedger(names, 'application/pdf');
             const build = startToolRun<PdfToolsInput, PdfToolsSummary>({
                 label: titleOf(job),
                 worker: pdfToolsWorker,
@@ -348,17 +356,17 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                     names,
                 ),
                 onOutput: (output: ToolOutput) => {
-                    // In order, each named as asked, a PDF: anything else is dropped.
-                    const index = next++;
-                    const planned = outputs[index];
-                    if (
-                        !planned ||
-                        output.name !== planned.name ||
-                        output.mime !== 'application/pdf'
-                    ) {
+                    // In order, each named as asked, a PDF: anything else stops the save.
+                    let index: number;
+                    try {
+                        index = ledger.take(output.name, output.mime);
+                    } catch {
                         output.release();
+                        mismatch = true;
+                        tool?.cancel();
                         return;
                     }
+                    const planned = outputs[index]!;
                     const bytes = new Uint8Array(output.bytes);
                     if (job.kind === 'version') {
                         const file = job.sources[0]!;
@@ -398,6 +406,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             });
             tool = build;
             await follow(build, row, () => cancelled, pageCount, 'page', job.sources.length);
+            ledger.complete();
         }
         row.update({ phase: 'saving', line: 'Saving', progress: null });
         await Promise.all(saving);
@@ -422,7 +431,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             openStorageFull();
         row.update({
             phase: 'failed',
-            line: failureWords(error, stopped, cancelled),
+            line: failureWords(mismatch ? new OutputMismatch() : error, stopped, cancelled),
             progress: null,
         });
     }
@@ -471,6 +480,8 @@ function renderRefusals(sources: readonly string[], pages: number): Record<strin
 }
 
 function failureWords(error: unknown, stopped: RunStopped | null, cancelled: boolean) {
+    if (error instanceof OutputMismatch)
+        return stopped?.cleanup === 'left' ? stopped.message : TOOL_FAILED;
     if (error instanceof RunStopped) return error.message;
     if (error instanceof SaveRefused) return error.message;
     // The run's clean-up says it all when it couldn't finish, or when the run was asked to stop.

@@ -164,6 +164,33 @@ object PdfPages {
         pdfImageSize(page.width, page.height, rotate, dpi).let { it[0].toInt() to it[1].toInt() }
 
     /*
+     * Each image's size, or the first page past `maxPixels` refused by its number: checked before the room is
+     * reserved, as Longs (each side can be up to 2^32 pixels, past an Int), never multiplied as Ints.
+     */
+    fun imagePlan(pages: List<PdfPagePlan>, inspections: List<PdfInspection>, dpi: UInt, maxPixels: Long): List<Pair<Int, Int>> =
+        pages.mapIndexed { index, page ->
+            val info = inspections[page.source.toInt()].pages[page.page.toInt()]
+            val (w, h) = pdfImageSize(info.width, info.height, page.rotate, dpi).let { it[0].toLong() to it[1].toLong() }
+            // Each side alone first: two sides of 2^32 multiply past a Long's range.
+            if (w > maxPixels || h > maxPixels || w * h > maxPixels) throw ImagesPdfRefused(
+                "Page ${index + 1} is too large to save as an image at this resolution. Choose 150 dpi, or fewer pages.",
+            )
+            w.toInt() to h.toInt()
+        }
+
+    /*
+     * What a save that failed after it began says: its own reason when its clean-up removed everything, and
+     * what may still be there (or the 401, for the session check) when it didn't.
+     */
+    fun afterStop(error: Throwable, stopped: SaveRunStopped): Throwable {
+        if (error is kotlinx.coroutines.CancellationException || error is ImagesPdf.StoppedWhileSaving) return stopped
+        if (stopped.sessionRefused) return stopped
+        if (stopped.cleanup != SaveCleanup.LEFT) return error
+        val reason = (error as? ImagesPdfRefused)?.message ?: (error as? ToolFailed)?.message ?: com.hushos.core.toolFailedMessage()
+        return ImagesPdfRefused("$reason ${stopped.message}")
+    }
+
+    /*
      * A PDF for PdfRenderer: the bytes in an anonymous memory file (memfd, Android 11 and later), never a
      * file on storage. Null before Android 11, or when PdfRenderer can't open it. Close it when done.
      */
@@ -288,14 +315,18 @@ object PdfPages {
         val names = files.map { it.name }
         when (choice) {
             is Choice.Images -> {
-                val sizes = choice.pages.map { imageSize(read.inspections[it.source.toInt()].pages[it.page.toInt()], it.rotate, choice.dpi) }
+                // Every page's size first: one too large to draw is refused before anything is reserved or made.
+                val sizes = imagePlan(choice.pages, read.inspections, choice.dpi, limits.imagesMaxPixels.toLong())
                 // A guess, as conversion's is: a PNG of a page is rarely more than a byte a pixel, a JPEG a third of that.
                 val results = sizes.map { (w, h) -> PlannedResult.Known((w.toLong() * h / if (choice.png) 1 else 3).toULong(), true) }
                 val run = SaveRun.start(writer, listOf(folder), results, journal)
                 try {
                     val into = run.folder(choice.folderName, signing(choice.pages), folder)
-                    val renderers = read.data.map { renderer(it) }
+                    // The PDFs read once into the core's writer, which makes each page a PDF to draw (its annotations
+                    // drawn into its content, as a viewer shows them); PdfRenderer draws that.
+                    val pdfWriter = PdfPagesWriter()
                     try {
+                        ToolRuns.shared.run("Reading ${names.first()}") { control -> read.data.forEach { pdfWriter.add(it, control) } }
                         choice.pages.forEachIndexed { index, page ->
                             val (w, h) = sizes[index]
                             val lease = ImagesPdf.Lease()
@@ -304,13 +335,10 @@ object PdfPages {
                                 val made = try {
                                     ToolRuns.shared.run("Saving page ${index + 1} as an image") { control ->
                                         control.progress()
-                                        if (w.toLong() * h > limits.imagesMaxPixels.toLong()) throw ImagesPdfRefused(
-                                            "Page ${index + 1} is too large to save as an image at this resolution. Choose 150 dpi, or fewer pages.",
-                                        ).also { refusal.set(it) }
-                                        val renderer = renderers[page.source.toInt()]
+                                        val renderer = renderer(pdfWriter.drawable(page, control))
                                             ?: throw ImagesPdfRefused(NO_RENDERER).also { refusal.set(it) }
-                                        val info = read.inspections[page.source.toInt()].pages[page.page.toInt()]
-                                        val bitmap = synchronized(renderer) { draw(renderer, page.page.toInt(), info.rotate, page.rotate, w, h) }
+                                        // The page to draw carries its own rotation already: nothing is added to it.
+                                        val bitmap = try { draw(renderer, 0, page.rotate, page.rotate, w, h) } finally { runCatching { renderer.close() } }
                                             ?: throw ImagesPdfRefused(words("damaged", if (files.size > 1) names[page.source.toInt()] else null))
                                                 .also { refusal.set(it) }
                                         val bytes = try { encode(bitmap, choice.png) } finally { bitmap.recycle() }
@@ -332,33 +360,33 @@ object PdfPages {
                             progress(index + 1, choice.pages.size)
                         }
                     } finally {
-                        renderers.forEach { runCatching { it?.close() } }
+                        pdfWriter.close()
                     }
                     TextSave.end(run)
                     return "Saved “${choice.folderName}”."
                 } catch (error: Throwable) {
                     val how = run.cancel()
                     stopped(how)
-                    if (error is kotlinx.coroutines.CancellationException || error is ImagesPdf.StoppedWhileSaving) throw how
-                    throw error
+                    throw afterStop(error, how)
                 }
             }
             is Choice.Version -> {
                 val run = SaveRun.start(writer, listOf(choice.file), listOf(PlannedResult.FromSources(total.toULong(), true)), journal)
                 try {
-                    val made = buildAll(read, names, listOf(choice.pages), limits, progress)
-                    val thumb = thumbnailOf(read, choice.pages)
                     run.holdTo(stillOn)
-                    val saved = run.version(made[0], choice.file, folder, choice.startedFrom, signing(choice.pages), "application/pdf", thumb)
-                    if (!stillOn()) throw ImagesPdf.StoppedWhileSaving()
+                    var saved: VersionSaved? = null
+                    buildEach(read, names, listOf(choice.pages), limits, progress = progress) { _, made ->
+                        saved = run.version(made, choice.file, folder, choice.startedFrom, signing(choice.pages), "application/pdf",
+                            thumbnailOf(read, choice.pages))
+                        if (!stillOn()) throw ImagesPdf.StoppedWhileSaving()
+                    }
                     TextSave.end(run)
                     if (saved is VersionSaved.Stale) throw ImagesPdfRefused(stale(choice.file.name))
                     return "Saved a new version of “${choice.file.name}”."
                 } catch (error: Throwable) {
                     val how = run.cancel()
                     stopped(how)
-                    if (error is kotlinx.coroutines.CancellationException || error is ImagesPdf.StoppedWhileSaving) throw how
-                    throw error
+                    throw afterStop(error, how)
                 }
             }
             is Choice.Files -> {
@@ -366,10 +394,11 @@ object PdfPages {
                 val results = choice.outputs.map { PlannedResult.FromSources((total * it.second.size / count).coerceAtLeast(1).toULong(), true) }
                 val run = SaveRun.start(writer, listOf(folder), results, journal)
                 try {
-                    val made = buildAll(read, names, choice.outputs.map { it.second }, limits, progress)
                     run.holdTo(stillOn)
-                    choice.outputs.forEachIndexed { index, (name, pages) ->
-                        run.file(made[index], name, "application/pdf", signing(pages), if (index < 20) thumbnailOf(read, pages) else null, folder)
+                    // Each output saved as it is made, its bytes counted in the budget until then: never all of them at once.
+                    buildEach(read, names, choice.outputs.map { it.second }, limits, progress = progress) { index, made ->
+                        val (name, pages) = choice.outputs[index]
+                        run.file(made, name, "application/pdf", signing(pages), if (index < 20) thumbnailOf(read, pages) else null, folder)
                         if (!stillOn()) throw ImagesPdf.StoppedWhileSaving()
                     }
                     TextSave.end(run)
@@ -377,33 +406,56 @@ object PdfPages {
                 } catch (error: Throwable) {
                     val how = run.cancel()
                     stopped(how)
-                    if (error is kotlinx.coroutines.CancellationException || error is ImagesPdf.StoppedWhileSaving) throw how
-                    throw error
+                    throw afterStop(error, how)
                 }
             }
         }
     }
 
-    /* The outputs, built in a tool run; their bytes counted in the process's budget while they wait. */
-    private suspend fun buildAll(read: Read, names: List<String>, outputs: List<List<PdfPagePlan>>, limits: PdfToolsLimits,
-                                 progress: (Int, Int) -> Unit): List<ByteArray> {
+    /*
+     * The outputs, one at a time: the PDFs read once into one writer, then each output built in a tool run of its
+     * own, its bytes charged to `budget` (waiting while the process holds 512 MB of results) and handed to `save`,
+     * the charge given back once `save` returns or throws, before the next is built. So a split whose ranges each
+     * carry a large shared font holds one output at a time, never all of them.
+     */
+    suspend fun buildEach(read: Read, names: List<String>, outputs: List<List<PdfPagePlan>>, limits: PdfToolsLimits,
+                          budget: com.hushos.core.ToolBudget = ToolRuns.budget, progress: (Int, Int) -> Unit = { _, _ -> },
+                          save: (Int, ByteArray) -> Unit) {
         val refusal = AtomicReference<ImagesPdfRefused?>(null)
-        return try {
-            ToolRuns.shared.run(if (outputs.size == 1) "Making ${names.first()}" else "Splitting ${names.first()}") { control ->
-                val made = mutableListOf<ByteArray>()
-                try {
-                    build(read.data, names, outputs, control, limits.maxOutputBytes.toLong()) { index, bytes ->
-                        made += bytes
-                        progress(index + 1, outputs.size)
+        val label = if (outputs.size == 1) "Making ${names.first()}" else "Splitting ${names.first()}"
+        PdfPagesWriter().use { writer ->
+            writer.limitOutput(limits.maxOutputBytes)
+            try {
+                ToolRuns.shared.run(label) { control ->
+                    read.data.forEachIndexed { index, bytes ->
+                        try {
+                            writer.add(bytes, control)
+                        } catch (refused: PdfToolsException.Refused) {
+                            throw ImagesPdfRefused(words(refused.code, if (read.data.size > 1) names[index] else null)).also { refusal.set(it) }
+                        }
                     }
-                } catch (refused: ImagesPdfRefused) {
-                    refusal.set(refused)
-                    throw refused
                 }
-                made
+                outputs.forEachIndexed { index, pages ->
+                    val lease = ImagesPdf.Lease { bytes, generation -> budget.release(bytes, generation) }
+                    try {
+                        val made = ToolRuns.shared.run(label) { control ->
+                            val bytes = try {
+                                writer.build(pages, control)
+                            } catch (refused: PdfToolsException.Refused) {
+                                throw ImagesPdfRefused(words(refused.code, null)).also { refusal.set(it) }
+                            }
+                            lease.take(bytes.size.toULong(), budget.produce(bytes.size.toULong(), control))
+                            bytes
+                        }
+                        progress(index + 1, outputs.size)
+                        save(index, made)
+                    } finally {
+                        lease.release()
+                    }
+                }
+            } catch (error: ToolFailed) {
+                throw refusal.get() ?: error
             }
-        } catch (error: ToolFailed) {
-            throw refusal.get() ?: error
         }
     }
 

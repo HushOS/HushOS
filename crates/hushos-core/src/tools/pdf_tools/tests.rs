@@ -72,6 +72,48 @@ impl Sha256Lite {
     }
 }
 
+fn layer_count(source: &Source) -> (u64, u64) {
+    source.layers.as_ref().map_or((0, 0), |layers| (layers.groups.len() as u64, layers.off.len() as u64))
+}
+
+/* A PDF of `objects` (numbered from 1, the catalog first), with a cross-reference table. */
+fn pdf_of(objects: &[&str]) -> Vec<u8> {
+    let mut out = String::from("%PDF-1.7\n");
+    let mut offsets = Vec::new();
+    for (index, body) in objects.iter().enumerate() {
+        offsets.push(out.len());
+        out.push_str(&format!("{} 0 obj\n{body}\nendobj\n", index + 1));
+    }
+    let xref = out.len();
+    out.push_str(&format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1));
+    for offset in offsets {
+        out.push_str(&format!("{offset:010} 00000 n \n"));
+    }
+    out.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objects.len() + 1
+    ));
+    out.into_bytes()
+}
+
+#[test]
+fn pages_below_one_node_share_what_it_gives_them() {
+    // Three pages that set nothing inheritable: one copy of the tree's Resources for all of them, not one each.
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 /MediaBox [0 0 100 100] /Resources << /Big [1 2 3 4 5 6 7 8] >> >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /Rotate 90 >>",
+    ]);
+    let source =
+        super::read(&bytes, PDF_TOOLS_MAX_PAGES as usize, PDF_TOOLS_MAX_OUTPUT_BYTES, &control()).unwrap();
+    assert!(Arc::ptr_eq(&source.pages[0].inherited, &source.pages[1].inherited));
+    // A page that sets one of them has its own.
+    assert!(!Arc::ptr_eq(&source.pages[0].inherited, &source.pages[2].inherited));
+    assert_eq!(source.pages[2].info.rotate, 90);
+}
+
 #[test]
 fn every_fixture_reads_as_expected_json_says() {
     let expected = expected();
@@ -90,6 +132,14 @@ fn every_fixture_reads_as_expected_json_says() {
         assert_eq!(read.signed, file["signed"].as_bool().unwrap(), "{name}");
         assert_eq!(read.outline, file["outline"].as_bool().unwrap(), "{name}");
         assert_eq!(read.form, file["form"].as_bool().unwrap(), "{name}");
+        let source =
+            super::read(&fixture(name), PDF_TOOLS_MAX_PAGES as usize, PDF_TOOLS_MAX_OUTPUT_BYTES, &control())
+                .unwrap();
+        assert_eq!(
+            layer_count(&source),
+            (file["layers"].as_u64().unwrap(), file["hiddenLayers"].as_u64().unwrap()),
+            "{name}"
+        );
     }
 }
 
@@ -135,6 +185,15 @@ fn every_operation_builds_what_expected_json_says() {
                 assert!(!contains(&made, key), "{name}: {}", String::from_utf8_lossy(key));
             }
             assert!(made.starts_with(b"%PDF-1.7"), "{name}");
+            // Layers come along, those off still off.
+            let again =
+                super::read(&made, PDF_TOOLS_MAX_PAGES as usize, PDF_TOOLS_MAX_OUTPUT_BYTES, &control())
+                    .unwrap();
+            assert_eq!(
+                layer_count(&again),
+                (output["layers"].as_u64().unwrap(), output["hiddenLayers"].as_u64().unwrap()),
+                "{name}"
+            );
             if let Some(clean) = qpdf_clean(&made) {
                 assert!(clean, "{name}: qpdf --check failed");
             }
@@ -260,13 +319,13 @@ fn the_page_cap_counts_every_pdf_added() {
     let writer = PdfPagesWriter::new();
     let plain = fixture("plain.pdf");
     let source = read(&plain, 3, PDF_TOOLS_MAX_OUTPUT_BYTES, &control()).unwrap();
-    let mut big = Source { doc: source.doc.clone(), pages: Vec::new(), tree: HashSet::new() };
+    let mut big = Source { doc: source.doc.clone(), pages: Vec::new(), tree: HashSet::new(), layers: None };
     for index in 0..1_998 {
         let page = &source.pages[index % 3];
         big.pages.push(PageNode {
             leaf: page.leaf.clone(),
             id: page.id,
-            inherited: page.inherited.clone(),
+            inherited: Arc::clone(&page.inherited),
             info: page.info,
         });
     }
@@ -295,4 +354,62 @@ fn rotations_and_image_sizes_follow_the_same_rules_as_the_web() {
     assert_eq!(limits.max_input_bytes, 64 * MIB);
     assert_eq!(limits.card_bytes, 16 * MIB);
     assert_eq!(pdf_tools_limits(0).max_input_bytes, 32 * MIB);
+}
+
+#[test]
+fn a_page_to_draw_carries_its_annotations_in_its_content() {
+    let writer = PdfPagesWriter::new();
+    writer.add(fixture("annotated.pdf"), control()).unwrap();
+    let plan = PdfPagePlan { source: 0, page: 0, rotate: 0 };
+    // Kept outputs keep their annotations; the page to draw has them in its content instead.
+    let kept = Document::load_mem(&writer.build(vec![plan], control()).unwrap()).unwrap();
+    assert!(kept.get_dictionary(kept.get_pages()[&1]).unwrap().has(b"Annots"));
+    let drawn = Document::load_mem(&writer.drawable(plan, control()).unwrap()).unwrap();
+    let page = drawn.get_dictionary(drawn.get_pages()[&1]).unwrap();
+    assert!(!page.has(b"Annots"));
+    let content = String::from_utf8(drawn.get_page_content(drawn.get_pages()[&1])).unwrap();
+    // Its appearance's 200 by 200 box fitted to the Rect [100 300 300 500]: moved, not scaled.
+    assert!(
+        content.contains("q 1.0000 0.0000 0.0000 1.0000 100.0000 300.0000 cm /HushAnnot0 Do Q"),
+        "{content}"
+    );
+    // The page's own content first, wrapped so its graphics state ends before the annotation is drawn.
+    assert!(content.starts_with("q\n") && content.contains("(Page 1) Tj"));
+    let resources = drawn
+        .get_dictionary(page.get(b"Resources").unwrap().as_reference().unwrap_or((0, 0)))
+        .ok()
+        .cloned()
+        .unwrap_or_else(|| page.get(b"Resources").unwrap().as_dict().unwrap().clone());
+    let xobjects = resources.get(b"XObject").unwrap().as_dict().unwrap();
+    let form = drawn.get_object(xobjects.get(b"HushAnnot0").unwrap().as_reference().unwrap()).unwrap();
+    assert!(matches!(form, Object::Stream(stream) if stream.content == b"0 0 1 rg 0 0 200 200 re f"));
+}
+
+#[test]
+fn a_hidden_annotation_is_not_drawn_and_a_scaled_one_fits_its_rect() {
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /F 2 /Rect [0 0 100 100] /AP << /N 6 0 R >> >>",
+        "<< /Type /Annot /Subtype /Square /Rect [200 200 400 300] /AP << /N 6 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length 23 >>\nstream\n0 0 1 rg 0 0 100 100 re f\nendstream",
+    ]);
+    let writer = PdfPagesWriter::new();
+    writer.add(bytes, control()).unwrap();
+    let drawn = Document::load_mem(
+        &writer.drawable(PdfPagePlan { source: 0, page: 0, rotate: 90 }, control()).unwrap(),
+    )
+    .unwrap();
+    let content = String::from_utf8(drawn.get_page_content(drawn.get_pages()[&1])).unwrap();
+    // The hidden one (F 2) not at all; the other scaled 2 by 1 into [200 200 400 300].
+    assert_eq!(content.matches(" Do Q").count(), 1, "{content}");
+    assert!(
+        content.contains("q 2.0000 0.0000 0.0000 1.0000 200.0000 200.0000 cm /HushAnnot0 Do Q"),
+        "{content}"
+    );
+    assert_eq!(
+        drawn.get_dictionary(drawn.get_pages()[&1]).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(),
+        90
+    );
 }

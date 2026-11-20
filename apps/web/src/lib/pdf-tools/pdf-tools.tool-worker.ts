@@ -1,11 +1,7 @@
 import { serveTool, ToolError, type RangeSource } from '@/lib/tools/worker';
+import { inspectAll } from './inspect';
 import { buildPdf, PdfRefused, readPdf, type SourcePdf } from './structure';
-import {
-    pagesText,
-    type InspectedSource,
-    type PdfToolsInput,
-    type PdfToolsSummary,
-} from './protocol';
+import type { PdfToolsInput, PdfToolsSummary } from './protocol';
 
 /*
  * The PDF tools worker for Edit pages (docs/file-tools-design.md, feature (c)): @cantoo/pdf-lib over
@@ -40,36 +36,26 @@ serveTool<PdfToolsInput, PdfToolsSummary>(async (input, context) => {
     let done = 0;
     const tick = (total: number) => context.progress(done, total);
 
-    async function open(index: number, total: number) {
+    async function open(index: number, total: number, maxPages?: number) {
         const source = context.sources[index]!;
         let bytes: Uint8Array | null = await readWhole(source, () => tick(total));
         // Read whole: its reader goes now, its chunks and key with it.
         source.close?.();
         try {
-            return await readPdf(bytes, { onProgress: () => tick(total) });
+            return await readPdf(bytes, { onProgress: () => tick(total), maxPages });
         } finally {
             bytes = null;
         }
     }
 
     if (input.kind === 'inspect') {
-        const inspected: InspectedSource[] = [];
-        for (let index = 0; index < files; index++) {
-            try {
-                const pdf = await open(index, files);
-                inspected.push({
-                    ok: true,
-                    pages: pagesText(pdf.pages.map((page) => page.info)),
-                    ...pdf.flags,
-                });
-            } catch (error) {
-                if (!(error instanceof PdfRefused) || error.reason === 'too-large') throw error;
-                inspected.push({ ok: false, reason: error.reason });
-            }
-            done++;
-            tick(files);
-        }
-        return { sources: inspected };
+        const sources = await inspectAll(files, (index, maxPages) => open(index, files, maxPages), {
+            onDone: () => {
+                done++;
+                tick(files);
+            },
+        });
+        return { sources };
     }
 
     const pages = input.outputs.reduce((sum, output) => sum + output.pages.length, 0);

@@ -121,9 +121,24 @@ fun PdfPagesSheet(model: DriveViewModel, state: DriveState, files: List<Opened>,
             dismiss()
         }
     }
-    // Each PDF opened once for drawing, closed with the sheet.
-    val renderers = remember(read) { read?.data?.map { PdfPages.renderer(it) }.orEmpty() }
-    DisposableEffect(renderers) { onDispose { renderers.forEach { r -> r?.let { synchronized(it) { runCatching { it.close() } } } } } }
+    // Each PDF opened once for drawing, off the main thread (each is written into a memory file first), and
+    // closed with the sheet on a thread of its own, after any page still being drawn.
+    var renderers by remember(read) { mutableStateOf<List<PdfRenderer?>?>(null) }
+    LaunchedEffect(read) {
+        val data = read?.data ?: return@LaunchedEffect
+        // Opened whole even if the sheet goes meanwhile, so what was opened is always closed.
+        val opened = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) { data.map { PdfPages.renderer(it) } }
+        if (kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.isActive == true) renderers = opened
+        else Thread { opened.forEach { r -> r?.let { synchronized(it) { runCatching { it.close() } } } } }.start()
+    }
+    DisposableEffect(renderers) {
+        val opened = renderers.orEmpty()
+        onDispose {
+            if (opened.isNotEmpty()) Thread {
+                opened.forEach { r -> r?.let { synchronized(it) { runCatching { it.close() } } } }
+            }.start()
+        }
+    }
 
     val ranges = PdfPages.ranges(items.size, items.indices.filter { items[it].id in cuts }.toSet())
     val split = ranges.size > 1
@@ -169,7 +184,7 @@ fun PdfPagesSheet(model: DriveViewModel, state: DriveState, files: List<Opened>,
                     },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PageThumbnail(renderers.getOrNull(item.source), item)
+                    PageThumbnail(renderers?.getOrNull(item.source), item)
                     Spacer(Modifier.width(AlpineSpace.S3))
                     Column(Modifier.weight(1f)) {
                         Text("Page ${index + 1}")
@@ -230,7 +245,7 @@ fun PdfPagesSheet(model: DriveViewModel, state: DriveState, files: List<Opened>,
                                     shape = SegmentedButtonDefaults.itemShape(i, 2)) { Text(label) }
                             }
                         }
-                        if (renderers.any { it == null }) Text(PdfPages.NO_RENDERER, color = alpine.danger)
+                        if (renderers?.any { it == null } == true) Text(PdfPages.NO_RENDERER, color = alpine.danger)
                         if (imagesAre == PdfPages.Stage.OFFER) Text("Saving ${items.size} pages as images takes a while and uses a lot of memory.")
                         if (imagesAre == PdfPages.Stage.CEILING) Text("Save at most ${limits.imagesMaxPages} pages as images at a time.", color = alpine.danger)
                     }
@@ -254,7 +269,7 @@ fun PdfPagesSheet(model: DriveViewModel, state: DriveState, files: List<Opened>,
                         val ready = read != null && !busy && items.isNotEmpty() && when (effective) {
                             SaveAs.VERSION -> items.toList() != original && run.current != null
                             SaveAs.FILE -> split || (trimmed.isNotEmpty() && '/' !in trimmed)
-                            SaveAs.IMAGES -> imagesAre != PdfPages.Stage.CEILING && renderers.none { it == null }
+                            SaveAs.IMAGES -> imagesAre != PdfPages.Stage.CEILING && renderers?.none { it == null } == true
                         }
                         TextButton(enabled = ready, onClick = {
                             val plan = items.map { PdfPagePlan(it.source.toUInt(), it.page.toUInt(), it.rotate) }
