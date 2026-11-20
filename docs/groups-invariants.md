@@ -1,6 +1,6 @@
 # Group crypto: security invariants
 
-The properties the group core (milestone 1) must hold, each with the code that enforces it in both twins, the tests and shared fixture cases that prove it, and the residuals that bound it. `docs/groups-design.md` is the specification; `docs/groups-threat-model.md` names the adversaries. This list is what a change to `packages/crypto/src/groups/group-trust.ts`, `groups.ts`, `succession-path.ts` or their Rust twins (`crates/hushos-core/src/group_trust.rs`, `groups.rs`, `succession_path.rs`) must keep true.
+The properties the group core (milestone 1) must hold, each with the code that enforces it in both twins, the tests and shared fixture cases that prove it, and the residuals that bound it. `docs/groups-design.md` is the specification; `docs/groups-threat-model.md` names the adversaries. This list is what a change to `packages/crypto/src/groups/group-trust.ts`, `groups.ts`, `succession-path.ts` or their Rust twins (`crates/hushos-core/src/groups/group_trust.rs`, `groups.rs`, `succession_path.rs`) must keep true.
 
 Conventions:
 

@@ -744,7 +744,7 @@ See `docs/identity-pq-design.md`.
 ### Archives
 
 - A zip (by name, or `application/zip` / `application/x-zip-compressed`) opens in the viewer as its list (`App/Viewers/ArchiveView.swift`, `ArchiveScreen`), never fetched whole: `Opener.open` skips the download for it and `FileViewer` shows `ArchiveScreen` in QuickLook's place. An earlier version of a zip still goes to QuickLook.
-- `HushOSKit/Transfers/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and decodes only the entries asked for, by range, from its own listing.
+- `HushOSKit/Transfers/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/tools/archive.rs), which lists from the central directory and decodes only the entries asked for, by range, from its own listing.
     - A zip kept on this phone (`Offline.localCopy`) opens from that copy (`ZipArchiveSession.openLocal` over `KeptCopy`, read by range into memory): it opens offline, and no other copy of its plaintext is made. Anything else reads the store.
     - On this phone: a kept zip whose row the session knows opens through `Opener` as any zip does (and then from its copy); one with only its offline record (kept from a share this session hasn't opened) opens in `KeptArchiveViewer` (`RecentsView.swift`, `ArchiveScreen(kept:name:)`, `OpenArchive.openKept`), never QuickLook.
     - A family's zip opens as it is now (`OpenArchive.currentRow`): its folder listed again first (no change feed), then the vault's row of that workspace unless it is older than the one tapped; that row names the version read and the crumb's name (`OpenArchive.row`).
