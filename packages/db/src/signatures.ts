@@ -284,7 +284,7 @@ export function deviceSessionStatement(input: {
  * Approving on another device, as the second step (docs/two-step-design.md 12). The step token
  * is named by its stored hash, the SHA-256 of its UTF-8 bytes; ids are lowercase. The three are
  * built identically in `packages/crypto/src/account/device-approval.ts` and
- * `crates/hushos-core/src/device_approval.rs`, held together by the fixtures.
+ * `crates/hushos-core/src/account/device_approval.rs`, held together by the fixtures.
  *
  * - The commitment the asking device makes before it sees the approving device's key:
  *   SHA-256("hushos/two-step/device/commit/v1" || purpose || sha256(stepToken) || deviceSigningKey || nonce).

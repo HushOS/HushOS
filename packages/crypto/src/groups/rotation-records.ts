@@ -45,7 +45,7 @@ import {
  * records"): one node's key envelope, metadata, versions, shares and links
  * sealed again under the fresh key a walk made. Moved out of session.ts
  * unchanged so the Rust core has a twin to be held to
- * (crates/hushos-core/src/rotation_records.rs, which AreaLedger::rotate_node
+ * (crates/hushos-core/src/groups/rotation_records.rs, which AreaLedger::rotate_node
  * runs): the shared fixtures rotate a node in each twin and read it with the
  * other's verdicts (area-ledger fixtures, `rotations`).
  *

@@ -8,7 +8,7 @@
  *
  * A folder with no colour, or one this client cannot read, is drawn in the
  * plain folder colour of the theme; a new folder starts that way. (The Rust
- * core keeps the twin of these rules: crates/hushos-core/src/colour.rs.)
+ * core keeps the twin of these rules: crates/hushos-core/src/drive/colour.rs.)
  */
 
 export const COLOUR_ATTRIBUTE = 'colour';

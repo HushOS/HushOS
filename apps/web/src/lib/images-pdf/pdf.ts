@@ -22,7 +22,7 @@ export { MAX_PIXELS, PDF_MAX_BYTES };
  *
  * - A JPEG goes in as a DCTDecode stream of its bytes as they are, its metadata cut (jpeg.ts),
  *   its EXIF orientation applied by the page's matrix. Its image dictionary is written here, the
- *   same as the core's writer writes it (crates/hushos-core/src/images_pdf.rs), not by pdf-lib's
+ *   same as the core's writer writes it (crates/hushos-core/src/tools/images_pdf.rs), not by pdf-lib's
  *   own embedder, which reads the frame header with a looser parse of its own.
  * - A PNG goes in through pdf-lib's embedder: its pixels, transparency as a soft mask, nothing
  *   of its text or EXIF chunks.

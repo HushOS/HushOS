@@ -6,7 +6,7 @@ import acvp from '../../../../crates/hushos-core/fixtures/ml-dsa-65-acvp.json';
 /*
  * FIPS 204 ACVP vectors for ML-DSA-65 (usnistgov/ACVP-Server, a subset; the
  * fixture names the commit and files). The Rust core checks the same file in
- * crates/hushos-core/src/pq.rs: both implementations must pass every case
+ * crates/hushos-core/src/primitives/pq.rs: both implementations must pass every case
  * before either library is upgraded (docs/identity-pq-design.md 1).
  */
 const hex = (value: string) => Uint8Array.from(Buffer.from(value, 'hex'));

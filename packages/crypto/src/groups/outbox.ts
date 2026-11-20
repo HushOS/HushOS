@@ -1,7 +1,7 @@
 /*
  * The outbox's rules (F7; docs/groups-design.md 2.4 "Staged chains",
  * docs/groups-server.md 6), shared with the Rust core
- * (crates/hushos-core/src/roster_calls.rs: outbox_step, AreaLedger::outbox_open)
+ * (crates/hushos-core/src/groups/roster_calls.rs: outbox_step, AreaLedger::outbox_open)
  * so both phones and the web move an entry on the same answers and send the
  * same entries. apps/web/src/lib/groups/outbox.ts drives them; the shared
  * fixtures (crates/hushos-core/fixtures/outbox-steps.json, the outbox entries

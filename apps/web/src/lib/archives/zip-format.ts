@@ -1,7 +1,7 @@
 /*
  * Reading a zip's list of contents, and the rules every entry is held to (docs/file-tools-design.md,
  * section 1 (a) and section 3). Pure and dependency-free: it runs in the archive's tools worker,
- * in the page's tests, and its twin is crates/hushos-core/src/archive.rs, held to the same
+ * in the page's tests, and its twin is crates/hushos-core/src/tools/archive.rs, held to the same
  * behaviour by the fixtures in e2e/fixtures/archives and their expected.json. Change one, change
  * both.
  *
@@ -744,7 +744,7 @@ const GROUP_SCAN = 16;
  * The list as the person sees it, and its folders: where each entry is, what it is, and whether
  * it is a Mac resource entry to hide. An entry whose path has no parts (a name of only
  * separators) is named as stored, so nothing in the archive goes unlisted. The core lists the
- * same way (crates/hushos-core/src/archive.rs).
+ * same way (crates/hushos-core/src/tools/archive.rs).
  *
  * The folders are made a level at a time: every entry still going deeper takes its next part.
  * A level's parents are the folders the level before made, numbered in a row, so its entries are

@@ -14,7 +14,7 @@
  * The orientation the first EXIF block names is read before it goes, so the page can turn the
  * picture instead of re-encoding it.
  *
- * Its twin is `cut_jpeg` in crates/hushos-core/src/images_pdf.rs; both are held to
+ * Its twin is `cut_jpeg` in crates/hushos-core/src/tools/images_pdf.rs; both are held to
  * e2e/fixtures/images/expected.json, whose expected outputs make.py works out on its own. Pure
  * and dependency-free: it runs in the PDF tools worker.
  */

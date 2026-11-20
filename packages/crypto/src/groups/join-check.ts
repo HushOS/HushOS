@@ -4,7 +4,7 @@ import { CryptoError } from '../primitives/errors';
  * Whether the two words a newcomer typed are the join code's at the two
  * positions the page hid for this showing (docs/groups-design.md 3.2;
  * apps/web/src/lib/groups/join.ts issues the positions and calls this). The
- * twin is the Rust core's join_check (crates/hushos-core/src/join.rs), which
+ * twin is the Rust core's join_check (crates/hushos-core/src/groups/join.rs), which
  * the phones call: both read the same cases (fixtures/join-check-cases.json)
  * and the fuzz kind `join_check` compares them on any input.
  *

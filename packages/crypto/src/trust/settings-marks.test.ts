@@ -3,7 +3,7 @@ import { familyCheckOf, settingsMarks, settingsPinOf } from './settings-marks';
 
 /*
  * The settings members acceptance reads as marks, read as the core reads them
- * (crates/hushos-core/src/ledger_settings.rs): `groups` and `familyChecks`
+ * (crates/hushos-core/src/groups/ledger_settings.rs): `groups` and `familyChecks`
  * only from a plain object. Spreading an array or a string would file its
  * items under "0", "1", …: a check record nobody made, which keeps a family
  * from first use on one twin and not the other.

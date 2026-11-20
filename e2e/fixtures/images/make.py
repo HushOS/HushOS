@@ -2,7 +2,7 @@
 The images-to-PDF fixtures of docs/file-tools-design.md, feature (b): real JPEGs, encoded by
 libjpeg (through Pillow, and cjpeg for restart markers and arithmetic coding), with metadata
 segments written byte by byte around them. The web's cutter (apps/web/src/lib/images-pdf/jpeg.ts)
-and the core's (crates/hushos-core/src/images_pdf.rs) are both held to expected.json here.
+and the core's (crates/hushos-core/src/tools/images_pdf.rs) are both held to expected.json here.
 
 What a cutter must make of each file is worked out here, independently of either cutter: every
 fixture is built from parts this script labels kept or dropped, and the expected output is the

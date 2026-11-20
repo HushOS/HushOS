@@ -12,7 +12,7 @@ import { encode } from '../primitives/keys';
  * where the digest is SHA-256 of the sign-in attempt's token (its UTF-8 bytes),
  * base64url. The server consumes the attempt before it checks anything, so a
  * signature is good for exactly one sign-in. `packages/db/src/signatures.ts`
- * and `crates/hushos-core/src/devices.rs` build the same bytes; the fixtures
+ * and `crates/hushos-core/src/account/devices.rs` build the same bytes; the fixtures
  * hold the three to each other.
  */
 
