@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { grip, newFolder, newPage, openFolder, registerAccount } from './helpers';
+import { grip, newFolder, newPage, openFolder, registerAccount, rightClick } from './helpers';
 
 /*
  * A folder long enough that the list draws only the rows near the screen (components/drive/
@@ -266,7 +266,7 @@ test('a right-click on a row deep in the list selects it and its menu acts on it
     await reset(page);
     await scrollToRow(page, 178);
     await expect(row(page, 180)).toBeVisible();
-    await row(page, 180).click({ button: 'right', position: { x: 600, y: 28 } });
+    await rightClick(row(page, 180), { position: { x: 600, y: 28 } });
     const menu = page.getByRole('menu');
     await expect(menu.getByRole('menuitem', { name: /^Preview/ })).toBeVisible();
     await expect(row(page, 180)).toHaveAttribute('aria-selected', 'true');
@@ -276,6 +276,10 @@ test('a right-click on a row deep in the list selects it and its menu acts on it
     await expect(dialog.getByRole('textbox')).toHaveValue(name(180));
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
+    // The menu closes behind the dialog, and the dialog hands the keys back to its Rename item
+    // until it has: an Escape in that moment (the next test's) is the closing menu's, not the
+    // list's, and leaves the row selected.
+    await expect(page.locator('[role=menu]')).toHaveCount(0);
 });
 
 test('the ⋯ menu of a row deep in the list acts on that row and gives the keys back', async () => {

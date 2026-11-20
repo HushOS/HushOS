@@ -12,6 +12,8 @@ import {
     type BrowserType,
     type Locator,
     type Page,
+    type Request,
+    type Worker,
 } from '@playwright/test';
 import { strToU8, zipSync } from 'fflate';
 import * as XLSX from 'xlsx';
@@ -580,4 +582,88 @@ export async function openWaiting(page: Page, text: string | RegExp) {
     await expect(waiting).toBeVisible({ timeout: 60_000 });
     await waiting.getByRole('button', { name: 'Open', exact: true }).click();
     await expect(waiting).toHaveCount(0, { timeout: 60_000 });
+}
+
+/*
+ * One of the app's modules as the browser fetches it: by its source path from the development
+ * server (`/src/components/drive/pdf-viewer.tsx`), or as its chunk from a production build
+ * (`/assets/pdf-viewer-<hash>.js`), which is what CI runs the suite against.
+ */
+export const appModule = (name: string) =>
+    new RegExp(`/(${name}\\.tsx?|${name}-[\\w-]+\\.js)(\\?|$)`);
+
+/*
+ * A script's address without its query, from a request for one; null for anything else. WebKit
+ * reports a module worker's own script as 'xhr', not 'script' (a CI trace showed the editor's
+ * text-check worker fetched, 200, as xhr), so there an xhr for a script file counts as a script
+ * too. Chromium reports it as 'script', and only that counts there.
+ */
+const scriptOf = (request: Request) => {
+    const url = request.url().split('?')[0]!;
+    const type = request.resourceType();
+    if (type === 'script') return url;
+    const webkit = test.info().project.use.browserName === 'webkit';
+    return webkit && type === 'xhr' && /\.m?[jt]sx?$/.test(url) ? url : null;
+};
+
+/*
+ * Every script `work` makes the page fetch (a worker's included), cached or not, and every worker
+ * it starts: WebKit can start a worker from its memory cache with no request to see, but every
+ * browser reports the worker itself (e2e/README.md, "Writing e2e for CI").
+ */
+export async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
+    const fetched = new Set<string>();
+    const listen = (request: Request) => {
+        const url = scriptOf(request);
+        if (url) fetched.add(url);
+    };
+    const started = (worker: Worker) => {
+        const url = worker.url();
+        if (url.startsWith('http')) fetched.add(url.split('?')[0]!);
+    };
+    p.on('request', listen);
+    p.on('worker', started);
+    try {
+        await work();
+    } finally {
+        p.off('request', listen);
+        p.off('worker', started);
+    }
+    return fetched;
+}
+
+/*
+ * A right-click as a person makes one: the release a moment after the press. Base UI closes a
+ * context menu whose release the page handles more than 500 ms after its contextmenu event,
+ * outside the menu: a press held and let go elsewhere. Playwright releases only once the page has
+ * handled the press, and WebKit then runs Base UI's 500 ms timer before the release, so on a
+ * runner that takes that long over the press (a CI trace showed WebKit busy 1.2 s) the menu
+ * closes as it opens. A press the page saw as held is made again, up to three times; one it saw
+ * as a click is never repeated, so a menu that fails to open on a click still fails the test.
+ */
+export async function rightClick(
+    target: Locator,
+    options: { position?: { x: number; y: number } } = {},
+) {
+    const page = target.page();
+    const menuGone = () => expect(page.locator('[role=menu]')).toHaveCount(0, { timeout: 5_000 });
+    for (let attempt = 1; ; attempt++) {
+        await page.evaluate(() => {
+            const press: { down?: number; up?: number } = {};
+            (window as unknown as { e2ePress: typeof press }).e2ePress = press;
+            const at = (key: 'down' | 'up') => () => (press[key] = performance.now());
+            addEventListener('contextmenu', at('down'), { capture: true, once: true });
+            addEventListener('mouseup', at('up'), { capture: true, once: true });
+        });
+        await target.click({ ...options, button: 'right' });
+        const held = await page.evaluate(() => {
+            const { down, up } = (window as unknown as { e2ePress: { down?: number; up?: number } })
+                .e2ePress;
+            return down === undefined || up === undefined ? 0 : up - down;
+        });
+        if (held < 500 || attempt === 3) return;
+        // Still open: the release landed in it, and a hold changed nothing.
+        if ((await page.locator('[role=menu][data-open]').count()) > 0) return;
+        await menuGone();
+    }
 }

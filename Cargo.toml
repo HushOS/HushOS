@@ -12,13 +12,10 @@ panic = "abort"
 [profile.release.package.hushos-push]
 opt-level = 3
 
-# The core's tests inflate the archive fixtures (gigabytes of zeros, docs/file-tools-design.md
-# section 7); unoptimised, zlib-rs and the CRC take minutes over them instead of seconds.
-[profile.dev.package.zlib-rs]
-opt-level = 3
-
-[profile.dev.package.crc32fast]
-opt-level = 3
-
-[profile.dev.package.flate2]
+# Every dependency optimised in debug builds, the workspace's own crates not: the core's tests
+# run its real Argon2, ML-DSA, ML-KEM and X25519 thousands of times, and unoptimised those took
+# most of CI's Rust job (roster_call_fixtures alone two minutes; 40 s to 6 s here). The archive
+# fixtures inflate gigabytes of zeros through zlib-rs and the CRC (docs/file-tools-design.md
+# section 7), which this covers too. Debug assertions and overflow checks are unchanged.
+[profile.dev.package."*"]
 opt-level = 3

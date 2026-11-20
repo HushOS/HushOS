@@ -40,7 +40,7 @@ concurrency:
 
 jobs:
     # The server output carries native modules for the platform it was built on (takumi's OG
-    # renderer among them): a Linux build cannot start on macOS. Built once here for the four
+    # renderer among them): a Linux build cannot start on macOS. Built once here for the five
     # shards. On a pull request only while it is open and carries `full-ci`, and on a `labeled`
     # event only when that label is `full-ci`, so adding any other label restarts nothing.
     build-macos:
@@ -78,16 +78,17 @@ jobs:
                   retention-days: 1
 
     # macOS runners have no Docker: the infrastructure runs natively. Families off, as in the
-    # chromium suite; the families flows run on chromium only.
+    # chromium suite; the families flows run on chromium only. Five shards, split by measured
+    # time (scripts/e2e-shard.ts), keep each near five minutes; four ran past six.
     e2e-webkit:
-        name: Browser tests (webkit ${{ matrix.shard }}/4, macOS)
+        name: Browser tests (webkit ${{ matrix.shard }}/5, macOS)
         needs: build-macos
         runs-on: macos-15
         timeout-minutes: 40
         strategy:
             fail-fast: false
             matrix:
-                shard: [1, 2, 3, 4]
+                shard: [1, 2, 3, 4, 5]
         steps:
             - uses: actions/checkout@v7
               with:
@@ -140,7 +141,16 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the production build
-              run: bun run e2e -- --project=webkit $(scripts/e2e-shard.sh webkit ${{ matrix.shard }} 4)
+              # Assigned first, so a shard script that fails stops the step rather than run every file.
+              # A ref from before scripts/e2e-shard.ts (a dispatch against an older commit or tag)
+              # falls back to Playwright's own split by test count.
+              run: |
+                  if [ -f scripts/e2e-shard.ts ] && [ -f e2e/durations.json ]; then
+                      shard=$(bun scripts/e2e-shard.ts webkit ${{ matrix.shard }} 5)
+                  else
+                      shard=--shard=${{ matrix.shard }}/5
+                  fi
+                  bun run e2e -- --project=webkit "$shard"
             - name: Show the end of the server and infrastructure logs
               if: failure()
               run: |

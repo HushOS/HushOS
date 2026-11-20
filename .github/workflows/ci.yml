@@ -88,7 +88,7 @@ jobs:
                   echo "browser suites: $browser, Rust core tests: $rust"
 
     check:
-        name: Check, migrate, and test
+        name: Check and migrate
         if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
         runs-on: ubuntu-latest
         services:
@@ -142,14 +142,68 @@ jobs:
                     echo "Rendered emails are stale: run bun run email:render and commit." >&2
                     exit 1
                   fi
-            # Not cached through Turborepo across runs: a package's test hash leaves out the
-            # workspace packages it imports, so a cached pass would survive a change to them.
+
+    # The Vitest suites, in five jobs beside each other rather than one after the checks above: on
+    # one runner they took nine and a half minutes, seven packages contending for four cores.
+    # Grouped by measured time. The web app's database project runs its files one after another
+    # (they share one database), about four and a half minutes, so it has a job of its own.
+    # `rest`, and the web job's `!db`, name what the others leave out, so a new package's or
+    # project's tests run without being listed. Each job has its own Postgres, and each package
+    # its own test database within it, as before.
+    test:
+        name: Unit tests (${{ matrix.name }})
+        if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: web
+                      filter: --filter=@hushos/web -- --project=!db
+                    - name: web database
+                      filter: --filter=@hushos/web -- --project=db
+                    - name: crypto
+                      filter: --filter=@hushos/crypto
+                    - name: db and drive
+                      filter: --filter=@hushos/db --filter=@hushos/drive
+                    - name: rest
+                      filter: --filter=!@hushos/web --filter=!@hushos/crypto --filter=!@hushos/db --filter=!@hushos/drive
+        services:
+            postgres:
+                image: postgres:18-alpine
+                env:
+                    POSTGRES_USER: hushos
+                    POSTGRES_PASSWORD: ci
+                    POSTGRES_DB: hushos
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hushos -d hushos"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            DATABASE_URL: postgresql://hushos:ci@127.0.0.1:5432/hushos
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             # bsdtar is one of the independent readers the archive fixtures are checked with
             # (apps/web/src/lib/archives/fixtures.test.ts): it opens WinZip AES, which zipfile can't.
             - name: bsdtar for the archive fixtures
+              if: matrix.name == 'web'
               run: command -v bsdtar || (sudo apt-get update -qq && sudo apt-get install -y -qq libarchive-tools)
+            # Not cached through Turborepo across runs: a package's test hash leaves out the
+            # workspace packages it imports, so a cached pass would survive a change to them.
             - name: Test
-              run: bun run test
+              env:
+                  FILTER: ${{ matrix.filter }}
+              # Word splitting is wanted: FILTER holds turbo's --filter arguments, and after `--`
+              # Vitest's.
+              run: bun run test -- $FILTER
 
     # The production build every browser job tests, built once. Its own job rather than a step
     # of the one above, so the browser jobs wait for a minute of build, not four of unit tests.
@@ -211,8 +265,12 @@ jobs:
             PUSH_TEST_DATABASE_URL: postgresql://hushos_push:ci@127.0.0.1:5432/hushos_push
         steps:
             - uses: actions/checkout@v7
+            # rust-cache's key leaves out Cargo.toml's [profile] sections: a profile change keeps
+            # restoring builds made under the old one, rebuilds them every run, and never saves.
+            # Name the profile here, and change the name with it.
             - uses: Swatinem/rust-cache@v2
               with:
+                  key: dependencies-at-opt-level-3
                   workspaces: |
                       . -> target
                       crates/hushos-core/fuzz -> target
@@ -273,7 +331,7 @@ jobs:
     # request per connection (server/plugins/request-context.ts), as the dev server did.
     # Families off, as hushos.com runs until billing charges for family folders: this suite
     # covers the off path (families.spec.ts checks they stay hidden), with the phone-sized
-    # project for mobile.spec.ts. Files are split by measured time (scripts/e2e-shard.sh).
+    # project for mobile.spec.ts. Files are split by measured time (scripts/e2e-shard.ts).
     # A public repository's standard runners cost nothing, and the plan offers no larger ones.
     e2e:
         name: Browser tests (chromium ${{ matrix.shard }}/3)
@@ -345,7 +403,10 @@ jobs:
                   TRUSTED_PROXY_HEADER: x-forwarded-for
                   TURBO_LOG_ORDER: stream
             - name: Run the browser suite against the production build
-              run: bun run e2e -- --project=chromium --project=mobile $(scripts/e2e-shard.sh chromium ${{ matrix.shard }} 3)
+              # Assigned first, so a shard script that fails stops the step rather than run every file.
+              run: |
+                  shard=$(bun scripts/e2e-shard.ts chromium ${{ matrix.shard }} 3)
+                  bun run e2e -- --project=chromium --project=mobile "$shard"
             # The whole log is in the artifact below; its end is enough to see a server
             # that fell over.
             - name: Show the end of the server log
@@ -363,18 +424,22 @@ jobs:
                       scratchpad/e2e-server.log
                   retention-days: 7
 
-    # Families on, the self-hosting default, in one job against the production build, as the
-    # other browser jobs: each block of families.spec.ts is serial and makes its own people, so
-    # the blocks run side by side on the two workers. The longest block (removal, about two
-    # minutes) sets the time, so a second shard would gain nothing. The switch is written out
-    # rather than left to the default, so a change of default cannot quietly turn this job into
-    # a second run of the off path.
+    # Families on, the self-hosting default, against the production build, as the other browser
+    # jobs. Each block of families.spec.ts is serial and makes its own people, so the blocks and
+    # the two-step files are split across three shards by measured time (scripts/e2e-shard.ts):
+    # one job took twelve minutes. The longest unit (two-step.spec.ts, about three minutes) sets
+    # the floor. The switch is written out rather than left to the default, so a change of
+    # default cannot quietly turn these jobs into a second run of the off path.
     e2e-families:
-        name: Browser tests (families)
+        name: Browser tests (families ${{ matrix.shard }}/3)
         needs: [changes, build]
         if: needs.changes.outputs.browser == 'true'
         runs-on: ubuntu-latest
         timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [1, 2, 3]
         steps:
             - uses: actions/checkout@v7
             - uses: oven-sh/setup-bun@v2
@@ -437,7 +502,9 @@ jobs:
             # key through the built server, which is the only place a server dependency the bundler
             # mis-orders shows. The device spec has two browsers approve each other through it.
             - name: Run the families and two-step suites against the production build
-              run: bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts e2e/two-step-passkeys.spec.ts e2e/two-step-device.spec.ts
+              run: |
+                  shard=$(bun scripts/e2e-shard.ts families ${{ matrix.shard }} 3)
+                  bun run e2e -- --project=chromium e2e/families.spec.ts e2e/two-step.spec.ts e2e/two-step-passkeys.spec.ts e2e/two-step-device.spec.ts "$shard"
             - name: Show the end of the server log
               if: failure()
               run: tail -n 60 scratchpad/e2e-server.log || true
@@ -445,7 +512,7 @@ jobs:
               if: failure() || hashFiles('test-results/**/trace.zip') != ''
               uses: actions/upload-artifact@v7
               with:
-                  name: playwright-traces-families-${{ github.run_attempt }}
+                  name: playwright-traces-families-${{ matrix.shard }}-${{ github.run_attempt }}
                   path: |
                       test-results
                       scratchpad/e2e-server.log
@@ -454,10 +521,12 @@ jobs:
     # Built on pull requests only with the `full-ci` label (a Dockerfile change wants it);
     # every push to main builds and publishes them as sha-<commit>. Not `latest`: runs for
     # different commits overlap, and an older one finishing last would move it backwards. The
-    # `latest` job moves it, in commit order.
+    # `latest` job moves it, in commit order. They wait for the unit tests as well as the checks:
+    # a self-hoster can pin a sha- tag, so one must never be published for a commit whose tests
+    # failed.
     images:
         name: Image ${{ matrix.image }}
-        needs: check
+        needs: [check, test]
         if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
         runs-on: ubuntu-latest
         permissions:
@@ -531,11 +600,12 @@ jobs:
     # here, names a commit all three images have reached.
     latest:
         name: Move latest to this commit
-        needs: [changes, check, build, rust, e2e, e2e-families, images]
+        needs: [changes, check, test, build, rust, e2e, e2e-families, images]
         if: >-
             !cancelled() &&
             github.event_name == 'push' && github.ref == 'refs/heads/main' &&
             needs.changes.result == 'success' && needs.check.result == 'success' &&
+            needs.test.result == 'success' &&
             needs.build.result == 'success' && needs.images.result == 'success' &&
             (needs.rust.result == 'success' || needs.rust.result == 'skipped') &&
             (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
@@ -717,7 +787,7 @@ jobs:
     ci-ok:
         name: CI ok
         if: always()
-        needs: [changes, check, build, rust, push-image, e2e, e2e-families, images]
+        needs: [changes, check, test, build, rust, push-image, e2e, e2e-families, images]
         runs-on: ubuntu-latest
         steps:
             - name: Every job that ran passed

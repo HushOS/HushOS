@@ -610,6 +610,7 @@ bun run e2e
 - If nothing listens on 5173, the dev server is started for you.
 - Do not edit source files during a run. The dev server's full reloads reset the page mid-test.
 - Use Playwright for any new browser check, not a one-off script.
+- Before writing one, read [e2e/README.md](e2e/README.md): what makes a spec pass on CI and not only here.
 
 ### What they do
 
@@ -645,9 +646,10 @@ bun run e2e -- --project=webkit
 
 ### On every pull request and push to `main`
 
-- `bun run check` (lint, format and typecheck), `bun run test` and `bun run build`.
+- `bun run check` (lint, format and typecheck) and `bun run build`, each in its own job.
+- `bun run test` in five jobs side by side (web, the web app's database tests, crypto, db and drive, the rest), each with its own Postgres.
 - The Chromium suite (projects `chromium` and `mobile`) and the families-on suite, both against that one production build (`bun run start`, web and jobs worker).
-- The Chromium suite is split into shards by measured time in `scripts/e2e-shard.sh`.
+- Both suites are split into three shards each by measured time: `scripts/e2e-shard.ts` reads `e2e/durations.json` (see [e2e/README.md](e2e/README.md#shards)).
 - A pull request that touches only Markdown or `docs/` skips the browser suites. MDX pages and `DESIGN.md` render in the app, so they do not count. A push to `main` always runs them.
 - `CI ok` passes when every job that ran passed. It is the one check to require.
 
@@ -661,7 +663,7 @@ bun run e2e -- --project=webkit
 
 WebKit is not part of CI and gates neither pull requests nor deploys.
 
-- `.github/workflows/webkit.yml` builds on macOS and runs the suite in four shards.
+- `.github/workflows/webkit.yml` builds on macOS and runs the suite in five shards, split the same way.
 - It runs every night against `main`, by hand (Actions, WebKit, Run workflow, with an optional ref), and on a pull request labelled `full-ci`.
 - Add `full-ci` to a change to on-device storage, device keys or the file viewer, where WebKit has differed.
 - A failed nightly or manual run on `main` opens or updates a `WebKit failed on main` issue. A run cancelled because no macOS runner was free does not.
