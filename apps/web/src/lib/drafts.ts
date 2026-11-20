@@ -139,19 +139,16 @@ export function createDraftStore(
             const db = await open();
             const [row, meta] = await Promise.all([db.get('drafts', key), db.get('meta', key)]);
             if (!row || !meta) return null;
+            const owner = { session: meta.session, revision: meta.revision };
             const draft = await sealer.open(place, row.record);
             // Never offered: one that doesn't open here (a rotated root, a changed record) or one past
-            // its age. Gone for good, since nothing can ever show it.
+            // its age. Gone for good, since nothing can ever show it, but only while it is still the
+            // revision read: another tab may have written a fresh one meanwhile.
             if (!draft || now() - draft.frame.savedAt > DRAFT_MAX_AGE_MS) {
-                const transaction = db.transaction(['drafts', 'meta'], 'readwrite');
-                await Promise.all([
-                    transaction.objectStore('drafts').delete(key),
-                    transaction.objectStore('meta').delete(key),
-                    transaction.done,
-                ]);
+                await this.remove(place, owner);
                 return null;
             }
-            return { draft, owner: { session: meta.session, revision: meta.revision } };
+            return { draft, owner };
         },
         async remove(place, owner) {
             const slot = await sealer.slot(place);
@@ -179,7 +176,10 @@ let shared: DraftStore | undefined;
 export function drafts() {
     return (shared ??= createDraftStore({
         slot: async (place) => (await authClient.rpc('driveDraftSlot', place)).slot,
-        seal: (place, draft) => authClient.rpc('driveDraftSeal', { ...place, draft }),
+        // Asked for as it is called (a lock's hook calls it with the key still there), and allowed to
+        // finish past that lock (drainOnLock).
+        seal: (place, draft) =>
+            authClient.rpc('driveDraftSeal', { ...place, draft }, { drainOnLock: true }),
         open: async (place, record) =>
             (await authClient.rpc('driveDraftOpen', { ...place, record })).draft,
     }));
@@ -201,8 +201,13 @@ export type DraftSnapshot = {
 export type DraftWriter = {
     /* The text changed: a write follows within `delay`, at most one per `delay` while typing. */
     changed(): void;
-    /* Writes (or removes an owned draft) now, for pagehide, hiding, a lock and closing; resolves once done. */
+    /* Writes (or removes an owned draft) now, for hiding, a lock and closing; resolves once done. */
     flush(): Promise<void>;
+    /*
+     * The text sealed at once, the seal asked for before this returns: called by the lock itself
+     * (authClient.beforeLock), while the key is still there. What lands after the lock is ciphertext.
+     */
+    seize(): Promise<void>;
     /* Removes the draft of `place` now, if this session owns it, after anything queued. */
     remove(place: DraftPlace): Promise<void>;
     /* The person restored (or will discard) this stored draft: this session owns it from here. */
@@ -226,7 +231,13 @@ const placeKey = (place: DraftPlace) =>
 export function createDraftWriter(options: {
     delay?: number;
     snapshot: () => DraftSnapshot | null;
+    /* No key to seal with (locked, signed out, another session): nothing new is started. */
     locked: () => boolean;
+    /*
+     * Signed out (its database on its way out): nothing more reaches the store. A lock is not
+     * this: a draft sealed before it still lands, as ciphertext. Defaults to `locked`.
+     */
+    ended?: () => boolean;
     store: Pick<DraftStore, 'write' | 'remove'>;
     now?: () => number;
     onKept?: (kept: boolean) => void;
@@ -255,11 +266,24 @@ export function createDraftWriter(options: {
                 .then(() => owned.delete(placeKey(place)))
                 .catch(() => {});
         });
+    const ended = options.ended ?? options.locked;
+    /* The write of `draft`: its seal asked for the moment this is called. */
+    const write = async (place: DraftPlace, draft: Draft) => {
+        const owner = { session, revision: ++revision };
+        const kept = await options.store.write(
+            place,
+            { ...draft, frame: { ...draft.frame, savedAt: now() } },
+            owner,
+            () => !ended(),
+        );
+        if (kept) owned.set(placeKey(place), owner);
+        options.onKept?.(kept);
+    };
     /*
      * The text is read when the write is asked for, never later: a close writes what was on screen
      * as it closed. The store is reached in order, after anything asked before.
      */
-    const run = () => {
+    const run = (atOnce = false) => {
         if (stopped || options.locked()) return chain;
         const snapshot = options.snapshot();
         if (!snapshot) return chain;
@@ -268,18 +292,16 @@ export function createDraftWriter(options: {
         const draft = snapshot.draft();
         // Half of a character just typed: nothing is written this time; the last draft stays.
         if (!draft) return chain;
+        // Sealed from here, before the caller goes on (a lock clears the key right after); anything
+        // asked for later waits for it.
+        if (atOnce) {
+            const writing = write(place, draft);
+            return queue(() => writing);
+        }
         return queue(async () => {
-            // Locked since it was asked for: nothing reaches the store.
+            // Locked since it was asked for: nothing is sealed.
             if (options.locked()) return;
-            const owner = { session, revision: ++revision };
-            const kept = await options.store.write(
-                place,
-                { ...draft, frame: { ...draft.frame, savedAt: now() } },
-                owner,
-                () => !options.locked(),
-            );
-            if (kept) owned.set(placeKey(place), owner);
-            options.onKept?.(kept);
+            await write(place, draft);
         });
     };
     const cancel = () => {
@@ -297,6 +319,10 @@ export function createDraftWriter(options: {
         flush() {
             cancel();
             return run();
+        },
+        seize() {
+            cancel();
+            return run(true);
         },
         remove(place) {
             cancel();

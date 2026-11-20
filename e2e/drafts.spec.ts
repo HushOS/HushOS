@@ -120,10 +120,20 @@ async function canaryHits(p: Page, canary: string) {
     }, canary);
 }
 
-/* Types `text`, waits until its draft is kept, then closes the tab: the next page is a fresh one. */
-async function typeAndCloseTab(text: string, name = 'draft.txt') {
+/*
+ * Types `text` and leaves the page at once, inside the editor's two-second write delay: `pagehide`
+ * locks the tab first of all, and the lock seals the text as the key goes (authClient.beforeLock).
+ * The event is dispatched here, then the tab closed once the draft is kept: a real close can end
+ * the page before that write lands (the browser guarantees nothing after pagehide), which is the
+ * limit the security page states. `timer`: no pagehide; the delay's own write keeps it.
+ */
+async function typeAndCloseTab(text: string, name = 'draft.txt', { timer = false } = {}) {
     await openEditor(page, name);
     await retype(page, text);
+    if (!timer)
+        await page.evaluate(() =>
+            window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false })),
+        );
     await expect.poll(() => draftCount(page), { timeout: 15_000 }).toBe(1);
     // As a person closing the tab: no beforeunload prompt, nothing saved.
     await page.close();
@@ -283,7 +293,7 @@ test('locked, the draft is ciphertext only and nothing is offered; after the unl
 
 test('signing out deletes the drafts: no database, no canary', async () => {
     const canary = `signout-canary-${Date.now()}`;
-    await typeAndCloseTab(canary);
+    await typeAndCloseTab(canary, 'draft.txt', { timer: true });
     expect(await draftCount(page)).toBe(1);
     await page.getByRole('button', { name: 'Account menu' }).click();
     await page.getByRole('menuitem', { name: 'Sign out' }).click();

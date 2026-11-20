@@ -195,6 +195,34 @@ describe('the draft store’s metadata and owners', () => {
         expect(await store.read(place())).toBeNull();
     });
 
+    test('an expired draft is deleted only while it is still the one read: a fresh one written meanwhile stays', async () => {
+        await createDraftStore(sealer(), 'hushos-drafts', () => NOW).write(
+            place(),
+            draft('old', NOW - 31 * DAY),
+            THEIRS,
+        );
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => (release = resolve));
+        const slow: DraftSealer = {
+            ...sealer(),
+            open: async (...args) => {
+                await gate;
+                return sealer().open(...args);
+            },
+        };
+        const store = createDraftStore(slow, 'hushos-drafts', () => NOW);
+        const reading = store.read(place());
+        // Another tab writes a fresh draft while the old one is opened.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        await store.write(place(), draft('fresh'), MINE);
+        release();
+        expect(await reading).toBeNull();
+        expect(
+            (await createDraftStore(sealer(), 'hushos-drafts', () => NOW).read(place()))?.draft
+                .text,
+        ).toBe('fresh');
+    });
+
     test('a store that can’t be read rejects: no answer is never “no draft”', async () => {
         const store = createDraftStore(
             { ...sealer(), slot: () => Promise.reject(new Error('worker busy')) },
@@ -366,6 +394,44 @@ describe('the draft writer', () => {
         release();
         await Promise.all([writing, removing]);
         expect(order).toEqual(['write', 'remove']);
+    });
+
+    test('seize asks for the seal before it returns, and what was sealed lands after a lock, not after a sign-out', async () => {
+        let locked = false;
+        let signedOut = false;
+        const asked: string[] = [];
+        const landed: string[] = [];
+        const writer = createDraftWriter({
+            locked: () => locked,
+            ended: () => signedOut,
+            snapshot: () => ({
+                place: place(),
+                atBaseline: false,
+                draft: () => draft('as it locked'),
+            }),
+            store: {
+                write: async (_where, value, _owner, current = () => true) => {
+                    asked.push(value.text);
+                    await Promise.resolve();
+                    if (current()) landed.push(value.text);
+                    return current();
+                },
+                remove: async () => true,
+            },
+        });
+        const seized = writer.seize();
+        // The seal was asked for before the caller went on to clear the key.
+        expect(asked).toEqual(['as it locked']);
+        locked = true;
+        await seized;
+        expect(landed).toEqual(['as it locked']);
+        // Signed out instead: sealed, but never stored.
+        locked = false;
+        const again = writer.seize();
+        locked = true;
+        signedOut = true;
+        await again;
+        expect(landed).toEqual(['as it locked']);
     });
 
     test('a lock that lands after the text was read keeps it out of the store', async () => {

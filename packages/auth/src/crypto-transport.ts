@@ -9,7 +9,15 @@ export type RequestOptions = {
     idleTimeoutMs?: number;
     /* Buffers moved to the worker rather than copied: they are detached here once sent. */
     transfer?: Transferable[];
+    /*
+     * Asked for just before a lock (an editor's last draft, sealed as the key goes): a lock lets this
+     * request finish, never longer than LOCK_DRAIN_MS, before the worker goes. Nothing new is taken.
+     */
+    drainOnLock?: boolean;
 };
+
+/* How long a lock waits for requests asked for just before it (drainOnLock) before the worker goes. */
+export const LOCK_DRAIN_MS = 1_000;
 
 export interface CryptoTransport {
     request<K extends keyof CryptoRequests>(
@@ -43,20 +51,37 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
             resolve: (value: unknown) => void;
             reject: (error: Error) => void;
             onProgress?: (progress: unknown) => void;
+            drain: boolean;
             arm: () => void;
             timer: ReturnType<typeof setTimeout>;
         }
     >();
     const listeners = new Set<() => void>();
-    function lock() {
-        if (closed) return;
-        closed = true;
+    /* The worker goes, once what may still finish (draining) has, or LOCK_DRAIN_MS has passed. */
+    let terminated = false;
+    function terminate() {
+        if (terminated) return;
+        terminated = true;
         worker.terminate();
         for (const task of pending.values()) {
             clearTimeout(task.timer);
             task.reject(new Error('Your account was locked. Please try again.'));
         }
         pending.clear();
+    }
+    function lock() {
+        if (closed) return;
+        closed = true;
+        // Everything but a request asked for just before the lock is refused now; the worker
+        // answers those it already took in order, then goes.
+        for (const [id, task] of pending)
+            if (!task.drain) {
+                clearTimeout(task.timer);
+                task.reject(new Error('Your account was locked. Please try again.'));
+                pending.delete(id);
+            }
+        if (pending.size === 0) terminate();
+        else setTimeout(terminate, LOCK_DRAIN_MS);
         for (const listener of listeners) listener();
         listeners.clear();
     }
@@ -70,6 +95,8 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
         }
         pending.delete(event.data.id);
         clearTimeout(task.timer);
+        // Locked, and the last request it waited for has answered: the worker goes now.
+        if (closed && pending.size === 0) queueMicrotask(terminate);
         if (event.data.error)
             task.reject(
                 Object.assign(
@@ -80,7 +107,10 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
             );
         else task.resolve(event.data.result);
     };
-    worker.onerror = lock;
+    worker.onerror = () => {
+        lock();
+        terminate();
+    };
     return {
         lock,
         onLock(listener) {
@@ -99,6 +129,7 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
                 const task = {
                     resolve: (value: unknown) => resolve(value as CryptoResults[K]),
                     reject,
+                    drain: options.drainOnLock === true,
                     onProgress: options.onProgress,
                     timer: setTimeout(lock, idle),
                     arm() {

@@ -45,3 +45,21 @@ test('a tab whose write never ends holds the lock no longer than its bound', asy
     await locking.flushDrafts(600);
     expect(Date.now() - started).toBeLessThan(1_500);
 });
+
+test('with no BroadcastChannel and an editor whose write fails, flushing still settles', async () => {
+    vi.stubGlobal(
+        'BroadcastChannel',
+        class {
+            constructor() {
+                throw new Error('BroadcastChannel is not available');
+            }
+        },
+    );
+    try {
+        const locking = await tab();
+        forgets.push(locking.flushBeforeLock(() => Promise.reject(new Error('quota'))));
+        await expect(locking.flushDrafts(300)).resolves.toBeUndefined();
+    } finally {
+        vi.unstubAllGlobals();
+    }
+});

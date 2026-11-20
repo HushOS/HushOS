@@ -43,19 +43,19 @@ import Testing
         // Nothing that names the file: no node id, no version id.
         #expect(!kept.contains(place.nodeId))
         #expect(!kept.contains(Self.base))
-        let read = try #require(store().read(at: place, key: key))
+        let read = try #require(store().read(at: place, key: key).draft)
         #expect(read.text == "draft canary")
         #expect(read.selection == DraftSelection(from: 2, to: 4))
         #expect(read.frame.baseVersionId == Self.base)
         // Another file, or another account's key: nothing found.
-        #expect(store().read(at: node(9), key: key) == nil)
-        #expect(store().read(at: place, key: Data(repeating: 9, count: 32)) == nil)
+        #expect(store().read(at: node(9), key: key).isAbsent)
+        #expect(store().read(at: place, key: Data(repeating: 9, count: 32)).isAbsent)
     }
 
     @Test func oneDraftPerFileTheLastWriteWins() throws {
         store().write(draft("first"), at: place, key: key)
         store().write(draft("second", savedAt: Self.now + 1), at: place, key: key)
-        #expect(try #require(store().read(at: place, key: key)).text == "second")
+        #expect(try #require(store().read(at: place, key: key).draft).text == "second")
         #expect(store().count == 1)
     }
 
@@ -66,7 +66,7 @@ import Testing
         // Another time beside the same sealed text: the associated data no longer holds.
         record = record.replacingOccurrences(of: String(Self.now), with: String(Self.now - 1))
         try Data(record.utf8).write(to: file)
-        #expect(store().read(at: place, key: key) == nil)
+        #expect(store().read(at: place, key: key).draft == nil)
         #expect(store().count == 0)
     }
 
@@ -76,7 +76,7 @@ import Testing
         let tooLong = String(repeating: "a", count: Int(draftLimits().textBytes) + 1)
         #expect(!store().write(draft(tooLong), at: node(60), key: key))
         #expect(store().count == 50)
-        #expect(store().read(at: node(0), key: key)?.text == "d0")
+        #expect(store().read(at: node(0), key: key).draft?.text == "d0")
         // A record whose bytes can't be parsed, recent by its date: the caps go by dates, never by reading it.
         let unreadable = folder.appendingPathComponent("unreadable.json")
         try Data("not a record".utf8).write(to: unreadable)
@@ -105,8 +105,8 @@ import Testing
         let limit = draftLimits().maxAgeMs
         store().write(draft("edge", savedAt: Self.now - limit), at: node(1), key: key)
         store().write(draft("past", savedAt: Self.now - limit - 1), at: node(2), key: key)
-        #expect(store().read(at: node(1), key: key)?.text == "edge")
-        #expect(store().read(at: node(2), key: key) == nil)
+        #expect(store().read(at: node(1), key: key).draft?.text == "edge")
+        #expect(store().read(at: node(2), key: key).draft == nil)
         #expect(store().count == 1)
     }
 
@@ -115,16 +115,16 @@ import Testing
         #expect(store().count == 50)
         store().write(draft("newest"), at: node(50), key: key)
         #expect(store().count == 50)
-        #expect(store().read(at: node(0), key: key) == nil)
-        #expect(store().read(at: node(1), key: key)?.text == "d1")
-        #expect(store().read(at: node(50), key: key)?.text == "newest")
+        #expect(store().read(at: node(0), key: key).draft == nil)
+        #expect(store().read(at: node(1), key: key).draft?.text == "d1")
+        #expect(store().read(at: node(50), key: key).draft?.text == "newest")
     }
 
     @Test func textPastTheEditorsLimitIsNotKeptAndTheLastDraftStays() {
         store().write(draft("kept"), at: place, key: key)
         let tooLong = String(repeating: "a", count: Int(draftLimits().textBytes) + 1)
         #expect(!store().write(draft(tooLong), at: place, key: key))
-        #expect(store().read(at: place, key: key)?.text == "kept")
+        #expect(store().read(at: place, key: key).draft?.text == "kept")
     }
 
     @Test func aWriteAskedForBeforeASignOutsWipeInAnotherProcessKeepsNothing() {
@@ -147,14 +147,57 @@ import Testing
         #expect(DraftRules.offer(mine, openedVersionId: "1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5", openedText: "mine") == .same)
     }
 
-    @Test func aTurnWritesOnlyEditableAnsweredTextAndRemovesOnlyAnOwnedDraftAtTheBaseline() {
-        #expect(DraftRules.step(editable: false, offering: false, startedFrom: Self.base, atBaseline: false, owns: true) == .none)
-        #expect(DraftRules.step(editable: true, offering: true, startedFrom: Self.base, atBaseline: false, owns: true) == .none)
-        #expect(DraftRules.step(editable: true, offering: false, startedFrom: nil, atBaseline: false, owns: true) == .none)
-        #expect(DraftRules.step(editable: true, offering: false, startedFrom: Self.base, atBaseline: true, owns: true) == .remove)
-        // An editor that wrote nothing (opened and left, closed while loading) removes nothing.
-        #expect(DraftRules.step(editable: true, offering: false, startedFrom: Self.base, atBaseline: true, owns: false) == .none)
-        #expect(DraftRules.step(editable: true, offering: false, startedFrom: Self.base, atBaseline: false, owns: false) == .write)
+    @Test func aTurnWritesOnlyEditableAnsweredTextAndAsksForARemovalAtTheBaseline() {
+        #expect(DraftRules.step(editable: false, offering: false, unread: false, startedFrom: Self.base, atBaseline: false) == .none)
+        #expect(DraftRules.step(editable: true, offering: true, unread: false, startedFrom: Self.base, atBaseline: false) == .none)
+        // A lookup that couldn't answer: nothing is written over the draft it may have missed.
+        #expect(DraftRules.step(editable: true, offering: false, unread: true, startedFrom: Self.base, atBaseline: false) == .none)
+        #expect(DraftRules.step(editable: true, offering: false, unread: false, startedFrom: nil, atBaseline: false) == .none)
+        #expect(DraftRules.step(editable: true, offering: false, unread: false, startedFrom: Self.base, atBaseline: true) == .remove)
+        #expect(DraftRules.step(editable: true, offering: false, unread: false, startedFrom: Self.base, atBaseline: false) == .write)
+    }
+
+    @Test @MainActor func aRemovalDecidesAfterTheWritesBeforeItAndAnUntouchedSessionRemovesNothing() async {
+        var removed = 0
+        let untouched = DraftSession()
+        untouched.remove { removed += 1 }
+        await DraftLane.settled()
+        #expect(removed == 0)
+        // A write still landing when the text went back to its baseline: the removal asked after it goes.
+        let typing = DraftSession()
+        typing.write({
+            try? await Task.sleep(for: .milliseconds(100))
+            return true
+        })
+        typing.remove { removed += 1 }
+        await DraftLane.settled()
+        #expect(removed == 1)
+        #expect(!typing.owns)
+    }
+
+    @Test func aLookupThatCantGetTheLockIsNoAnswerNeverNone() throws {
+        store().write(draft("unread"), at: place, key: key)
+        var answer = DraftLookup.absent
+        var busy = store()
+        busy.activity = .expired
+        // Another process holds the lock: no answer, and the draft is still there.
+        FileLock.withLock(folder.path + ".lock") { answer = busy.read(at: place, key: key) }
+        if case .unavailable = answer {} else { Issue.record("expected unavailable, got \(answer)") }
+        #expect(store().read(at: place, key: key).draft?.text == "unread")
+        #expect(store().read(at: node(9), key: key).isAbsent)
+    }
+
+    @Test func aWipeThatNeverGetsTheLockStillVoidsAWriteAlreadyUnderWay() {
+        var writing = store()
+        let folder = folder
+        // The wipe comes from another process while this writer holds the lock, and times out on it.
+        writing.beforePublish = {
+            var wiping = DraftStore(folder: folder)
+            wiping.activity = .expired
+            wiping.wipe()
+        }
+        #expect(!writing.write(draft("before the sign-out"), at: place, key: key))
+        #expect(store().count == 0)
     }
 
     @Test func aCopyOfARestoredDraftFromAnotherVersionIsReSealedNeverVouchedFor() throws {

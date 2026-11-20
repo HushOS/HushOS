@@ -25,6 +25,23 @@ public struct DraftPlace: Hashable, Sendable {
     }
 }
 
+/* A draft lookup's answer: none, no answer (unread: nothing may be written over it), or the draft. */
+public enum DraftLookup: Sendable {
+    case absent
+    case unavailable
+    case found(Draft)
+
+    public var draft: Draft? {
+        if case .found(let draft) = self { return draft }
+        return nil
+    }
+
+    public var isAbsent: Bool {
+        if case .absent = self { return true }
+        return false
+    }
+}
+
 public struct DraftStore: Sendable {
     let folder: URL
     let now: @Sendable () -> UInt64
@@ -72,17 +89,19 @@ public struct DraftStore: Sendable {
 
     /* The account's drafts deleted (AccountStore.wipe), under the lock, so no write asked for before lands after. */
     func wipe() {
-        let moved = generation &+ 1
-        let delete = {
-            try? Data(String(moved).utf8).write(to: generationFile, options: .atomic)
-            try? FileManager.default.removeItem(at: folder)
-        }
-        // The lock not had (a process holding it suspended): deleted anyway, and once more under it.
+        // First, lock or no lock: every write asked for before this is void from now. A writer checks the generation
+        // again once its record is in place and takes it back if it moved, so even a wipe that never gets the lock (a
+        // process holding it suspended) leaves nothing a writer published around it.
+        try? Data(String(generation &+ 1).utf8).write(to: generationFile, options: .atomic)
+        let delete = { _ = try? FileManager.default.removeItem(at: folder) }
         if !FileLock.withLock(lockPath, activity: activity, delete) {
             delete()
             FileLock.withLock(lockPath, activity: activity, delete)
         }
     }
+
+    /* Tests only: runs between a writer's first check and its record landing. */
+    var beforePublish: (@Sendable () -> Void)?
 
     static func wipe(folder: URL) { DraftStore(folder: folder).wipe() }
 
@@ -104,11 +123,17 @@ public struct DraftStore: Sendable {
         guard let slot = try? slot(place, key: key),
               let record = try? draftSeal(accountKey: key, userId: place.userId, workspaceId: place.workspaceId,
                                           nodeId: place.nodeId, draft: draft) else { return false }
+        beforePublish?()
         Unbacked.folder(folder)
         let files = FileManager.default
         do {
             try Data(record.utf8).write(to: file(slot), options: [.atomic, .completeFileProtection])
         } catch {
+            return false
+        }
+        // A wipe came while this wrote (in this process or another, with the lock or without): what it published goes.
+        guard asked == generation else {
+            try? files.removeItem(at: file(slot))
             return false
         }
         // When it was written, as the file's own date: the caps read dates, never a record (a protected one can't be
@@ -127,25 +152,26 @@ public struct DraftStore: Sendable {
     }
 
     /*
-     * The file's draft, or nil: none, one that couldn't be read now (left as it is), or one that doesn't open here or is
-     * too old, which is deleted (nothing can show it).
+     * The file's draft: `absent` (none, or one that doesn't open here or is too old, deleted since nothing can show it),
+     * `unavailable` (the lock not had, the file there but not readable now: no answer, never "none"), or `found`.
      */
-    public func read(at place: DraftPlace, key: Data) -> Draft? {
-        var found: Draft?
+    public func read(at place: DraftPlace, key: Data) -> DraftLookup {
+        var found = DraftLookup.unavailable
         FileLock.withLock(lockPath, activity: activity) { found = readLocked(at: place, key: key) }
         return found
     }
 
-    private func readLocked(at place: DraftPlace, key: Data) -> Draft? {
-        guard let slot = try? slot(place, key: key),
-              let record = try? String(contentsOf: file(slot), encoding: .utf8) else { return nil }
+    private func readLocked(at place: DraftPlace, key: Data) -> DraftLookup {
+        guard let slot = try? slot(place, key: key) else { return .unavailable }
+        guard FileManager.default.fileExists(atPath: file(slot).path) else { return .absent }
+        guard let record = try? String(contentsOf: file(slot), encoding: .utf8) else { return .unavailable }
         guard let draft = try? draftOpen(accountKey: key, userId: place.userId, workspaceId: place.workspaceId,
                                          nodeId: place.nodeId, record: record),
               now() <= draft.frame.savedAt + draftLimits().maxAgeMs else {
             try? FileManager.default.removeItem(at: file(slot))
-            return nil
+            return .absent
         }
-        return draft
+        return .found(draft)
     }
 
     public func remove(at place: DraftPlace, key: Data) {
@@ -178,13 +204,13 @@ public enum DraftRules {
     }
 
     /*
-     * `owns`: this session wrote the stored draft, or the person restored it. Back at the baseline, only a draft the session
-     * owns goes: an editor that wrote nothing (closed while loading, opened and left) never removes one.
+     * Back at the baseline the turn asks for a removal; whether it happens is decided in the lane, after the writes before
+     * it (DraftSession.remove): only a draft the session owns goes. `unread`: a lookup that couldn't answer, so nothing is
+     * written over the draft it may have missed.
      */
-    public static func step(editable: Bool, offering: Bool, startedFrom: String?, atBaseline: Bool, owns: Bool) -> Step {
-        guard editable, !offering, startedFrom != nil else { return .none }
-        if atBaseline { return owns ? .remove : .none }
-        return .write
+    public static func step(editable: Bool, offering: Bool, unread: Bool, startedFrom: String?, atBaseline: Bool) -> Step {
+        guard editable, !offering, !unread, startedFrom != nil else { return .none }
+        return atBaseline ? .remove : .write
     }
 
     /* What reopening does with the draft (the core's draft_offer, held to the web by fixtures/drafts.json). */
@@ -272,6 +298,39 @@ extension TextEditing {
     }
 }
 
+/*
+ * One editing session's hold on its draft, shared by the screens that show it (EditorState carries it across a rebuild,
+ * so a write that lands after an unfold counts for the editor presented again). `owns`: this session wrote the stored draft,
+ * or the person restored it; only then does a removal it asks for go. `unread`: its lookup couldn't answer, so nothing is
+ * written until one does. Writes and removals go through DraftLane, a removal deciding after the writes before it.
+ */
+@MainActor public final class DraftSession {
+    public private(set) var owns = false
+    public var unread = false
+
+    public init() {}
+
+    /* The person restored the stored draft: this session's to remove from here. */
+    public func adopt() { owns = true }
+
+    public func write(_ work: @escaping @MainActor () async -> Bool, kept: @escaping @MainActor (Bool) -> Void = { _ in }) {
+        DraftLane.enqueue { [self] in
+            let written = await work()
+            if written { owns = true }
+            kept(written)
+        }
+    }
+
+    /* Removed once the writes asked before have landed, if this session owns the draft then, or `force`. */
+    public func remove(force: Bool = false, _ work: @escaping @MainActor () async -> Void) {
+        DraftLane.enqueue { [self] in
+            guard force || owns else { return }
+            owns = false
+            await work()
+        }
+    }
+}
+
 extension Vault {
     /* Where this account keeps `file`'s draft. */
     public nonisolated func draftPlace(of file: Opened) -> DraftPlace {
@@ -284,8 +343,8 @@ extension Vault {
         return store.write(draft, at: draftPlace(of: file), key: key, asked: asked)
     }
 
-    public func readDraft(of file: Opened, store: DraftStore = .shared) -> Draft? {
-        guard let key = try? unlockAccount() else { return nil }
+    public func readDraft(of file: Opened, store: DraftStore = .shared) -> DraftLookup {
+        guard let key = try? unlockAccount() else { return .unavailable }
         return store.read(at: draftPlace(of: file), key: key)
     }
 

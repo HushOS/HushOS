@@ -35,6 +35,15 @@ data class DraftPlace(val userId: String, val workspaceId: String, val nodeId: S
     }
 }
 
+/* A draft lookup's answer: none, no answer (unread: nothing may be written over it), or the draft. */
+sealed class DraftLookup {
+    object Absent : DraftLookup()
+    object Unavailable : DraftLookup()
+    data class Found(val found: Draft) : DraftLookup()
+
+    val draft: Draft? get() = (this as? Found)?.found
+}
+
 class DraftStore(private val folder: File, private val now: () -> Long = System::currentTimeMillis) {
     /*
      * Filed by workspace tag (a name only the unlocked account works out from the workspace), so a family's removal deletes
@@ -92,19 +101,23 @@ class DraftStore(private val folder: File, private val now: () -> Long = System:
         return true
     }
 
-    /* The file's draft, or null: none, or one that doesn't open here or is too old, which is deleted (nothing can show it). */
-    fun read(place: DraftPlace, key: ByteArray): Draft? = synchronized(LOCK) { readLocked(place, key) }
+    /*
+     * The file's draft: Absent (none, or one that doesn't open here or is too old, deleted since nothing can show it),
+     * Unavailable (there but not readable now: no answer, never "none"), or Found.
+     */
+    fun read(place: DraftPlace, key: ByteArray): DraftLookup = synchronized(LOCK) { readLocked(place, key) }
 
-    private fun readLocked(place: DraftPlace, key: ByteArray): Draft? {
-        sweepPartials()
-        val target = runCatching { file(place, key) }.getOrNull() ?: return null
-        val record = target.takeIf { it.exists() }?.let { runCatching { it.readText() }.getOrNull() } ?: return null
+    private fun readLocked(place: DraftPlace, key: ByteArray): DraftLookup {
+        runCatching { sweepPartials() }
+        val target = runCatching { file(place, key) }.getOrNull() ?: return DraftLookup.Unavailable
+        if (!target.exists()) return DraftLookup.Absent
+        val record = runCatching { target.readText() }.getOrNull() ?: return DraftLookup.Unavailable
         val draft = runCatching { draftOpen(key, place.userId, place.workspaceId, place.nodeId, record) }.getOrNull()
         if (draft == null || now().toULong() > draft.frame.savedAt + draftLimits().maxAgeMs) {
             target.delete()
-            return null
+            return DraftLookup.Absent
         }
-        return draft
+        return DraftLookup.Found(draft)
     }
 
     fun remove(place: DraftPlace, key: ByteArray) {
@@ -148,12 +161,13 @@ object DraftRules {
      * the text is back at what was last opened or saved; otherwise it is written.
      */
     /*
-     * `owns`: this session wrote the stored draft, or the person restored it. Back at the baseline, only a draft the session
-     * owns goes: an editor that wrote nothing (closed while loading, opened and left) never removes one.
+     * Back at the baseline the turn asks for a removal; whether it happens is decided in order after the writes before it
+     * (TextEdit.removeDraft): only a draft the session owns goes. `unread`: a lookup that couldn't answer, so nothing is
+     * written over the draft it may have missed.
      */
-    fun step(editable: Boolean, offering: Boolean, startedFrom: String?, atBaseline: Boolean, owns: Boolean): Step = when {
-        !editable || offering || startedFrom == null -> Step.NONE
-        atBaseline -> if (owns) Step.REMOVE else Step.NONE
+    fun step(editable: Boolean, offering: Boolean, unread: Boolean, startedFrom: String?, atBaseline: Boolean): Step = when {
+        !editable || offering || unread || startedFrom == null -> Step.NONE
+        atBaseline -> Step.REMOVE
         else -> Step.WRITE
     }
 
@@ -183,8 +197,8 @@ fun Vault.draftPlace(file: Opened) = DraftPlace.of(api.session.userId, file)
 fun Vault.writeDraft(store: DraftStore, draft: Draft, file: Opened, asked: Long = store.generation): Boolean =
     runCatching { store.write(draft, draftPlace(file), unlockAccount(), asked) }.getOrDefault(false)
 
-fun Vault.readDraft(store: DraftStore, file: Opened): Draft? =
-    runCatching { store.read(draftPlace(file), unlockAccount()) }.getOrNull()
+fun Vault.readDraft(store: DraftStore, file: Opened): DraftLookup =
+    runCatching { store.read(draftPlace(file), unlockAccount()) }.getOrDefault(DraftLookup.Unavailable)
 
 fun Vault.removeDraft(store: DraftStore, file: Opened) {
     runCatching { store.remove(draftPlace(file), unlockAccount()) }

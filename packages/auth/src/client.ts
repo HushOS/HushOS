@@ -428,7 +428,20 @@ export function createAuthClient(
     let holding = false;
     let channel: BroadcastChannel | undefined;
     let listening = false;
+    /*
+     * Called first by every lock of this tab (Lock, another tab's, a sign-out, the page being left,
+     * a worker that failed), while the key is still there: what an editor must keep (its draft)
+     * is asked for here, with `drainOnLock`, and the worker answers it before it goes. Each is
+     * tried on its own; none can stop or delay the lock itself.
+     */
+    const lockHooks = new Set<() => void>();
     function lock() {
+        for (const hook of lockHooks)
+            try {
+                hook();
+            } catch {
+                /* A hook's failure is its own: the lock goes on. */
+            }
         epoch += 1;
         pendingStep = undefined;
         askedWith = undefined;
@@ -1250,6 +1263,16 @@ export function createAuthClient(
         // The live session is gone or belongs to a newer credential revision. Another tab
         // may have just written a fresh bundle for it, so only lock this tab; restore()
         // validates the bundle against the live session and removes it if it is really dead.
+        /*
+         * Called first by every lock of this tab, with the key still there (see lockHooks); the
+         * returned function stops it. A hook must only start its work: the lock never waits.
+         */
+        beforeLock(hook: () => void) {
+            lockHooks.add(hook);
+            return () => {
+                lockHooks.delete(hook);
+            };
+        },
         resync() {
             lock();
         },

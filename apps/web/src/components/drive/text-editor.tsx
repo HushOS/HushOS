@@ -69,6 +69,7 @@ import {
     invalidateFolders,
     nodeSize,
 } from '@/lib/drive';
+import { authClient } from '@/lib/auth-client';
 import { flushBeforeLock } from '@/lib/draft-flush';
 import {
     createDraftWriter,
@@ -219,6 +220,10 @@ export const editorWords = {
     discardDraft: 'Discard',
     draftNotKept: 'Your unsaved changes couldn’t be kept on this device.',
 };
+
+/* A file's slot in this browser, for the lookup's hold on writes. */
+const slotKey = (place: DraftPlace) =>
+    `${place.userId.toLowerCase()}/${place.workspaceId.toLowerCase()}/${place.nodeId.toLowerCase()}`;
 
 /* A draft found when the file opened, waiting for Restore or Discard. */
 type DraftOfferShown = {
@@ -600,7 +605,7 @@ export function TextEditor({
      * The lookup hasn't answered (still reading, or the store failed): nothing is written over a
      * draft not yet read.
      */
-    const draftPending = useRef(false);
+    const draftPending = useRef<string | null>(null);
     /*
      * The version the session's text was first read from (what a copy is signed from), and whether
      * it is the version read now: a draft restored from another version can't be checked, and its
@@ -699,17 +704,20 @@ export function TextEditor({
                     ? { userId: account, workspaceId: file.workspaceId, nodeId: file.id }
                     : null;
                 /* What a stored draft becomes against this text: an offer, or nothing (the file holds it). */
-                const offerFor = (stored: StoredDraft | null, opened: string) => {
+                const offerFor = (
+                    stored: StoredDraft | null,
+                    opened: string,
+                    openedVersionId: string | null,
+                ) => {
                     if (!stored || !place) return null;
                     const kind = draftOffer(
                         {
                             baseVersionId: stored.draft.frame.baseVersionId,
                             text: stored.draft.text,
                         },
-                        { versionId, text: opened },
+                        { versionId: openedVersionId, text: opened },
                     );
-                    if (kind !== 'same')
-                        return { ...stored, kind, openedVersionId: versionId, place };
+                    if (kind !== 'same') return { ...stored, kind, openedVersionId, place };
                     // The file already holds that text: the draft is spent, unless rewritten since.
                     void drafts()
                         .remove(place, stored.owner)
@@ -720,23 +728,42 @@ export function TextEditor({
                     draftAsked.current = true;
                     const looked = await lookUpDraft(drafts(), place);
                     if (!still()) return;
-                    if (looked.status === 'answered') found = offerFor(looked.stored, text.text);
+                    if (looked.status === 'answered')
+                        found = offerFor(looked.stored, text.text, versionId);
                     else if (looked.status === 'waiting') waiting = looked.later;
                     else unread = true;
                 }
                 if (text.editable) textSource.current = { versionId, known: true };
-                draftPending.current = waiting !== null || unread;
+                // Nothing is written to this file's slot until its draft has been read.
+                draftPending.current =
+                    (waiting !== null || unread) && place ? slotKey(place) : null;
                 if (unread) setDraftNotKept(true);
-                if (waiting && text.editable) {
-                    const opened = text.text;
-                    // Answered late: offered then (the text goes read-only until answered). Unanswered,
-                    // nothing is written over it for the rest of the session.
+                if (waiting && text.editable && place) {
+                    const openedAt = opening.current;
+                    // Answered late: weighed against the text and version open now (typing, a save
+                    // or a copy may have come meanwhile), and offered only while this very file is
+                    // still the one being written, opened as it was (not Open theirs since).
                     void waiting.then(
                         (stored) => {
                             if (!mounted.current || deviceSession.generation() !== account0) return;
-                            draftPending.current = false;
-                            const late = offerFor(stored, opened);
-                            if (!late) return;
+                            const { file: writing, startedFrom } = target.current;
+                            const sameFile =
+                                writing.id === place.nodeId &&
+                                writing.workspaceId === place.workspaceId;
+                            // Another file now: nothing will write over this one's slot from here.
+                            if (!sameFile) {
+                                draftPending.current = null;
+                                return;
+                            }
+                            // Reopened (Open theirs): left unread, and still never written over.
+                            if (opening.current !== openedAt || !saved.current) return;
+                            draftPending.current = null;
+                            const late = offerFor(stored, saved.current.toString(), startedFrom);
+                            if (!late) {
+                                // Writes resume: text typed while it was read is kept from here.
+                                if (dirtyNow.current) writer.current?.changed();
+                                return;
+                            }
                             setOffer(late);
                             view.current?.dispatch({
                                 effects: editability.current.reconfigure(fixed(false)),
@@ -799,7 +826,7 @@ export function TextEditor({
             !place ||
             !editableNow.current ||
             offerNow.current ||
-            draftPending.current ||
+            draftPending.current === slotKey(place) ||
             endedNow.current ||
             reloadingNow.current
         )
@@ -835,6 +862,8 @@ export function TextEditor({
         const made = createDraftWriter({
             snapshot: draftSnapshot,
             locked: () => sessionEnding() || deviceSession.generation() !== openedUnder.current,
+            // A lock is not an end: a draft sealed as it came still lands, as ciphertext.
+            ended: () => !deviceSession.open(),
             store: drafts(),
             onKept: (kept) => {
                 if (mounted.current) setDraftNotKept(!kept);
@@ -842,15 +871,16 @@ export function TextEditor({
         });
         writer.current = made;
         const unregister = flushBeforeLock(() => made.flush());
-        const left = () => void made.flush();
+        // Every lock of this tab (Lock, another tab's, the page being left, which locks first)
+        // seals the text with the key still there; the worker answers before it goes.
+        const unhook = authClient.beforeLock(() => void made.seize());
         const hidden = () => {
             if (document.visibilityState === 'hidden') void made.flush();
         };
         document.addEventListener('visibilitychange', hidden);
-        window.addEventListener('pagehide', left);
         return () => {
             document.removeEventListener('visibilitychange', hidden);
-            window.removeEventListener('pagehide', left);
+            unhook();
             unregister();
             // An unanswered offer keeps its draft. Closed by choice (Discard, or nothing to keep), the
             // draft goes; a lock, a sign-out or leaving the drive keeps what was typed (written now,
@@ -1423,6 +1453,8 @@ export function TextEditor({
         if (!current) return;
         current.dispatch({ effects: editability.current.reconfigure(fixed(!endedNow.current)) });
         current.focus();
+        // Typed before a late offer came: kept from here.
+        if (dirtyNow.current) writer.current?.changed();
     }, [setOffer]);
     /*
      * Restore: the draft's text in place of the opened one, as an unsaved edit (Undo goes back), in the

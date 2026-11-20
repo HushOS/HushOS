@@ -730,3 +730,31 @@ describe('a device the server says was removed', () => {
         expect(identity).not.toBeNull();
     });
 });
+
+describe('before a lock', () => {
+    test('every lock of the tab calls its hooks first, with the worker still there; a failing hook stops nothing', async () => {
+        pagehide.clear();
+        const order: string[] = [];
+        const transport: CryptoTransport = {
+            request: async () => ({}) as never,
+            lock() {
+                order.push('worker gone');
+            },
+            onLock() {},
+        };
+        const auth = createAuthClient(
+            () => transport,
+            keyStore([]).store,
+            api as unknown as AuthApi,
+        );
+        auth.beforeLock(() => {
+            throw new Error('a draft that could not be sealed');
+        });
+        auth.beforeLock(() => order.push('sealed'));
+        await auth.rpc('driveDraftSlot' as never, {} as never);
+        // The page being left locks first of all: the hooks run before the worker goes.
+        for (const leave of pagehide) leave();
+        expect(order).toEqual(['sealed', 'worker gone']);
+        expect(auth.store.getState().unlockedUserId).toBeNull();
+    });
+});

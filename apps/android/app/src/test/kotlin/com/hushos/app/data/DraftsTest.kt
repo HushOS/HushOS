@@ -59,19 +59,19 @@ class DraftsTest {
         assertFalse(everything().contains(place.nodeId))
         assertFalse(everything().contains(base))
         assertFalse(records().any { it.path.contains(place.workspaceId) || it.path.contains(place.nodeId) })
-        val read = store().read(place, key)!!
+        val read = store().read(place, key).draft!!
         assertEquals("draft canary", read.text)
         assertEquals(DraftSelection(2u, 4u), read.selection)
         assertEquals(base, read.frame.baseVersionId)
-        assertNull(store().read(node(9), key))
-        assertNull(store().read(place, ByteArray(32) { 9 }))
+        assertNull(store().read(node(9), key).draft)
+        assertNull(store().read(place, ByteArray(32) { 9 }).draft)
     }
 
     @Test
     fun oneDraftPerFileTheLastWriteWins() {
         store().write(draft("first"), place, key)
         store().write(draft("second", now + 1), place, key)
-        assertEquals("second", store().read(place, key)!!.text)
+        assertEquals("second", store().read(place, key).draft!!.text)
         assertEquals(1, store().count)
     }
 
@@ -81,7 +81,7 @@ class DraftsTest {
         val file = records().single()
         // Another time beside the same sealed text: the associated data no longer holds.
         file.writeText(file.readText().replace(now.toString(), (now - 1).toString()))
-        assertNull(store().read(place, key))
+        assertNull(store().read(place, key).draft)
         assertEquals(0, store().count)
     }
 
@@ -90,8 +90,8 @@ class DraftsTest {
         val limit = draftLimits().maxAgeMs.toLong()
         store().write(draft("edge", now - limit), node(1), key)
         store().write(draft("past", now - limit - 1), node(2), key)
-        assertEquals("edge", store().read(node(1), key)?.text)
-        assertNull(store().read(node(2), key))
+        assertEquals("edge", store().read(node(1), key).draft?.text)
+        assertNull(store().read(node(2), key).draft)
         assertEquals(1, store().count)
     }
 
@@ -101,9 +101,9 @@ class DraftsTest {
         assertEquals(50, store().count)
         store().write(draft("newest"), node(50), key)
         assertEquals(50, store().count)
-        assertNull(store().read(node(0), key))
-        assertEquals("d1", store().read(node(1), key)?.text)
-        assertEquals("newest", store().read(node(50), key)?.text)
+        assertNull(store().read(node(0), key).draft)
+        assertEquals("d1", store().read(node(1), key).draft?.text)
+        assertEquals("newest", store().read(node(50), key).draft?.text)
     }
 
     @Test
@@ -111,7 +111,7 @@ class DraftsTest {
         store().write(draft("kept"), place, key)
         assertFalse(store().write(draft("a".repeat(draftLimits().textBytes.toInt() + 1)), place, key))
         assertFalse(store().write(draft("half \uD83E"), place, key))
-        assertEquals("kept", store().read(place, key)?.text)
+        assertEquals("kept", store().read(place, key).draft?.text)
     }
 
     @Test
@@ -119,10 +119,10 @@ class DraftsTest {
         for (n in 0 until 50) store().write(draft("d$n", now - 50_000 + n), node(n), key)
         assertFalse(store().write(draft("a".repeat(draftLimits().textBytes.toInt() + 1)), node(60), key))
         assertEquals(50, store().count)
-        assertEquals("d0", store().read(node(0), key)?.text)
+        assertEquals("d0", store().read(node(0), key).draft?.text)
         // A write a kill left half done: swept, never counted or kept.
         val partial = File(records().first().parentFile, "left.json.partial").apply { writeText("half") }
-        store().read(node(1), key)
+        store().read(node(1), key).draft
         assertFalse(partial.exists())
     }
 
@@ -133,8 +133,8 @@ class DraftsTest {
         val odd = File(records().first().parentFile, "odd.json").apply { writeText("not a record"); setLastModified(now) }
         store().write(draft("newest"), node(50), key)
         assertTrue(odd.exists())
-        assertNull(store().read(node(0), key))
-        assertNull(store().read(node(1), key))
+        assertNull(store().read(node(0), key).draft)
+        assertNull(store().read(node(1), key).draft)
     }
 
     @Test
@@ -143,8 +143,8 @@ class DraftsTest {
         store().write(draft("family"), place.copy(workspaceId = family), key)
         store().write(draft("mine"), place, key)
         store().removeWorkspace(place.userId, family, key)
-        assertNull(store().read(place.copy(workspaceId = family), key))
-        assertEquals("mine", store().read(place, key)?.text)
+        assertNull(store().read(place.copy(workspaceId = family), key).draft)
+        assertEquals("mine", store().read(place, key).draft?.text)
     }
 
     @Test
@@ -180,14 +180,29 @@ class DraftsTest {
     }
 
     @Test
-    fun aTurnWritesOnlyEditableAnsweredTextAndRemovesOnlyAnOwnedDraftAtTheBaseline() {
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = false, offering = false, startedFrom = base, atBaseline = false, owns = true))
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = true, startedFrom = base, atBaseline = false, owns = true))
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, startedFrom = null, atBaseline = false, owns = true))
-        assertEquals(DraftRules.Step.REMOVE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = true, owns = true))
-        // An editor that wrote nothing (opened and left, closed while loading) removes nothing.
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = true, owns = false))
-        assertEquals(DraftRules.Step.WRITE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = false, owns = false))
+    fun aTurnWritesOnlyEditableAnsweredTextAndAsksForARemovalAtTheBaseline() {
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = false, offering = false, unread = false, startedFrom = base, atBaseline = false))
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = true, unread = false, startedFrom = base, atBaseline = false))
+        // A lookup that couldn't answer: nothing is written over the draft it may have missed.
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, unread = true, startedFrom = base, atBaseline = false))
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, unread = false, startedFrom = null, atBaseline = false))
+        assertEquals(DraftRules.Step.REMOVE, DraftRules.step(editable = true, offering = false, unread = false, startedFrom = base, atBaseline = true))
+        assertEquals(DraftRules.Step.WRITE, DraftRules.step(editable = true, offering = false, unread = false, startedFrom = base, atBaseline = false))
+    }
+
+    @Test
+    fun aDraftThatCantBeReadNowIsNoAnswerNeverNoneAndStays() {
+        store().write(draft("unread"), place, key)
+        val record = records().single()
+        val kept = record.readText()
+        // Not readable now (a directory where the record was stands in for an I/O failure).
+        record.delete()
+        record.mkdirs()
+        assertTrue(store().read(place, key) is DraftLookup.Unavailable)
+        record.delete()
+        record.writeText(kept)
+        assertEquals("unread", store().read(place, key).draft?.text)
+        assertTrue(store().read(node(9), key) is DraftLookup.Absent)
     }
 
     @Test

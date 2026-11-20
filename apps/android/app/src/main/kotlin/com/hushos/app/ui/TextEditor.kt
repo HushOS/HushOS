@@ -62,6 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
+import com.hushos.app.data.DraftLookup
 import com.hushos.app.data.DraftRules
 import com.hushos.app.data.DraftStore
 import com.hushos.app.data.EditSession
@@ -289,6 +290,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
      */
     private var sourceVersionId: String? = null
     private var sourceKnown = true
+    /* The lookup couldn't answer: nothing is written over the draft it may have missed until one does. */
+    private var draftUnread = false
 
     /* Runs `work` on the main thread after everything asked before it. */
     private fun inOrder(work: suspend () -> Unit) {
@@ -472,7 +475,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             // The first open only: a draft of this file from an earlier session (a closed app, a kill), answered before the
             // text can be changed.
             val opened0 = opened.getOrNull()
-            val kept = if (!draftAsked && opened0 != null && opened0.second is TextEditing.Open.Editable) {
+            val looked = if (!draftAsked && opened0 != null && opened0.second is TextEditing.Open.Editable) {
                 withContext(draftLane) { vault.readDraft(drafts, opened0.first) }
             } else null
             if (sessionRefused(opened.exceptionOrNull())) return@launch
@@ -494,15 +497,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             preview = null
             previewTooLong = false
             markdown = MarkdownDocument.handles(file.name, file.metadata.mime)
-            if (text is TextEditing.Open.Editable && !draftAsked) {
+            if (text is TextEditing.Open.Editable && !draftAsked && looked != null) {
                 draftAsked = true
-                if (kept != null) {
-                    val versionId = file.node.currentVersion?.id
-                    when (val kind = DraftRules.offer(kept, versionId, text.text)) {
-                        DraftOffer.SAME -> removeDraft(file, force = true)
-                        else -> offer = PendingDraft(kept, kind, versionId, file)
-                    }
-                }
+                offer = answered(looked, file, text.text, file.node.currentVersion?.id)
             }
             if (text is TextEditing.Open.Editable) {
                 sourceVersionId = file.node.currentVersion?.id
@@ -670,8 +667,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         val vault = session.take()?.owner ?: return
         val file = target
         val baseline = savedText
-        val step = DraftRules.step(editable = phase == Phase.Editing, offering = offer != null, startedFrom = startedFrom,
-            atBaseline = baseline == null || TextEditing.same(buffer, baseline), owns = ownsDraft)
+        // A lookup that couldn't answer is asked again first: nothing is written over the draft it may have missed.
+        if (draftUnread) return lookAgain(vault, file)
+        val step = DraftRules.step(editable = phase == Phase.Editing, offering = offer != null, unread = draftUnread,
+            startedFrom = startedFrom, atBaseline = baseline == null || TextEditing.same(buffer, baseline))
         when (step) {
             DraftRules.Step.NONE -> return
             DraftRules.Step.REMOVE -> removeDraft(file)
@@ -690,6 +689,40 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     draftNotKept = !written
                     if (written) ownsDraft = true
                 }
+            }
+        }
+    }
+
+    /*
+     * What a lookup's answer makes of the draft: an offer, nothing (none, or the file holds its text, which drops it), or no
+     * answer (unread: the quiet line, and no draft written until a lookup answers).
+     */
+    private fun answered(looked: DraftLookup, file: Opened, text: String, versionId: String?): PendingDraft? {
+        draftUnread = looked is DraftLookup.Unavailable
+        if (draftUnread) draftNotKept = true
+        val kept = looked.draft ?: return null
+        return when (val kind = DraftRules.offer(kept, versionId, text)) {
+            DraftOffer.SAME -> {
+                removeDraft(file, force = true)
+                null
+            }
+            else -> PendingDraft(kept, kind, versionId, file)
+        }
+    }
+
+    /* The lookup asked again, weighed against the text as last opened or saved; answered, the turn runs. */
+    private fun lookAgain(vault: Vault, file: Opened) {
+        inOrder {
+            val looked = withContext(draftLane) { vault.readDraft(drafts, file) }
+            if (target.id != file.id || offer != null || phase != Phase.Editing) return@inOrder
+            val late = answered(looked, file, savedText ?: return@inOrder, startedFrom)
+            if (late != null) {
+                offer = late
+                return@inOrder
+            }
+            if (!draftUnread) {
+                draftNotKept = false
+                writeDraft()
             }
         }
     }

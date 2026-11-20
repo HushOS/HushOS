@@ -119,7 +119,7 @@ struct TextEditorScreen: View {
      * Whether this session owns the stored draft (it wrote it, or the person restored it): only then does a close, a save
      * back to the baseline, Open theirs or a copy remove it. An editor that wrote nothing never removes another's draft.
      */
-    @State private var ownsDraft = false
+    @State private var draftSession = DraftSession()
     /*
      * The version the session's text was first read from (what a copy is signed from), and whether it is the version read
      * now: a draft restored from another version can't be checked, and its copy is re-sealed rather than vouched for.
@@ -164,7 +164,6 @@ struct TextEditorScreen: View {
         .onChange(of: store.editorAccessEnded) { _, _ in
             // Access confirmed lost: the draft goes with the text.
             if let target { store.dropDraft(of: target) }
-            ownsDraft = false
             draftTimer.cancel()
             ending = true
             session.close()
@@ -567,7 +566,7 @@ struct TextEditorScreen: View {
 
     /* What changes the state the store keeps for this editor (EditorWork.state). */
     private var remembered: String {
-        "\(phase)|\(edited)|\(pane)|\(confirmLeave)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)|\(draft != nil)|\(ownsDraft)|\(textSource.known)"
+        "\(phase)|\(edited)|\(pane)|\(confirmLeave)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)|\(draft != nil)|\(textSource.known)"
     }
 
     /* The editor's state, held by the store with its text view (DriveStore.editorWork), for the editor presented again. */
@@ -582,7 +581,7 @@ struct TextEditorScreen: View {
         let state = EditorState(held: held, loadFrom: loadFrom, target: target, startedFrom: startedFrom, source: source,
                                 destination: destination, marked: marked, savedText: savedText, saveState: saveState,
                                 format: format, edited: edited, status: status, previewing: pane == .preview,
-                                askingLeave: confirmLeave, draft: draft, ownsDraft: ownsDraft, textSource: textSource)
+                                askingLeave: confirmLeave, draft: draft, draftSession: draftSession, textSource: textSource)
         // The share that let this person edit, recorded once: a later listing says whether that grant itself went.
         let work = heldWork() ?? EditorWork(file: item, box: editor, grant: store.editGrant(for: item))
         work.remember(state)
@@ -614,7 +613,8 @@ struct TextEditorScreen: View {
         draftAsked = true
         draft = state.draft
         offering = state.draft != nil
-        ownsDraft = state.ownsDraft
+        // The same session's hold on its draft: a write that lands after the rebuild counts here too.
+        draftSession = state.draftSession
         textSource = state.textSource
         // "Discard your changes?" was open when the screens went, or a link still waits on it: asked again, and the link
         // goes on only once it is answered.
@@ -696,16 +696,10 @@ struct TextEditorScreen: View {
                 var found: PendingDraft?
                 if loadFrom == nil, !draftAsked {
                     draftAsked = true
-                    let kept = await vault.readDraft(of: file)
+                    let looked = await vault.readDraft(of: file)
                     // Closed, or another session, while it was read: nothing reaches the screen either way.
                     guard session.live(token, current: store.vault) else { return }
-                    if let kept {
-                        let versionId = file.node.currentVersion?.id
-                        switch DraftRules.offer(kept, openedVersionId: versionId, openedText: text) {
-                        case .same: removeDraft(of: file, force: true)
-                        case let kind: found = PendingDraft(draft: kept, kind: kind, openedVersionId: versionId, file: file)
-                        }
-                    }
+                    found = answered(looked, file: file, text: text, versionId: file.node.currentVersion?.id)
                 }
                 draft = found
                 offering = found != nil
@@ -900,8 +894,10 @@ extension TextEditorScreen {
     fileprivate func draftTurn() {
         guard !ending, let file = target else { return }
         let text = editor.text
-        let step = DraftRules.step(editable: phase == .editing, offering: draft != nil, startedFrom: startedFrom,
-                                   atBaseline: TextEditing.same(text, savedText), owns: ownsDraft)
+        // A lookup that couldn't answer is asked again first: nothing is written over the draft it may have missed.
+        if draftSession.unread { return lookAgain(file) }
+        let step = DraftRules.step(editable: phase == .editing, offering: draft != nil, unread: draftSession.unread,
+                                   startedFrom: startedFrom, atBaseline: TextEditing.same(text, savedText))
         switch step {
         case .none:
             return
@@ -919,10 +915,49 @@ extension TextEditorScreen {
             let vault = store.vault
             // Asked now: a sign-out's wipe before it lands keeps nothing of it.
             let asked = DraftStore.shared.generation
-            DraftLane.enqueue {
-                let written = await vault.writeDraft(kept, of: file, asked: asked)
-                draftNotKept = !written
-                if written { ownsDraft = true }
+            draftSession.write({ await vault.writeDraft(kept, of: file, asked: asked) }, kept: { draftNotKept = !$0 })
+        }
+    }
+
+    /*
+     * What a lookup's answer makes of the draft: an offer, nothing (none, or the file holds its text, which drops it), or no
+     * answer (`unread`: the quiet line, and no draft written until a lookup answers).
+     */
+    fileprivate func answered(_ looked: DraftLookup, file: Opened, text: String, versionId: String?) -> PendingDraft? {
+        switch looked {
+        case .absent:
+            draftSession.unread = false
+            return nil
+        case .unavailable:
+            draftSession.unread = true
+            draftNotKept = true
+            return nil
+        case .found(let kept):
+            draftSession.unread = false
+            switch DraftRules.offer(kept, openedVersionId: versionId, openedText: text) {
+            case .same:
+                removeDraft(of: file, force: true)
+                return nil
+            case let kind:
+                return PendingDraft(draft: kept, kind: kind, openedVersionId: versionId, file: file)
+            }
+        }
+    }
+
+    /* The lookup asked again, weighed against the text as last opened or saved; answered, the turn runs. */
+    fileprivate func lookAgain(_ file: Opened) {
+        let vault = store.vault
+        Task {
+            let looked = await vault.readDraft(of: file)
+            guard !ending, target?.ref == file.ref, draft == nil else { return }
+            if let late = answered(looked, file: file, text: savedText, versionId: startedFrom) {
+                draft = late
+                offering = true
+                return
+            }
+            if !draftSession.unread {
+                draftNotKept = false
+                draftTurn()
             }
         }
     }
@@ -934,11 +969,7 @@ extension TextEditorScreen {
     fileprivate func removeDraft(of file: Opened, force: Bool = false) {
         let vault = store.vault
         // Decided in the lane, after the writes asked before: one still landing counts as owned.
-        DraftLane.enqueue {
-            guard force || ownsDraft else { return }
-            ownsDraft = false
-            await vault.removeDraft(of: file)
-        }
+        draftSession.remove(force: force) { await vault.removeDraft(of: file) }
     }
 
     /*
@@ -955,7 +986,7 @@ extension TextEditorScreen {
         if pending.kind == .stale { startedFrom = found.frame.baseVersionId }
         // Its text is this session's from here, and the draft too; read from another version than the one just opened,
         // its source can't be checked now.
-        ownsDraft = true
+        draftSession.adopt()
         textSource = TextSource(versionId: found.sourceVersionId,
                                 known: found.sourceVersionId != nil && found.sourceVersionId == textSource.versionId)
         editor.replaceAll(found.text, selection: found.selection)
@@ -1020,7 +1051,7 @@ struct EditorState {
     let askingLeave: Bool
     /* The draft offer was up, unanswered: up again in the editor presented after the rebuild. */
     let draft: PendingDraft?
-    let ownsDraft: Bool
+    let draftSession: DraftSession
     let textSource: TextSource
 }
 

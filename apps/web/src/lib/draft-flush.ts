@@ -37,7 +37,12 @@ function flushHere(ms: number) {
 /* Answers another tab's lock: writes this tab's editors, saying so before and after. */
 function listen() {
     if (listening || typeof BroadcastChannel === 'undefined') return;
-    const channel = new BroadcastChannel(CHANNEL);
+    let channel: BroadcastChannel;
+    try {
+        channel = new BroadcastChannel(CHANNEL);
+    } catch {
+        return;
+    }
     listening = channel;
     // Node's (in tests) would otherwise keep the process alive; browsers have no such method.
     (channel as { unref?: () => void }).unref?.();
@@ -62,8 +67,13 @@ export function flushBeforeLock(flush: () => Promise<void>) {
 
 /* Every other tab's editors, asked to write, and waited for: none answering within ANSWER_MS is none. */
 function flushOthers(ms: number) {
-    if (typeof BroadcastChannel === 'undefined') return Promise.resolve();
-    const channel = new BroadcastChannel(CHANNEL);
+    let channel: BroadcastChannel;
+    try {
+        channel = new BroadcastChannel(CHANNEL);
+    } catch {
+        // No broadcasting here: other tabs still seal theirs as the lock reaches them (beforeLock).
+        return Promise.resolve();
+    }
     const id = crypto.randomUUID();
     const writing = new Set<string>();
     let graceOver = false;
@@ -85,14 +95,21 @@ function flushOthers(ms: number) {
         graceOver = true;
         settle();
     }, ANSWER_MS);
-    channel.postMessage({ kind: 'ask', id, from: tab } satisfies Message);
+    try {
+        channel.postMessage({ kind: 'ask', id, from: tab } satisfies Message);
+    } catch {
+        finish();
+    }
     return within(done, ms).finally(() => {
         clearTimeout(grace);
         channel.close();
     });
 }
 
-/* Writes every open editor's draft in this browser, never waiting longer than `ms`: a lock is never held up for long. */
+/*
+ * Writes every open editor's draft in this browser, never waiting longer than `ms`, and never
+ * failing: a lock is never held up for long, and never stopped.
+ */
 export async function flushDrafts(ms = 1_500) {
-    await Promise.all([flushHere(ms), flushOthers(ms)]);
+    await Promise.allSettled([flushHere(ms), flushOthers(ms)]);
 }
