@@ -12,6 +12,7 @@ import {
     draftSavedAt,
     draftSlot,
     draftsToDrop,
+    draftWorkspaceTag,
     openDraft,
     sealDraft,
 } from './drafts';
@@ -42,6 +43,7 @@ const fixture = JSON.parse(
     keyInfo: string;
     key: string;
     slot: string;
+    workspaceTag: string;
     draft: Draft;
     associatedData: string;
     nonce: string;
@@ -82,6 +84,9 @@ describe('draft key and slot', () => {
         expect(encode(expected)).toBe(fixture.key);
         expect(encode(await draftKey(root, place))).toBe(fixture.key);
         expect(await draftSlot(root, place)).toBe(fixture.slot);
+        expect(await draftWorkspaceTag(root, place.userId, place.workspaceId)).toBe(
+            fixture.workspaceTag,
+        );
     });
 
     test('each file and each account has its own key and slot', async () => {
@@ -96,7 +101,7 @@ describe('draft key and slot', () => {
 
 describe('sealing and opening', () => {
     test('the web seals the core’s record byte for byte and opens it', async () => {
-        expect(new TextDecoder().decode(draftContext(place, fixture.draft.frame))).toBe(
+        expect(new TextDecoder().decode(draftContext(place, fixture.draft.frame.savedAt))).toBe(
             fixture.associatedData,
         );
         expect(await sealDraft(root, place, fixture.draft, decode(fixture.nonce, 24))).toBe(
@@ -106,8 +111,8 @@ describe('sealing and opening', () => {
         expect(draftSavedAt(fixture.record)).toBe(fixture.draft.frame.savedAt);
     });
 
-    test('a draft moved to another account, file, base, format or time, or changed, does not open', async () => {
-        expect(fixture.refusals.length).toBeGreaterThanOrEqual(12);
+    test('a draft moved to another account, file or time, or changed, does not open', async () => {
+        expect(fixture.refusals.length).toBeGreaterThanOrEqual(10);
         for (const refusal of fixture.refusals) {
             const key = refusal.accountKey ? decode(refusal.accountKey, 32) : root;
             const where = {
@@ -122,22 +127,25 @@ describe('sealing and opening', () => {
         }
     });
 
-    test('a record sealed now, given another base, format or time beside it, does not open', async () => {
+    test('a stored record names no file: no node id and no version id, and its time is bound', async () => {
         const record = await sealDraft(root, place, fixture.draft);
-        expect(await openDraft(root, place, record)).toEqual(fixture.draft);
+        for (const id of [
+            fixture.nodeId,
+            fixture.workspaceId,
+            fixture.draft.frame.baseVersionId,
+            fixture.draft.sourceVersionId!,
+        ])
+            expect(record).not.toContain(id);
         const fields = JSON.parse(record) as Record<string, unknown>;
-        const swaps: [string, unknown][] = [
-            ['base', '1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5'],
-            ['encoding', 'utf-8'],
-            ['lineEnding', 'lf'],
-            ['mixed', false],
-            ['savedAt', fixture.draft.frame.savedAt - 1],
-        ];
-        for (const [name, value] of swaps)
-            await expect(
-                openDraft(root, place, JSON.stringify({ ...fields, [name]: value })),
-                name,
-            ).rejects.toThrow(DraftError);
+        expect(Object.keys(fields)).toEqual(['v', 'savedAt', 'sealed']);
+        expect(await openDraft(root, place, record)).toEqual(fixture.draft);
+        await expect(
+            openDraft(
+                root,
+                place,
+                JSON.stringify({ ...fields, savedAt: fixture.draft.frame.savedAt - 1 }),
+            ),
+        ).rejects.toThrow(DraftError);
     });
 
     test('a fresh seal never repeats a nonce, and the text is not in the record', async () => {

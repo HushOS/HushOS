@@ -220,7 +220,7 @@ Folder and file keys hang off the workspace key, not off your account key. That 
         ],
         [
             'Editor drafts',
-            'Text you typed in the editor and have not saved, kept on this device a couple of seconds after each change so a closed tab or a lock loses nothing. Sealed with XChaCha20-Poly1305 under a key derived from your account key for that one file, with the version it started from bound in, so a locked browser holds ciphertext and the unlock brings the offer back. Found by a name only your unlocked account can work out, so a locked browser shows how many drafts there are and when each was written, never which file. Never sent to the server. Saving, discarding and signing out delete it; it lasts at most 30 days, 50 at most are kept, and the iPhone and Android apps keep them the same way, out of backups',
+            'Text you typed in the editor and have not saved, sealed on this device a couple of seconds after a change, when the page is hidden and before this browser locks, so a closed tab or a lock costs at most what you typed after the last write that finished. Sealed with XChaCha20-Poly1305 under a key derived from your account key for that one file, with the version it started from, its format and where its text came from sealed in beside it. A locked browser sees how many drafts there are, when each was written and how large it is, and nothing that names a file. Never sent to the server. Saving, discarding and signing out delete it. One older than 30 days is never offered (it is deleted when the editor next looks for it or keeps another), and at most 50 are kept. The iPhone and Android apps keep them the same way, out of backups',
         ],
         [
             'Signing out',

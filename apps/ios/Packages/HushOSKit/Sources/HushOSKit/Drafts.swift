@@ -28,6 +28,8 @@ public struct DraftPlace: Hashable, Sendable {
 public struct DraftStore: Sendable {
     let folder: URL
     let now: @Sendable () -> UInt64
+    /* Unbacked.protectAll leaves the drafts' complete protection as written (DraftStore.folderName). */
+    static let folderName = "drafts"
 
     public init(folder: URL, now: @escaping @Sendable () -> UInt64 = DraftStore.clock) {
         self.folder = folder
@@ -50,55 +52,88 @@ public struct DraftStore: Sendable {
         try draftSlot(accountKey: key, userId: place.userId, workspaceId: place.workspaceId, nodeId: place.nodeId)
     }
 
-    /* One lock for every draft file in the process, and what every wipe of a folder moves under it. */
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var moved: [String: UInt64] = [:]
+    /*
+     * Beside the folder, never in it and never deleted: the lock every process takes for a draft write, removal or wipe
+     * (the app, and the Files sign-in sheet whose sign-in wipes the account), and the generation every wipe moves under
+     * it, kept on disk so a write asked for in one process before a wipe in another keeps nothing.
+     */
+    private var lockPath: String {
+        // Its folder made first: a lock file that can't be opened would stop every write, quietly.
+        try? FileManager.default.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return folder.path + ".lock"
+    }
+    private var generationFile: URL { URL(fileURLWithPath: folder.path + ".generation") }
+    var activity: FileLock.Activity = .system
 
-    /* What a write asked for now carries: a wipe (a sign-out) after it moves this, and the write keeps nothing. */
-    public var generation: UInt64 { Self.lock.withLock { Self.moved[folder.standardizedFileURL.path] ?? 0 } }
+    /* What a write asked for now carries: a wipe (a sign-out, another account's sign-in) after it moves this. */
+    public var generation: UInt64 {
+        (try? String(contentsOf: generationFile, encoding: .utf8)).flatMap { UInt64($0) } ?? 0
+    }
 
     /* The account's drafts deleted (AccountStore.wipe), under the lock, so no write asked for before lands after. */
-    static func wipe(folder: URL) {
-        lock.withLock {
-            moved[folder.standardizedFileURL.path, default: 0] += 1
+    func wipe() {
+        let moved = generation &+ 1
+        let delete = {
+            try? Data(String(moved).utf8).write(to: generationFile, options: .atomic)
             try? FileManager.default.removeItem(at: folder)
+        }
+        // The lock not had (a process holding it suspended): deleted anyway, and once more under it.
+        if !FileLock.withLock(lockPath, activity: activity, delete) {
+            delete()
+            FileLock.withLock(lockPath, activity: activity, delete)
         }
     }
 
+    static func wipe(folder: URL) { DraftStore(folder: folder).wipe() }
+
     /*
-     * Seals and keeps `draft` for `place`, keeping the caps; false when it couldn't be kept (past the limit, a full disk,
-     * a phone locked under complete protection, a wipe since `asked`). The last draft kept stays then.
+     * Seals and keeps `draft` for `place`, then keeps the caps; false when it couldn't be kept (past the limit, a full
+     * disk, a phone locked under complete protection, a wipe since `asked`). The last draft kept stays then, and nothing
+     * else is evicted for a write that didn't land.
      */
     @discardableResult
     public func write(_ draft: Draft, at place: DraftPlace, key: Data, asked: UInt64? = nil) -> Bool {
         let asked = asked ?? generation
-        return Self.lock.withLock { writeLocked(draft, at: place, key: key, asked: asked) }
+        var kept = false
+        FileLock.withLock(lockPath, activity: activity) { kept = writeLocked(draft, at: place, key: key, asked: asked) }
+        return kept
     }
 
     private func writeLocked(_ draft: Draft, at place: DraftPlace, key: Data, asked: UInt64) -> Bool {
-        guard asked == Self.moved[folder.standardizedFileURL.path] ?? 0 else { return false }
+        guard asked == generation else { return false }
+        guard let slot = try? slot(place, key: key),
+              let record = try? draftSeal(accountKey: key, userId: place.userId, workspaceId: place.workspaceId,
+                                          nodeId: place.nodeId, draft: draft) else { return false }
+        Unbacked.folder(folder)
+        let files = FileManager.default
         do {
-            let slot = try slot(place, key: key)
-            let record = try draftSeal(accountKey: key, userId: place.userId, workspaceId: place.workspaceId,
-                                       nodeId: place.nodeId, draft: draft)
-            Unbacked.folder(folder)
-            let files = FileManager.default
-            let kept = (try? files.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-            let entries = kept.filter { $0.pathExtension == "json" }.map { url in
-                DraftEntry(slot: url.deletingPathExtension().lastPathComponent,
-                           savedAt: (try? String(contentsOf: url, encoding: .utf8)).flatMap { draftSavedAt(record: $0) })
-            }
-            for gone in draftsToDrop(entries: entries, now: now(), keep: slot) { try? files.removeItem(at: file(gone)) }
             try Data(record.utf8).write(to: file(slot), options: [.atomic, .completeFileProtection])
-            return true
         } catch {
             return false
         }
+        // When it was written, as the file's own date: the caps read dates, never a record (a protected one can't be
+        // read while the phone is locked, and that is no reason to evict it).
+        let at = Date(timeIntervalSince1970: TimeInterval(draft.frame.savedAt) / 1000)
+        try? files.setAttributes([.modificationDate: at], ofItemAtPath: file(slot).path)
+        let kept = (try? files.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        let entries: [DraftEntry] = kept.filter { $0.pathExtension == "json" }.compactMap { url in
+            // A date that can't be read is no verdict on the draft: it is left alone.
+            guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return nil }
+            return DraftEntry(slot: url.deletingPathExtension().lastPathComponent,
+                              savedAt: UInt64(max(0, date.timeIntervalSince1970 * 1000)))
+        }
+        for gone in draftsToDrop(entries: entries, now: now(), keep: slot) { try? files.removeItem(at: file(gone)) }
+        return true
     }
 
-    /* The file's draft, or nil: none, or one that doesn't open here or is too old, which is deleted (nothing can show it). */
+    /*
+     * The file's draft, or nil: none, one that couldn't be read now (left as it is), or one that doesn't open here or is
+     * too old, which is deleted (nothing can show it).
+     */
     public func read(at place: DraftPlace, key: Data) -> Draft? {
-        Self.lock.withLock { readLocked(at: place, key: key) }
+        var found: Draft?
+        FileLock.withLock(lockPath, activity: activity) { found = readLocked(at: place, key: key) }
+        return found
     }
 
     private func readLocked(at place: DraftPlace, key: Data) -> Draft? {
@@ -115,7 +150,7 @@ public struct DraftStore: Sendable {
 
     public func remove(at place: DraftPlace, key: Data) {
         guard let slot = try? slot(place, key: key) else { return }
-        Self.lock.withLock { _ = try? FileManager.default.removeItem(at: file(slot)) }
+        FileLock.withLock(lockPath, activity: activity) { _ = try? FileManager.default.removeItem(at: file(slot)) }
     }
 
     /* How many drafts are kept (for tests and the wipe's check). */
@@ -142,9 +177,14 @@ public enum DraftRules {
         case write
     }
 
-    public static func step(editable: Bool, offering: Bool, startedFrom: String?, atBaseline: Bool) -> Step {
+    /*
+     * `owns`: this session wrote the stored draft, or the person restored it. Back at the baseline, only a draft the session
+     * owns goes: an editor that wrote nothing (closed while loading, opened and left) never removes one.
+     */
+    public static func step(editable: Bool, offering: Bool, startedFrom: String?, atBaseline: Bool, owns: Bool) -> Step {
         guard editable, !offering, startedFrom != nil else { return .none }
-        return atBaseline ? .remove : .write
+        if atBaseline { return owns ? .remove : .none }
+        return .write
     }
 
     /* What reopening does with the draft (the core's draft_offer, held to the web by fixtures/drafts.json). */
@@ -205,6 +245,33 @@ public enum DraftRules {
     public var scheduled: Bool { pending != nil }
 }
 
+/*
+ * Every draft write and removal in this process, one after another in the order asked (the editor's turns, a confirmed loss
+ * of access's removal): a removal asked for after a write never runs before it.
+ */
+@MainActor public enum DraftLane {
+    private static var chain: Task<Void, Never>?
+
+    public static func enqueue(_ work: @escaping @MainActor () async -> Void) {
+        let previous = chain
+        chain = Task {
+            await previous?.value
+            await work()
+        }
+    }
+
+    /* Waits for everything asked so far (tests). */
+    public static func settled() async { await chain?.value }
+}
+
+/* Where a copy's version verdict can't be told: the text came from a version not read now (a restored draft's). */
+extension TextEditing {
+    public static func contentUnknown(_ source: SaveSource) -> SaveSource {
+        guard case let .file(metadata, _, fromLink) = source else { return source }
+        return .file(metadata: metadata, version: .unchecked, fromLink: fromLink)
+    }
+}
+
 extension Vault {
     /* Where this account keeps `file`'s draft. */
     public nonisolated func draftPlace(of file: Opened) -> DraftPlace {
@@ -212,7 +279,7 @@ extension Vault {
     }
 
     /* Kept for `file`, on this phone only; false when it couldn't be. One at a time, in order, on the vault. */
-    public func writeDraft(_ draft: Draft, of file: Opened, asked: UInt64? = nil, store: DraftStore = .shared) -> Bool {
+    public func writeDraft(_ draft: Draft, of file: Opened, asked: UInt64?, store: DraftStore = .shared) -> Bool {
         guard let key = try? unlockAccount() else { return false }
         return store.write(draft, at: draftPlace(of: file), key: key, asked: asked)
     }

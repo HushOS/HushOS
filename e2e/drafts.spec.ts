@@ -238,18 +238,19 @@ test('someone saved since the draft: Restore leads to the stale choices, never o
 
 test('locked, the draft is ciphertext only and nothing is offered; after the unlock it is', async () => {
     const canary = `lock-canary-${Date.now()}`;
-    await openEditor(page, 'draft.txt');
-    await retype(page, canary);
-    await expect.poll(() => draftCount(page), { timeout: 15_000 }).toBe(1);
-    // Locked from another tab while this one holds the unsaved text.
+    // Another window, its Lock question already open before anything is typed here.
     const locker = await context.newPage();
     await openDrive(locker);
     await locker.getByRole('button', { name: 'Account menu' }).click();
     await locker.getByRole('menuitem', { name: 'Lock on this browser' }).click();
-    await locker
-        .getByRole('alertdialog')
-        .getByRole('button', { name: 'Lock', exact: true })
-        .click();
+    const lock = locker.getByRole('alertdialog').getByRole('button', { name: 'Lock', exact: true });
+    await expect(lock).toBeVisible();
+    await page.bringToFront();
+    await openEditor(page, 'draft.txt');
+    await retype(page, canary);
+    // Locked from the other window at once, inside this one's two-second write delay: the lock
+    // asks this tab's editor to write first.
+    await lock.click();
     await expect(
         locker.getByRole('heading', { level: 1, name: 'HushOS is locked here' }),
     ).toBeVisible();

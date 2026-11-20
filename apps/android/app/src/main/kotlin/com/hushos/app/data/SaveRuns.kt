@@ -1569,8 +1569,14 @@ class VaultSaveWriter(private val vault: Vault, private val epoch: SaveRunJourna
      * members as they are at the copy; with `named`'s records too when the copy takes its name and type from that row (a
      * save adopted since, perhaps renamed): the copy is signed as the weakest of them (signing).
      */
-    fun copySources(file: Opened, named: Opened? = null): SaveSources =
-        SaveSources.From(listOfNotNull(file, named?.takeIf { it.node != file.node }).map { SaveSource.of(vault.copyPrior(it)) })
+    /*
+     * `contentKnown` false: the text came from a version other than `file`'s (a draft restored from an earlier one), which
+     * can't be checked now: the copy's content is re-sealed, never vouched for.
+     */
+    fun copySources(file: Opened, named: Opened? = null, contentKnown: Boolean = true): SaveSources =
+        SaveSources.From(listOfNotNull(file, named?.takeIf { it.node != file.node }).mapIndexed { at, row ->
+            SaveSource.of(vault.copyPrior(row)).let { if (at == 0 && !contentKnown) it.contentUnknown() else it }
+        })
 
     override fun refreshFolder(folder: Opened): Opened {
         resync(folder.node.workspaceId)

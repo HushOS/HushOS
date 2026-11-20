@@ -74,8 +74,11 @@ import {
     createDraftWriter,
     drafts,
     draftWhen,
+    lookUpDraft,
+    type DraftOwner,
     type DraftSnapshot,
     type DraftWriter,
+    type StoredDraft,
 } from '@/lib/drafts';
 import { allLanguages, editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
 import { frameThrottle, type FrameThrottle } from '@/lib/frame-throttle';
@@ -220,31 +223,13 @@ export const editorWords = {
 /* A draft found when the file opened, waiting for Restore or Discard. */
 type DraftOfferShown = {
     draft: Draft;
+    /* Which session wrote it: restoring or discarding it makes it this one's to remove. */
+    owner: DraftOwner;
     kind: 'current' | 'stale';
     /* The version the file opened at: Save on top goes after it. */
     openedVersionId: string | null;
     place: DraftPlace;
 };
-
-/* Past this, a draft that hasn't been read is taken for none: a store that won't answer never holds up editing. */
-const DRAFT_READ_MS = 2_000;
-
-/* The file's draft, or null for none, one that couldn't be read in time, or a store that failed. */
-async function readDraft(place: DraftPlace) {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-        return await Promise.race([
-            drafts().read(place),
-            new Promise<null>((resolve) => {
-                timer = setTimeout(() => resolve(null), DRAFT_READ_MS);
-            }),
-        ]);
-    } catch {
-        return null;
-    } finally {
-        clearTimeout(timer);
-    }
-}
 
 const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
 
@@ -611,6 +596,20 @@ export function TextEditor({
     const draftAsked = useRef(false);
     /* The account session this editor opened under: no draft is written for another. */
     const openedUnder = useRef(deviceSession.generation());
+    /*
+     * The lookup hasn't answered (still reading, or the store failed): nothing is written over a
+     * draft not yet read.
+     */
+    const draftPending = useRef(false);
+    /*
+     * The version the session's text was first read from (what a copy is signed from), and whether
+     * it is the version read now: a draft restored from another version can't be checked, and its
+     * copy is re-sealed rather than vouched for.
+     */
+    const textSource = useRef<{ versionId: string | null; known: boolean }>({
+        versionId: null,
+        known: true,
+    });
     /* The last draft couldn't be kept (quota, past the limit): said in one quiet line. */
     const [draftNotKept, setDraftNotKept] = useState(false);
     const writer = useRef<DraftWriter | null>(null);
@@ -651,6 +650,7 @@ export function TextEditor({
         let reader: FileReader | null = null;
         // Read for this account session only: a lock, a sign-out or another sign-in meanwhile shows nothing.
         const account = deviceSession.generation();
+        const account0 = account;
         const still = () => active && deviceSession.generation() === account;
         // The editor's whole fixed set, fetched beside the read: the text shows once both are here.
         const assets = editorAssets();
@@ -691,29 +691,61 @@ export function TextEditor({
                 // The first open only: a draft of this file from an earlier session (a closed tab, a
                 // crash, a lock), offered before the text can be changed, never once Open theirs reloads.
                 let found: DraftOfferShown | null = null;
+                let waiting: Promise<StoredDraft | null> | null = null;
+                let unread = false;
+                const versionId = file.currentVersion?.id ?? null;
                 const account = unlockedNow();
-                if (text.editable && !draftAsked.current && account) {
+                const place = account
+                    ? { userId: account, workspaceId: file.workspaceId, nodeId: file.id }
+                    : null;
+                /* What a stored draft becomes against this text: an offer, or nothing (the file holds it). */
+                const offerFor = (stored: StoredDraft | null, opened: string) => {
+                    if (!stored || !place) return null;
+                    const kind = draftOffer(
+                        {
+                            baseVersionId: stored.draft.frame.baseVersionId,
+                            text: stored.draft.text,
+                        },
+                        { versionId, text: opened },
+                    );
+                    if (kind !== 'same')
+                        return { ...stored, kind, openedVersionId: versionId, place };
+                    // The file already holds that text: the draft is spent, unless rewritten since.
+                    void drafts()
+                        .remove(place, stored.owner)
+                        .catch(() => {});
+                    return null;
+                };
+                if (text.editable && !draftAsked.current && place) {
                     draftAsked.current = true;
-                    const place = {
-                        userId: account,
-                        workspaceId: file.workspaceId,
-                        nodeId: file.id,
-                    };
-                    const draft = await readDraft(place);
+                    const looked = await lookUpDraft(drafts(), place);
                     if (!still()) return;
-                    if (draft) {
-                        const versionId = file.currentVersion?.id ?? null;
-                        const kind = draftOffer(
-                            { baseVersionId: draft.frame.baseVersionId, text: draft.text },
-                            { versionId, text: text.text },
-                        );
-                        // The file already holds that text: nothing to offer, and the draft is spent.
-                        if (kind === 'same')
-                            void drafts()
-                                .remove(place)
-                                .catch(() => {});
-                        else found = { draft, kind, openedVersionId: versionId, place };
-                    }
+                    if (looked.status === 'answered') found = offerFor(looked.stored, text.text);
+                    else if (looked.status === 'waiting') waiting = looked.later;
+                    else unread = true;
+                }
+                if (text.editable) textSource.current = { versionId, known: true };
+                draftPending.current = waiting !== null || unread;
+                if (unread) setDraftNotKept(true);
+                if (waiting && text.editable) {
+                    const opened = text.text;
+                    // Answered late: offered then (the text goes read-only until answered). Unanswered,
+                    // nothing is written over it for the rest of the session.
+                    void waiting.then(
+                        (stored) => {
+                            if (!mounted.current || deviceSession.generation() !== account0) return;
+                            draftPending.current = false;
+                            const late = offerFor(stored, opened);
+                            if (!late) return;
+                            setOffer(late);
+                            view.current?.dispatch({
+                                effects: editability.current.reconfigure(fixed(false)),
+                            });
+                        },
+                        () => {
+                            if (mounted.current) setDraftNotKept(true);
+                        },
+                    );
                 }
                 target.current = openedTarget(file);
                 // A copy of its own: what a save writes unchanged is exactly these bytes, nothing around them.
@@ -767,6 +799,7 @@ export function TextEditor({
             !place ||
             !editableNow.current ||
             offerNow.current ||
+            draftPending.current ||
             endedNow.current ||
             reloadingNow.current
         )
@@ -789,6 +822,7 @@ export function TextEditor({
                     },
                     text,
                     selection: { from: anchor, to: head },
+                    sourceVersionId: textSource.current.versionId,
                 };
             },
         };
@@ -1289,6 +1323,8 @@ export function TextEditor({
                     stillOn: () => live(taken),
                     // Who wrote what the copy is made from, as trust stands now (not when it opened).
                     check: (nodes) => clientFor(file.workspaceId).checkNow(nodes),
+                    // Text from a restored draft of another version: re-sealed, never vouched for.
+                    sourceUnknown: !textSource.current.known,
                 },
             );
             if (!live(taken)) return;
@@ -1306,9 +1342,10 @@ export function TextEditor({
             if (!live(taken)) return;
             // Published either way: a close waiting on it goes on (asking first if typed meanwhile).
             landed = true;
+            // The text went into the copy, located or not: the file it came from keeps no draft of
+            // it, unless typed into since.
+            if (before && current.state.doc.eq(doc)) void writer.current?.remove(before);
             if (made.node && listed) {
-                // The text went into the copy: the file it came from keeps no draft of it.
-                if (before) void writer.current?.remove(before);
                 settled(doc, listed, made.versionId, bytes);
                 onTarget(listed);
                 setStatus(editorWords.savedCopy(listed.name));
@@ -1407,6 +1444,15 @@ export function TextEditor({
         setTextFormat(format);
         if (shown.kind === 'stale')
             target.current = { ...target.current, startedFrom: draft.frame.baseVersionId };
+        // Its text is this session's from here, and the draft too (Discard changes then removes it).
+        // Read from another version than the one just opened, its source can't be checked now.
+        writer.current?.adopt(shown.place, shown.owner);
+        textSource.current = {
+            versionId: draft.sourceVersionId,
+            known:
+                draft.sourceVersionId !== null &&
+                draft.sourceVersionId === textSource.current.versionId,
+        };
         closeOffer();
         const end = draft.text.length;
         const at = (offset: number) => Math.min(offset, end);
@@ -1429,6 +1475,8 @@ export function TextEditor({
     const discardDraft = useCallback(() => {
         const shown = offerNow.current;
         if (!shown) return;
+        // Discarded by the person: theirs to remove, unless another tab wrote it since.
+        writer.current?.adopt(shown.place, shown.owner);
         void writer.current?.remove(shown.place);
         closeOffer();
     }, [closeOffer]);
@@ -1580,6 +1628,12 @@ export function TextEditor({
                     <p className="shrink-0 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground">
                         {mixedNote(textFormat)}
                     </p>
+                )}
+                {draftNotKept && (
+                    // On a phone the header has no room for it: said here instead.
+                    <output className="shrink-0 border-b border-rule px-5 py-2 text-[13px] text-muted-foreground sm:hidden">
+                        {editorWords.draftNotKept}
+                    </output>
                 )}
                 {warning && (
                     // On a phone the header has no room for it: said here instead, and read out the same way.

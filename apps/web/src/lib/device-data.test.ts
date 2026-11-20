@@ -318,6 +318,8 @@ const API: Record<string, RegExp> = {
 const NOT_STORAGE = new Set([
     'hushos-auth',
     'hushos-signed-out',
+    // The pre-lock ask to every tab's editor to write its draft (lib/draft-flush.ts).
+    'hushos-draft-flush',
     'hushos-link-used',
     'hushos-device',
     'hushos-sign-out',

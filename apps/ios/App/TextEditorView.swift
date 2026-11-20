@@ -115,8 +115,16 @@ struct TextEditorScreen: View {
     /* The last draft couldn't be kept: one quiet line. */
     @State private var draftNotKept = false
     @State private var draftTimer = DraftTimer()
-    /* Draft writes and removals, one after another in the order asked. */
-    @State private var draftChain: Task<Void, Never>?
+    /*
+     * Whether this session owns the stored draft (it wrote it, or the person restored it): only then does a close, a save
+     * back to the baseline, Open theirs or a copy remove it. An editor that wrote nothing never removes another's draft.
+     */
+    @State private var ownsDraft = false
+    /*
+     * The version the session's text was first read from (what a copy is signed from), and whether it is the version read
+     * now: a draft restored from another version can't be checked, and its copy is re-sealed rather than vouched for.
+     */
+    @State private var textSource = TextSource(versionId: nil, known: true)
 
     private struct StaleVersion: Identifiable, Equatable {
         let currentVersionId: String?
@@ -156,6 +164,7 @@ struct TextEditorScreen: View {
         .onChange(of: store.editorAccessEnded) { _, _ in
             // Access confirmed lost: the draft goes with the text.
             if let target { store.dropDraft(of: target) }
+            ownsDraft = false
             draftTimer.cancel()
             ending = true
             session.close()
@@ -540,7 +549,8 @@ struct TextEditorScreen: View {
      * the screen goes (onDisappear stays the fallback).
      */
     private func close() {
-        // Closed by choice (Discard, nothing to keep, or saved): the draft goes. An offer still unanswered keeps its draft.
+        // Closed by choice (Discard, nothing to keep, or saved): the draft this session owns goes. An offer still unanswered
+        // keeps its draft, and an editor that wrote nothing (closed while loading) removes nothing.
         draftTimer.cancel()
         if draft == nil, let target { removeDraft(of: target) }
         ending = true
@@ -557,7 +567,7 @@ struct TextEditorScreen: View {
 
     /* What changes the state the store keeps for this editor (EditorWork.state). */
     private var remembered: String {
-        "\(phase)|\(edited)|\(pane)|\(confirmLeave)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)|\(draft != nil)"
+        "\(phase)|\(edited)|\(pane)|\(confirmLeave)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)|\(draft != nil)|\(ownsDraft)|\(textSource.known)"
     }
 
     /* The editor's state, held by the store with its text view (DriveStore.editorWork), for the editor presented again. */
@@ -572,7 +582,7 @@ struct TextEditorScreen: View {
         let state = EditorState(held: held, loadFrom: loadFrom, target: target, startedFrom: startedFrom, source: source,
                                 destination: destination, marked: marked, savedText: savedText, saveState: saveState,
                                 format: format, edited: edited, status: status, previewing: pane == .preview,
-                                askingLeave: confirmLeave, draft: draft)
+                                askingLeave: confirmLeave, draft: draft, ownsDraft: ownsDraft, textSource: textSource)
         // The share that let this person edit, recorded once: a later listing says whether that grant itself went.
         let work = heldWork() ?? EditorWork(file: item, box: editor, grant: store.editGrant(for: item))
         work.remember(state)
@@ -604,6 +614,8 @@ struct TextEditorScreen: View {
         draftAsked = true
         draft = state.draft
         offering = state.draft != nil
+        ownsDraft = state.ownsDraft
+        textSource = state.textSource
         // "Discard your changes?" was open when the screens went, or a link still waits on it: asked again, and the link
         // goes on only once it is answered.
         if state.askingLeave || store.editorHoldsSomething { confirmLeave = true }
@@ -684,17 +696,20 @@ struct TextEditorScreen: View {
                 var found: PendingDraft?
                 if loadFrom == nil, !draftAsked {
                     draftAsked = true
-                    if let kept = await vault.readDraft(of: file) {
-                        guard session.live(token, current: store.vault) else { return }
+                    let kept = await vault.readDraft(of: file)
+                    // Closed, or another session, while it was read: nothing reaches the screen either way.
+                    guard session.live(token, current: store.vault) else { return }
+                    if let kept {
                         let versionId = file.node.currentVersion?.id
                         switch DraftRules.offer(kept, openedVersionId: versionId, openedText: text) {
-                        case .same: removeDraft(of: file)
+                        case .same: removeDraft(of: file, force: true)
                         case let kind: found = PendingDraft(draft: kept, kind: kind, openedVersionId: versionId, file: file)
                         }
                     }
                 }
                 draft = found
                 offering = found != nil
+                textSource = TextSource(versionId: file.node.currentVersion?.id, known: true)
                 editor.open(text)
                 savedText = text
                 // From what was just opened, never decoded again.
@@ -808,7 +823,7 @@ struct TextEditorScreen: View {
         guard stillOn(token) else { return }
         do {
             let (folder, _) = try await vault.editTarget(file, at: destination)
-            let sources = try await vault.copySources(of: from, named: file)
+            let sources = try await vault.copySources(of: from, named: file, contentKnown: textSource.known)
             guard stillOn(token) else { return }
             let made = try await TextSave.copy(bytes, of: file, in: folder, sources: sources, start: TextSave.runs(vault),
                                                stillOn: { @MainActor in stillOn(token) })
@@ -817,8 +832,8 @@ struct TextEditorScreen: View {
             // stays theirs.
             // The copy went into the editor's folder: a row answered from elsewhere sets no version to go on from, and
             // the next save finds it gone from here.
-            // The text went into the copy: the file it came from keeps no draft of it.
-            removeDraft(of: file)
+            // The text went into the copy: the file it came from keeps no draft of it, unless typed into since.
+            if TextEditing.same(editor.text, text) { removeDraft(of: file) }
             target = made.file
             startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
             if TextEditing.speaksFor(made.file, versionId: made.versionId, at: destination) { marked = made.file }
@@ -886,7 +901,7 @@ extension TextEditorScreen {
         guard !ending, let file = target else { return }
         let text = editor.text
         let step = DraftRules.step(editable: phase == .editing, offering: draft != nil, startedFrom: startedFrom,
-                                   atBaseline: TextEditing.same(text, savedText))
+                                   atBaseline: TextEditing.same(text, savedText), owns: ownsDraft)
         switch step {
         case .none:
             return
@@ -899,25 +914,29 @@ extension TextEditorScreen {
                              text: text,
                              selection: selected.map {
                                  DraftSelection(from: UInt32(clamping: $0.location), to: UInt32(clamping: $0.location + $0.length))
-                             })
+                             },
+                             sourceVersionId: textSource.versionId)
             let vault = store.vault
-            let previous = draftChain
             // Asked now: a sign-out's wipe before it lands keeps nothing of it.
             let asked = DraftStore.shared.generation
-            draftChain = Task {
-                await previous?.value
+            DraftLane.enqueue {
                 let written = await vault.writeDraft(kept, of: file, asked: asked)
                 draftNotKept = !written
+                if written { ownsDraft = true }
             }
         }
     }
 
-    /* The file's draft deleted, after any write asked for before. */
-    fileprivate func removeDraft(of file: Opened) {
+    /*
+     * The file's draft deleted, in order after any write asked for before: one this session owns, or (`force`) one the
+     * person discarded or the file already holds.
+     */
+    fileprivate func removeDraft(of file: Opened, force: Bool = false) {
         let vault = store.vault
-        let previous = draftChain
-        draftChain = Task {
-            await previous?.value
+        // Decided in the lane, after the writes asked before: one still landing counts as owned.
+        DraftLane.enqueue {
+            guard force || ownsDraft else { return }
+            ownsDraft = false
             await vault.removeDraft(of: file)
         }
     }
@@ -934,6 +953,11 @@ extension TextEditorScreen {
         saveState = TextEditing.SaveState(format: found.frame.format, text: state.text, bytes: state.bytes)
         format = found.frame.format
         if pending.kind == .stale { startedFrom = found.frame.baseVersionId }
+        // Its text is this session's from here, and the draft too; read from another version than the one just opened,
+        // its source can't be checked now.
+        ownsDraft = true
+        textSource = TextSource(versionId: found.sourceVersionId,
+                                known: found.sourceVersionId != nil && found.sourceVersionId == textSource.versionId)
         editor.replaceAll(found.text, selection: found.selection)
         edited = !TextEditing.same(found.text, savedText)
         scroll.revision += 1
@@ -948,8 +972,14 @@ extension TextEditorScreen {
     fileprivate func discardDraft() {
         guard let pending = draft else { return }
         draft = nil
-        removeDraft(of: pending.file)
+        removeDraft(of: pending.file, force: true)
     }
+}
+
+/* The version a session's text was first read from, and whether it is the one read now (SaveSources' content verdict). */
+struct TextSource {
+    let versionId: String?
+    let known: Bool
 }
 
 /* A draft found at the first open: what it holds, how it is restored, and the file and version it opened at. */
@@ -990,6 +1020,8 @@ struct EditorState {
     let askingLeave: Bool
     /* The draft offer was up, unanswered: up again in the editor presented after the rebuild. */
     let draft: PendingDraft?
+    let ownsDraft: Bool
+    let textSource: TextSource
 }
 
 /* The editor's words, the web's (text-editor.tsx editorWords). */

@@ -14,19 +14,23 @@
 //! `["hushos/drafts/slot/v1",userId,workspaceId,nodeId]`, base64url, so the
 //! store says which files have a draft to no one without the unlocked account.
 //!
-//! Record: compact JSON `{v, base, encoding, lineEnding, mixed, savedAt,
-//! sealed}`. The frame (the version the text started from, the session's save
-//! format and the time) is beside the envelope and bound by the associated data
-//! `["hushos/drafts",1,userId,workspaceId,nodeId,base,encoding,lineEnding,mixed,savedAt]`,
-//! so a record moved to another file or account, or given another base version,
-//! format or time, does not open.
+//! Record: compact JSON `{v, savedAt, sealed}`, the time alone in the clear (the
+//! caps read it), bound by the associated data
+//! `["hushos/drafts",1,userId,workspaceId,nodeId,savedAt]`: a record moved to
+//! another file or account, or given another time, does not open. Everything
+//! else is sealed, so a locked device sees how many drafts there are, when each
+//! was written and how large it is, and nothing that names a file: no node or
+//! version id.
 //!
-//! Envelope: `[1][24-byte nonce][XChaCha20-Poly1305]`, base64url. Plaintext: the
-//! selection's ends (`from`, where it began, and `to`, where the cursor is) as 32-bit big-endian UTF-16 offsets
-//! (`0xFFFFFFFF` for none), then the text in UTF-8.
+//! Envelope: `[1][24-byte nonce][XChaCha20-Poly1305]`, base64url. Plaintext: a
+//! 32-bit big-endian length, then that many bytes of header, the compact JSON
+//! `[base,encoding,lineEnding,mixed,from,to,source]` (the version the text
+//! started from, the session's save format, the selection's ends as UTF-16
+//! offsets with `0xFFFFFFFF` for none, and the version the session first read its
+//! text from, `""` for none), then the text in UTF-8.
 
 use crate::bytes::{decode, encode, random, NONCE_BYTES, TAG_BYTES};
-use crate::canonical::{encode_statement, uuid};
+use crate::canonical::{encode_statement, parse_statement, uuid};
 use crate::contacts::hkdf;
 use crate::envelope::{open_with_nonce, seal_with_nonce};
 use crate::error::{input, CoreError, CoreResult};
@@ -36,6 +40,7 @@ use zeroize::Zeroizing;
 
 const LABEL: &str = "hushos/drafts/v1";
 const SLOT_LABEL: &str = "hushos/drafts/slot/v1";
+const WORKSPACE_LABEL: &str = "hushos/drafts/workspace/v1";
 const DOMAIN: &str = "hushos/drafts";
 const VERSION: u8 = 1;
 const NO_OFFSET: u32 = u32::MAX;
@@ -101,6 +106,9 @@ pub struct Draft {
     pub frame: DraftFrame,
     pub text: String,
     pub selection: Option<DraftSelection>,
+    /// The version the session first read its text from: what a copy is signed
+    /// from. `None` when it couldn't be told.
+    pub source_version_id: Option<String>,
 }
 
 struct Place {
@@ -174,18 +182,15 @@ fn checked(frame: &DraftFrame) -> CoreResult<DraftFrame> {
     Ok(DraftFrame { base_version_id: base, format: frame.format, saved_at: frame.saved_at })
 }
 
-fn context(at: &Place, frame: &DraftFrame) -> CoreResult<Vec<u8>> {
+/* The associated data: the record's time, bound to its account and file. */
+fn context(at: &Place, saved_at: u64) -> CoreResult<Vec<u8>> {
     encode_statement(&[
         json!(DOMAIN),
         json!(VERSION),
         json!(at.user),
         json!(at.workspace),
         json!(at.node),
-        json!(frame.base_version_id),
-        json!(encoding_name(frame.format.encoding)),
-        json!(line_ending_name(frame.format.line_ending)),
-        json!(u8::from(frame.format.mixed)),
-        json!(frame.saved_at),
+        json!(saved_at),
     ])
 }
 
@@ -219,49 +224,97 @@ pub fn draft_slot(
     Ok(encode(&derived[..16]))
 }
 
-fn plaintext(text: &str, selection: Option<DraftSelection>) -> CoreResult<Zeroizing<Vec<u8>>> {
-    if text.len() as u64 > DRAFT_TEXT_LIMIT {
-        return Err(input("This text is too large to keep."));
+/// A workspace's tag: what a phone files its drafts under, so a family's removal
+/// deletes that family's drafts without opening any, and without naming the
+/// workspace to anyone but the unlocked account.
+///
+/// ```
+/// let key = vec![7u8; 32];
+/// let user = "6b1a3f0e-2c4d-4e5f-8a9b-0c1d2e3f4a5b";
+/// let tag = hushos_core::draft_workspace_tag(key.clone(), user.into(), "0d4f2a1b-9c8e-4f7a-b6d5-e4c3b2a1f0e9".into())?;
+/// assert_eq!(tag.len(), 22);
+/// assert_ne!(tag, hushos_core::draft_workspace_tag(key, user.into(), "1d4f2a1b-9c8e-4f7a-b6d5-e4c3b2a1f0e9".into())?);
+/// # Ok::<(), hushos_core::CoreError>(())
+/// ```
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+pub fn draft_workspace_tag(
+    account_key: Vec<u8>,
+    user_id: String,
+    workspace_id: String,
+) -> CoreResult<String> {
+    let account_key = Zeroizing::new(account_key);
+    if account_key.len() != 32 {
+        return Err(input("Invalid account key."));
     }
-    let (from, to) = match selection {
+    let lower = |value: &str, what: &str| -> CoreResult<String> {
+        let lowered = value.to_lowercase();
+        uuid(&lowered, what)?;
+        Ok(lowered)
+    };
+    let info = encode_statement(&[
+        json!(WORKSPACE_LABEL),
+        json!(lower(&user_id, "user id")?),
+        json!(lower(&workspace_id, "workspace id")?),
+    ])?;
+    Ok(encode(&hkdf(&account_key, &info)?[..16]))
+}
+
+/* The sealed header: base, encoding, line ending, mixed, selection's ends, source ("" for none). */
+fn header(draft: &Draft, frame: &DraftFrame) -> CoreResult<Vec<u8>> {
+    let (from, to) = match draft.selection {
         Some(selection) if selection.from != NO_OFFSET && selection.to != NO_OFFSET => {
             (selection.from, selection.to)
         }
         Some(_) => return Err(input("Invalid selection.")),
         None => (NO_OFFSET, NO_OFFSET),
     };
-    let mut out = Zeroizing::new(Vec::with_capacity(8 + text.len()));
-    out.extend_from_slice(&from.to_be_bytes());
-    out.extend_from_slice(&to.to_be_bytes());
-    out.extend_from_slice(text.as_bytes());
+    let source = match &draft.source_version_id {
+        Some(source) => {
+            let lowered = source.to_lowercase();
+            uuid(&lowered, "version id")?;
+            lowered
+        }
+        None => String::new(),
+    };
+    encode_statement(&[
+        json!(frame.base_version_id),
+        json!(encoding_name(frame.format.encoding)),
+        json!(line_ending_name(frame.format.line_ending)),
+        json!(u8::from(frame.format.mixed)),
+        json!(from),
+        json!(to),
+        json!(source),
+    ])
+}
+
+fn plaintext(draft: &Draft, frame: &DraftFrame) -> CoreResult<Zeroizing<Vec<u8>>> {
+    if draft.text.len() as u64 > DRAFT_TEXT_LIMIT {
+        return Err(input("This text is too large to keep."));
+    }
+    let head = header(draft, frame)?;
+    let mut out = Zeroizing::new(Vec::with_capacity(4 + head.len() + draft.text.len()));
+    out.extend_from_slice(&(head.len() as u32).to_be_bytes());
+    out.extend_from_slice(&head);
+    out.extend_from_slice(draft.text.as_bytes());
     Ok(out)
 }
 
 fn seal_draft_with_nonce(account_key: &[u8], at: &Place, draft: &Draft, nonce: &[u8]) -> CoreResult<String> {
     let frame = checked(&draft.frame)?;
-    let aad = context(at, &frame)?;
-    let body = plaintext(&draft.text, draft.selection)?;
+    let aad = context(at, frame.saved_at)?;
+    let body = plaintext(draft, &frame)?;
     let key = derive(account_key, LABEL, at)?;
     let sealed = seal_with_nonce(key.as_slice(), nonce, &body, &aad)?;
     let mut envelope = Vec::with_capacity(1 + NONCE_BYTES + sealed.len());
     envelope.push(VERSION);
     envelope.extend_from_slice(nonce);
     envelope.extend_from_slice(&sealed);
-    // In the web's key order: every value is an id, a fixed word, a boolean or an integer, so
-    // nothing needs escaping and both twins write the same bytes.
-    Ok(format!(
-        r#"{{"v":{VERSION},"base":"{}","encoding":"{}","lineEnding":"{}","mixed":{},"savedAt":{},"sealed":"{}"}}"#,
-        frame.base_version_id,
-        encoding_name(frame.format.encoding),
-        line_ending_name(frame.format.line_ending),
-        frame.format.mixed,
-        frame.saved_at,
-        encode(&envelope),
-    ))
+    // In the web's key order; nothing needs escaping, so both twins write the same bytes.
+    Ok(format!(r#"{{"v":{VERSION},"savedAt":{},"sealed":"{}"}}"#, frame.saved_at, encode(&envelope)))
 }
 
-/// The record a phone keeps for this file's draft: the frame beside the sealed
-/// text. Refused past 8 MiB of text.
+/// The record a phone keeps for this file's draft: its time beside the sealed
+/// frame, source and text. Refused past 8 MiB of text.
 ///
 /// ```
 /// use hushos_core::*;
@@ -279,8 +332,10 @@ fn seal_draft_with_nonce(account_key: &[u8], at: &Place, draft: &Draft, nonce: &
 ///     },
 ///     text: "Unsaved words".into(),
 ///     selection: Some(DraftSelection { from: 3, to: 3 }),
+///     source_version_id: Some("9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d".into()),
 /// };
 /// let record = draft_seal(key.clone(), user.into(), workspace.into(), node.into(), draft.clone())?;
+/// assert!(!record.contains(node) && !record.contains("9a8b7c6d"));
 /// assert_eq!(draft_open(key, user.into(), workspace.into(), node.into(), record)?, draft);
 /// # Ok::<(), CoreError>(())
 /// ```
@@ -298,7 +353,7 @@ pub fn draft_seal(
 }
 
 struct Parsed {
-    frame: DraftFrame,
+    saved_at: u64,
     envelope: Vec<u8>,
 }
 
@@ -308,39 +363,40 @@ fn parse(record: &str) -> CoreResult<Parsed> {
     if field("v")?.as_u64() != Some(u64::from(VERSION)) {
         return Err(refused());
     }
-    let text = |name: &str| field(name)?.as_str().ok_or_else(refused);
-    let format = TextFormat {
-        encoding: encoding_of(text("encoding")?).ok_or_else(refused)?,
-        line_ending: line_ending_of(text("lineEnding")?).ok_or_else(refused)?,
-        mixed: field("mixed")?.as_bool().ok_or_else(refused)?,
-    };
-    let frame = checked(&DraftFrame {
-        base_version_id: text("base")?.to_owned(),
-        format,
-        saved_at: field("savedAt")?.as_u64().ok_or_else(refused)?,
-    })
-    .map_err(|_| refused())?;
-    let envelope = decode("draft", text("sealed")?, None).map_err(|_| refused())?;
-    if envelope.len() < 1 + NONCE_BYTES + TAG_BYTES + 8 || envelope[0] != VERSION {
+    let saved_at = field("savedAt")?.as_u64().filter(|at| *at <= MAX_SAFE).ok_or_else(refused)?;
+    let envelope =
+        decode("draft", field("sealed")?.as_str().ok_or_else(refused)?, None).map_err(|_| refused())?;
+    if envelope.len() < 1 + NONCE_BYTES + TAG_BYTES + 4 || envelope[0] != VERSION {
         return Err(refused());
     }
-    Ok(Parsed { frame, envelope })
+    Ok(Parsed { saved_at, envelope })
 }
 
-/// When a record was written, read without a key (for the caps); `None` for one
-/// that doesn't parse, which the caps drop first.
+/// When a record was written, read without a key and without decoding its
+/// envelope; `None` for one that doesn't say.
 ///
 /// ```
 /// assert_eq!(hushos_core::draft_saved_at("not a draft".into()), None);
+/// assert_eq!(hushos_core::draft_saved_at(r#"{"v":1,"savedAt":12,"sealed":"x"}"#.into()), Some(12));
 /// ```
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn draft_saved_at(record: String) -> Option<u64> {
-    parse(&record).ok().map(|parsed| parsed.frame.saved_at)
+    let value: Value = serde_json::from_str(&record).ok()?;
+    let saved_at = value.get("savedAt")?.as_u64()?;
+    (value.get("v")?.as_u64()? == u64::from(VERSION) && saved_at <= MAX_SAFE).then_some(saved_at)
+}
+
+fn text_field(parts: &[Value], at: usize) -> CoreResult<&str> {
+    parts.get(at).and_then(Value::as_str).ok_or_else(refused)
+}
+
+fn int_field(parts: &[Value], at: usize) -> CoreResult<u64> {
+    parts.get(at).and_then(Value::as_u64).ok_or_else(refused)
 }
 
 /// The draft a record holds for this account and file, or `Sealed` when it does
-/// not open here: another account, file, base version, format or time, a changed
-/// byte, or another root. Never "none".
+/// not open here: another account, file or time, a changed byte, or another
+/// root. Never "none".
 #[cfg_attr(feature = "uniffi", uniffi::export)]
 pub fn draft_open(
     account_key: Vec<u8>,
@@ -351,23 +407,55 @@ pub fn draft_open(
 ) -> CoreResult<Draft> {
     let account_key = Zeroizing::new(account_key);
     let at = place(&user_id, &workspace_id, &node_id)?;
-    let Parsed { frame, envelope } = parse(&record)?;
-    let aad = context(&at, &frame)?;
+    let Parsed { saved_at, envelope } = parse(&record)?;
+    let aad = context(&at, saved_at)?;
     let key = derive(&account_key, LABEL, &at)?;
     let body = Zeroizing::new(
         open_with_nonce(key.as_slice(), &envelope[1..1 + NONCE_BYTES], &envelope[1 + NONCE_BYTES..], &aad)
             .map_err(|_| refused())?,
     );
-    if body.len() < 8 {
+    if body.len() < 4 {
         return Err(refused());
     }
-    let from = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
-    let to = u32::from_be_bytes([body[4], body[5], body[6], body[7]]);
-    if (from == NO_OFFSET) != (to == NO_OFFSET) {
+    let length = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize;
+    let head = body.get(4..4 + length).ok_or_else(refused)?;
+    let parts = parse_statement(head, "draft").map_err(|_| refused())?;
+    if parts.len() != 7 {
         return Err(refused());
     }
-    let text = String::from_utf8(body[8..].to_vec()).map_err(|_| refused())?;
-    Ok(Draft { frame, text, selection: (from != NO_OFFSET).then_some(DraftSelection { from, to }) })
+    let format = TextFormat {
+        encoding: encoding_of(text_field(&parts, 1)?).ok_or_else(refused)?,
+        line_ending: line_ending_of(text_field(&parts, 2)?).ok_or_else(refused)?,
+        mixed: match int_field(&parts, 3)? {
+            0 => false,
+            1 => true,
+            _ => return Err(refused()),
+        },
+    };
+    let frame = checked(&DraftFrame { base_version_id: text_field(&parts, 0)?.to_owned(), format, saved_at })
+        .map_err(|_| refused())?;
+    let (from, to) = (int_field(&parts, 4)?, int_field(&parts, 5)?);
+    if from > u64::from(NO_OFFSET)
+        || to > u64::from(NO_OFFSET)
+        || (from == u64::from(NO_OFFSET)) != (to == u64::from(NO_OFFSET))
+    {
+        return Err(refused());
+    }
+    let source = text_field(&parts, 6)?;
+    let source_version_id = if source.is_empty() {
+        None
+    } else {
+        uuid(source, "version id").map_err(|_| refused())?;
+        Some(source.to_owned())
+    };
+    let text = String::from_utf8(body[4 + length..].to_vec()).map_err(|_| refused())?;
+    Ok(Draft {
+        frame,
+        text,
+        selection: (from != u64::from(NO_OFFSET))
+            .then_some(DraftSelection { from: from as u32, to: to as u32 }),
+        source_version_id,
+    })
 }
 
 /// What reopening a file does with its draft.
@@ -477,6 +565,7 @@ mod tests {
             },
             text: text.into(),
             selection: None,
+            source_version_id: Some("9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d".into()),
         }
     }
 
@@ -506,6 +595,7 @@ mod tests {
                 from: selection["from"].as_u64().unwrap() as u32,
                 to: selection["to"].as_u64().unwrap() as u32,
             }),
+            source_version_id: value["sourceVersionId"].as_str().map(str::to_owned),
         }
     }
 
@@ -529,8 +619,12 @@ mod tests {
         let at = place(&s(&f, "userId"), &s(&f, "workspaceId"), &s(&f, "nodeId")).unwrap();
         assert_eq!(encode(derive(&root, LABEL, &at).unwrap().as_slice()), s(&f, "key"));
         assert_eq!(
-            draft_slot(root, s(&f, "userId"), s(&f, "workspaceId"), s(&f, "nodeId")).unwrap(),
+            draft_slot(root.clone(), s(&f, "userId"), s(&f, "workspaceId"), s(&f, "nodeId")).unwrap(),
             s(&f, "slot")
+        );
+        assert_eq!(
+            draft_workspace_tag(root, s(&f, "userId"), s(&f, "workspaceId")).unwrap(),
+            s(&f, "workspaceTag")
         );
     }
 
@@ -541,7 +635,14 @@ mod tests {
         let nonce = decode("nonce", &s(&f, "nonce"), Some(NONCE_BYTES)).unwrap();
         let draft = fixture_draft(&f["draft"]);
         let at = place(&s(&f, "userId"), &s(&f, "workspaceId"), &s(&f, "nodeId")).unwrap();
-        assert_eq!(String::from_utf8(context(&at, &draft.frame).unwrap()).unwrap(), s(&f, "associatedData"));
+        assert_eq!(
+            String::from_utf8(context(&at, draft.frame.saved_at).unwrap()).unwrap(),
+            s(&f, "associatedData")
+        );
+        assert!(
+            !s(&f, "record").contains(&s(&f, "nodeId"))
+                && !s(&f, "record").contains(&draft.frame.base_version_id)
+        );
         assert_eq!(seal_draft_with_nonce(&root, &at, &draft, &nonce).unwrap(), s(&f, "record"));
         let opened =
             draft_open(root, s(&f, "userId"), s(&f, "workspaceId"), s(&f, "nodeId"), s(&f, "record"))
@@ -554,7 +655,7 @@ mod tests {
     fn a_draft_moved_to_another_account_file_base_format_or_time_or_changed_does_not_open() {
         let f = fixture();
         let refusals = f["refusals"].as_array().unwrap();
-        assert!(refusals.len() >= 12);
+        assert!(refusals.len() >= 10);
         for case in refusals {
             let pick = |name: &str| {
                 case.get(name).and_then(Value::as_str).map(str::to_owned).unwrap_or_else(|| s(&f, name))
@@ -567,26 +668,19 @@ mod tests {
     }
 
     #[test]
-    fn a_record_sealed_now_given_another_base_format_or_time_beside_it_does_not_open() {
+    fn a_record_names_no_file_and_its_time_is_bound() {
         let key = vec![3u8; 32];
         let record =
             draft_seal(key.clone(), USER.into(), WORKSPACE.into(), NODE.into(), draft("mine")).unwrap();
-        assert!(draft_open(key.clone(), USER.into(), WORKSPACE.into(), NODE.into(), record.clone()).is_ok());
-        let fields: Value = serde_json::from_str(&record).unwrap();
-        let swaps = [
-            ("base", json!("1c2d3e4f-5a6b-4c7d-8e9f-a0b1c2d3e4f5")),
-            ("encoding", json!("utf-8")),
-            ("lineEnding", json!("lf")),
-            ("mixed", json!(false)),
-            ("savedAt", json!(1_763_650_439_999u64)),
-        ];
-        for (name, value) in swaps {
-            let mut swapped = fields.clone();
-            swapped[name] = value;
-            let opened =
-                draft_open(key.clone(), USER.into(), WORKSPACE.into(), NODE.into(), swapped.to_string());
-            assert_eq!(opened, Err(refused()), "{name}");
-        }
+        // Neither the node nor a version id (base or source) is in what a locked device holds.
+        assert!(!record.contains(NODE) && !record.contains("9a8b7c6d"), "{record}");
+        let opened =
+            draft_open(key.clone(), USER.into(), WORKSPACE.into(), NODE.into(), record.clone()).unwrap();
+        assert_eq!(opened, draft("mine"));
+        let mut swapped: Value = serde_json::from_str(&record).unwrap();
+        swapped["savedAt"] = json!(1_763_650_439_999u64);
+        let opened = draft_open(key, USER.into(), WORKSPACE.into(), NODE.into(), swapped.to_string());
+        assert_eq!(opened, Err(refused()));
     }
 
     #[test]

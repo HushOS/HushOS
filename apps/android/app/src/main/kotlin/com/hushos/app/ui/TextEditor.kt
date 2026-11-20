@@ -276,6 +276,28 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     /* The write turn waiting to run; draft writes and removals run one at a time, in the order asked. */
     private var draftTurn: Job? = null
     private val draftLane = Dispatchers.IO.limitedParallelism(1)
+    /* Draft writes and removals, one after another in the order asked: a removal decides after the writes before it. */
+    private var draftWork: Job? = null
+    /*
+     * Whether this session owns the stored draft (it wrote it, or the person restored it): only then does a close, a save
+     * back to the baseline, Open theirs or a copy remove it. An editor that wrote nothing never removes another's draft.
+     */
+    private var ownsDraft = false
+    /*
+     * The version the session's text was first read from (what a copy is signed from), and whether it is the version read
+     * now: a draft restored from another version can't be checked, and its copy is re-sealed rather than vouched for.
+     */
+    private var sourceVersionId: String? = null
+    private var sourceKnown = true
+
+    /* Runs `work` on the main thread after everything asked before it. */
+    private fun inOrder(work: suspend () -> Unit) {
+        val previous = draftWork
+        draftWork = scope.launch {
+            previous?.join()
+            work()
+        }
+    }
 
     fun showSource() {
         previewing = false
@@ -477,10 +499,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 if (kept != null) {
                     val versionId = file.node.currentVersion?.id
                     when (val kind = DraftRules.offer(kept, versionId, text.text)) {
-                        DraftOffer.SAME -> removeDraft(file)
+                        DraftOffer.SAME -> removeDraft(file, force = true)
                         else -> offer = PendingDraft(kept, kind, versionId, file)
                     }
                 }
+            }
+            if (text is TextEditing.Open.Editable) {
+                sourceVersionId = file.node.currentVersion?.id
+                sourceKnown = true
             }
             phase = when (text) {
                 is TextEditing.Open.Editable -> Phase.Editing.also {
@@ -580,7 +606,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val bytes = state.bytes(text)
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file, destination)
-                    bytes to TextSave.copy(bytes, file, folder, writer.copySources(from, named = file), TextSave.runs(writer, SaveRunJournal.of(context)),
+                    bytes to TextSave.copy(bytes, file, folder, writer.copySources(from, named = file, contentKnown = sourceKnown), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
             }
@@ -593,8 +619,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs. The copy went into the editor's folder: a row answered from elsewhere sets no version to go
                 // on from, and the next save finds it gone from here.
-                // The text went into the copy: the file it came from keeps no draft of it.
-                removeDraft(file)
+                // The text went into the copy: the file it came from keeps no draft of it, unless typed into since.
+                if (TextEditing.same(buffer, text)) removeDraft(file)
                 target = made.file
                 startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
                 markWith(made.file, made.versionId)
@@ -645,7 +671,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         val file = target
         val baseline = savedText
         val step = DraftRules.step(editable = phase == Phase.Editing, offering = offer != null, startedFrom = startedFrom,
-            atBaseline = baseline == null || TextEditing.same(buffer, baseline))
+            atBaseline = baseline == null || TextEditing.same(buffer, baseline), owns = ownsDraft)
         when (step) {
             DraftRules.Step.NONE -> return
             DraftRules.Step.REMOVE -> removeDraft(file)
@@ -655,12 +681,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 val text = buffer.toString()
                 val chosen = selection ?: (android.text.Selection.getSelectionStart(buffer) to android.text.Selection.getSelectionEnd(buffer))
                 val draft = Draft(DraftFrame(base, state.format, System.currentTimeMillis().toULong()), text,
-                    chosen.takeIf { it.first >= 0 && it.second >= 0 }?.let { DraftSelection(it.first.toUInt(), it.second.toUInt()) })
+                    chosen.takeIf { it.first >= 0 && it.second >= 0 }?.let { DraftSelection(it.first.toUInt(), it.second.toUInt()) },
+                    sourceVersionId)
                 // Asked now: a sign-out's wipe before it lands keeps nothing of it.
                 val asked = drafts.generation
-                scope.launch {
+                inOrder {
                     val written = withContext(draftLane) { vault.writeDraft(drafts, draft, file, asked) }
                     draftNotKept = !written
+                    if (written) ownsDraft = true
                 }
             }
         }
@@ -671,10 +699,17 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         writeDraft()
     }
 
-    /* The file's draft deleted, after any write asked for before. */
-    private fun removeDraft(file: Opened) {
+    /*
+     * The file's draft deleted, after any write asked for before: one this session owns, or (`force`) one the person
+     * discarded, the file already holds, or whose family is gone.
+     */
+    private fun removeDraft(file: Opened, force: Boolean = false) {
         val vault = session.take()?.owner ?: return
-        scope.launch { withContext(draftLane) { vault.removeDraft(drafts, file) } }
+        inOrder {
+            if (!force && !ownsDraft) return@inOrder
+            ownsDraft = false
+            withContext(draftLane) { vault.removeDraft(drafts, file) }
+        }
     }
 
     /*
@@ -690,6 +725,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saveState = state.inFormat(draft.frame.format)
         format = draft.frame.format
         if (pending.kind == DraftOffer.STALE) startedFrom = draft.frame.baseVersionId
+        // Its text is this session's from here, and the draft too; read from another version than the one just opened, its
+        // source can't be checked now.
+        ownsDraft = true
+        sourceKnown = draft.sourceVersionId != null && draft.sourceVersionId == sourceVersionId
+        sourceVersionId = draft.sourceVersionId
         buffer.replace(0, buffer.length, draft.text)
         draft.selection?.let {
             val end = buffer.length
@@ -706,16 +746,17 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     fun discardDraft() {
         val pending = offer ?: return
         offer = null
-        removeDraft(pending.file)
+        removeDraft(pending.file, force = true)
     }
 
     /*
-     * Closed by the person (Discard, nothing to keep, saved, or the file's family cleared out): the draft goes. An offer still
-     * unanswered keeps its draft.
+     * Closed by the person (Discard, nothing to keep, saved): the draft this session owns goes; an offer still unanswered keeps
+     * its draft, and an editor that wrote nothing (closed while loading) removes nothing. `gone` (the file's family cleared
+     * out): its draft goes whatever, offer or not.
      */
-    fun closed() {
+    fun closed(gone: Boolean = false) {
         draftTurn?.cancel()
-        if (offer == null) removeDraft(target)
+        if (gone) removeDraft(target, force = true) else if (offer == null) removeDraft(target)
         end()
     }
 

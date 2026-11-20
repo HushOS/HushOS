@@ -19,6 +19,7 @@ import {
     createDraftWriter,
     DRAFT_WRITE_DELAY_MS,
     draftWhen,
+    lookUpDraft,
     type DraftSealer,
     type DraftSnapshot,
 } from './drafts';
@@ -34,6 +35,8 @@ const WORKSPACE = 'a1a1a1a1-0000-4000-8000-000000000001';
 const node = (n: number) => `b2b2b2b2-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const place = (n = 1, userId = USER) => ({ userId, workspaceId: WORKSPACE, nodeId: node(n) });
 const DAY = 24 * 60 * 60 * 1000;
+const MINE = { session: 'mine', revision: 1 };
+const THEIRS = { session: 'theirs', revision: 4 };
 const NOW = 1_763_650_440_000;
 
 const draft = (text: string, savedAt = NOW): Draft => ({
@@ -46,6 +49,7 @@ const draft = (text: string, savedAt = NOW): Draft => ({
     },
     text,
     selection: { from: 1, to: 2 },
+    sourceVersionId: null,
 });
 
 /* The worker's sealing, run here with a root of its own: what reaches the store is real ciphertext. */
@@ -100,11 +104,11 @@ async function rawRows() {
 describe('the draft store', () => {
     test('keeps only ciphertext, and gives the text back to the same account and file', async () => {
         const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
-        expect(await store.write(place(), draft('canary text'))).toBe(true);
+        expect(await store.write(place(), draft('canary text'), MINE)).toBe(true);
         const raw = await rawRows();
         expect(raw).not.toContain('canary');
         expect(raw).not.toContain(node(1));
-        expect((await store.read(place()))?.text).toBe('canary text');
+        expect((await store.read(place()))?.draft.text).toBe('canary text');
         // Another file, another account: nothing.
         expect(await store.read(place(2))).toBeNull();
         expect(await store.read(place(1, OTHER_USER))).toBeNull();
@@ -112,14 +116,18 @@ describe('the draft store', () => {
 
     test('one draft per account and file: the last write wins', async () => {
         const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
-        await store.write(place(), draft('first'));
-        await store.write(place(), draft('second', NOW + 1));
-        expect((await store.read(place()))?.text).toBe('second');
+        await store.write(place(), draft('first'), MINE);
+        await store.write(place(), draft('second', NOW + 1), MINE);
+        expect((await store.read(place()))?.draft.text).toBe('second');
         expect(JSON.parse(await rawRows())).toHaveLength(1);
     });
 
     test('a draft that no longer opens here (a changed record, a rotated root) is deleted, never offered', async () => {
-        await createDraftStore(sealer(), 'hushos-drafts', () => NOW).write(place(), draft('mine'));
+        await createDraftStore(sealer(), 'hushos-drafts', () => NOW).write(
+            place(),
+            draft('mine'),
+            MINE,
+        );
         const store = createDraftStore(
             { ...sealer(), open: async () => null },
             'hushos-drafts',
@@ -131,31 +139,69 @@ describe('the draft store', () => {
 
     test('older than thirty days is dropped on read; thirty days exactly is offered', async () => {
         const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
-        await store.write(place(1), draft('edge', NOW - 30 * DAY));
-        await store.write(place(2), draft('past', NOW - 30 * DAY - 1));
-        expect((await store.read(place(1)))?.text).toBe('edge');
+        await store.write(place(1), draft('edge', NOW - 30 * DAY), MINE);
+        await store.write(place(2), draft('past', NOW - 30 * DAY - 1), MINE);
+        expect((await store.read(place(1)))?.draft.text).toBe('edge');
         expect(await store.read(place(2))).toBeNull();
         expect(JSON.parse(await rawRows())).toHaveLength(1);
     });
 
     test('fifty per account: a new one pushes the oldest out, and other accounts are not counted', async () => {
         const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
-        await store.write(place(100, OTHER_USER), draft('theirs', NOW - 60_000));
-        for (let n = 0; n < 50; n++) await store.write(place(n), draft(`d${n}`, NOW - 50_000 + n));
+        await store.write(place(100, OTHER_USER), draft('theirs', NOW - 60_000), MINE);
+        for (let n = 0; n < 50; n++)
+            await store.write(place(n), draft(`d${n}`, NOW - 50_000 + n), MINE);
         expect(JSON.parse(await rawRows())).toHaveLength(51);
-        await store.write(place(50), draft('newest', NOW));
+        await store.write(place(50), draft('newest', NOW), MINE);
         expect(await store.read(place(0))).toBeNull();
-        expect((await store.read(place(1)))?.text).toBe('d1');
-        expect((await store.read(place(50)))?.text).toBe('newest');
-        expect((await store.read(place(100, OTHER_USER)))?.text).toBe('theirs');
+        expect((await store.read(place(1)))?.draft.text).toBe('d1');
+        expect((await store.read(place(50)))?.draft.text).toBe('newest');
+        expect((await store.read(place(100, OTHER_USER)))?.draft.text).toBe('theirs');
         expect(JSON.parse(await rawRows())).toHaveLength(51);
     });
 
     test('a write that can’t be sealed is not kept, and says so; the last draft stays', async () => {
         const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
-        await store.write(place(), draft('kept'));
-        expect(await store.write(place(), draft('a'.repeat(8 * 1024 * 1024 + 1)))).toBe(false);
-        expect((await store.read(place()))?.text).toBe('kept');
+        await store.write(place(), draft('kept'), MINE);
+        expect(await store.write(place(), draft('a'.repeat(8 * 1024 * 1024 + 1)), MINE)).toBe(
+            false,
+        );
+        expect((await store.read(place()))?.draft.text).toBe('kept');
+    });
+});
+
+describe('the draft store’s metadata and owners', () => {
+    test('the caps read metadata only: writing never opens or decodes another draft', async () => {
+        let opened = 0;
+        const counting = {
+            ...sealer(),
+            open: async (...args: Parameters<DraftSealer['open']>) => {
+                opened += 1;
+                return sealer().open(...args);
+            },
+        };
+        const store = createDraftStore(counting, 'hushos-drafts', () => NOW);
+        for (let n = 0; n < 5; n++) await store.write(place(n), draft(`d${n}`), MINE);
+        expect(opened).toBe(0);
+    });
+
+    test('a removal by a session that didn’t write what is stored removes nothing', async () => {
+        const store = createDraftStore(sealer(), 'hushos-drafts', () => NOW);
+        await store.write(place(), draft('another tab’s'), THEIRS);
+        expect(await store.remove(place(), MINE)).toBe(false);
+        expect((await store.read(place()))?.draft.text).toBe('another tab’s');
+        expect((await store.read(place()))?.owner).toEqual(THEIRS);
+        expect(await store.remove(place(), THEIRS)).toBe(true);
+        expect(await store.read(place())).toBeNull();
+    });
+
+    test('a store that can’t be read rejects: no answer is never “no draft”', async () => {
+        const store = createDraftStore(
+            { ...sealer(), slot: () => Promise.reject(new Error('worker busy')) },
+            'hushos-drafts',
+            () => NOW,
+        );
+        await expect(store.read(place())).rejects.toThrow('worker busy');
     });
 });
 
@@ -181,6 +227,7 @@ describe('the draft writer', () => {
                 },
                 remove: async () => {
                     calls.removes += 1;
+                    return true;
                 },
             },
         });
@@ -240,7 +287,7 @@ describe('the draft writer', () => {
         expect(readOnly.calls).toEqual({ writes: [], removes: 0 });
     });
 
-    test('back at the saved text, the draft is removed instead of written', async () => {
+    test('back at the saved text, the draft it wrote is removed instead of written', async () => {
         vi.useFakeTimers();
         const { calls, type, backToBaseline } = setup();
         type('changed');
@@ -248,6 +295,39 @@ describe('the draft writer', () => {
         backToBaseline();
         await settle(DRAFT_WRITE_DELAY_MS);
         expect(calls).toEqual({ writes: ['changed'], removes: 1 });
+    });
+
+    test('a session that wrote nothing removes nothing: an untouched tab, a close while loading', async () => {
+        vi.useFakeTimers();
+        const { writer, calls, backToBaseline } = setup();
+        backToBaseline();
+        await settle(DRAFT_WRITE_DELAY_MS);
+        await writer.flush();
+        await writer.remove(place());
+        expect(calls).toEqual({ writes: [], removes: 0 });
+    });
+
+    test('a removal names the revision this session wrote last, or the one it adopted', async () => {
+        const removed: unknown[] = [];
+        const writer = createDraftWriter({
+            session: 'mine',
+            locked: () => false,
+            snapshot: () => ({ place: place(), atBaseline: false, draft: () => draft('x') }),
+            store: {
+                write: async () => true,
+                remove: async (_where, owner) => {
+                    removed.push(owner);
+                    return true;
+                },
+            },
+        });
+        await writer.flush();
+        await writer.flush();
+        await writer.remove(place());
+        expect(removed).toEqual([{ session: 'mine', revision: 2 }]);
+        writer.adopt(place(2), THEIRS);
+        await writer.remove(place(2));
+        expect(removed.at(-1)).toEqual(THEIRS);
     });
 
     test('flush writes at once and takes the pending write with it', async () => {
@@ -276,6 +356,7 @@ describe('the draft writer', () => {
                     }),
                 remove: async () => {
                     order.push('remove');
+                    return true;
                 },
             },
         });
@@ -298,7 +379,7 @@ describe('the draft writer', () => {
                     writes.push(value.text);
                     return true;
                 },
-                remove: async () => {},
+                remove: async () => true,
             },
         });
         // Read now, written a moment later: a lock between the two leaves the store untouched.
@@ -306,6 +387,38 @@ describe('the draft writer', () => {
         locked = true;
         await late;
         expect(writes).toEqual([]);
+    });
+});
+
+describe('looking a draft up', () => {
+    const stored = { draft: draft('kept'), owner: THEIRS };
+    test('an answer in time is the answer; none is none', async () => {
+        expect(await lookUpDraft({ read: async () => stored }, place(), 50)).toEqual({
+            status: 'answered',
+            stored,
+        });
+        expect(await lookUpDraft({ read: async () => null }, place(), 50)).toEqual({
+            status: 'answered',
+            stored: null,
+        });
+    });
+
+    test('a slow store is “still reading”, never “no draft”, and its answer still comes', async () => {
+        let answer!: (value: typeof stored) => void;
+        const looked = await lookUpDraft(
+            { read: () => new Promise((resolve) => (answer = resolve)) },
+            place(),
+            20,
+        );
+        expect(looked.status).toBe('waiting');
+        answer(stored);
+        expect(await (looked as { later: Promise<unknown> }).later).toEqual(stored);
+    });
+
+    test('a store that fails is “not read”, never “no draft”', async () => {
+        expect(
+            await lookUpDraft({ read: () => Promise.reject(new Error('busy')) }, place(), 50),
+        ).toEqual({ status: 'failed' });
     });
 });
 

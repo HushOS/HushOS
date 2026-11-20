@@ -150,7 +150,19 @@ export type CheckNow = (nodes: DriveNode[]) => Promise<Map<string, NodeIntegrity
 export async function saveCopy(
     start: StartRun,
     edit: { file: DriveNode; source: DriveNode; folder: DriveNode; bytes: Uint8Array },
-    { stillOn = () => true, pause, check }: SaveOptions & { check?: CheckNow } = {},
+    {
+        stillOn = () => true,
+        pause,
+        check,
+        sourceUnknown = false,
+    }: SaveOptions & {
+        check?: CheckNow;
+        /*
+         * The text came from a version that can't be checked now (a draft restored from another
+         * version than the one just read): its content is re-sealed, never vouched for.
+         */
+        sourceUnknown?: boolean;
+    } = {},
 ): Promise<TextCopy> {
     const bytes = edit.bytes;
     // Signed as the weakest of what it is made from, each checked now: the text's own version
@@ -169,7 +181,22 @@ export async function saveCopy(
             },
         };
     };
-    const sources = await Promise.all(rows.map(async (row) => ({ node: await now(row) })));
+    const sources = await Promise.all(
+        rows.map(async (row) => {
+            const node = await now(row);
+            // The text's own version is the one that can't be told: its name record still checks.
+            if (!sourceUnknown || row !== edit.source) return { node };
+            return {
+                node: {
+                    ...node,
+                    integrity: {
+                        metadata: node.integrity?.metadata ?? 'unchecked',
+                        version: 'unchecked' as const,
+                    },
+                },
+            };
+        }),
+    );
     if (!stillOn()) throw new SessionEnded();
     const run = await start({
         targets: [edit.folder],

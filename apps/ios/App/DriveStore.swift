@@ -209,7 +209,8 @@ final class DriveStore {
     /* The editor's draft of `file` (Editing 1c), deleted on this phone: access to it confirmed lost. */
     func dropDraft(of file: Opened) {
         let vault = vault
-        Task { await vault.removeDraft(of: file) }
+        // In order after the editor's writes asked before it: none of them lands after this.
+        DraftLane.enqueue { await vault.removeDraft(of: file) }
     }
 
     /* Its family removed, forked or refused (FileViewer's familyGone, for a file no viewer shows). */

@@ -5,6 +5,7 @@ import {
     draftKey,
     draftKeyInfo,
     draftSlot,
+    draftWorkspaceTag,
     sealDraft,
 } from '../src/drafts';
 import { encode } from '../src/keys';
@@ -36,6 +37,7 @@ const draft: Draft = {
     },
     text: 'Draft canary 🦀 über\nsecond line\n',
     selection: { from: 14, to: 20 },
+    sourceVersionId: '4e3d2c1b-0a9f-4e8d-9c7b-6a5f4e3d2c1b',
 };
 
 const key = await draftKey(accountKey, place);
@@ -57,8 +59,9 @@ await writeFile(
             keyInfo: draftKeyInfo(place),
             key: encode(key),
             slot: await draftSlot(accountKey, place),
+            workspaceTag: await draftWorkspaceTag(accountKey, place.userId, place.workspaceId),
             draft,
-            associatedData: new TextDecoder().decode(draftContext(place, draft.frame)),
+            associatedData: new TextDecoder().decode(draftContext(place, draft.frame.savedAt)),
             nonce: encode(nonce),
             record,
             refusals: [
@@ -66,11 +69,8 @@ await writeFile(
                 { name: 'another workspace', workspaceId: OTHER },
                 { name: 'another node', nodeId: OTHER },
                 { name: 'another account key', accountKey: encode(new Uint8Array(32).fill(9)) },
-                { name: 'another base version', record: withField('base', OTHER) },
-                { name: 'another encoding', record: withField('encoding', 'utf-8') },
-                { name: 'another line ending', record: withField('lineEnding', 'lf') },
-                { name: 'not mixed', record: withField('mixed', false) },
                 { name: 'another time', record: withField('savedAt', draft.frame.savedAt + 1) },
+                { name: 'no time', record: withField('savedAt', null) },
                 {
                     name: 'a changed ciphertext byte',
                     record: withField('sealed', Buffer.from(flipped).toString('base64url')),

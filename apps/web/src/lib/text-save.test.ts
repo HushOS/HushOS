@@ -324,6 +324,31 @@ describe('when someone else saved first', () => {
         expect(resultSignatures(b.sources.at(-1) as ResultSources).version).toBe('resealed');
     });
 
+    test('a copy of a draft restored from another version re-seals its content, whatever the current version checks as', async () => {
+        const b = bench();
+        const id = b.add('notes.txt', 'start');
+        const opened = {
+            ...b.asNode(id),
+            integrity: { metadata: 'verified', version: 'verified' },
+        } as unknown as DriveNode;
+        const check = async (nodes: DriveNode[]) =>
+            new Map(nodes.map((node) => [node.id, node.integrity] as const));
+        // The version just read checks; the draft's text came from an earlier one that can't be checked now.
+        await saveCopy(
+            b.start,
+            { file: opened, source: opened, folder: b.folder, bytes: utf8('from the draft') },
+            { check, sourceUnknown: true },
+        );
+        expect(resultSignatures(b.sources.at(-1) as ResultSources).version).toBe('resealed');
+        // Read from the version that checks, it is vouched for as before.
+        await saveCopy(
+            b.start,
+            { file: opened, source: opened, folder: b.folder, bytes: utf8('as read') },
+            { check },
+        );
+        expect(resultSignatures(b.sources.at(-1) as ResultSources).version).not.toBe('resealed');
+    });
+
     test('a file gone from its folder is stale with no version to save on top of', async () => {
         const b = bench();
         const id = b.add('notes.txt', 'start');

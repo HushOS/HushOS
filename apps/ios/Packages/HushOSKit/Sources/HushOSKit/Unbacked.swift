@@ -72,10 +72,18 @@ public enum Unbacked {
     }
 
     /* The class on a folder and everything already in it, for what an earlier version wrote without one. */
-    static func protectAll(_ url: URL) {
-        protect(url)
+    static func protectAll(_ url: URL, protecting: (URL) -> Void = protect) {
+        protecting(url)
         guard let walk = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
-        for case let item as URL in walk { protect(item) }
+        for case let item as URL in walk {
+            // The editor's drafts keep the complete protection they were written with: unreadable once the phone locks.
+            // (The simulator records no class, so DraftsTests holds this walk to never reaching them.)
+            if item.lastPathComponent == DraftStore.folderName, item.deletingLastPathComponent().lastPathComponent == "local" {
+                walk.skipDescendants()
+                continue
+            }
+            protecting(item)
+        }
     }
 
     public static func exclude(_ url: URL) {

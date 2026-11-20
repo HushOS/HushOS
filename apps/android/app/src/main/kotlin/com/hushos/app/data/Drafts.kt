@@ -7,9 +7,9 @@ import com.hushos.core.DraftOffer
 import com.hushos.core.draftLimits
 import com.hushos.core.draftOffer
 import com.hushos.core.draftOpen
-import com.hushos.core.draftSavedAt
 import com.hushos.core.draftSeal
 import com.hushos.core.draftSlot
+import com.hushos.core.draftWorkspaceTag
 import com.hushos.core.draftsToDrop
 import java.io.File
 import java.text.DateFormat
@@ -36,62 +36,88 @@ data class DraftPlace(val userId: String, val workspaceId: String, val nodeId: S
 }
 
 class DraftStore(private val folder: File, private val now: () -> Long = System::currentTimeMillis) {
-    // Base64url: letters, digits, '-' and '_' only, so a file name as it is.
-    private fun file(slot: String) = File(folder, "$slot.json")
-
-    private fun slot(place: DraftPlace, key: ByteArray) = draftSlot(key, place.userId, place.workspaceId, place.nodeId)
-
     /*
-     * Seals and keeps `draft` for `place`, keeping the caps; false when it couldn't be kept (past the limit, half a character
-     * in the text, a full disk). The last draft kept stays then.
+     * Filed by workspace tag (a name only the unlocked account works out from the workspace), so a family's removal deletes
+     * that family's drafts without opening any. Base64url: letters, digits, '-' and '_' only, so file names as they are.
      */
+    private fun tag(place: DraftPlace, key: ByteArray) = draftWorkspaceTag(key, place.userId, place.workspaceId)
+    private fun file(place: DraftPlace, key: ByteArray) =
+        File(File(folder, tag(place, key)), "${draftSlot(key, place.userId, place.workspaceId, place.nodeId)}.json")
+
+    /* Every record, by its file: the caps go by the files' own dates, never by reading one. */
+    private fun records() = folder.walkTopDown().filter { it.isFile && it.name.endsWith(".json") }.toList()
+
+    /* Writes a kill or a full disk left half done: never read, never counted, never kept. */
+    private fun sweepPartials() {
+        folder.walkTopDown().filter { it.isFile && it.name.endsWith(".partial") }.forEach { it.delete() }
+    }
+
     /* What a write asked for now carries: a wipe (a sign-out) after it moves this, and the write keeps nothing. */
     val generation: Long get() = synchronized(LOCK) { MOVED[folder.absolutePath] ?: 0L }
 
+    /*
+     * Seals and keeps `draft` for `place`, then keeps the caps; false when it couldn't be kept (past the limit, half a
+     * character in the text, a full disk, a wipe since `asked`). The last draft kept stays then, and nothing else is evicted
+     * for a write that didn't land.
+     */
     fun write(draft: Draft, place: DraftPlace, key: ByteArray, asked: Long = generation): Boolean = synchronized(LOCK) {
         writeLocked(draft, place, key, asked)
     }
 
     /* Under LOCK: a write asked for before a wipe (a sign-out) writes nothing after it. */
-    private fun writeLocked(draft: Draft, place: DraftPlace, key: ByteArray, asked: Long): Boolean = runCatching {
+    private fun writeLocked(draft: Draft, place: DraftPlace, key: ByteArray, asked: Long): Boolean {
         if (asked != (MOVED[folder.absolutePath] ?: 0L) || !TextEditing.writable(draft.text)) return false
-        val slot = slot(place, key)
-        val record = draftSeal(key, place.userId, place.workspaceId, place.nodeId, draft)
-        folder.mkdirs()
-        val entries = (folder.listFiles() ?: emptyArray()).filter { it.name.endsWith(".json") }.map {
-            DraftEntry(it.name.removeSuffix(".json"), runCatching { draftSavedAt(it.readText()) }.getOrNull())
-        }
-        for (gone in draftsToDrop(entries, now().toULong(), slot)) file(gone).delete()
-        // Written beside it, then moved into place: a kill mid-write never leaves half a record.
-        val partial = File(folder, "$slot.json.partial")
-        partial.writeText(record)
-        if (!partial.renameTo(file(slot))) {
-            partial.delete()
+        sweepPartials()
+        val target = runCatching { file(place, key) }.getOrNull() ?: return false
+        val record = runCatching { draftSeal(key, place.userId, place.workspaceId, place.nodeId, draft) }.getOrNull() ?: return false
+        // Written beside it, then moved into place: a kill mid-write never leaves half a record, and a failed write leaves
+        // nothing behind.
+        val partial = File(target.parentFile, "${target.name}.partial")
+        try {
+            target.parentFile!!.mkdirs()
+            partial.writeText(record)
+            if (!partial.renameTo(target)) return false
+        } catch (_: Exception) {
             return false
+        } finally {
+            partial.delete()
         }
-        true
-    }.getOrDefault(false)
+        // When it was written, as the file's own date: what the caps read.
+        target.setLastModified(draft.frame.savedAt.toLong())
+        val entries = records().mapNotNull { record ->
+            // A date that can't be read is no verdict on the draft: it is left alone.
+            record.lastModified().takeIf { it > 0 }?.let { DraftEntry(record.path, it.toULong()) }
+        }
+        for (gone in draftsToDrop(entries, now().toULong(), target.path)) File(gone).delete()
+        return true
+    }
 
     /* The file's draft, or null: none, or one that doesn't open here or is too old, which is deleted (nothing can show it). */
     fun read(place: DraftPlace, key: ByteArray): Draft? = synchronized(LOCK) { readLocked(place, key) }
 
     private fun readLocked(place: DraftPlace, key: ByteArray): Draft? {
-        val slot = runCatching { slot(place, key) }.getOrNull() ?: return null
-        val record = file(slot).takeIf { it.exists() }?.let { runCatching { it.readText() }.getOrNull() } ?: return null
+        sweepPartials()
+        val target = runCatching { file(place, key) }.getOrNull() ?: return null
+        val record = target.takeIf { it.exists() }?.let { runCatching { it.readText() }.getOrNull() } ?: return null
         val draft = runCatching { draftOpen(key, place.userId, place.workspaceId, place.nodeId, record) }.getOrNull()
         if (draft == null || now().toULong() > draft.frame.savedAt + draftLimits().maxAgeMs) {
-            file(slot).delete()
+            target.delete()
             return null
         }
         return draft
     }
 
     fun remove(place: DraftPlace, key: ByteArray) {
-        synchronized(LOCK) { runCatching { file(slot(place, key)).delete() } }
+        synchronized(LOCK) { runCatching { file(place, key).delete() } }
+    }
+
+    /* A family removed (its folders let go of here): every draft of its files, unopened. */
+    fun removeWorkspace(userId: String, workspaceId: String, key: ByteArray) {
+        synchronized(LOCK) { runCatching { File(folder, draftWorkspaceTag(key, userId.lowercase(), workspaceId.lowercase())).deleteRecursively() } }
     }
 
     /* How many drafts are kept. */
-    val count: Int get() = (folder.listFiles() ?: emptyArray()).count { it.name.endsWith(".json") }
+    val count: Int get() = records().size
 
     companion object {
         const val DIR = "drafts"
@@ -121,9 +147,13 @@ object DraftRules {
      * What a write turn does: nothing for read-only text, an unanswered offer or no version to start from; the draft goes once
      * the text is back at what was last opened or saved; otherwise it is written.
      */
-    fun step(editable: Boolean, offering: Boolean, startedFrom: String?, atBaseline: Boolean): Step = when {
+    /*
+     * `owns`: this session wrote the stored draft, or the person restored it. Back at the baseline, only a draft the session
+     * owns goes: an editor that wrote nothing (closed while loading, opened and left) never removes one.
+     */
+    fun step(editable: Boolean, offering: Boolean, startedFrom: String?, atBaseline: Boolean, owns: Boolean): Step = when {
         !editable || offering || startedFrom == null -> Step.NONE
-        atBaseline -> Step.REMOVE
+        atBaseline -> if (owns) Step.REMOVE else Step.NONE
         else -> Step.WRITE
     }
 
@@ -158,4 +188,15 @@ fun Vault.readDraft(store: DraftStore, file: Opened): Draft? =
 
 fun Vault.removeDraft(store: DraftStore, file: Opened) {
     runCatching { store.remove(draftPlace(file), unlockAccount()) }
+}
+
+/* A family let go of: its drafts on this phone, deleted. */
+fun Vault.removeWorkspaceDrafts(store: DraftStore, workspaceId: String) {
+    runCatching { store.removeWorkspace(api.session.userId, workspaceId, unlockAccount()) }
+}
+
+/* Where a copy's version verdict can't be told: the text came from a version not read now (a restored draft's). */
+fun SaveSource.contentUnknown(): SaveSource = when (this) {
+    is SaveSource.OfFile -> copy(version = com.hushos.core.Integrity.UNCHECKED)
+    is SaveSource.OfFolder -> this
 }

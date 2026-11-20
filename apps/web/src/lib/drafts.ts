@@ -1,10 +1,4 @@
-import {
-    type Draft,
-    type DraftPlace,
-    draftSavedAt,
-    draftsToDrop,
-    DRAFT_MAX_AGE_MS,
-} from '@hushos/crypto/drafts';
+import { type Draft, type DraftPlace, draftsToDrop, DRAFT_MAX_AGE_MS } from '@hushos/crypto/drafts';
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import { authClient } from '@/lib/auth-client';
 
@@ -14,24 +8,31 @@ import { authClient } from '@/lib/auth-client';
  * (@hushos/crypto/drafts), kept in this browser's IndexedDB and nowhere else. A locked browser
  * holds only ciphertext: the worker has no root to seal or open with, so nothing is written or
  * read while locked, and an unlock brings the drafts back. Signing out, and the account's local
- * wipe, delete the whole database (lib/device-data.ts); a save that makes the text current, a
- * Discard and Open theirs delete the file's draft.
+ * wipe, delete the whole database (lib/device-data.ts).
  *
  * One record per account and file, found by the worker's slot (a name only the unlocked account
- * works out), last writer wins: two tabs editing the same file keep whichever wrote last. Each
- * row keeps the account (so the caps count one account's drafts), when it was written (the caps
- * and expiry, readable without a key) and the sealed record. Bounds: 8 MiB of text per draft,
- * 50 drafts per account (the oldest go) and 30 days.
+ * works out), last writer wins. Beside each record, a small metadata row: the account, when it
+ * was written, its size, and which editor session wrote it with which revision. The caps read
+ * only those (never a sealed record), and a session removes only a draft it owns: one it wrote
+ * (the same session and revision still stored) or one the person restored or discarded. So an
+ * untouched tab, or an editor closed while it loaded, never deletes another's draft. Bounds:
+ * 8 MiB of text per draft, 50 drafts per account (the oldest go), and 30 days, after which a
+ * draft is never offered (and is deleted when its slot is next read or the caps run).
  *
  * Part of the editor's fixed set (editorAssets): nothing here is in the post-unlock preload.
  */
 
 export const DRAFTS_DATABASE = 'hushos-drafts';
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 
-type Row = { key: string; userId: string; savedAt: number; record: string };
+/* Which editor session wrote a stored draft, and its how-many-th write. */
+export type DraftOwner = { session: string; revision: number };
+
+type Row = { key: string; record: string };
+type Meta = { key: string; userId: string; savedAt: number; size: number } & DraftOwner;
 interface Schema extends DBSchema {
     drafts: { key: string; value: Row };
+    meta: { key: string; value: Meta; indexes: { userId: string } };
 }
 
 /* The worker's side (driveDraftSlot, driveDraftSeal, driveDraftOpen), so tests can stand in. */
@@ -42,18 +43,33 @@ export type DraftSealer = {
     open(place: DraftPlace, record: string): Promise<Draft | null>;
 };
 
+/* A draft read back: what it holds, and who wrote it. */
+export type StoredDraft = { draft: Draft; owner: DraftOwner };
+
 export type DraftStore = {
     /*
-     * Seals and keeps the draft, keeping the caps; false when it could not be kept. `current`, asked once
-     * the text is sealed: false (locked or signed out meanwhile) and nothing reaches the database.
+     * Seals and keeps the draft as `owner`'s, keeping the caps; false when it could not be kept.
+     * `current`, asked once the text is sealed: false (locked or signed out meanwhile) and nothing
+     * reaches the database.
      */
-    write(place: DraftPlace, draft: Draft, current?: () => boolean): Promise<boolean>;
-    /* The file's draft, or null: none, or one that doesn't open or is too old, which is deleted. */
-    read(place: DraftPlace): Promise<Draft | null>;
-    remove(place: DraftPlace): Promise<void>;
+    write(
+        place: DraftPlace,
+        draft: Draft,
+        owner: DraftOwner,
+        current?: () => boolean,
+    ): Promise<boolean>;
+    /*
+     * The file's draft, or null for none (or one that doesn't open or is past its age, which is
+     * deleted: nothing could ever show it). Rejects when the store couldn't be read: that is no
+     * answer, never "none".
+     */
+    read(place: DraftPlace): Promise<StoredDraft | null>;
+    /* Removes the file's draft only while `owner` still wrote what is stored; true when it went (or was none). */
+    remove(place: DraftPlace, owner: DraftOwner): Promise<boolean>;
 };
 
 const rowKey = (userId: string, slot: string) => `${userId.toLowerCase()}:${slot}`;
+const same = (a: DraftOwner, b: DraftOwner) => a.session === b.session && a.revision === b.revision;
 
 export function createDraftStore(
     sealer: DraftSealer,
@@ -64,7 +80,10 @@ export function createDraftStore(
     const open = () =>
         (database ??= openDB<Schema>(name, DATABASE_VERSION, {
             upgrade(db) {
+                // Version 1 kept the time beside each record; nothing of it was released.
+                if (db.objectStoreNames.contains('drafts')) db.deleteObjectStore('drafts');
                 db.createObjectStore('drafts', { keyPath: 'key' });
+                db.createObjectStore('meta', { keyPath: 'key' }).createIndex('userId', 'userId');
             },
             // Another tab deleting it (a sign-out there): let go, so the deletion goes through.
             blocking(_current, _next, event) {
@@ -78,37 +97,36 @@ export function createDraftStore(
             database = undefined;
             throw error;
         }));
-    const account = (userId: string) => {
-        const user = userId.toLowerCase();
-        return IDBKeyRange.bound(`${user}:`, `${user}:￿`);
-    };
     return {
-        async write(place, draft, current = () => true) {
+        async write(place, draft, owner, current = () => true) {
             try {
                 const { slot, record } = await sealer.seal(place, draft);
                 // A lock or a sign-out while it was sealed: its database may be on its way out.
                 if (!current()) return false;
                 const key = rowKey(place.userId, slot);
                 const db = await open();
-                const transaction = db.transaction('drafts', 'readwrite');
-                const store = transaction.store;
-                const rows = await store.getAll(account(place.userId));
+                const transaction = db.transaction(['drafts', 'meta'], 'readwrite');
+                const metas = transaction.objectStore('meta');
+                const records = transaction.objectStore('drafts');
+                const rows = await metas.index('userId').getAll(place.userId.toLowerCase());
                 const drop = draftsToDrop(
-                    rows.map((row) => ({
-                        slot: row.key,
-                        savedAt: draftSavedAt(row.record) === row.savedAt ? row.savedAt : null,
-                    })),
+                    rows.map((row) => ({ slot: row.key, savedAt: row.savedAt })),
                     now(),
                     key,
                 );
-                for (const gone of drop) void store.delete(gone);
-                void store.put({
-                    key,
-                    userId: place.userId.toLowerCase(),
-                    savedAt: draft.frame.savedAt,
-                    record,
-                });
-                await transaction.done;
+                // Every request awaited with the transaction: a refused one (quota) fails here, once.
+                await Promise.all([
+                    ...drop.flatMap((gone) => [metas.delete(gone), records.delete(gone)]),
+                    records.put({ key, record }),
+                    metas.put({
+                        key,
+                        userId: place.userId.toLowerCase(),
+                        savedAt: draft.frame.savedAt,
+                        size: record.length,
+                        ...owner,
+                    }),
+                    transaction.done,
+                ]);
                 return true;
             } catch {
                 // Quota, a store that won't open, text past the limit: editing goes on regardless.
@@ -119,20 +137,39 @@ export function createDraftStore(
             const slot = await sealer.slot(place);
             const key = rowKey(place.userId, slot);
             const db = await open();
-            const row = await db.get('drafts', key);
-            if (!row) return null;
+            const [row, meta] = await Promise.all([db.get('drafts', key), db.get('meta', key)]);
+            if (!row || !meta) return null;
             const draft = await sealer.open(place, row.record);
             // Never offered: one that doesn't open here (a rotated root, a changed record) or one past
             // its age. Gone for good, since nothing can ever show it.
             if (!draft || now() - draft.frame.savedAt > DRAFT_MAX_AGE_MS) {
-                await db.delete('drafts', key);
+                const transaction = db.transaction(['drafts', 'meta'], 'readwrite');
+                await Promise.all([
+                    transaction.objectStore('drafts').delete(key),
+                    transaction.objectStore('meta').delete(key),
+                    transaction.done,
+                ]);
                 return null;
             }
-            return draft;
+            return { draft, owner: { session: meta.session, revision: meta.revision } };
         },
-        async remove(place) {
+        async remove(place, owner) {
             const slot = await sealer.slot(place);
-            await (await open()).delete('drafts', rowKey(place.userId, slot));
+            const key = rowKey(place.userId, slot);
+            const db = await open();
+            const transaction = db.transaction(['drafts', 'meta'], 'readwrite');
+            const meta = await transaction.objectStore('meta').get(key);
+            // Another session wrote since (another tab): its draft is not this one's to remove.
+            if (meta && !same(meta, owner)) {
+                await transaction.done;
+                return false;
+            }
+            await Promise.all([
+                transaction.objectStore('drafts').delete(key),
+                transaction.objectStore('meta').delete(key),
+                transaction.done,
+            ]);
+            return true;
         },
     };
 }
@@ -150,9 +187,10 @@ export function drafts() {
 
 /*
  * What the editor holds now, for the writer: null when nothing may be written (no editable text,
- * a read-only or ended session, the restore offer still unanswered, Open theirs under way, no
- * version to start from, or another account session than the editor's). `atBaseline`: the text
- * is what was last opened or saved, so the draft goes instead.
+ * a read-only or ended session, the restore offer unanswered or the lookup still out, Open theirs
+ * under way, no version to start from, or another account session than the editor's).
+ * `atBaseline`: the text is what was last opened or saved, so the draft goes instead, if this
+ * session owns it.
  */
 export type DraftSnapshot = {
     place: DraftPlace;
@@ -163,21 +201,27 @@ export type DraftSnapshot = {
 export type DraftWriter = {
     /* The text changed: a write follows within `delay`, at most one per `delay` while typing. */
     changed(): void;
-    /* Writes (or removes) now, for pagehide, hiding and closing; resolves once done. */
+    /* Writes (or removes an owned draft) now, for pagehide, hiding, a lock and closing; resolves once done. */
     flush(): Promise<void>;
-    /* Removes the draft of `place` now, after anything queued; nothing queued writes it back. */
+    /* Removes the draft of `place` now, if this session owns it, after anything queued. */
     remove(place: DraftPlace): Promise<void>;
+    /* The person restored (or will discard) this stored draft: this session owns it from here. */
+    adopt(place: DraftPlace, owner: DraftOwner): void;
     /* Stops the timer: nothing more is scheduled; what was already asked for still lands. */
     stop(): void;
 };
+
+const placeKey = (place: DraftPlace) =>
+    `${place.userId.toLowerCase()}/${place.workspaceId.toLowerCase()}/${place.nodeId.toLowerCase()}`;
 
 /*
  * The draft writer's rules. A change schedules a write `delay` later; changes meanwhile ride on it,
  * so typing writes at most once per `delay` and the last change is written within `delay`. A write
  * never happens while locked (`locked`), never without a snapshot, and never for a text at its
- * baseline, which removes the draft instead. Writes and removals run one at a time, in order, so a
- * removal after a save is never overtaken by a write from before it. `onKept` hears whether the
- * last write was kept.
+ * baseline, which removes the draft instead, and only one this session owns (wrote, or adopted
+ * from a restore): an untouched session never deletes. Writes and removals run one at a time, in
+ * order, so a removal after a save is never overtaken by a write from before it. `onKept` hears
+ * whether the last write was kept.
  */
 export function createDraftWriter(options: {
     delay?: number;
@@ -186,9 +230,14 @@ export function createDraftWriter(options: {
     store: Pick<DraftStore, 'write' | 'remove'>;
     now?: () => number;
     onKept?: (kept: boolean) => void;
+    session?: string;
 }): DraftWriter {
     const delay = options.delay ?? DRAFT_WRITE_DELAY_MS;
     const now = options.now ?? Date.now;
+    const session = options.session ?? crypto.randomUUID();
+    let revision = 0;
+    /* What this session may remove, by file: what it wrote last, or adopted. */
+    const owned = new Map<string, DraftOwner>();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
     let chain: Promise<void> = Promise.resolve();
@@ -197,6 +246,15 @@ export function createDraftWriter(options: {
         chain = next;
         return next;
     };
+    const removeOwned = (place: DraftPlace) =>
+        queue(async () => {
+            const owner = owned.get(placeKey(place));
+            if (!owner) return;
+            await options.store
+                .remove(place, owner)
+                .then(() => owned.delete(placeKey(place)))
+                .catch(() => {});
+        });
     /*
      * The text is read when the write is asked for, never later: a close writes what was on screen
      * as it closed. The store is reached in order, after anything asked before.
@@ -206,21 +264,21 @@ export function createDraftWriter(options: {
         const snapshot = options.snapshot();
         if (!snapshot) return chain;
         const { place } = snapshot;
-        if (snapshot.atBaseline)
-            return queue(async () => {
-                await options.store.remove(place).catch(() => {});
-            });
+        if (snapshot.atBaseline) return removeOwned(place);
         const draft = snapshot.draft();
         // Half of a character just typed: nothing is written this time; the last draft stays.
         if (!draft) return chain;
         return queue(async () => {
             // Locked since it was asked for: nothing reaches the store.
             if (options.locked()) return;
+            const owner = { session, revision: ++revision };
             const kept = await options.store.write(
                 place,
                 { ...draft, frame: { ...draft.frame, savedAt: now() } },
+                owner,
                 () => !options.locked(),
             );
+            if (kept) owned.set(placeKey(place), owner);
             options.onKept?.(kept);
         });
     };
@@ -242,13 +300,53 @@ export function createDraftWriter(options: {
         },
         remove(place) {
             cancel();
-            return queue(() => options.store.remove(place).catch(() => {}));
+            return removeOwned(place);
+        },
+        adopt(place, owner) {
+            owned.set(placeKey(place), owner);
         },
         stop() {
             stopped = true;
             cancel();
         },
     };
+}
+
+/* Past this the editor shows the text without waiting for the lookup, which goes on: no draft is written until it answers. */
+export const DRAFT_READ_MS = 2_000;
+
+/*
+ * A file's draft as the store answered (`stored`, null for none), or still being read past `ms`
+ * (`later`), or not read at all (`failed`). Neither of the last two is "none": a draft not yet
+ * read is never written over or removed.
+ */
+export type DraftLookup =
+    | { status: 'answered'; stored: StoredDraft | null }
+    | { status: 'waiting'; later: Promise<StoredDraft | null> }
+    | { status: 'failed' };
+
+export async function lookUpDraft(
+    store: Pick<DraftStore, 'read'>,
+    place: DraftPlace,
+    ms = DRAFT_READ_MS,
+): Promise<DraftLookup> {
+    const reading = store.read(place);
+    // Read on past `ms`: its failure is the waiting caller's, never an unhandled rejection.
+    reading.catch(() => {});
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        return await Promise.race([
+            reading.then(
+                (stored): DraftLookup => ({ status: 'answered', stored }),
+                (): DraftLookup => ({ status: 'failed' }),
+            ),
+            new Promise<DraftLookup>((resolve) => {
+                timer = setTimeout(() => resolve({ status: 'waiting', later: reading }), ms);
+            }),
+        ]);
+    } finally {
+        clearTimeout(timer);
+    }
 }
 
 /* About two seconds after a change, and no more often while typing. */

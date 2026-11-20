@@ -44,17 +44,21 @@ class DraftsTest {
     private fun store(at: Long = now) = DraftStore(folder) { at }
 
     private fun draft(text: String, savedAt: Long = now) =
-        Draft(DraftFrame(base, TextFormat(TextEncoding.UTF8, LineEnding.LF, false), savedAt.toULong()), text, DraftSelection(2u, 4u))
+        Draft(DraftFrame(base, TextFormat(TextEncoding.UTF8, LineEnding.LF, false), savedAt.toULong()), text, DraftSelection(2u, 4u), base)
 
     private fun node(n: Int) = place.copy(nodeId = "5f0c1d2e-3a4b-4c5d-9e6f-%012d".format(n))
 
-    private fun everything() = (folder.listFiles() ?: emptyArray()).joinToString("\n") { it.readText() }
+    private fun everything() = folder.walkTopDown().filter { it.isFile }.joinToString("\n") { it.readText() }
+    private fun records() = folder.walkTopDown().filter { it.isFile && it.name.endsWith(".json") }.toList()
 
     @Test
     fun keepsOnlyCiphertextAndGivesTheTextBackToTheSameAccountAndFile() {
         assertTrue(store().write(draft("draft canary"), place, key))
         assertFalse(everything().contains("canary"))
+        // Nothing that names the file: no node id, no workspace id, no version id.
         assertFalse(everything().contains(place.nodeId))
+        assertFalse(everything().contains(base))
+        assertFalse(records().any { it.path.contains(place.workspaceId) || it.path.contains(place.nodeId) })
         val read = store().read(place, key)!!
         assertEquals("draft canary", read.text)
         assertEquals(DraftSelection(2u, 4u), read.selection)
@@ -74,9 +78,9 @@ class DraftsTest {
     @Test
     fun aChangedRecordIsDeletedNeverOffered() {
         store().write(draft("mine"), place, key)
-        val file = folder.listFiles()!!.single()
-        // Another base version beside the same sealed text: the associated data no longer holds.
-        file.writeText(file.readText().replace(base, other))
+        val file = records().single()
+        // Another time beside the same sealed text: the associated data no longer holds.
+        file.writeText(file.readText().replace(now.toString(), (now - 1).toString()))
         assertNull(store().read(place, key))
         assertEquals(0, store().count)
     }
@@ -111,6 +115,50 @@ class DraftsTest {
     }
 
     @Test
+    fun aFailedWriteEvictsNothingAndLeavesNoPartialBehind() {
+        for (n in 0 until 50) store().write(draft("d$n", now - 50_000 + n), node(n), key)
+        assertFalse(store().write(draft("a".repeat(draftLimits().textBytes.toInt() + 1)), node(60), key))
+        assertEquals(50, store().count)
+        assertEquals("d0", store().read(node(0), key)?.text)
+        // A write a kill left half done: swept, never counted or kept.
+        val partial = File(records().first().parentFile, "left.json.partial").apply { writeText("half") }
+        store().read(node(1), key)
+        assertFalse(partial.exists())
+    }
+
+    @Test
+    fun theCapsGoByTheFilesDatesNeverByReadingThem() {
+        for (n in 0 until 50) store().write(draft("d$n", now - 50_000 + n), node(n), key)
+        // A record that doesn't parse, dated now: not "unreadable, so dropped" (the oldest goes instead).
+        val odd = File(records().first().parentFile, "odd.json").apply { writeText("not a record"); setLastModified(now) }
+        store().write(draft("newest"), node(50), key)
+        assertTrue(odd.exists())
+        assertNull(store().read(node(0), key))
+        assertNull(store().read(node(1), key))
+    }
+
+    @Test
+    fun aFamilysRemovalDeletesItsDraftsUnopenedAndNoOthers() {
+        val family = "2c2c2c2c-0000-4000-8000-000000000002"
+        store().write(draft("family"), place.copy(workspaceId = family), key)
+        store().write(draft("mine"), place, key)
+        store().removeWorkspace(place.userId, family, key)
+        assertNull(store().read(place.copy(workspaceId = family), key))
+        assertEquals("mine", store().read(place, key)?.text)
+    }
+
+    @Test
+    fun aCopyOfARestoredDraftFromAnotherVersionIsReSealedNeverVouchedFor() {
+        val verified = SaveSource.OfFile(com.hushos.core.Integrity.VERIFIED, com.hushos.core.Integrity.VERIFIED)
+        val vouched = SaveRuns.signing(SaveSources.From(listOf(verified)))
+        val restored = SaveRuns.signing(SaveSources.From(listOf(verified.contentUnknown())))
+        assertEquals(com.hushos.core.Integrity.RESEALED, restored?.version)
+        assertTrue(vouched?.version != restored?.version)
+        // The name record still checks: only the content is unknown.
+        assertEquals(vouched?.metadata, restored?.metadata)
+    }
+
+    @Test
     fun aWriteAskedForBeforeASignOutsWipeKeepsNothing() {
         store().write(draft("before"), place, key)
         val asked = store().generation
@@ -132,12 +180,14 @@ class DraftsTest {
     }
 
     @Test
-    fun aTurnWritesOnlyEditableAnsweredTextAndRemovesAtTheBaseline() {
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = false, offering = false, startedFrom = base, atBaseline = false))
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = true, startedFrom = base, atBaseline = false))
-        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, startedFrom = null, atBaseline = false))
-        assertEquals(DraftRules.Step.REMOVE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = true))
-        assertEquals(DraftRules.Step.WRITE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = false))
+    fun aTurnWritesOnlyEditableAnsweredTextAndRemovesOnlyAnOwnedDraftAtTheBaseline() {
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = false, offering = false, startedFrom = base, atBaseline = false, owns = true))
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = true, startedFrom = base, atBaseline = false, owns = true))
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, startedFrom = null, atBaseline = false, owns = true))
+        assertEquals(DraftRules.Step.REMOVE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = true, owns = true))
+        // An editor that wrote nothing (opened and left, closed while loading) removes nothing.
+        assertEquals(DraftRules.Step.NONE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = true, owns = false))
+        assertEquals(DraftRules.Step.WRITE, DraftRules.step(editable = true, offering = false, startedFrom = base, atBaseline = false, owns = false))
     }
 
     @Test

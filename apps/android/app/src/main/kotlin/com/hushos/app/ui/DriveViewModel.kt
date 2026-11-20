@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import com.hushos.app.data.removeWorkspaceDrafts
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
@@ -2565,7 +2566,14 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      */
     override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
         // A family file open in the editor goes with the family's other plaintext.
-        textEdit?.let { open -> if (workspaces.any { it.equals(open.target.node.workspaceId, ignoreCase = true) }) closeEditor() }
+        textEdit?.let { open -> if (workspaces.any { it.equals(open.target.node.workspaceId, ignoreCase = true) }) closeEditor(gone = true) }
+        // Every draft of the family's files on this phone, unopened.
+        vault?.let { held ->
+            val store = com.hushos.app.data.DraftStore.of(context)
+            viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                for (workspace in workspaces) held.removeWorkspaceDrafts(store, workspace)
+            }
+        }
         val subject = state.value.archive ?: return
         // By its workspace when it has one; by its node only when it has none (a kept copy whose record predates its
         // workspace's): another workspace's node that shares its id never closes it.
@@ -2685,9 +2693,9 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         return false
     }
 
-    /* The person closed the editor (Discard, nothing to keep, saved), or the file's family cleared out: its draft goes too. */
-    fun closeEditor() {
-        textEdit?.closed()
+    /* The person closed the editor (Discard, nothing to keep, saved), or (`gone`) the file's family cleared out. */
+    fun closeEditor(gone: Boolean = false) {
+        textEdit?.closed(gone)
         textEdit = null
         _state.update { it.copy(editing = null) }
     }

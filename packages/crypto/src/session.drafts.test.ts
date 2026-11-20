@@ -24,6 +24,7 @@ const draft: Draft = {
     },
     text: 'unsaved canary',
     selection: { from: 3, to: 3 },
+    sourceVersionId: null,
 };
 
 async function restored(root: Uint8Array<ArrayBuffer>) {
