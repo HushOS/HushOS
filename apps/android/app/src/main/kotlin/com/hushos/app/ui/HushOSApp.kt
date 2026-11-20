@@ -42,7 +42,38 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.foundation.layout.fillMaxHeight
-import com.hushos.app.data.PlanDisplay
+import com.hushos.app.data.account.PlanDisplay
+import com.hushos.app.ui.account.AccountDeletedScreen
+import com.hushos.app.ui.account.AccountScreen
+import com.hushos.app.ui.account.ApprovalSheet
+import com.hushos.app.ui.account.AskForNotifications
+import com.hushos.app.ui.account.FreshWordsScreen
+import com.hushos.app.ui.account.PhraseScreen
+import com.hushos.app.ui.account.RecoverScreen
+import com.hushos.app.ui.account.SignInScreen
+import com.hushos.app.ui.account.SignupScreen
+import com.hushos.app.ui.drive.BrowseScreen
+import com.hushos.app.ui.drive.DriveState
+import com.hushos.app.ui.drive.DriveViewModel
+import com.hushos.app.ui.drive.Gate
+import com.hushos.app.ui.drive.HomeScreen
+import com.hushos.app.ui.drive.InfoPane
+import com.hushos.app.ui.drive.InfoSheet
+import com.hushos.app.ui.drive.ItemActions
+import com.hushos.app.ui.drive.ItemSheet
+import com.hushos.app.ui.drive.Notice
+import com.hushos.app.ui.drive.TransferItem
+import com.hushos.app.ui.drive.formatSpace
+import com.hushos.app.ui.families.InvitationSheet
+import com.hushos.app.ui.families.MemberCheckSheet
+import com.hushos.app.ui.families.outOfReach
+import com.hushos.app.ui.sharing.MarkContactStep
+import com.hushos.app.ui.sharing.OwnWordsSheet
+import com.hushos.app.ui.sharing.SharedScreen
+import com.hushos.app.ui.viewers.ArchiveScreen
+import com.hushos.app.ui.viewers.EditorMarks
+import com.hushos.app.ui.viewers.MarkdownViewer
+import com.hushos.app.ui.viewers.TextEditorScreen
 import com.hushos.tokens.AlpineSpace
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.background
@@ -140,7 +171,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         }
     }
     // Words this phone made (a sign-up or a recovery) that the app was stopped before they were checked: shown again first.
-    val waitingFor by com.hushos.app.data.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
+    val waitingFor by com.hushos.app.data.account.RecoveryWords.waitingFor.collectAsStateWithLifecycle()
     val signedInAs = state.user?.id?.takeIf { state.gate == Gate.SIGNED_IN }
     if (signedInAs != null && waitingFor?.equals(signedInAs, ignoreCase = true) == true) { Noticed(model, state) { WordsWaiting(model) }; return }
     when (state.gate) {
@@ -166,7 +197,7 @@ fun HushOSApp(model: DriveViewModel = viewModel()) {
         title = { Text(if (state.removed) "Removed from your account" else "You’ve been signed out") },
         text = {
             Text(
-                if (state.removed) "This ${if (com.hushos.app.data.Auth.isTablet(LocalContext.current)) "tablet" else "phone"} was removed from your account. Sign in again to use it."
+                if (state.removed) "This ${if (com.hushos.app.data.account.Auth.isTablet(LocalContext.current)) "tablet" else "phone"} was removed from your account. Sign in again to use it."
                 else "Your session ended, perhaps because your password was changed on another device. Sign in again to carry on.",
             )
         },
@@ -226,11 +257,11 @@ private fun WordsWaiting(model: DriveViewModel) {
     LaunchedEffect(Unit) {
         unsaved = model.recoveryWordsUnsaved()
         asked = true
-        if (unsaved == false) com.hushos.app.data.RecoveryWords.settled()
+        if (unsaved == false) com.hushos.app.data.account.RecoveryWords.settled()
     }
     if (!asked || unsaved == false) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingIndicator() }; return }
     BackHandler {}
-    PhraseScreen(model, fresh = true, firstKit = true) { com.hushos.app.data.RecoveryWords.settled() }
+    PhraseScreen(model, fresh = true, firstKit = true) { com.hushos.app.data.account.RecoveryWords.settled() }
 }
 
 private enum class Tab(val label: String) { HOME("Home"), FILES("Files"), SHARED("Shared"), ACCOUNT("Account") }
@@ -309,7 +340,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     }
     val infoHost = remember(info) {
         object : InfoHost {
-            override fun open(item: com.hushos.app.data.Opened) {
+            override fun open(item: com.hushos.app.data.vault.Opened) {
                 scope.launch {
                     // One Info at a time: another item replaces it, so Back closes Info rather than stepping through items.
                     if (info.currentDestination?.pane == SupportingPaneScaffoldRole.Supporting) info.navigateBack(BackNavigationBehavior.PopLatest)
@@ -324,7 +355,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
     // server confirmed closes Info; rows dropped to be read again (a rotation, a catalogue update) keep the last one shown.
     val infoItem = infoId?.takeIf { infoTab == tab }?.let { id ->
         // Not state: it only matters to a later pass, and is set after this one is applied.
-        val last = remember(id) { java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.Opened?>(null) }
+        val last = remember(id) { java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.vault.Opened?>(null) }
         // Once shown, the node Info means is that workspace's: a share's node by the same id as one of this
         // account's own is another node, and neither one's removal or return speaks for the other.
         val workspace = last.get()?.node?.workspaceId
@@ -352,7 +383,7 @@ private fun Main(model: DriveViewModel, state: DriveState) {
             InfoLookup.CLOSE -> { LaunchedEffect(id) { closeInfo() }; null }
             InfoLookup.FIND -> {
                 // `find` opens the row's folder, so once found the row is held and the next pass shows it live.
-                val found by androidx.compose.runtime.produceState<com.hushos.app.data.Opened?>(null, id) { value = model.find(id) ?: run { closeInfo(); null } }
+                val found by androidx.compose.runtime.produceState<com.hushos.app.data.vault.Opened?>(null, id) { value = model.find(id) ?: run { closeInfo(); null } }
                 found?.takeIf { model.liveItem(it.id, it.node.workspaceId) != null }
             }
         }
@@ -541,14 +572,14 @@ private fun TabRail(tab: Tab, state: androidx.compose.material3.WideNavigationRa
  * transfer notification) before the system asks; "Not now" isn't asked again.
  */
 @Composable
-fun rememberBackgroundAccess(): com.hushos.app.data.BackgroundAccess {
+fun rememberBackgroundAccess(): com.hushos.app.data.transfers.BackgroundAccess {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var access by remember { mutableStateOf(com.hushos.app.data.Background.read(context)) }
+    var access by remember { mutableStateOf(com.hushos.app.data.transfers.Background.read(context)) }
     // Read again whenever HushOS comes back, from Settings or anywhere else.
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     androidx.compose.runtime.DisposableEffect(lifecycle) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) access = com.hushos.app.data.Background.read(context)
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) access = com.hushos.app.data.transfers.Background.read(context)
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
@@ -571,7 +602,7 @@ private fun BackgroundSheet(active: Boolean) {
     var showing by remember { mutableStateOf(false) }
     LaunchedEffect(active) {
         val notNow = prefs.getLong("background-not-now", 0L).takeIf { it > 0L }
-        if (active && com.hushos.app.data.Background.shouldAsk(com.hushos.app.data.Background.read(context), notNow, System.currentTimeMillis())) showing = true
+        if (active && com.hushos.app.data.transfers.Background.shouldAsk(com.hushos.app.data.transfers.Background.read(context), notNow, System.currentTimeMillis())) showing = true
     }
     // Everything turned on in Settings meanwhile: nothing left to ask.
     LaunchedEffect(access) { if (access.allSet) showing = false }
@@ -582,7 +613,7 @@ private fun BackgroundSheet(active: Boolean) {
 
 /* The prompt's body: what is off, a line and a button each, and Not now. Save to HushOS asks with it too. */
 @Composable
-fun BackgroundAsk(access: com.hushos.app.data.BackgroundAccess, notNow: () -> Unit) {
+fun BackgroundAsk(access: com.hushos.app.data.transfers.BackgroundAccess, notNow: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences("asked", android.content.Context.MODE_PRIVATE) }
     val ask = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) {}
@@ -591,15 +622,15 @@ fun BackgroundAsk(access: com.hushos.app.data.BackgroundAccess, notNow: () -> Un
         Text("Let HushOS finish transfers in the background", style = MaterialTheme.typography.titleLarge)
         if (!access.notifications) BackgroundRow("A notification shows how far a transfer has got, so you can leave the app.", "Allow notifications") {
             // The system prompt once; after that, only Settings can turn it on.
-            if (com.hushos.app.data.Background.asksForNotifications && !prefs.getBoolean("notifications", false)) {
+            if (com.hushos.app.data.transfers.Background.asksForNotifications && !prefs.getBoolean("notifications", false)) {
                 prefs.edit().putBoolean("notifications", true).apply(); ask.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-            } else open(com.hushos.app.data.Background.notificationSettings(context))
+            } else open(com.hushos.app.data.transfers.Background.notificationSettings(context))
         }
         if (!access.battery) BackgroundRow("Battery optimisation can pause uploads when you leave the app. In the list, choose HushOS and turn it off.", "Open settings") {
-            open(com.hushos.app.data.Background.batterySettings())
+            open(com.hushos.app.data.transfers.Background.batterySettings())
         }
         if (!access.data) BackgroundRow("Data Saver is stopping HushOS from using data in the background.", "Open settings") {
-            open(com.hushos.app.data.Background.dataSettings(context))
+            open(com.hushos.app.data.transfers.Background.dataSettings(context))
         }
         TextButton(onClick = notNow, modifier = Modifier.align(Alignment.End)) { Text("Not now") }
     }
@@ -666,7 +697,7 @@ private fun statusLine(item: TransferItem, offline: Boolean): String = when {
     item.done -> when (direction(item)) { "keep" -> "On this phone"; "down" -> "Downloaded"; else -> "Uploaded" }
     // A family upload waiting out a key change in its folder (FamilyUploads), as iOS and the web say it.
     // (queued again, or paused in its run between looks with nothing sent yet).
-    item.keyChange && !offline && (item.waiting || item.fraction <= 0f) -> com.hushos.app.data.FamilyUploads.FINISHING
+    item.keyChange && !offline && (item.waiting || item.fraction <= 0f) -> com.hushos.app.data.families.FamilyUploads.FINISHING
     item.waiting -> if (offline) "Waiting for a connection" else "Waiting"
     // A kept folder: how many of its files are done, the bar measuring bytes.
     item.files != null -> "${item.files.first} of ${item.files.second} files" + if (item.fraction > 0f) " · ${(item.fraction * 100).toInt()}%" else ""

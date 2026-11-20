@@ -8,9 +8,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import com.hushos.app.ui.DriveViewModel
+import com.hushos.app.ui.drive.DriveViewModel
 import com.hushos.app.ui.HushOSTheme
-import com.hushos.app.ui.PickerSignIn
+import com.hushos.app.ui.account.PickerSignIn
 
 /*
  * Sign-in for a file picker. The provider's sign-in affordance (AuthenticationRequiredException) starts this, for a

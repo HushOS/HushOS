@@ -1,7 +1,7 @@
 package com.hushos.app
 
 import android.app.Application
-import com.hushos.app.data.DecryptedCopies
+import com.hushos.app.data.drive.DecryptedCopies
 import com.hushos.app.data.TransferNotices
 
 class HushOSApplication : Application() {
@@ -13,7 +13,7 @@ class HushOSApplication : Application() {
         // FCM's service can run in this process.
         com.hushos.app.data.PushTokens.app(this)
         // A recovery the app was stopped in the middle of: a picker's sign-in waits until its new words are confirmed.
-        com.hushos.app.data.RecoveryWords.load(this)
+        com.hushos.app.data.account.RecoveryWords.load(this)
         // Every start of the process (the app, a queued job, the Files app's provider): plaintext copies older than a day go.
         val cache = cacheDir
         Thread({
@@ -28,7 +28,7 @@ class HushOSApplication : Application() {
             // over a day old is an open nobody holds any more, and goes), and a kept save whose job was never queued gets one.
             runCatching { com.hushos.app.data.TransferQueue.startupSweep(this) }
             // Relay handles a sign-out or a replaced token left to delete, until the relay confirms.
-            runCatching { com.hushos.app.data.PushNotifications.registrar(this).drain() }
+            runCatching { com.hushos.app.data.platform.PushNotifications.registrar(this).drain() }
         }, "HushOSSweep").start()
     }
 }

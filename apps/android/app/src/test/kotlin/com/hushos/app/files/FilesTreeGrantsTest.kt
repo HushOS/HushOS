@@ -2,11 +2,11 @@ package com.hushos.app.files
 
 import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
-import com.hushos.app.data.DriveApi
+import com.hushos.app.data.drive.DriveApi
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
-import com.hushos.app.data.Shared
-import com.hushos.app.data.Vault
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.vault.Vault
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -34,7 +34,7 @@ class FilesTreeGrantsTest {
     @Before
     fun signIn() {
         // The mirror is one per process and Robolectric keeps statics between tests: each test starts from an empty one.
-        com.hushos.app.data.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        com.hushos.app.data.drive.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         app.deleteDatabase("mirror.db")
         FamilyFixture.signIn(server, "files-tree-grants-test")
     }
@@ -112,7 +112,7 @@ class FilesTreeGrantsTest {
         provider.beforeCacheDownload = {
             provider.beforeCacheDownload = null
             Shared.clearSession(app)
-            com.hushos.app.data.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+            com.hushos.app.data.account.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
             Shared.writeSession(app, Shared.Session(server.origin, "another-token", java.util.UUID.randomUUID().toString(), "sam@example.org"))
         }
         assertThrows(Exception::class.java) { provider.openDocument(notes, "r", null).close() }

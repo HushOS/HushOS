@@ -1,8 +1,8 @@
 package com.hushos.app.foreign
 
-import com.hushos.app.data.ArchiveSessions
-import com.hushos.app.data.FamilyFailure
-import com.hushos.app.data.StoreSource
+import com.hushos.app.data.transfers.ArchiveSessions
+import com.hushos.app.data.families.FamilyFailure
+import com.hushos.app.data.transfers.StoreSource
 import com.hushos.core.ArchiveException
 import com.hushos.core.Content
 import com.hushos.core.EntrySink
@@ -171,13 +171,13 @@ class ArchiveSessionsTest {
         server.start()
         try {
             val (content, _) = sealed(File(fixtures, "basic.zip").readBytes())
-            val session = com.hushos.app.data.Shared.Session("http://127.0.0.1:${server.address.port}", "token", "user")
-            val current = com.hushos.app.data.CallControl()
-            val source = com.hushos.app.data.archiveSourceOf(com.hushos.app.data.DriveApi(session), "version", "workspace", current)
+            val session = com.hushos.app.data.drive.Shared.Session("http://127.0.0.1:${server.address.port}", "token", "user")
+            val current = com.hushos.app.data.transfers.CallControl()
+            val source = com.hushos.app.data.transfers.archiveSourceOf(com.hushos.app.data.drive.DriveApi(session), "version", "workspace", current)
             try {
                 ArchiveSessions().open(source, content, current, signedIn = session)
                 fail("opened without the store")
-            } catch (error: com.hushos.app.data.ArchiveSessionRefused) {
+            } catch (error: com.hushos.app.data.transfers.ArchiveSessionRefused) {
                 // Not the core's failure in words: the 401, with the session it was read under, for the app's session check.
                 assertEquals(session, error.session)
             }
@@ -190,7 +190,7 @@ class ArchiveSessionsTest {
             ArchiveSessions().open(StoreSource { _, _ -> throw java.io.IOException("Down") }, content)
             fail("opened without the store")
         } catch (error: Exception) {
-            assertFalse(error is com.hushos.app.data.ArchiveSessionRefused)
+            assertFalse(error is com.hushos.app.data.transfers.ArchiveSessionRefused)
         }
     }
 

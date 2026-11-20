@@ -14,18 +14,18 @@ import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
 import android.provider.DocumentsProvider
 import android.webkit.MimeTypeMap
-import com.hushos.app.data.FilesRoots
-import com.hushos.app.data.NotAuthenticated
-import com.hushos.app.data.Opened
-import com.hushos.app.data.Shared
-import com.hushos.app.data.Vault
-import com.hushos.app.data.WriteBacks
-import com.hushos.app.data.sync
-import com.hushos.app.data.buildCatalogue
-import com.hushos.app.data.Offline
-import com.hushos.app.data.SharedLoad
-import com.hushos.app.data.TrustState
-import com.hushos.app.data.providerSummary
+import com.hushos.app.data.drive.FilesRoots
+import com.hushos.app.data.drive.NotAuthenticated
+import com.hushos.app.data.vault.Opened
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.vault.Vault
+import com.hushos.app.data.transfers.WriteBacks
+import com.hushos.app.data.drive.sync
+import com.hushos.app.data.drive.buildCatalogue
+import com.hushos.app.data.drive.Offline
+import com.hushos.app.data.trust.SharedLoad
+import com.hushos.app.data.trust.TrustState
+import com.hushos.app.data.trust.providerSummary
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -78,7 +78,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // A load begun for the vault dropped here neither lands nor is joined by the next one's requests.
             trustLoad.reset(null) { trust = TrustState.Loading }
             session ?: throw authenticationRequired()
-            val created = Vault(ctx, com.hushos.app.data.DriveApi(session))
+            val created = Vault(ctx, com.hushos.app.data.drive.DriveApi(session))
             // The tree on the phone first: listings answer from it, and without a network they still answer.
             runCatching { created.buildCatalogue() }
             trustLoad.reset(created)
@@ -127,7 +127,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     /* Whom this account trusts, for the rows' Unverified label, and when it was last asked. */
     @Volatile private var trust: TrustState = TrustState.Loading
     @Volatile private var trustAt = 0L
-    private val trustLoad = SharedLoad<Vault, Result<com.hushos.app.data.Trust>>()
+    private val trustLoad = SharedLoad<Vault, Result<com.hushos.app.data.trust.Trust>>()
 
     /*
      * The trust set, loaded at most every few minutes (a failed load is asked again sooner), as the app's own lists
@@ -210,7 +210,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     /* The families of the session's vault, made with it. */
     private fun familiesOf(vault: Vault): ProviderFamilies =
-        families?.takeIf { it.vault === vault } ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.OPEN_AGAIN)
+        families?.takeIf { it.vault === vault } ?: throw FileNotFoundException(com.hushos.app.data.families.FamilyWords.OPEN_AGAIN)
 
     private fun familyCursor(cursor: MatrixCursor, row: FamilyRow) {
         cursor.newRow()
@@ -446,7 +446,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         try {
             beforeCacheDownload?.invoke()
             vault.download(id, incoming)
-            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+            com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) {
                 file.parentFile?.mkdirs()
                 check(incoming.renameTo(file) || file.isFile) { "The file couldn't be kept." }
             } ?: throw authenticationRequired()
@@ -471,7 +471,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             // server's older version, which an app that reads then truncates would write the save away with.
             val pending = File(context!!.cacheDir, "files/$id/pending-${java.util.UUID.randomUUID()}")
             // Copied only while the account the read is for is still here, as every copy the cache keeps.
-            val copied = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.copyNewestTo(context!!, slot, pending) } ?: throw authenticationRequired()
+            val copied = com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) { WriteBacks.copyNewestTo(context!!, slot, pending) } ?: throw authenticationRequired()
             if (copied) return@guarded ParcelFileDescriptor.open(pending, ParcelFileDescriptor.MODE_READ_ONLY).also { pending.delete() }
             // A save of it landed from its job's own vault since: this vault may still hold the version before. The version is
             // checked with the server first; without an answer, the landed bytes are read (kept as that version's read copy),
@@ -482,7 +482,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
             val item = if (landing == null) vault.resolve(id) else {
                 runCatching { currentVersion(vault, id) }.getOrNull()?.also { WriteBacks.caughtUp(context!!, slot, landing.id, vault.ledgerGeneration) } ?: run {
                     val landed = landing.version?.let { cacheFile(id, it) }?.takeIf { it.isFile }
-                        ?: throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+                        ?: throw FileNotFoundException(com.hushos.app.data.families.GroupsApiError.NO_ANSWER)
                     return@guarded ParcelFileDescriptor.open(landed, ParcelFileDescriptor.MODE_READ_ONLY)
                 }
             }
@@ -493,7 +493,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val edit = personalEdit(vault, id, mode)
         // Opened only while the account it was made for is still here (under the wipe's lock): a mode that creates would
         // otherwise make the file again after a sign-out.
-        com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+        com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) {
             ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onEditClosed(error, vault, edit, item) }
         } ?: run { WriteBacks.discardEdit(edit); throw authenticationRequired() }
     }
@@ -504,7 +504,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * from here: the job sends the newest save, and the provider never uploads past it. A save the account's sign-out
      * overtook keeps nothing.
      */
-    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
+    internal fun onEditClosed(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.vault.Opened) {
         // Nothing escapes the close thread, whatever happens: a closed edit left on disk is the next reconcile's to keep.
         try {
             closeEdit(error, vault, edit, opened)
@@ -513,7 +513,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         }
     }
 
-    private fun closeEdit(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.Opened) {
+    private fun closeEdit(error: java.io.IOException?, vault: Vault, edit: File, opened: com.hushos.app.data.vault.Opened) {
         // The other app's write failed: what it left was never saved.
         if (error != null) { WriteBacks.discardEdit(edit); return }
         val ctx = context!!
@@ -556,7 +556,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         // and the open fails. The target names the account, so no later start takes it for another account's.
         val opened = vault.resolve(id)
         val ctx = context!!
-        fun <T> forItsAccount(body: () -> T): T = com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration, body) ?: throw authenticationRequired()
+        fun <T> forItsAccount(body: () -> T): T = com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration, body) ?: throw authenticationRequired()
         val edit = forItsAccount {
             WriteBacks.personalEdit(ctx, WriteBacks.Target(opened.node.workspaceId, opened.id, opened.name, opened.metadata.mime,
                 opened.node.parentId ?: vault.rootId, root = vault.rootId), vault.api.session.userId)
@@ -597,16 +597,16 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val opened = families.node(doc)
         // On the saves' own thread (WriteBacks.closes), in close order, never the main one.
         // Opened only while the account it was made for is still here: a mode that creates would make it again after a sign-out.
-        return com.hushos.app.data.Reservations.whileAccount(families.vault.ledgerGeneration) {
+        return com.hushos.app.data.transfers.Reservations.whileAccount(families.vault.ledgerGeneration) {
             ParcelFileDescriptor.open(edit, ParcelFileDescriptor.parseMode(mode), WriteBacks.closes) { error -> onFamilyEditClosed(error, families, doc, edit, opened, epoch) }
-        } ?: run { WriteBacks.discardEdit(edit); throw FileNotFoundException(com.hushos.app.data.FamilyWords.OPEN_AGAIN) }
+        } ?: run { WriteBacks.discardEdit(edit); throw FileNotFoundException(com.hushos.app.data.families.FamilyWords.OPEN_AGAIN) }
     }
 
     /*
      * The other app closed a family file it wrote: it becomes the file's pending save, here in the close callback so saves
      * keep the order they were closed in (ProviderFamilies.save). Nothing is sent from here; the slot's job sends it.
      */
-    internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.Opened, epoch: Long) {
+    internal fun onFamilyEditClosed(error: java.io.IOException?, families: ProviderFamilies, doc: FamilyDoc.Node, edit: File, opened: com.hushos.app.data.vault.Opened, epoch: Long) {
         // Nothing escapes the close thread, whatever happens. The other app's write failed: what it left was never saved.
         // Otherwise the save decides (ProviderFamilies.save): a closed edit goes only once kept or let go of, never here.
         try {
@@ -622,11 +622,11 @@ class HushOSDocumentsProvider : DocumentsProvider() {
      * folder listed again. A version that landed elsewhere (another device, a transfer job's vault) replaces the row held
      * here. No answer is refused: an edit built on a version that can't be checked could replace a newer one.
      */
-    private fun currentVersion(vault: Vault, id: String): com.hushos.app.data.Opened {
+    private fun currentVersion(vault: Vault, id: String): com.hushos.app.data.vault.Opened {
         val held = vault.resolve(id)
         val ws = held.node.workspaceId
         if (ws.equals(vault.ownWorkspaceId, ignoreCase = true)) {
-            if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.GroupsApiError.NO_ANSWER)
+            if (vault.sync() == null) throw FileNotFoundException(com.hushos.app.data.families.GroupsApiError.NO_ANSWER)
         } else held.node.parentId?.let { vault.listChildren(it, ws) }
         return vault.resolve(id)
     }
@@ -647,7 +647,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
 
     override fun createDocument(parentDocumentId: String, mimeType: String, given: String): String = guarded {
         // Another app's name for what it saves: made well formed, so a lone surrogate never reaches the core.
-        val displayName = com.hushos.app.data.wellFormed(given)
+        val displayName = com.hushos.app.data.drive.wellFormed(given)
         val vault = requireVault()
         FamilyDoc.of(parentDocumentId)?.let { doc ->
             val node = doc as? FamilyDoc.Node ?: throw FileNotFoundException("Choose a family folder.")
@@ -667,7 +667,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun renameDocument(documentId: String, displayName: String): String? = guarded {
         val vault = requireVault()
         FamilyDoc.of(documentId)?.let { doc ->
-            familiesOf(vault).rename(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE), com.hushos.app.data.wellFormed(displayName))
+            familiesOf(vault).rename(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.families.FamilyWords.UNAVAILABLE), com.hushos.app.data.drive.wellFormed(displayName))
             return@guarded null
         }
         vault.rename(nodeId(documentId, vault), displayName)
@@ -680,7 +680,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
         val target = FamilyDoc.of(targetParentDocumentId)
         if (source != null || target != null) {
             // Within one family folder only: never into or out of the drive, another folder or another family.
-            if (source !is FamilyDoc.Node || target !is FamilyDoc.Node) throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE)
+            if (source !is FamilyDoc.Node || target !is FamilyDoc.Node) throw FileNotFoundException(com.hushos.app.data.families.FamilyWords.UNAVAILABLE)
             familiesOf(vault).move(source, target)
             return@guarded sourceDocumentId
         }
@@ -692,7 +692,7 @@ class HushOSDocumentsProvider : DocumentsProvider() {
     override fun deleteDocument(documentId: String) = guarded {
         val vault = requireVault()
         FamilyDoc.of(documentId)?.let { doc ->
-            familiesOf(vault).delete(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.FamilyWords.UNAVAILABLE))
+            familiesOf(vault).delete(doc as? FamilyDoc.Node ?: throw FileNotFoundException(com.hushos.app.data.families.FamilyWords.UNAVAILABLE))
             return@guarded
         }
         vault.trash(nodeId(documentId, vault))

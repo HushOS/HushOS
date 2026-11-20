@@ -66,7 +66,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.em
-import com.hushos.app.data.SessionUser
+import com.hushos.app.data.account.SessionUser
+import com.hushos.app.ui.drive.DriveViewModel
+import com.hushos.app.ui.drive.tagColour
 import com.hushos.tokens.AlpineRadius
 import com.hushos.tokens.AlpineSpace
 
@@ -405,7 +407,7 @@ fun AccessText(
  * `onGone`, so the screen goes back rather than showing nothing.
  */
 @Composable
-fun RestoredFolder(model: DriveViewModel, id: String, onGone: () -> Unit, content: @Composable (com.hushos.app.data.Opened) -> Unit) {
+fun RestoredFolder(model: DriveViewModel, id: String, onGone: () -> Unit, content: @Composable (com.hushos.app.data.vault.Opened) -> Unit) {
     val known = model.item(id)
     val found by androidx.compose.runtime.produceState(known, id) { if (value == null) value = model.find(id) ?: run { onGone(); null } }
     val folder = known ?: found
@@ -426,7 +428,7 @@ fun OpeningScreen() {
  * again from the catalogue after the system restarts the app. Gone by then: nothing is open.
  */
 @Composable
-fun rememberSavedItem(model: DriveViewModel): androidx.compose.runtime.MutableState<com.hushos.app.data.Opened?> {
+fun rememberSavedItem(model: DriveViewModel): androidx.compose.runtime.MutableState<com.hushos.app.data.vault.Opened?> {
     var id by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf<String?>(null) }
     val item = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(id?.let { model.item(it) }) }
     androidx.compose.runtime.LaunchedEffect(Unit) {

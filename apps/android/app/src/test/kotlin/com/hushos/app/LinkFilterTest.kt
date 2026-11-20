@@ -4,9 +4,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.PatternMatcher
-import com.hushos.app.data.AppLink
-import com.hushos.app.data.AppLinkResult
-import com.hushos.app.data.AppLinks
+import com.hushos.app.data.platform.AppLink
+import com.hushos.app.data.platform.AppLinkResult
+import com.hushos.app.data.platform.AppLinks
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals

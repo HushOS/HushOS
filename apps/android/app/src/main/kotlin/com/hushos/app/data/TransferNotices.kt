@@ -13,6 +13,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.hushos.app.data.transfers.FailedTransfer
+import com.hushos.app.data.transfers.FailedTransfers
 import java.io.File
 import java.net.URLDecoder
 import java.net.URLEncoder

@@ -6,23 +6,23 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsContract.Root
-import com.hushos.app.data.DriveApi
+import com.hushos.app.data.drive.DriveApi
 import com.hushos.app.data.FakeDrive
-import com.hushos.app.data.FamilyCopies
+import com.hushos.app.data.drive.FamilyCopies
 import com.hushos.app.data.FamilyFixture
-import com.hushos.app.data.FamilyFailure
-import com.hushos.app.data.FamilyState
-import com.hushos.app.data.FamilySync
-import com.hushos.app.data.GuardUnsaved
-import com.hushos.app.data.SessionEnded
-import com.hushos.app.data.Shared
-import com.hushos.app.data.Vault
-import com.hushos.app.data.familyGuardKept
-import com.hushos.app.data.forgetFamilyCopies
-import com.hushos.app.data.FamilyUploads
-import com.hushos.app.data.Reservations
+import com.hushos.app.data.families.FamilyFailure
+import com.hushos.app.data.families.FamilyState
+import com.hushos.app.data.families.FamilySync
+import com.hushos.app.data.trust.GuardUnsaved
+import com.hushos.app.data.vault.SessionEnded
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.vault.Vault
+import com.hushos.app.data.vault.familyGuardKept
+import com.hushos.app.data.vault.forgetFamilyCopies
+import com.hushos.app.data.families.FamilyUploads
+import com.hushos.app.data.transfers.Reservations
 import com.hushos.app.data.TransferQueue
-import com.hushos.app.data.WriteBacks
+import com.hushos.app.data.transfers.WriteBacks
 import androidx.work.Configuration
 import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
@@ -32,7 +32,7 @@ import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
 import java.util.UUID
-import com.hushos.app.data.oweFamilyGuard
+import com.hushos.app.data.vault.oweFamilyGuard
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -82,7 +82,7 @@ class ProviderFamiliesTest {
         WriteBacks.afterNewestChosen = null
         WriteBacks.afterStaged = null
         TransferQueue.beforeSlotEnqueued = null
-        com.hushos.app.data.FailedTransfers.beforeWrite = null
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = null
         Reservations.forgetHeld()
         server.close()
         assertEquals("routes the fake does not serve", emptyList<String>(), server.unknown)
@@ -118,7 +118,7 @@ class ProviderFamiliesTest {
      * file as the app opened it being the row this vault holds. The file's slot.
      */
     private fun writeBack(families: ProviderFamilies, doc: FamilyDoc.Node, edit: File,
-                          opened: com.hushos.app.data.Opened = families.vault.item(doc.workspaceId, doc.nodeId)!!, epoch: Long = families.epochOf(doc)): String {
+                          opened: com.hushos.app.data.vault.Opened = families.vault.item(doc.workspaceId, doc.nodeId)!!, epoch: Long = families.epochOf(doc)): String {
         assertTrue("the save wasn't kept", families.save(doc, edit, opened, epoch))
         return WriteBacks.slotOf(doc.workspaceId, doc.nodeId)
     }
@@ -296,8 +296,8 @@ class ProviderFamiliesTest {
         assertEquals(emptyList<FamilyRoot>(), families.load())
         assertFalse("a failed save's plaintext outlived the removal", WriteBacks.dir(app, slot).exists())
         assertFalse("a save without a job outlived the removal", WriteBacks.dir(app, stray).exists())
-        val rows = com.hushos.app.data.FailedTransfers.of(app).all()
-        assertTrue(rows.isNotEmpty() && rows.all { it.reason == com.hushos.app.data.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
+        val rows = com.hushos.app.data.transfers.FailedTransfers.of(app).all()
+        assertTrue(rows.isNotEmpty() && rows.all { it.reason == com.hushos.app.data.families.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
     }
 
     /*
@@ -857,7 +857,7 @@ class ProviderFamiliesTest {
         }
         assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
         server.extraRoutes = inner
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         assertEquals(slot, row.slot)
         writeBack(families, doc, families.editFor(doc, "w").apply { writeText("last save") })
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
@@ -1162,7 +1162,7 @@ class ProviderFamiliesTest {
         assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
         server.extraRoutes = inner
         assertFalse("a removed family's save outlived it", WriteBacks.dir(app, slot).exists())
-        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().all { it.reason == com.hushos.app.data.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
+        assertTrue(com.hushos.app.data.transfers.FailedTransfers.of(app).all().all { it.reason == com.hushos.app.data.families.FamilyWords.NOT_IN_FAMILY && it.sourceGone() })
     }
 
     /*
@@ -1189,7 +1189,7 @@ class ProviderFamiliesTest {
         now += 6 * 60_000L
         assertEquals(emptyList<FamilyRoot>(), families.load())
         assertTrue("the slot's reservation was left", Reservations.all(app).none { WriteBacks.ledgerOf(slot, it.job) })
-        assertTrue("a landed save reads as not sent", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertTrue("a landed save reads as not sent", com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         assertFalse(WriteBacks.dir(app, slot).exists())
     }
 
@@ -1264,7 +1264,7 @@ class ProviderFamiliesTest {
         val began = Reservations.generation
         TransferQueue.dropSlot(app, slot, null, { body -> Reservations.whileAccount(began) { body() } }) { _, _ ->
             // The abort blocks across a sign-out; the next account saves the same file.
-            com.hushos.app.data.AccountStore.of(app).wipe()
+            com.hushos.app.data.account.AccountStore.of(app).wipe()
             WriteBacks.save(app, Reservations.generation, target, File(app.cacheDir, "next").apply { writeText("next account's save") })
             Reservations.Abort.PENDING
         }
@@ -1505,7 +1505,7 @@ class ProviderFamiliesTest {
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save the disk refused".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         assertNull(WriteBacks.pending(app, slot))
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         assertEquals("save the disk refused", File(row.file!!).readText())
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
@@ -1525,15 +1525,15 @@ class ProviderFamiliesTest {
         WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save the disk refused".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         Vault(app, DriveApi(Shared.session(app)!!)).forgetFamilyCopies(listOf(family.workspaceId))
         // The cleanup deleted the edit; as if this one had outlived it, so only the revocation count stands in the way.
         File(row.file!!).apply { parentFile!!.mkdirs(); writeText("save the disk refused") }
         assertFalse(TransferQueue.retry(app, row))
         assertNull("a revoked family's edit reached the queue", WriteBacks.pending(app, slot))
         assertFalse(File(row.file!!).exists())
-        val after = com.hushos.app.data.FailedTransfers.of(app).all().single()
-        assertEquals(com.hushos.app.data.FamilyWords.NOT_IN_FAMILY, after.reason)
+        val after = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
+        assertEquals(com.hushos.app.data.families.FamilyWords.NOT_IN_FAMILY, after.reason)
         assertTrue("the row still offers a Retry", after.sourceGone())
     }
 
@@ -1553,7 +1553,7 @@ class ProviderFamiliesTest {
         WriteBacks.beforeSlotId = { WriteBacks.beforeSlotId = null; throw java.io.IOException("No space left on device") }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("save after a revocation".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         assertEquals("save after a revocation", serverText())
@@ -1573,7 +1573,7 @@ class ProviderFamiliesTest {
         WriteBacks.fault = { at -> if (at == "json") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("kept for a retry".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        assertEquals(1, com.hushos.app.data.FailedTransfers.of(app).all().size)
+        assertEquals(1, com.hushos.app.data.transfers.FailedTransfers.of(app).all().size)
         assertEquals("kept for a retry", read(provider, file))
         assertEquals("kept for a retry", families.editFor(doc, "wa").readText())
     }
@@ -1588,16 +1588,16 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
-        com.hushos.app.data.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("family save on a full disk".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         WriteBacks.fault = null
-        com.hushos.app.data.FailedTransfers.beforeWrite = null
-        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = null
+        assertTrue(com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         val closed = FamilyCopies.edits(app.filesDir, family.workspaceId)!!.walkTopDown().single { it.isFile && it.name.endsWith(".closed") }
         assertEquals("family save on a full disk", closed.readText())
         TransferQueue.reconcileEdits(app, startup = true)
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
         assertEquals("family save on a full disk", serverText())
@@ -1619,13 +1619,13 @@ class ProviderFamiliesTest {
         WriteBacks.fault = { at -> if (at == "copy") { WriteBacks.fault = null; throw java.io.IOException("No space left on device") } }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("kept over a day".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single()
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single()
         val abandoned = families.editFor(doc, "w").apply { writeText("never closed") }
         val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
         File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
-        com.hushos.app.data.DecryptedCopies.sweep(app.cacheDir)
+        com.hushos.app.data.drive.DecryptedCopies.sweep(app.cacheDir)
         TransferQueue.reconcileEdits(app, startup = true)
-        val left = com.hushos.app.data.FailedTransfers.of(app).all().single { it.file == abandoned.path }
+        val left = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single { it.file == abandoned.path }
         assertEquals("kept over a day", File(row.file!!).readText())
         assertEquals("kept over a day", read(provider, file))
         assertTrue(TransferQueue.retry(app, row))
@@ -1647,12 +1647,12 @@ class ProviderFamiliesTest {
         val families = familiesOf(provider)
         val doc = FamilyDoc.of(file) as FamilyDoc.Node
         WriteBacks.fault = { at -> if (at == "copy") throw java.io.IOException("No space left on device") }
-        com.hushos.app.data.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("only in its closed edit".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         WriteBacks.fault = null
-        com.hushos.app.data.FailedTransfers.beforeWrite = null
-        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = null
+        assertTrue(com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         assertEquals("only in its closed edit", read(provider, file))
         assertEquals("only in its closed edit", families.editFor(doc, "rw").readText())
     }
@@ -1670,13 +1670,13 @@ class ProviderFamiliesTest {
         TransferQueue.beforeSlotEnqueued = {
             TransferQueue.beforeSlotEnqueued = null
             Shared.clearSession(app)
-            com.hushos.app.data.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
+            com.hushos.app.data.account.AccountStore(app.filesDir, app.cacheDir, app.noBackupFilesDir).wipe()
             Shared.writeSession(app, Shared.Session(server.origin, "another-token", UUID.randomUUID().toString(), "sam@example.org"))
         }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("saved before the sign-out".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         assertEquals("a job was queued for the account signed in now", emptyList<androidx.work.WorkInfo>(), jobs(slot))
-        assertEquals("the old account's file name was published", emptyMap<String, String>(), com.hushos.app.data.JobNames.of(app).all())
+        assertEquals("the old account's file name was published", emptyMap<String, String>(), com.hushos.app.data.transfers.JobNames.of(app).all())
     }
 
     /*
@@ -1693,7 +1693,7 @@ class ProviderFamiliesTest {
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("never kept".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         WriteBacks.fault = null
-        assertEquals(1, com.hushos.app.data.FailedTransfers.of(app).all().count { it.slot == slot && it.stage != null })
+        assertEquals(1, com.hushos.app.data.transfers.FailedTransfers.of(app).all().count { it.slot == slot && it.stage != null })
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("newest".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         val pending = WriteBacks.pending(app, slot)!!
@@ -1732,19 +1732,19 @@ class ProviderFamiliesTest {
         val provider = provider()
         rows(provider.queryChildDocuments(folder, null, null as String?), Document.COLUMN_DOCUMENT_ID)
         WriteBacks.fault = { at -> if (at == "close" || at == "copy") throw java.io.IOException("No space left on device") }
-        com.hushos.app.data.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = { throw java.io.IOException("No space left on device") }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("family save on a full disk".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
         WriteBacks.fault = null
-        com.hushos.app.data.FailedTransfers.beforeWrite = null
-        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        com.hushos.app.data.transfers.FailedTransfers.beforeWrite = null
+        assertTrue(com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         val edit = File(app.filesDir, WriteBacks.EDITS).walkTopDown().single { it.isFile && !it.name.contains('.') }
         assertEquals("family save on a full disk", edit.readText())
         val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
         File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
         WriteBacks.forgetReservedHere()
         TransferQueue.reconcileEdits(app, startup = true)
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single { it.slot == slot }
         assertEquals(edit.path, row.file)
         assertTrue(TransferQueue.retry(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))
@@ -1828,7 +1828,7 @@ class ProviderFamiliesTest {
         revoking!!.join(10_000)
         assertNull("a save revoked during its copy was published", WriteBacks.pending(app, slot))
         assertEquals("a revoked save's copy was left", emptyList<String>(), WriteBacks.dir(app, slot).listFiles().orEmpty().map { it.name }.filter { it.contains(".bin") })
-        assertTrue(com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertTrue(com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
     }
 
     /*
@@ -1872,7 +1872,7 @@ class ProviderFamiliesTest {
         WriteBacks.fault = null
         val dir = WriteBacks.dir(app, slot)
         assertEquals("a staged copy outlived its failed write", emptyList<String>(), dir.listFiles().orEmpty().map { it.name }.filter { ".bin" in it || it.endsWith(".staged") })
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single { it.slot == slot }
         assertEquals("a family save the disk refused", File(row.file!!).readText())
         // (The failed staging took its now empty slot folder with it: a dead process's copy is planted in one again.)
         val left = File(dir.apply { mkdirs() }, "n9-left.bin.staged").apply { writeText("plaintext a dead process left"); setLastModified(System.currentTimeMillis() - 60 * 60 * 1000L) }
@@ -1903,8 +1903,8 @@ class ProviderFamiliesTest {
         family.listed = false
         now += 6 * 60_000L
         assertEquals(emptyList<FamilyRoot>(), families.load())
-        val rows = com.hushos.app.data.FailedTransfers.of(app).all()
-        assertEquals("the newer save was said to have uploaded", listOf(com.hushos.app.data.FamilyWords.NOT_IN_FAMILY), rows.map { it.reason })
+        val rows = com.hushos.app.data.transfers.FailedTransfers.of(app).all()
+        assertEquals("the newer save was said to have uploaded", listOf(com.hushos.app.data.families.FamilyWords.NOT_IN_FAMILY), rows.map { it.reason })
         assertFalse(WriteBacks.dir(app, slot).exists())
     }
 
@@ -1945,7 +1945,7 @@ class ProviderFamiliesTest {
         }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("newer save".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        assertTrue("the newer save was left for a Retry", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertTrue("the newer save was left for a Retry", com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         assertEquals("newer save", WriteBacks.contentOf(app, slot).readText())
     }
 
@@ -1965,7 +1965,7 @@ class ProviderFamiliesTest {
         }
         ParcelFileDescriptor.AutoCloseOutputStream(provider.openDocument(file, "w", null)).use { it.write("staged during the sweep".toByteArray()) }
         org.robolectric.Shadows.shadowOf(WriteBacks.closes.looper).idle()
-        assertTrue("the staged save was left for a Retry", com.hushos.app.data.FailedTransfers.of(app).all().isEmpty())
+        assertTrue("the staged save was left for a Retry", com.hushos.app.data.transfers.FailedTransfers.of(app).all().isEmpty())
         assertEquals("staged during the sweep", WriteBacks.contentOf(app, slot).readText())
     }
 
@@ -2019,7 +2019,7 @@ class ProviderFamiliesTest {
         assertEquals(ListenableWorker.Result.failure()::class, runJob(slot)::class)
         server.extraRoutes = inner
         WriteBacks.fault = null
-        val row = com.hushos.app.data.FailedTransfers.of(app).all().single { it.slot == slot }
+        val row = com.hushos.app.data.transfers.FailedTransfers.of(app).all().single { it.slot == slot }
         assertFalse("a failed save its slot still holds was offered no Retry", row.sourceGone())
         assertEquals(TransferQueue.Retry.SENT, TransferQueue.retryOutcome(app, row))
         assertEquals(ListenableWorker.Result.success(), runJob(slot))

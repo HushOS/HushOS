@@ -3,23 +3,23 @@ package com.hushos.app.files
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.webkit.MimeTypeMap
-import com.hushos.app.data.AreaWrite
-import com.hushos.app.data.FamilyCopies
-import com.hushos.app.data.FamilyRecords
-import com.hushos.app.data.FamilyRootsSignal
-import com.hushos.app.data.FamilyState
-import com.hushos.app.data.FamilySync
-import com.hushos.app.data.FamilyView
-import com.hushos.app.data.FamilyWords
-import com.hushos.app.data.FilesRoots
-import com.hushos.app.data.NotAuthenticated
-import com.hushos.app.data.Opened
-import com.hushos.app.data.SessionEnded
+import com.hushos.app.data.families.AreaWrite
+import com.hushos.app.data.drive.FamilyCopies
+import com.hushos.app.data.families.FamilyRecords
+import com.hushos.app.data.drive.FamilyRootsSignal
+import com.hushos.app.data.families.FamilyState
+import com.hushos.app.data.families.FamilySync
+import com.hushos.app.data.families.FamilyView
+import com.hushos.app.data.families.FamilyWords
+import com.hushos.app.data.drive.FilesRoots
+import com.hushos.app.data.drive.NotAuthenticated
+import com.hushos.app.data.vault.Opened
+import com.hushos.app.data.vault.SessionEnded
 import com.hushos.app.data.TransferQueue
-import com.hushos.app.data.WriteBacks
-import com.hushos.app.data.Vault
-import com.hushos.app.data.familyWordsSince
-import com.hushos.app.data.familyEpoch
+import com.hushos.app.data.transfers.WriteBacks
+import com.hushos.app.data.vault.Vault
+import com.hushos.app.data.vault.familyWordsSince
+import com.hushos.app.data.vault.familyEpoch
 import java.io.File
 import java.io.FileNotFoundException
 
@@ -275,7 +275,7 @@ class ProviderFamilies internal constructor(
         relist(workspaceId, folderId)
         true
     } catch (error: Exception) {
-        if (!com.hushos.app.data.FamilyUploads.folderGone(error)) throw error
+        if (!com.hushos.app.data.families.FamilyUploads.folderGone(error)) throw error
         for (row in vault.nodes.rowsIn(workspaceId)) if (row.node.parentId == folderId) vault.forget(row.node.workspaceId, row.id)
         false
     }
@@ -372,7 +372,7 @@ class ProviderFamilies internal constructor(
             } catch (error: Exception) {
                 // Gone or in the trash for good (the server said so; a failure to answer stays silent): its rows forgotten,
                 // and Files told, the folder's listing and the one above it, so it shows neither the folder nor its children.
-                if (com.hushos.app.data.FamilyUploads.folderGone(error)) {
+                if (com.hushos.app.data.families.FamilyUploads.folderGone(error)) {
                     val parent = vault.item(doc.workspaceId, doc.nodeId)?.node?.parentId
                     for (row in vault.nodes.rowsIn(doc.workspaceId)) if (row.node.parentId == doc.nodeId) vault.forget(row.node.workspaceId, row.id)
                     vault.forget(doc.workspaceId, doc.nodeId)
@@ -475,7 +475,7 @@ class ProviderFamilies internal constructor(
             synchronized(FamilyCopies.LOCK) {
                 if (vault.closed) throw SessionEnded()
                 vault.familyWordsSince(folder.workspaceId, epoch)?.let { throw FileNotFoundException(it) }
-                com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+                com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) {
                     if (!file.isFile) {
                         file.parentFile?.mkdirs()
                         check(incoming.renameTo(file)) { "The file couldn't be kept." }
@@ -551,7 +551,7 @@ class ProviderFamilies internal constructor(
             // Only while the account it opens for is still here (the wipe's lock, inside the copies lock as everywhere): after
             // a sign-out nothing of it is made. Its target names the account, so no later start takes it for another's.
             var made: File? = null
-            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+            com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) {
                 val edit = WriteBacks.editIn(File(edits, item.id.lowercase()), target, vault.api.session.userId)
                 try {
                     if (fill(edit)) made = edit else WriteBacks.discardEdit(edit)
@@ -584,7 +584,7 @@ class ProviderFamilies internal constructor(
             // Only while the account it reads for is still here (the wipe's lock: an account's wipe can come before its
             // vault closes, a deletion or the device removed), as the personal read's copy.
             var copied: File? = null
-            com.hushos.app.data.Reservations.whileAccount(vault.ledgerGeneration) {
+            com.hushos.app.data.transfers.Reservations.whileAccount(vault.ledgerGeneration) {
                 if (WriteBacks.copyNewestTo(vault.context, slotOf(doc), file)) copied = file
             } ?: throw SessionEnded()
             copied

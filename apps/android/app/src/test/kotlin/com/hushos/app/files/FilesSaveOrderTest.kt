@@ -10,22 +10,22 @@ import androidx.work.WorkManager
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.TestListenableWorkerBuilder
 import androidx.work.testing.WorkManagerTestInitHelper
-import com.hushos.app.data.AccountStore
-import com.hushos.app.data.DriveApi
-import com.hushos.app.data.FailedTransfer
-import com.hushos.app.data.FailedTransfers
+import com.hushos.app.data.account.AccountStore
+import com.hushos.app.data.drive.DriveApi
+import com.hushos.app.data.transfers.FailedTransfer
+import com.hushos.app.data.transfers.FailedTransfers
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
-import com.hushos.app.data.Mirror
-import com.hushos.app.data.Reservations
-import com.hushos.app.data.JobNames
-import com.hushos.app.data.Shared
+import com.hushos.app.data.drive.Mirror
+import com.hushos.app.data.transfers.Reservations
+import com.hushos.app.data.transfers.JobNames
+import com.hushos.app.data.drive.Shared
 import com.hushos.app.data.TransferQueue
 import com.hushos.app.data.UploadWorker
-import com.hushos.app.data.Vault
-import com.hushos.app.data.WriteBacks
-import com.hushos.app.data.buildCatalogue
-import com.hushos.app.data.sync
+import com.hushos.app.data.vault.Vault
+import com.hushos.app.data.transfers.WriteBacks
+import com.hushos.app.data.drive.buildCatalogue
+import com.hushos.app.data.drive.sync
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
 import org.json.JSONObject
@@ -1396,7 +1396,7 @@ class FilesSaveOrderTest {
         val abandoned = provider.personalEdit(vaultOf(provider), notes, "w").apply { writeText("never closed") }
         val twoDaysAgo = System.currentTimeMillis() - 2 * 86_400_000L
         File(app.filesDir, WriteBacks.EDITS).walkTopDown().forEach { it.setLastModified(twoDaysAgo) }
-        com.hushos.app.data.DecryptedCopies.sweep(app.cacheDir)
+        com.hushos.app.data.drive.DecryptedCopies.sweep(app.cacheDir)
         TransferQueue.reconcileEdits(app, startup = true)
         val left = FailedTransfers.of(app).all().single { it.file == abandoned.path }
         assertEquals("kept over a day", File(row.file!!).readText())

@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * What the archive viewer says (docs/file-tools-design.md, section 1 (a)), word for word the web's
- * (apps/web/src/lib/archives/words.ts) and Android's (data/ArchiveWords.kt): change them together.
+ * (apps/web/src/lib/archives/words.ts) and Android's (data/transfers/ArchiveWords.kt): change them together.
  */
 public enum ArchiveWords {
     public static let needsPassword = "Needs a password"

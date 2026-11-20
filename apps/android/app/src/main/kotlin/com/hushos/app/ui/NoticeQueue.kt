@@ -1,5 +1,8 @@
 package com.hushos.app.ui
 
+import com.hushos.app.ui.drive.Notice
+
+
 /*
  * The app shows one notice at a time (DriveState.notice). A notice that stays until it is read says something the person
  * can't find anywhere else (a share gone, a change to a family that won't be made), so one is never lost to the next:
