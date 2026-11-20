@@ -6,7 +6,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import com.hushos.app.ui.DriveViewModel
+import com.hushos.app.ui.drive.DriveViewModel
 import com.hushos.app.ui.HushOSApp
 import com.hushos.app.ui.HushOSTheme
 
@@ -68,8 +68,8 @@ class MainActivity : ComponentActivity() {
             com.hushos.app.data.TransferNotices.OPEN_FILES -> { model.openRequest("files::"); return }
         }
         // A tapped push notice: Devices, Account (two-step sign-in), Shared (with me), the families in Account, or the app as it was.
-        intent?.action?.takeIf { it.startsWith(com.hushos.app.data.PushNotices.OPEN + ":") }?.let {
-            when (val open = it.removePrefix(com.hushos.app.data.PushNotices.OPEN + ":")) {
+        intent?.action?.takeIf { it.startsWith(com.hushos.app.data.platform.PushNotices.OPEN + ":") }?.let {
+            when (val open = it.removePrefix(com.hushos.app.data.platform.PushNotices.OPEN + ":")) {
                 "devices", "families", "account" -> model.openRequest(open)
                 "shared:false" -> model.openRequest(open)
             }

@@ -1,5 +1,6 @@
 package com.hushos.app.ui
 
+import com.hushos.app.ui.drive.Notice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

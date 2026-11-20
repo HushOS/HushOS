@@ -2,11 +2,11 @@ package com.hushos.app.files
 
 import android.content.pm.ProviderInfo
 import android.os.ParcelFileDescriptor
-import com.hushos.app.data.DriveApi
+import com.hushos.app.data.drive.DriveApi
 import com.hushos.app.data.FakeDrive
 import com.hushos.app.data.FamilyFixture
-import com.hushos.app.data.Shared
-import com.hushos.app.data.Vault
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.vault.Vault
 import com.hushos.app.data.TransferQueue
 import com.hushos.app.data.UploadWorker
 import androidx.work.Configuration
@@ -42,7 +42,7 @@ class FilesWriteModesTest {
     @Before
     fun signIn() {
         // The mirror is one per process and Robolectric keeps statics between tests: each test starts from an empty one.
-        com.hushos.app.data.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
+        com.hushos.app.data.drive.Mirror::class.java.getDeclaredField("instance").apply { isAccessible = true }.set(null, null)
         app.deleteDatabase("mirror.db")
         FamilyFixture.signIn(server, "files-write-modes-test")
         WorkManagerTestInitHelper.initializeTestWorkManager(app, Configuration.Builder().setExecutor(SynchronousExecutor()).setTaskExecutor(SynchronousExecutor()).build())
@@ -159,9 +159,9 @@ class FilesWriteModesTest {
         assertTrue(runCatching { vault.resolve(notes) }.isFailure)
         provider.onEditClosed(null, vault, edit, opened)
         val queued = androidx.work.WorkManager.getInstance(app).getWorkInfosByTag(TransferQueue.TAG).get().single()
-        val slot = com.hushos.app.data.WriteBacks.slotOf(opened.node.workspaceId, notes)
-        assertEquals("kept through a failed lookup", com.hushos.app.data.WriteBacks.contentOf(app, slot).readText())
-        val request = TransferQueue.slotRequest(queued.id, slot, com.hushos.app.data.WriteBacks.contentOf(app, slot), session = TransferQueue.accountTag(Shared.session(app)!!))
+        val slot = com.hushos.app.data.transfers.WriteBacks.slotOf(opened.node.workspaceId, notes)
+        assertEquals("kept through a failed lookup", com.hushos.app.data.transfers.WriteBacks.contentOf(app, slot).readText())
+        val request = TransferQueue.slotRequest(queued.id, slot, com.hushos.app.data.transfers.WriteBacks.contentOf(app, slot), session = TransferQueue.accountTag(Shared.session(app)!!))
         val worker = TestListenableWorkerBuilder<UploadWorker>(app).setId(queued.id).setInputData(request.workSpec.input).setTags(request.tags.toList()).build()
         assertEquals(ListenableWorker.Result.success(), runBlocking { worker.doWork() })
         val out = File(app.cacheDir, "read-${System.nanoTime()}")

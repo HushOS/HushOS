@@ -1,15 +1,15 @@
 package com.hushos.app.foreign
 
-import com.hushos.app.data.ApiError
-import com.hushos.app.data.DriveApi
-import com.hushos.app.data.OpenedVersion
-import com.hushos.app.data.PaddingDrains
-import com.hushos.app.data.Shared
-import com.hushos.app.data.StoreSource
-import com.hushos.app.data.ToolFailed
-import com.hushos.app.data.ToolRunState
-import com.hushos.app.data.ToolRuns
-import com.hushos.app.data.toolReaderOf
+import com.hushos.app.data.drive.ApiError
+import com.hushos.app.data.drive.DriveApi
+import com.hushos.app.data.vault.OpenedVersion
+import com.hushos.app.data.transfers.PaddingDrains
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.transfers.StoreSource
+import com.hushos.app.data.transfers.ToolFailed
+import com.hushos.app.data.transfers.ToolRunState
+import com.hushos.app.data.transfers.ToolRuns
+import com.hushos.app.data.transfers.toolReaderOf
 
 import com.hushos.core.Content
 import com.hushos.core.RunControl
@@ -488,7 +488,7 @@ class ToolRunsTest {
             server.signedOutFrom = 2
             val api = DriveApi(Shared.Session(server.origin, "token", "user"))
             val control = RunControl(toolWatchdogMillis(), null)
-            val refused = java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.NotAuthenticated?>(null)
+            val refused = java.util.concurrent.atomic.AtomicReference<com.hushos.app.data.drive.NotAuthenticated?>(null)
             val reader = toolReaderOf(api, OpenedVersion(content, "v1"), "ws", control, refused = refused)
             assertTrue(runCatching { reader.readAt(0uL, 20uL) }.isFailure)
             assertTrue("the 401 was lost under the core's read failure", refused.get() != null)

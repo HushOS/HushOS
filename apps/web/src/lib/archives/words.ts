@@ -3,7 +3,7 @@ import { ZIP_LIMITS } from './zip-format';
 
 /*
  * What the archive viewer says (docs/file-tools-design.md, section 1 (a), whose strings are used
- * as written). The phones say the same (HushOSKit/Transfers/ArchiveWords.swift, data/ArchiveWords.kt):
+ * as written). The phones say the same (HushOSKit/Transfers/ArchiveWords.swift, data/transfers/ArchiveWords.kt):
  * change them together.
  */
 export const archiveWords = {

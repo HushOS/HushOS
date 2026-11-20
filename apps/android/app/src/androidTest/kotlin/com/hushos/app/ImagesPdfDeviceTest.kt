@@ -8,8 +8,8 @@ import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.hushos.app.data.ImagesPdf
-import com.hushos.app.data.ImagesPdfRefused
+import com.hushos.app.data.transfers.ImagesPdf
+import com.hushos.app.data.transfers.ImagesPdfRefused
 import com.hushos.core.PageSize
 import com.hushos.core.RunControl
 import java.io.ByteArrayOutputStream

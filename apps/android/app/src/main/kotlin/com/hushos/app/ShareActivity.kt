@@ -7,8 +7,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import com.hushos.app.ui.HushOSTheme
-import com.hushos.app.ui.SaveToHushOS
-import com.hushos.app.ui.SaveViewModel
+import com.hushos.app.ui.drive.SaveToHushOS
+import com.hushos.app.ui.drive.SaveViewModel
 
 /* Save to HushOS in the share sheet: a sheet over the sending app, closed once the files are queued. */
 class ShareActivity : ComponentActivity() {

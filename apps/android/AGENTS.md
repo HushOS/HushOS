@@ -72,30 +72,35 @@ Toolchain on this Mac:
 
 ### Main files
 
-Paths are under `app/src/main/kotlin/com/hushos/app/`.
+Paths are under `app/src/main/kotlin/com/hushos/app/`. Packages follow the folders.
 
-| File                                           | Role                                                                                                  |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `data/Mirror.kt`, `data/Catalogue.kt`          | SQLite mirror of the feed (nodes, cursors, thumbnails) and the catalogue built from it                |
-| `data/WriteBacks.kt`                           | Other apps' saves through the provider: one slot per file                                             |
-| `data/TransferQueue.kt`                        | WorkManager transfer jobs, failed rows, sweeps                                                        |
-| `data/Offline.kt`                              | Keep downloaded: private storage, one folder per version                                              |
-| `data/Links.kt`                                | Owner link views, `PublicApi` without a cookie, `LinkVault` for a visitor, `Reports`                  |
-| `data/Contacts.kt`                             | Pins, owned shares, shared-by-me rows; mirrors `packages/drive/src/trust.ts`                          |
-| `data/Rotation.kt`                             | Re-keying a subtree when a share is revoked                                                           |
-| `data/OwnIdentity.kt`                          | Opening and upgrading this account's identity; `OpenedIdentities`                                     |
-| `data/ContactGuard.kt`, `data/ContactTrust.kt` | The contact guard and the trust acts over it                                                          |
-| `data/Vault.kt`, `data/VaultFamilies.kt`       | The vault and its family write path                                                                   |
-| `data/Reservations.kt`                         | The upload reservation ledger                                                                         |
-| `data/Family*.kt`, `data/GroupsApi.kt`         | Families: sync, guard, sessions, join, check, manage, removal, walks, uploads, plan; the group routes |
-| `data/SaveTargets.kt`                          | Save to HushOS targets, family folders included                                                       |
-| `files/ProviderFamilies.kt`                    | Family roots in the Files app                                                                         |
-| `ui/Screens.kt`, `ui/LinksUi.kt`               | Main screens; share sheet, link browser, report dialog, contacts sheet, phrase grid, `PeopleSheet`    |
-| `ui/ContactsUi.kt`                             | `ContactStepSheet`                                                                                    |
-| `ui/Adaptive.kt`                               | Window-size frame decisions                                                                           |
-| `ui/MarkdownViewer.kt`                         | The in-app Markdown viewer                                                                            |
-| `ui/Families.kt`, `ui/FamiliesModel.kt`        | Family screens and their model                                                                        |
-| `ui/SignupScreen.kt`                           | Creating an account in the app                                                                        |
+- `data/` by feature: `account` (sign-in, two-step, identity, settings marks), `vault`, `trust` (contacts, pins, the guard), `families`, `drive` (API, mirror, catalogue, links, offline), `transfers` (uploads, saves, file tools, archives), `editor`, `platform` (app links, notifications, problems).
+- `ui/` by surface: `account`, `drive`, `sharing`, `viewers`, `families`; shared pieces (`Components`, `Theme`, `Adaptive`, `Screens`, `HushOSApp`) stay in `ui/`.
+- `TransferQueue.kt`, `FamilyWalkWork.kt`, `PushTokens.kt` and `TransferNotices.kt` stay in `data/` (package `com.hushos.app.data`): the manifest names `RetryReceiver` and `PushService` by class, and WorkManager stores its workers' class names on the phone, so moving them would drop queued work on update.
+- Tests mirror the packages under `app/src/test/kotlin/com/hushos/app/`.
+
+| File                                                       | Role                                                                                                  |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `data/drive/Mirror.kt`, `data/drive/Catalogue.kt`          | SQLite mirror of the feed (nodes, cursors, thumbnails) and the catalogue built from it                |
+| `data/transfers/WriteBacks.kt`                             | Other apps' saves through the provider: one slot per file                                             |
+| `data/TransferQueue.kt`                                    | WorkManager transfer jobs, failed rows, sweeps                                                        |
+| `data/drive/Offline.kt`                                    | Keep downloaded: private storage, one folder per version                                              |
+| `data/drive/Links.kt`                                      | Owner link views, `PublicApi` without a cookie, `LinkVault` for a visitor, `Reports`                  |
+| `data/trust/Contacts.kt`                                   | Pins, owned shares, shared-by-me rows; mirrors `packages/drive/src/trust.ts`                          |
+| `data/vault/Rotation.kt`                                   | Re-keying a subtree when a share is revoked                                                           |
+| `data/account/OwnIdentity.kt`                              | Opening and upgrading this account's identity; `OpenedIdentities`                                     |
+| `data/trust/ContactGuard.kt`, `data/trust/ContactTrust.kt` | The contact guard and the trust acts over it                                                          |
+| `data/vault/Vault.kt`, `data/vault/VaultFamilies.kt`       | The vault and its family write path                                                                   |
+| `data/transfers/Reservations.kt`                           | The upload reservation ledger                                                                         |
+| `data/families/`, `data/FamilyWalkWork.kt`                 | Families: sync, guard, sessions, join, check, manage, removal, walks, uploads, plan; the group routes |
+| `data/transfers/SaveTargets.kt`                            | Save to HushOS targets, family folders included                                                       |
+| `files/ProviderFamilies.kt`                                | Family roots in the Files app                                                                         |
+| `ui/Screens.kt`, `ui/sharing/LinksUi.kt`                   | Main screens; share sheet, link browser, report dialog, contacts sheet, phrase grid, `PeopleSheet`    |
+| `ui/sharing/ContactsUi.kt`                                 | `ContactStepSheet`                                                                                    |
+| `ui/Adaptive.kt`                                           | Window-size frame decisions                                                                           |
+| `ui/viewers/MarkdownViewer.kt`                             | The in-app Markdown viewer                                                                            |
+| `ui/families/Families.kt`, `ui/families/FamiliesModel.kt`  | Family screens and their model                                                                        |
+| `ui/account/SignupScreen.kt`                               | Creating an account in the app                                                                        |
 
 ## Design rules
 
@@ -153,13 +158,13 @@ The same four tabs as iOS: Home, Files, Shared and Account.
 ### Home and Files
 
 - Home has search and a tags row, with a tag manager offering presets plus any hex colour.
-- There are no type chips. Search's kind words (`data/ItemKind.kt`, the web's split) find "photos", "videos", "documents" and "folders".
+- There are no type chips. Search's kind words (`data/drive/ItemKind.kt`, the web's split) find "photos", "videos", "documents" and "folders".
 - Files has search, tag filters and a floating add menu.
 - Long press opens the item sheet, whose first row is Select. The FAB also offers "Select items".
 - Selection shows a contextual bar for copy, cut, move and trash.
 - A paste bar shows while the clipboard holds items. It refuses a cross-drive paste.
 - Same-name uploads ask: replace, keep both, or skip.
-- Keep downloaded lives in `data/Offline.kt` (private storage, one folder per version), with an Offline section on Home.
+- Keep downloaded lives in `data/drive/Offline.kt` (private storage, one folder per version), with an Offline section on Home.
     - The item sheet scrolls; Keep downloaded sits right under Rename, so it is reachable without scrolling.
 
 ### Scan document
@@ -180,13 +185,13 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - A release build without them fails (`assembleRelease`, `bundleRelease`), and `check-bundle.sh` refuses a bundle whose manifest says `com.hushos.push.configured` false.
 - `FirebaseInitProvider` is removed, FCM auto-init is off and `firebase_data_collection_default_enabled` is false in the manifest, so nothing reaches Google until "On this phone" is turned on. Datatransport's `cct` backend (see Scan document) also drops FCM's delivery metrics.
 - Token steps (the token, its deletion) run on one serial executor (`PushTokens.steps`), so a quick off-then-on never registers a token about to be deleted.
-- `data/PushNotifications.kt`:
+- `data/platform/PushNotifications.kt`:
     - `PushRegistrar`: register, turn off and settle hold `turn`; `forget` (the wipe) moves a generation under `state`, and every write of the registration happens under `state` only while its session is still signed in and the generation hasn't moved. Tests: `PushRegistrarTest`.
     - The registration (handle and `deleteSecret`) is in `Shared`'s encrypted preferences; a write that isn't committed deletes the new handle at the relay. Retired handles wait in `push-pending-deletions` (not account data) until their relay answers 204 or 404, retried at every start.
     - `catchUp` lists `GET /api/notifications` when the app opens or comes back; event ids shown are in `push-seen.json` (an account file).
     - The words, the tag and which relay may be used are the core's (`notifications.rs`): only `https://push.hushos.com`, or in a debug build `localhost`/`127.0.0.1`, and `10.0.2.2` only on the emulator. A sharer is named by the pin's name only.
 - `PushService` checks the tag, fetches the event and posts within 9 seconds, else the fallback. Channels: Security (high), Shared with you, Families, Other activity (low, the fallback); notices and channels `VISIBILITY_PRIVATE` with a public version reading "New activity in HushOS"; local only. Whether a locked phone shows the private version is the person's lock-screen setting, not the app's.
-- `POST_NOTIFICATIONS` is asked from the switch (`ui/NotificationsSection.kt`) and once per account by the app itself (`AskForNotifications` over `data/PushAsk.kt`):
+- `POST_NOTIFICATIONS` is asked from the switch (`ui/account/NotificationsSection.kt`) and once per account by the app itself (`AskForNotifications` over `data/platform/PushAsk.kt`):
     - from `Main`, once it has settled with the window's focus, so never while a sheet or dialog (each a window of its own) is up. `PushAsk.read` reads the server's settings and changes nothing; losing the focus cancels the effect, and the mark is set on the main thread right before the question;
     - only on a server with notifications and a usable relay, where notifications are allowed already (before Android 13, switched off since, or a sign-out and back in) the app asks in its own words instead (an `AlertDialog`, "Turn on notifications?", Turn on / Not now), and only Turn on registers;
     - the record is `push-asked.json` in the app's files (an account file) with the marks `ASKED`, `RETRY` (a yes whose registration failed, made once per start: `PushAsk.retried`) and `DECIDED` (the switch, either way), changed only by compare-and-set. The relay waiting for the answer survives a rotation (`rememberSaveable`). Tests: `PushAskTest`.
@@ -195,7 +200,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 ### Two-step sign-in
 
-`docs/two-step-design.md` 4 to 6, and 12. `data/TwoStep.kt` holds the requests and the rules; `ui/TwoStepScreen.kt` the screens.
+`docs/two-step-design.md` 4 to 6, and 12. `data/account/TwoStep.kt` holds the requests and the rules; `ui/account/TwoStepScreen.kt` the screens.
 
 - `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `SignIn.SignedIn` or `SignIn.Step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in the view model's memory, for `Auth.answerStep`.
     - It is dropped six minutes after it arrived (`PendingSignIn.dropIn`, `DriveViewModel.awaitStep`), counted on the clock since boot (`uptime`), never against the step's `expiresAt`: a phone with a wrong date must still be able to sign in. An answer still out is waited for.
@@ -212,7 +217,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
     - A rotation or a phrase reset holds them when no session came of the sign-in after it: it didn't happen, its step did not pass, or nothing confirmed the change.
     - The panel says what the web's does (`apps/web/src/components/account/new-phrase.tsx`), from `StepWords.NEW_PHRASE_…` and `HeldWords.lead`. Change the wording there and on the web together.
     - Once a rotation's or a reset's last request has gone out, nothing that fails may cost the new phrase. Keep it that way.
-- A rotation and a phrase reset end the same way (`Reset`, `data/TwoStep.kt`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
+- A rotation and a phrase reset end the same way (`Reset`, `data/account/TwoStep.kt`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
     - That sign-in (`Auth.proved`, tried twice) answers its second step with the phrase just made, so nobody is sent to a step they need unseen words for.
     - The new words are withheld only when the server answered a refusal (a 4xx in its own words): then, and only then, `NOT_RESET` or `NOT_ROTATED` is said after the server's reason (`Reset.refusal`). Once the request has left without one they are always shown (`Reset.settle`): a look that found the account as it was is not proof, the commit can land a second later.
     - Whether they are shown as the account's or with "keep both" is judged by the salt this change generated, never by whether the sign-in worked and never by version numbers: the session envelope's `wrappingSalt`, or the step's `phrase.wrappingSalt`, is this change's only if it was made. Another salt ends the probe's session unstored and leaves the step unanswered.
@@ -239,7 +244,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 #### Passkeys, security keys and the default
 
-`docs/two-step-design.md` 3 and 12. `data/Passkeys.kt` holds the rules, `ui/PasskeySheet.kt` the system's sheet. Tests: `PasskeysTest`, `PasskeySheetTest`.
+`docs/two-step-design.md` 3 and 12. `data/account/Passkeys.kt` holds the rules, `ui/account/PasskeySheet.kt` the system's sheet. Tests: `PasskeysTest`, `PasskeySheetTest`.
 
 - The app can use a key only for the server it is linked to: `Passkeys.usable` is https, no port but 443, no user or password in the address, and the build's `BuildConfig.LINK_HOST` (the `appLinkHost` placeholder; hushos.com for the store app, localhost for debug, so never in a debug build).
     - Anywhere else it names no methods, so the server never lists a key at a step. Settings still list, rename and remove keys and change the default; there is no Add, and one line says keys are added in a browser. The browser path for self-hosted servers is not built.
@@ -261,7 +266,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 #### Approve on another device
 
-`docs/two-step-design.md` 12 ("What was built (item 2)"). `data/DeviceApproval.kt` holds the order of the requests and every check; `ui/DeviceApprovalUi.kt` the panel, the list, the banner and the sheet. The cryptography and every reply's reading are the core's. The twin of iOS's two `DeviceApproval.swift` files.
+`docs/two-step-design.md` 12 ("What was built (item 2)"). `data/account/DeviceApproval.kt` holds the order of the requests and every check; `ui/account/DeviceApprovalUi.kt` the panel, the list, the banner and the sheet. The cryptography and every reply's reading are the core's. The twin of iOS's two `DeviceApproval.swift` files.
 
 - Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer (`StepOutcome.after`, `StepUp.failed`).
     - At a sign-in the step starts its default by itself, once per step (`SignInStepScreen`'s `started`): the key's sheet (a closed one says nothing) or the request to another device. Otherwise only from a press: the step's button (Use another device), choosing it under Use another way, or Ask again. Opening a form never sends a prompt. One request at a time (`DeviceAskModel.phase` is idle or ended before another is made).
@@ -285,7 +290,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
         - `loadNow` fetches the list uncounted (`DeviceApprovals.listed`), reads the session again, and only then counts and writes (`PromptLimit.shown`), in the same step as that check. A late list of the account that was here before writes nothing into the next one's record. Keep that order.
 - Settings: `TwoStepStatus.showsDevice`, `deviceValue`, `canTurnOnDevice`; Turn on is `DeviceMethodScreen`, Turn off is `RemoveScreen`.
     - `canMakeDefault` is offered only on a kind the account has.
-- Turning it on (`DeviceSetupModel` in `ui/DeviceApprovalUi.kt`, held by the view model as `deviceSetup`; `DriveViewModel.startDevice`, `askDeviceSetup`, `confirmDeviceSetup`): the person chooses the device that approves, from `TwoStepStatus.approvers` ("Turning it on first" in the design).
+- Turning it on (`DeviceSetupModel` in `ui/account/DeviceApprovalUi.kt`, held by the view model as `deviceSetup`; `DriveViewModel.startDevice`, `askDeviceSetup`, `confirmDeviceSetup`): the person chooses the device that approves, from `TwoStepStatus.approvers` ("Turning it on first" in the design).
     - No device is ever chosen for the person, even when the list has one (`TwoStepStatus.approver(picked)` is null until they pick): a device's name and kind are its own words. Nothing is sent until one is picked. `canTurnOnDevice` needs a device to choose.
     - The request names the chosen device (`approvalStartJson(…, approverDeviceId)`), the first time and at every Ask again; it is `TwoStepFlow.approver` while it is asked, and the page names it.
     - This request (`approvalTurnsOn(purpose)`, never a string comparison) is answered the other way round, with a code the approving phone draws. The asking phone never holds it and checks nothing: a code both devices derive is one whoever asked could work out alone. Where it is asked:
@@ -314,7 +319,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 - Account shows name, plan and storage, read only, with no way to buy.
 - Account also has change password, two-step sign-in, delete account, Contacts and Your twelve words, trash, and sign out.
-- `PlanDisplay` in `data/Auth.kt` decides the plan card:
+- `PlanDisplay` in `data/account/Auth.kt` decides the plan card:
     - While `/api/auth/storage` names a `pool`, the card is the family's plan, "Shared with <family>", with the pool's figures.
     - There is no Files row then: the total is counted in whole GB.
     - "Not enough room" reads `availableBytes`, never quota less used.
@@ -325,18 +330,18 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 ### People and your twelve words
 
-- People (`PeopleSheet` in `ui/LinksUi.kt`) opens from Account and the Shared header.
+- People (`PeopleSheet` in `ui/sharing/LinksUi.kt`) opens from Account and the Shared header.
 - It has the add-by-email field, then a Your twelve words row, then the list sorted by name, with Find someone from eight contacts.
 - Your twelve words is one `OwnWordsSheet`, drawn by `Main` while `DriveViewModel.showingOwnWords`.
     - It checks the served identity first (`Vault.currentOwnFingerprint`).
 
 ### Markdown viewer
 
-- Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open in HushOS's own `MarkdownViewer` (`ui/MarkdownViewer.kt`), not another app.
+- Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open in HushOS's own `MarkdownViewer` (`ui/viewers/MarkdownViewer.kt`), not another app.
     - The app's root draws it while `DriveState.reading`.
 - `openWith` in `ui/Screens.kt` routes them. Everything else goes through `openElsewhere`.
     - So does the viewer's Open with, which closes the viewer first so a no-app notice isn't hidden under it.
-- `data/MarkdownDocument.kt` parses with commonmark-java under the web's rules, tested in `MarkdownDocumentTest`:
+- `data/editor/MarkdownDocument.kt` parses with commonmark-java under the web's rules, tested in `MarkdownDocumentTest`:
     - raw HTML dropped;
     - links to http, https or mailto only, and only on a tap;
     - images named and never fetched; a linked image opens its link;
@@ -367,20 +372,20 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/text-editor.tsx`, iOS's `TextEditorScreen`): Edit in the item sheet for a text file (`TextEditing.opens`, the core's `text_editable_kind`) of at most 8 MiB that this person may change (`mayEditText`: their own only once the own root is loaded, else an editor's folder mount covering it, never a file shared on its own; a family folder only while this phone may write it). Files of no known kind aren't sniffed: they open in other apps, so Edit isn't offered for them.
 
-- `TextEdit` (ui/TextEditor.kt), held by the view model so a rotation keeps it: lists the file's folder afresh (`VaultSaveWriter.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory with the tool reader (`TextEditing.bytesOf`; no decrypted copy on disk), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence, never transcoded.
+- `TextEdit` (ui/viewers/TextEditor.kt), held by the view model so a rotation keeps it: lists the file's folder afresh (`VaultSaveWriter.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory with the tool reader (`TextEditing.bytesOf`; no decrypted copy on disk), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence, never transcoded.
 - `TextEdit` keeps a `TextEditing.SaveState`: the format found at open, kept for the whole session, and the text and bytes last opened or saved. A save writes those bytes while the text is unchanged, otherwise the text in that format (the core's `text_encode`), converted inside the save job, never on the main thread, and built at open from what the load already decoded off it (`SaveState.opening(opened, bytes)`), never decoded twice. The format is never found again from what was saved (a save that removed every line break, or one past 8 MiB, would lose it).
 - Markdown (`MarkdownDocument.handles`, asked of the row the text was read from, Open theirs included, never the item sheet's) gets a Source/Preview `SegmentedButton` row under the bar; the preview is the viewer's `MarkdownBlockView` blocks over the text as it was when Preview was chosen, parsed off the main thread, not selectable (a copy would skip the editor's protections), and not offered past `MarkdownDocument.LIMIT` in UTF-8 bytes (it stays on Source with a note, gone at the next edit; the size is asked again at the next Preview). Open theirs goes back to Source. A save or a copy of text holding half a character (a surrogate without its pair) writes nothing and keeps the text (`TextEditing.HalfCharacter`). The `EditText` stays underneath, `INVISIBLE` (no focus, no TalkBack, keyboard hidden).
-- Side by side when the window is at least medium wide and medium tall (`editorSideBySide` in `ui/Adaptive.kt`, 600 by 480dp: the Fold opened, a tablet; never a phone, upright or on its side): the source and the preview in one `Layout` (`SourceAndPreview`) that only changes how it places them. The preview follows typing: one parse at a time off the main thread (`MarkdownDocument.parseLined`) and one more if the text changed meanwhile, never a debounce. `EditorScroll` scrolls the two together by source line: each block's first source line from commonmark-java's block source spans (a block cut in pieces shares its lines out), `LineMap` and `TextLines` (`data/MarkdownLines.kt`), the preview's place as its first visible item and how far down it. Only a person's scroll leads: the link's own scroll of the `EditText` is made and seen in one call, its own move of the preview is recognised when it lands, and a preview move counts only while its list is being scrolled. A fold, an unfold or a resize recreates the screen: `TextEdit` keeps the source line at the top and the cursor (`sourceLine`, `selection`), and the new `EditText` is put back there. Narrow, the Source/Preview switch keeps the line that was at the top: a block not laid out yet is scrolled to, measured, then put at the line's fraction. Over the preview's limit (decided by the text's length where that settles it, and counted in bytes only when it could go either way) the side-by-side pane says so in place of the preview (no spinner, no old blocks, no sync) and comes back once the text fits; lines are counted and the source's line starts indexed (`TextEdit.textLines`) in the background parse, never in a scroll callback, and not at all for plain text or a text past the limit. A fold's restore keeps a cheap text offset (`topOffset`, the layout's own line start) instead. The preview's position is read from the item `firstVisibleItemIndex` names, not the first visible one (which may sit in the content padding). Tests: `MarkdownLinesTest`, `AdaptiveTest`.
+- Side by side when the window is at least medium wide and medium tall (`editorSideBySide` in `ui/Adaptive.kt`, 600 by 480dp: the Fold opened, a tablet; never a phone, upright or on its side): the source and the preview in one `Layout` (`SourceAndPreview`) that only changes how it places them. The preview follows typing: one parse at a time off the main thread (`MarkdownDocument.parseLined`) and one more if the text changed meanwhile, never a debounce. `EditorScroll` scrolls the two together by source line: each block's first source line from commonmark-java's block source spans (a block cut in pieces shares its lines out), `LineMap` and `TextLines` (`data/editor/MarkdownLines.kt`), the preview's place as its first visible item and how far down it. Only a person's scroll leads: the link's own scroll of the `EditText` is made and seen in one call, its own move of the preview is recognised when it lands, and a preview move counts only while its list is being scrolled. A fold, an unfold or a resize recreates the screen: `TextEdit` keeps the source line at the top and the cursor (`sourceLine`, `selection`), and the new `EditText` is put back there. Narrow, the Source/Preview switch keeps the line that was at the top: a block not laid out yet is scrolled to, measured, then put at the line's fraction. Over the preview's limit (decided by the text's length where that settles it, and counted in bytes only when it could go either way) the side-by-side pane says so in place of the preview (no spinner, no old blocks, no sync) and comes back once the text fits; lines are counted and the source's line starts indexed (`TextEdit.textLines`) in the background parse, never in a scroll callback, and not at all for plain text or a text past the limit. A fold's restore keeps a cheap text offset (`topOffset`, the layout's own line start) instead. The preview's position is read from the item `firstVisibleItemIndex` names, not the first visible one (which may sit in the content padding). Tests: `MarkdownLinesTest`, `AdaptiveTest`.
 - The system's `EditText` edits the session's `SpannableStringBuilder` in place (an `Editable.Factory` that hands it back), never copied per keystroke and never saved into the instance state (`isSaveEnabled = false`). No suggestions, no keyboard learning (`IME_FLAG_NO_PERSONALIZED_LEARNING`); a CR typed or pasted goes in as LF. No colouring.
 - Save goes through the save path (`TextSave` over `SaveRun`). The next save starts from the version this one minted (`VersionSaved.Saved.versionId`), never the reply row's; a run whose row can't be retired is cancelled after three tries (`TextSave.end`). A stale save offers a sheet: Save on top, Save as a copy (signed as the source: `Vault.copyPrior`), Open theirs after a confirmation.
 - One `EditSession` per editor, bound to the vault it opened under: load, save, copy and Open theirs take a token and ask it before a run starts and before the screen changes. A sign-in that replaces the vault ends the editor (`signedIn` calls `endTextEdit`), and ending it cancels a save on its way; `TextSave` asks the session again once its run has started and retires the empty run. Rows are checked again as opened (`TextEditing.held`). The editor is drawn over every screen, so a link or notification never closes it. Shares are matched by workspace and id (`EditRights.nearestMount`).
 - Back and Close with changes ask first. Every session end (sign-out, session lost, account deleted, another sign-in) ends the editor with the archive (`endTextEdit`), and a family's clear-out closes a family file's editor.
-- Drafts (Editing 1c, `data/Drafts.kt` over the core's `drafts.rs`): the unsaved text sealed under a key derived from the account key for the account and file, one record per file in `noBackupFilesDir/drafts/<workspace tag>/` (the core's `draft_workspace_tag`, so `closeArchiveIn` deletes a removed family's drafts unopened), deleted by `AccountStore.wipe` (`DraftStore.deleteAll`, under the store's lock: a write asked for before the wipe keeps nothing). The caps read the files' dates (set to each draft's time), never a record, and run only after the new record landed; a `.partial` left by a kill or a failed write is deleted in `finally` and swept on the next read or write. A write turn about two seconds after the first change (`markEdited`), and at once on `ON_STOP` and after a save; `DraftRules.step` writes only editable, answered text and, back at the baseline, asks for a removal, which goes only if, once the writes before it have landed (`inOrder`), this session owns the draft (`ownsDraft`); the I/O runs on `draftLane`. A lookup answers `DraftLookup`: absent, unavailable (not readable now: `draftUnread`, no writes until a lookup answers, asked again each turn) or found. Looked for once, at the first open that reaches the text (never after Open theirs); the view model holds `TextEdit`, so a rotation or a fold never asks twice. The offer is an `AlertDialog` that only its two answers close (Restore, Discard); Restore replaces the buffer with its selection and the session format it was typed under (`SaveState.inFormat`), sets `startedFrom` to the draft's base when someone saved since and opens the stale sheet, and when the draft's source version isn't the one just read, Save as a copy re-seals its content (`copySources(contentKnown)`, `SaveSource.contentUnknown`). Removed by a close by choice (`TextEdit.closed`, owned only, not while the offer is unanswered; a family's clear-out removes it whatever), Discard, Open theirs and a save back at the baseline (owned only), and a published copy (the source's, unless typed into since); kept when a session ends (`end`). Tests: `DraftsTest`, `AccountStoreTest` (the wipe).
+- Drafts (Editing 1c, `data/editor/Drafts.kt` over the core's `drafts.rs`): the unsaved text sealed under a key derived from the account key for the account and file, one record per file in `noBackupFilesDir/drafts/<workspace tag>/` (the core's `draft_workspace_tag`, so `closeArchiveIn` deletes a removed family's drafts unopened), deleted by `AccountStore.wipe` (`DraftStore.deleteAll`, under the store's lock: a write asked for before the wipe keeps nothing). The caps read the files' dates (set to each draft's time), never a record, and run only after the new record landed; a `.partial` left by a kill or a failed write is deleted in `finally` and swept on the next read or write. A write turn about two seconds after the first change (`markEdited`), and at once on `ON_STOP` and after a save; `DraftRules.step` writes only editable, answered text and, back at the baseline, asks for a removal, which goes only if, once the writes before it have landed (`inOrder`), this session owns the draft (`ownsDraft`); the I/O runs on `draftLane`. A lookup answers `DraftLookup`: absent, unavailable (not readable now: `draftUnread`, no writes until a lookup answers, asked again each turn) or found. Looked for once, at the first open that reaches the text (never after Open theirs); the view model holds `TextEdit`, so a rotation or a fold never asks twice. The offer is an `AlertDialog` that only its two answers close (Restore, Discard); Restore replaces the buffer with its selection and the session format it was typed under (`SaveState.inFormat`), sets `startedFrom` to the draft's base when someone saved since and opens the stale sheet, and when the draft's source version isn't the one just read, Save as a copy re-seals its content (`copySources(contentKnown)`, `SaveSource.contentUnknown`). Removed by a close by choice (`TextEdit.closed`, owned only, not while the offer is unanswered; a family's clear-out removes it whatever), Discard, Open theirs and a save back at the baseline (owned only), and a published copy (the source's, unless typed into since); kept when a session ends (`end`). Tests: `DraftsTest`, `AccountStoreTest` (the wipe).
 - Tests: `TextEditingTest` (the shared fixture's byte and edit cases, a stand-in server keeping versions).
 
 ### Sign-up in the app
 
-- "Create an account" on the sign-in screen runs the web's /register in the app (`ui/SignupScreen.kt`, `DriveViewModel.SignupFlow`):
+- "Create an account" on the sign-in screen runs the web's /register in the app (`ui/account/SignupScreen.kt`, `DriveViewModel.SignupFlow`):
     1. email and the terms;
     2. the emailed link (`/register/complete#verify=`, `AppLink.Register`, in the manifest's path filters and the web's app-links paths);
     3. name and password (`SignupRules`, the web's lengths in UTF-16 units);
@@ -400,7 +405,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 ### Mirror and catalogue
 
-- `data/Mirror.kt` (SQLiteOpenHelper: nodes, cursors, thumbnails) and `data/Catalogue.kt` mirror the web.
+- `data/drive/Mirror.kt` (SQLiteOpenHelper: nodes, cursors, thumbnails) and `data/drive/Catalogue.kt` mirror the web.
     - Pull the whole feed once, open rows parents first, then `sync()` pulls only changes.
 - `listChildren`, `recents`, `trash` and `thumbnail` answer from the catalogue first.
 - `NodeView.rawJson` keeps the row as served, for the mirror.
@@ -420,7 +425,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 ### Who can open what
 
-- `DriveState.access` comes from `/shares/mine`. `ui/SharingRefresh.kt` asks for it again:
+- `DriveState.access` comes from `/shares/mine`. `ui/sharing/SharingRefresh.kt` asks for it again:
     - at once after every restore (`write(restored = true)`, the batch, a trash's Undo);
     - after a sync that applied a change in the own drive, at most once per 10 s, with one load at the interval's end.
     - Why both: the server leaves trashed items out, and a change can't say it was a restore.
@@ -464,17 +469,17 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 ## Sharing, links, reports and rotation
 
-- `data/Links.kt`: owner link views, `PublicApi` without a cookie, `LinkVault` for a visitor, `Reports`.
-- `data/Contacts.kt`: pins, owned shares, shared-by-me rows, and the matching `Vault` functions.
+- `data/drive/Links.kt`: owner link views, `PublicApi` without a cookie, `LinkVault` for a visitor, `Reports`.
+- `data/trust/Contacts.kt`: pins, owned shares, shared-by-me rows, and the matching `Vault` functions.
 - `Auth.rotateKeys` and `Auth.recoveryKey`.
-- The UI lives in `ui/LinksUi.kt`: share sheet with People and Links, link browser, report dialog, contacts sheet, phrase grid.
+- The UI lives in `ui/sharing/LinksUi.kt`: share sheet with People and Links, link browser, report dialog, contacts sheet, phrase grid.
 - Shared folders open through `BrowseScreen(start = root)`.
     - So they get search, select, the paste bar and the add button, in the granter's workspace.
     - Pasting a copy across drives re-uploads (`copyAcross`). A cut never moves into or out of a share across drives (`Vault.mayMove`, `SHARE_MOVE_REFUSED`): the server refuses `moveOf` there, so Copy is the route.
 
 ### Rotation on revoke
 
-- Revoking a share rotates the subtree (`data/Rotation.kt`, the same protocol as the web).
+- Revoking a share rotates the subtree (`data/vault/Rotation.kt`, the same protocol as the web).
 - Never send a node beside its parent in one batch (`deferChildren`).
     - Why: the server judges each node on its own. Another device can win the parent while this one wins the child, sealed under a key nobody kept.
 - A batch goes in parts of at most 4 MiB, each node whole (`rotationParts`), in both walks. Each part is settled as it lands.
@@ -488,7 +493,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 Design: `docs/identity-pq-design.md`.
 
-- `data/OwnIdentity.kt`: `openOwnIdentity` opens the identity and upgrades a version 1 one before anything is signed.
+- `data/account/OwnIdentity.kt`: `openOwnIdentity` opens the identity and upgrades a version 1 one before anything is signed.
     - The upgrade is `identity_upgrade`, `POST /api/auth/identity/upgrade`. A 409 adopts the identity another device stored.
     - `Vault.identityKeys()` goes through it, and `loadRoot` calls it first.
 - `SettingsMark` keeps the settings sequence, whether a version 2 settings document was seen, and `(keyVersion, identityVersion)`.
@@ -519,14 +524,14 @@ Design: `docs/identity-pq-design.md`.
     - Tests: `SettingsReuseTest`.
 - At launch `loadRoot` loads the trust set beside the workspace, and the family pass runs on its own: Home's loading state never waits for it.
     - `refreshTrust(join = true)`, only from `loadRoot` and `onForeground`, joins a load already under way for the same vault and generation; one begun before a guard write or a save is not joined, and one joined that didn't settle the trust set (failed, or overtaken) is loaded once more, only while that vault is still the session's. Every other ask follows an act (a check, Continue, a key replacement, Try again) and loads afresh.
-    - The join is `JoinedLoads` (`data/Integrity.kt`): it holds a vault only while its load runs, and the view model clears it wherever it drops the vault (sign-in, sign-out, a lost session, deletion), so a signed-out vault is never kept reachable. Test: `JoinedLoadsTest`.
+    - The join is `JoinedLoads` (`data/trust/Integrity.kt`): it holds a vault only while its load runs, and the view model clears it wherever it drops the vault (sign-in, sign-out, a lost session, deletion), so a signed-out vault is never kept reachable. Test: `JoinedLoadsTest`.
     - A non-forced `refreshFamilies` waits for a pass already running for the same session (then finds nothing due) rather than run a second; never from inside a pass (`InFamilyPass`), and never on an ended session's (`reset` lets go of it). Test: `FamiliesModelSessionTest`.
     - A pass asks route 25 once: `FamilySync.pass()` holds the answer in a coroutine context element (a thread-local that follows the pass's coroutine), so only its own syncs see it, and it ends with the pass's coroutine.
     - A chain call that lands (`sendKept`'s `finish(CallEnd.Landed)`) or a walk that ends moves `FamilySync.landings`; a listing asked for before it is asked for again. Test: `FamilyManageTest`.
 
 ### Pins and shares
 
-- `data/Contacts.kt` mirrors `packages/drive/src/trust.ts`.
+- `data/trust/Contacts.kt` mirrors `packages/drive/src/trust.ts`.
 - `ServedIdentity` is the served shape everywhere: lookups, granters, grantees, rotation work, operators.
 - `ContactPin.trust` is the core's `pin_trust` (verified, seen, legacy, invalid); `compare` is its `compare_pin`.
 - `commitment` is the core's `key_commitment`. Never use `fingerprint`, which every first-seen pin holds as `""`.
@@ -540,7 +545,7 @@ Design: `docs/identity-pq-design.md`.
 
 Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+Trust.swift` and `ContactGuard.swift`.
 
-- `data/ContactGuard.kt` is the contact guard: one record per account in `noBackupFilesDir/guard/<contact_guard_slot>.json`.
+- `data/trust/ContactGuard.kt` is the contact guard: one record per account in `noBackupFilesDir/guard/<contact_guard_slot>.json`.
     - Sealed by the core (`contact_guard_seal`/`_open`, HKDF from the settings key), with the settings key's envelope beside it.
     - Found through the vault's `marksKey`, as the rollback marks are.
 - Failure states:
@@ -550,7 +555,7 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 - Writes are read-change-write under one process-wide lock (the provider shares the process) and a sign-out generation.
 - `AccountStore.wipe` deletes it (`ContactGuard.deleteAll`).
 - `GuardTurn` serialises acts, and the readers that judge from the guard, across the app's and the provider's Vaults.
-- `data/ContactTrust.kt` orders the reads and writes. Every rule is the core's: `pin_of_served`, `pin_trust`, `compare_pin`, `key_commitment`, `pin_first_seen_of_legacy`, `guard_agrees`, `guard_entry_next`.
+- `data/trust/ContactTrust.kt` orders the reads and writes. Every rule is the core's: `pin_of_served`, `pin_trust`, `compare_pin`, `key_commitment`, `pin_first_seen_of_legacy`, `guard_agrees`, `guard_entry_next`.
     - `stand` says where this phone stands with one person.
     - `commitTrust` writes the pending act, saves, then commits the guard. It writes the act again before each compare-and-set attempt (`updateSettings(beforeSend =)`).
     - `guardFor` finishes a pending act whose save landed.
@@ -573,7 +578,7 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
     - A first-seen pin's records read `SEEN`: no mark, and Info's "Added by" with "Not verified · Check it’s Maya" (`seenByOf`).
     - The mark's words are 6.12's. Its way out is Check it's Maya (a pin that vouches for nothing) or Check who wrote this (Add someone with `writer`, then the words).
     - `Main` shows that step (`DriveViewModel.contactStep`), so it outlives the mark.
-- UI (`ui/ContactsUi.kt`): `ContactStepSheet` takes the place of the sheet it was met in.
+- UI (`ui/sharing/ContactsUi.kt`): `ContactStepSheet` takes the place of the sheet it was met in.
     - It covers Add someone, Check it's Maya with the mismatch path and Remove, and "Maya's account changed" with both variants and Technical details.
 - The share sheet's lookups (`Vault.shareeChanged`):
     - kept a minute (`cachedLookup`);
@@ -664,7 +669,7 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 
 ### File tools harness
 
-- `data/ToolRuns.kt`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
+- `data/transfers/ToolRuns.kt`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
 - `ToolRuns.run` takes one run at a time (a fair `Mutex`; a second waits, told `Waiting(behind)`), runs the work on a thread of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling coroutine is cancelled.
 - A thread can't be killed: cancel and the watchdog end the run for the caller at once, a connection in flight is disconnected and a retry's wait cut short, and the work stops at its next core call (read, produce, progress, check). The thread frees the slot when it returns; a caller cancelled before the thread starts gives the slot back itself.
 - Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
@@ -684,26 +689,26 @@ Design: `docs/optional-verification.md` sections 2 and 6. Twin of iOS's `Vault+T
 
 ### One PDF (images to PDF)
 
-- Convert, then One PDF: the item sheet's `Convert` row (`ItemSheet.CONVERT`, then `ONE_PDF`) and the selection's ⋮ `Convert` (enabled when every item is an image a PDF takes); Convert opens `ConvertSheet`, whose one row opens `ui/ImagesPdfSheet.kt`.
+- Convert, then One PDF: the item sheet's `Convert` row (`ItemSheet.CONVERT`, then `ONE_PDF`) and the selection's ⋮ `Convert` (enabled when every item is an image a PDF takes); Convert opens `ConvertSheet`, whose one row opens `ui/viewers/ImagesPdfSheet.kt`.
 - The sheet: rows to reorder by long-pressing the handle and dragging, or by each row's Move earlier and Move later buttons (also TalkBack actions); segmented Page size and Margins; the name; "Location, camera and other photo details are left out."; progress and Stop (asks first). `DriveViewModel.makeImagesPdf` runs it on `Dispatchers.IO` and hands back the words to show (null once saved); a cancel's words are the save run's own (`stopped`).
-- `data/ImagesPdf.kt`: `ImagesPdf.make` starts a `SaveRun`, builds in a `ToolRuns` run (`vault.toolReader(...)` read in 8 MiB pieces by `readWhole`, never `TextEditing.bytesOf`, which finishes the control; the core refuses one read past 64 MiB), charges the PDF to `ToolRuns.budget` as a `Lease` given back however the run ends, and saves it through `saveMade`, which holds the upload's completion to the job (`holdTo`) and refuses a PDF that landed after Stop, so the run's cancel removes it. The run is held by `DriveViewModel` (`startImagesPdf`, `stopImagesPdf`, `pdfRun`), not the sheet, so a rotation keeps it. Images from more than one folder are refused (`ImagesPdf.MIXED_FOLDERS`); Convert shows only where `mayEditText` allows. An image is read only when it fits a third of the app's heap, each reader closed (`use`) once read, and the writer's output limit is lowered to a third of the heap (`limitOutput`). `leaveSession`, `sessionLost` and `signOut` call `endImagesPdf`, which cancels the run and drops its state; a late update from an ended session is ignored. Decoding: a JPEG never decoded; anything else through `ImageDecoder` (orientation applied, unpremultiplied, software allocator), refused from its header past the lower of `imagesPdfMaxPixels(totalMem)` and a third of the app's heap (`memoryClass`, or `largeMemoryClass` with a large heap) at four bytes a pixel; an opaque image is compressed to JPEG straight from its bitmap. A PNG or an image with a transparent pixel goes in as RGBA; the rest as JPEG at 92. HEIC reads here.
+- `data/transfers/ImagesPdf.kt`: `ImagesPdf.make` starts a `SaveRun`, builds in a `ToolRuns` run (`vault.toolReader(...)` read in 8 MiB pieces by `readWhole`, never `TextEditing.bytesOf`, which finishes the control; the core refuses one read past 64 MiB), charges the PDF to `ToolRuns.budget` as a `Lease` given back however the run ends, and saves it through `saveMade`, which holds the upload's completion to the job (`holdTo`) and refuses a PDF that landed after Stop, so the run's cancel removes it. The run is held by `DriveViewModel` (`startImagesPdf`, `stopImagesPdf`, `pdfRun`), not the sheet, so a rotation keeps it. Images from more than one folder are refused (`ImagesPdf.MIXED_FOLDERS`); Convert shows only where `mayEditText` allows. An image is read only when it fits a third of the app's heap, each reader closed (`use`) once read, and the writer's output limit is lowered to a third of the heap (`limitOutput`). `leaveSession`, `sessionLost` and `signOut` call `endImagesPdf`, which cancels the run and drops its state; a late update from an ended session is ignored. Decoding: a JPEG never decoded; anything else through `ImageDecoder` (orientation applied, unpremultiplied, software allocator), refused from its header past the lower of `imagesPdfMaxPixels(totalMem)` and a third of the app's heap (`memoryClass`, or `largeMemoryClass` with a large heap) at four bytes a pixel; an opaque image is compressed to JPEG straight from its bitmap. A PNG or an image with a transparent pixel goes in as RGBA; the rest as JPEG at 92. HEIC reads here.
 - Not yet: a row in the transfers sheet, and the interrupted-run prompt.
 - Tests: `data/ImagesPdfTest` on the JVM (the JPEG path, which never decodes) and `ImagesPdfDeviceTest` on the emulator (`PdfRenderer` reads the PDF back; PNG transparency, WebP as JPEG, the pixel cap): `ANDROID_SERIAL=emulator-5560 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.hushos.app.ImagesPdfDeviceTest`.
 
 ### Archives
 
-- A zip (name `.zip`, or `application/zip` / `application/x-zip-compressed`) opens as its list in the app (`ui/ArchiveScreen.kt`), drawn while `DriveState.archive` is set (`DriveViewModel.showArchive`, called before `downloadOpened` at each place a file opens). It is never decrypted to a cache file nor handed to another app. A zip kept on the phone opens from its kept copy through the core's `ZipArchiveSession.openLocal` (`FileLocalSource` reads ranges into memory), so it opens offline and no further copy is made. Link visitors' files still open the old way.
-- `ui/ArchiveBrowse.kt` holds an open zip for the screen and lives in the view model (`DriveViewModel.archiveBrowse`), so a rotation keeps the session (and the password, which only the core holds), the folder, the open item, the entry the Save dialog is choosing a place for, and every download. Closing it (Back, another zip, the model going) closes its sessions and ends its downloads.
+- A zip (name `.zip`, or `application/zip` / `application/x-zip-compressed`) opens as its list in the app (`ui/viewers/ArchiveScreen.kt`), drawn while `DriveState.archive` is set (`DriveViewModel.showArchive`, called before `downloadOpened` at each place a file opens). It is never decrypted to a cache file nor handed to another app. A zip kept on the phone opens from its kept copy through the core's `ZipArchiveSession.openLocal` (`FileLocalSource` reads ranges into memory), so it opens offline and no further copy is made. Link visitors' files still open the old way.
+- `ui/viewers/ArchiveBrowse.kt` holds an open zip for the screen and lives in the view model (`DriveViewModel.archiveBrowse`), so a rotation keeps the session (and the password, which only the core holds), the folder, the open item, the entry the Save dialog is choosing a place for, and every download. Closing it (Back, another zip, the model going) closes its sessions and ends its downloads.
     - Every path that ends a session (sign-out, `sessionLost`, `leaveSession`, account deletion) ends the open archive too (`DriveViewModel.endArchive`): its sessions closed, its downloads stopped.
     - A session opened but never handed over (Back while the tree builds, a failure) is closed in `load`'s `finally`; nothing else would close it before a sign-out. Tested in `foreign/ArchiveBrowseTest`.
     - It is opened on an `ArchiveSubject` (id, name, the drive row or the kept file). A drive row is resolved first the way `currentOpened` does (a family file another member replaced), and the screen names and sends the resolved row.
     - "On this phone" opens a kept zip by its record alone (`DriveViewModel.showKeptArchive`), through `openLocal` over the kept copy; Send a copy of such an archive shares the kept file (`sendKept`).
     - A download refused with `wrong-password` (the item has a password of its own) opens the item, asking for its password, and unlocks by its index (`ArchiveBrowse.downloadFailed`), never a dead end on the bar.
     - An encrypted archive inside the archive is never previewed, but its Download asks for the password first, then downloads.
-- `data/ArchiveSessions.kt`: each open zip is a core `ZipArchiveSession`. Every call runs on a thread of its own under a fresh `RunControl` (watchdog polled each second, cancel on coroutine cancel), one call at a time per session; a call's thread finishes its control, leaves the live set and frees the turn before its caller hears the result. A 401 under `archiveSourceOf`'s reads is kept on the call's thread (`CallControl.refuse`) and thrown as `ArchiveSessionRefused` with the session the archive reads under; `ArchiveBrowse.failed` hands it to `DriveViewModel.archiveRefused`, which ends the session only if it is still the one in use. A session the core makes (open, openLocal, sibling) is handed to its `OpenArchive` on the call's thread (`adopt`), kept if the archive is open and closed at once if not: a Kotlin object is only freed by the GC, so a result its caller never heard (Back or a sign-out mid-open) would otherwise keep its key (`aSessionMadeAsItsOpenIsCancelledIsClosedNotLeftWithItsKey`). On iOS the dropped result is released as the call's thread returns, and the core's `Drop` closes it. Every archive is held to an `ArchiveScope` (`Vault.archiveScope`), taken under `FamilyCopies.LOCK` before its key: the session's `FamilySessionState`, its workspace and node, that workspace's invalidation count, and whether it was a family folder then. Every workspace has a count, proven or not, so a forget of a share's folder route 25 never proved still moves it. The registry's one lock is `FamilyCopies.LOCK`, the lock forgets, proofs and a session's end take, and every registry operation checks the scope and acts in the same step: `admit` (registering an open or a sibling), `whileStanding` (each downloaded piece checked), `revoke` (a forget or a proof recorded and its archives marked revoked, called inside the proof's or forget's own locked step, with the node ids it forgot), then `finish` closes them outside the lock. Both are bound to the session that forgot or proved: an ended session's reaches nothing, and never another session's archive. The lock is never held across anything slow. A piece is checked under it and written under the archive's own `OpenArchive.writing`; the stream is opened under that, never the registry's. HushOS's own documents provider takes its `vaultLock` and then this one (`FamilySessions.of`), so this one is never held into a provider. `close` marks the archive closed and cancels its calls at once; the core's `closeArchive`, which waits for a call still writing, runs on `ArchiveSessions.closer` in the background, so nothing on the main thread waits on a provider write. This account's own drive is never held to a family's count (`ArchiveScope.own`), and `forgetWorkspaces` never moves it. By node only for an archive with no workspace (a kept copy recorded before its workspace was; `FamilySessionState.archivePurged`), so another workspace's colliding id closes nothing. Closes run outside the lock: a close waits for the call's thread, which may be writing under it. A forget between the scope and the registration is refused there (`aForgetBetweenAZipsScopeAndItsRegistrationIsSeenThere`). Route 25's proof (`noteFamilyWorkspaces`) and a family's forget (`forgetWorkspaces`) close the archives of those workspaces at once (`ArchiveSessions.closeWorkspaces`), so a share's content key doesn't outlive the proof; the next call says the family's words (`aZipAShareOpenedClosesWhenItsFolderIsProvenAFamilys`). A closed archive's screen is told (`OpenArchive.onFamilyClosed`): `ArchiveBrowse` drops the list, the item open and the downloads, and shows the family's words (`aShownArchiveWhoseWorkspaceIsProvenAFamilysLeavesTheScreen`). A kept zip opened from "On this phone" carries its record's workspace and node, and a proof closes it by either (the purge's node ids). Both local opens of a kept zip (`Vault.openArchive`'s kept copy, a record's `Vault.openKeptArchive`) are first held to every revocation the session holds, not only those since the tap (`Vault.keptAdmits`: a folder let go of, a folder proven a family's unless opened through its ledger, by workspace when the record has one and by the node-only purge set only when it hasn't). Its Send a copy (`DriveViewModel.sendKept`) asks `Vault.keptMayLeave` first, as iOS's `ArchiveSessions.keptMayLeave`: refused in the family's words once its folder was proven a family's or let go of, its node purged, the session ended, or the kept file is gone. Reads and writes cross the FFI in HushOS's words (`Problems.say`, `ArchiveWords.UNREADABLE`, `KEPT_UNREADABLE`, `NOT_SAVED`), never a system message. `ArchiveBrowse.load` asks `refusal()` before it shows the tree it built, so an archive closed meanwhile is never shown (`anArchiveWhoseFamilyGoesWhileItsTreeBuildsIsNeverShown`). Browsing does not take `ToolRuns`' slot. `AccountStore.wipe` calls `ArchiveSessions.shared.closeAll()`.
+- `data/transfers/ArchiveSessions.kt`: each open zip is a core `ZipArchiveSession`. Every call runs on a thread of its own under a fresh `RunControl` (watchdog polled each second, cancel on coroutine cancel), one call at a time per session; a call's thread finishes its control, leaves the live set and frees the turn before its caller hears the result. A 401 under `archiveSourceOf`'s reads is kept on the call's thread (`CallControl.refuse`) and thrown as `ArchiveSessionRefused` with the session the archive reads under; `ArchiveBrowse.failed` hands it to `DriveViewModel.archiveRefused`, which ends the session only if it is still the one in use. A session the core makes (open, openLocal, sibling) is handed to its `OpenArchive` on the call's thread (`adopt`), kept if the archive is open and closed at once if not: a Kotlin object is only freed by the GC, so a result its caller never heard (Back or a sign-out mid-open) would otherwise keep its key (`aSessionMadeAsItsOpenIsCancelledIsClosedNotLeftWithItsKey`). On iOS the dropped result is released as the call's thread returns, and the core's `Drop` closes it. Every archive is held to an `ArchiveScope` (`Vault.archiveScope`), taken under `FamilyCopies.LOCK` before its key: the session's `FamilySessionState`, its workspace and node, that workspace's invalidation count, and whether it was a family folder then. Every workspace has a count, proven or not, so a forget of a share's folder route 25 never proved still moves it. The registry's one lock is `FamilyCopies.LOCK`, the lock forgets, proofs and a session's end take, and every registry operation checks the scope and acts in the same step: `admit` (registering an open or a sibling), `whileStanding` (each downloaded piece checked), `revoke` (a forget or a proof recorded and its archives marked revoked, called inside the proof's or forget's own locked step, with the node ids it forgot), then `finish` closes them outside the lock. Both are bound to the session that forgot or proved: an ended session's reaches nothing, and never another session's archive. The lock is never held across anything slow. A piece is checked under it and written under the archive's own `OpenArchive.writing`; the stream is opened under that, never the registry's. HushOS's own documents provider takes its `vaultLock` and then this one (`FamilySessions.of`), so this one is never held into a provider. `close` marks the archive closed and cancels its calls at once; the core's `closeArchive`, which waits for a call still writing, runs on `ArchiveSessions.closer` in the background, so nothing on the main thread waits on a provider write. This account's own drive is never held to a family's count (`ArchiveScope.own`), and `forgetWorkspaces` never moves it. By node only for an archive with no workspace (a kept copy recorded before its workspace was; `FamilySessionState.archivePurged`), so another workspace's colliding id closes nothing. Closes run outside the lock: a close waits for the call's thread, which may be writing under it. A forget between the scope and the registration is refused there (`aForgetBetweenAZipsScopeAndItsRegistrationIsSeenThere`). Route 25's proof (`noteFamilyWorkspaces`) and a family's forget (`forgetWorkspaces`) close the archives of those workspaces at once (`ArchiveSessions.closeWorkspaces`), so a share's content key doesn't outlive the proof; the next call says the family's words (`aZipAShareOpenedClosesWhenItsFolderIsProvenAFamilys`). A closed archive's screen is told (`OpenArchive.onFamilyClosed`): `ArchiveBrowse` drops the list, the item open and the downloads, and shows the family's words (`aShownArchiveWhoseWorkspaceIsProvenAFamilysLeavesTheScreen`). A kept zip opened from "On this phone" carries its record's workspace and node, and a proof closes it by either (the purge's node ids). Both local opens of a kept zip (`Vault.openArchive`'s kept copy, a record's `Vault.openKeptArchive`) are first held to every revocation the session holds, not only those since the tap (`Vault.keptAdmits`: a folder let go of, a folder proven a family's unless opened through its ledger, by workspace when the record has one and by the node-only purge set only when it hasn't). Its Send a copy (`DriveViewModel.sendKept`) asks `Vault.keptMayLeave` first, as iOS's `ArchiveSessions.keptMayLeave`: refused in the family's words once its folder was proven a family's or let go of, its node purged, the session ended, or the kept file is gone. Reads and writes cross the FFI in HushOS's words (`Problems.say`, `ArchiveWords.UNREADABLE`, `KEPT_UNREADABLE`, `NOT_SAVED`), never a system message. `ArchiveBrowse.load` asks `refusal()` before it shows the tree it built, so an archive closed meanwhile is never shown (`anArchiveWhoseFamilyGoesWhileItsTreeBuildsIsNeverShown`). Browsing does not take `ToolRuns`' slot. `AccountStore.wipe` calls `ArchiveSessions.shared.closeAll()`.
 - The core reads one call at a time per session, so every download runs on a sibling (`OpenArchive.sibling()`, the core's `ZipArchiveSession.sibling()`: the same listing and the held password, a reader of its own) and previews never wait behind it, password-protected items included. A sibling closes when its download ends, with its archive, and by `closeAll`.
 - The object source finds the control of the call reading per thread (`CallControl`): an archive and its siblings share one source while their calls run side by side, so each fetch is cut off by its own call's end.
-- `data/ArchiveTree.kt` is the core's `ArchiveFolders` (each folder's parent as a little-endian u32, names joined by `/`), taken once with `OpenArchive.takeFolders()` (the core keeps none after) and held as `IntArray`s and one string: a folder costs a few bytes, never an object. Each entry carries its `folder` and `name`; `ArchiveBrowse.path` is folder numbers. A folder's rows are made the first time they are shown, off the main thread (`produceState` on `Dispatchers.Default`, shown only for the folder still open; `made` hands back kept ones without waiting on a sort), each sort with a collator of its own (an ICU collator isn't safe across threads), and kept; the core refuses a listing past 2,000,000 folders (`LIST_FOLDERS_MAX`, `directory-too-large`), about 29 MB of the tree's arrays at the cap; names compare with runs of digits as numbers, scanned in place. It dates entries (Unix time, else DOS local). `data/ArchiveWords.kt` is the web's `lib/archives/words.ts` word for word (with `entryRefusalWords` as `refusal(code, entry = true)`); change them together, with iOS.
+- `data/transfers/ArchiveTree.kt` is the core's `ArchiveFolders` (each folder's parent as a little-endian u32, names joined by `/`), taken once with `OpenArchive.takeFolders()` (the core keeps none after) and held as `IntArray`s and one string: a folder costs a few bytes, never an object. Each entry carries its `folder` and `name`; `ArchiveBrowse.path` is folder numbers. A folder's rows are made the first time they are shown, off the main thread (`produceState` on `Dispatchers.Default`, shown only for the folder still open; `made` hands back kept ones without waiting on a sort), each sort with a collator of its own (an ICU collator isn't safe across threads), and kept; the core refuses a listing past 2,000,000 folders (`LIST_FOLDERS_MAX`, `directory-too-large`), about 29 MB of the tree's arrays at the cap; names compare with runs of digits as numbers, scanned in place. It dates entries (Unix time, else DOS local). `data/transfers/ArchiveWords.kt` is the web's `lib/archives/words.ts` word for word (with `entryRefusalWords` as `refusal(code, entry = true)`); change them together, with iOS.
 - The entry pane checks what can't be read at all (method, encryption, a nested archive) before asking for a password. A `wrong-password` refusal on an item that the held password didn't open asks again for that item and unlocks with its index.
 - Previews come from memory only, decoded off the main thread: images through `ImageDecoder` (at most 4096 px a side), text in blocks of at most 200 lines and 16,384 characters (`textBlocks`), Markdown through `MarkdownBlockView`, PDF through `PdfRenderer` over an anonymous memory file (`Os.memfd_create`, Android 11 and later only), its pages drawn on a thread of their own. Other kinds say "This kind of file has no preview yet." and offer Download; an item HushOS can't open offers the archive itself through Send a copy. The large-file card's numbers are the core's `zipEntryPreviewLimits(kind, totalMem)`.
 - Download streams through an `EntrySink` into the file the person picks (`CreateDocument`, named by the core's `saveName`), through `SaveDestination` and a locked `SaveStream`: opened `"wt"` at its first piece, and once closed (a cancel, the watchdog, the end) it opens and writes nothing more, whatever the call's thread still does.
@@ -733,7 +738,7 @@ The unit tests use the host JVM's networking. `src/androidTest/.../ToolCutoffTes
 
 ## Saves from other apps (write-backs)
 
-Another app's saves of one file through the provider are coalesced in `data/WriteBacks.kt`. Test: `FilesSaveOrderTest`.
+Another app's saves of one file through the provider are coalesced in `data/transfers/WriteBacks.kt`. Test: `FilesSaveOrderTest`.
 
 The core rule: the closed edits on disk are the truth. Rows and counters are only caches of them.
 
@@ -953,13 +958,13 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 
 ### Group routes
 
-- `data/GroupsApi.kt` reads routes 2, 3, 5, 6, 14, 15, 23 and 25, and sends the managing routes (see [Managing members](#managing-members-invite-and-let-them-in)).
+- `data/families/GroupsApi.kt` reads routes 2, 3, 5, 6, 14, 15, 23 and 25, and sends the managing routes (see [Managing members](#managing-members-invite-and-let-them-in)).
 - `GroupsApiError`: status 0 is no answer. Only a 404 `not-member` wipes.
 - `sendCall` answers a `CallAnswer` (status 0 is no answer) and never throws for a refusal.
 
 ### Sync and records
 
-- `data/FamilySync.kt` (`Vault.families`, one per vault) is the web's `sync.ts` + `pins.ts` over the core's `AreaLedger` (`Vault.areaLedger`). A sync:
+- `data/families/FamilySync.kt` (`Vault.families`, one per vault) is the web's `sync.ts` + `pins.ts` over the core's `AreaLedger` (`Vault.areaLedger`). A sync:
     1. hands settings to the ledger first (`useForFamilies`, `use_settings_envelope`);
     2. calls `accept_served` with the device record;
     3. stores the guard the acceptance hands back, before the record (`FamilyRecords`, `noBackupFilesDir/groups/<user>_<group>.json`, never over a later roster version);
@@ -970,7 +975,7 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 
 ### The family guard
 
-- `data/FamilyGuard.kt`: `noBackupFilesDir/guard/<slot>.families.json`.
+- `data/families/FamilyGuard.kt`: `noBackupFilesDir/guard/<slot>.families.json`.
     - Sealed with `contact_guard_seal` kind `families` under the settings key, its envelope beside it.
     - Written under the contact guard's lock and generation.
     - Merged with `merge_pin` and never lowered.
@@ -1008,13 +1013,13 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 
 ### Joining and checking
 
-- Joining (`data/FamilyJoin.kt`): `join_first_use`, the v4 joins record, `accept_joining`, then guard, record, folders and pin.
+- Joining (`data/families/FamilyJoin.kt`): `join_first_use`, the v4 joins record, `accept_joining`, then guard, record, folders and pin.
     - A relaunch finishes from the joins record.
     - A join that lands schedules the family work at once (`FamiliesModel.joined`).
 - `/join#invite=` parses as an `AppLink.Join`.
     - It reaches the app both as `hushos://join` and through the verified https filter's `/join` path.
     - `LinkFilterTest`: the manifest hands it to `LinkActivity`, and nothing the app can't do (such as `/join/other` or billing) leaves the browser.
-- `data/FamilyCheck.kt`:
+- `data/families/FamilyCheck.kt`:
     - `memberStandings`: one guarded read (`guardedStandings`);
     - `checkCode`: the sync's outcome handed back;
     - `checkMatch`: `pair_match`, with the check record and a verified pin committed as any trust act.
@@ -1094,17 +1099,17 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 
 ### Family screens
 
-- `ui/FamiliesModel.kt` (`DriveViewModel.families`):
+- `ui/families/FamiliesModel.kt` (`DriveViewModel.families`):
     - route 2 with `listReconciling`;
     - each family's state and marks;
     - the removal bookkeeping in `FamilyFolders`;
     - the invitation and member-check sheets `Main` draws, so they outlive their screen.
-- `ui/Families.kt`:
+- `ui/families/Families.kt`:
     - Account's section;
     - the family page, with members and Verified/Not verified, and the hard warning;
     - `FamilyRoute` in Account's one saved value;
     - the folder through `BrowseScreen` with family gates: no add, select, paste or folder menu. A removed folder says so, with no search.
-- `ui/FamilyJoin.kt` (`InvitationSheet`, `JoinContent`) and `ui/FamilyCheck.kt` (`MemberCheckSheet`).
+- `ui/families/FamilyJoin.kt` (`InvitationSheet`, `JoinContent`) and `ui/families/FamilyCheck.kt` (`MemberCheckSheet`).
 - A family item is `Owner.EDIT` while `FamiliesModel.writable`: accepted, openable, `AreaWrite.WRITABLE`.
     - Its menu is Send a copy, Rename, Move, Info and Move to Trash.
     - Move starts at the family's top folder. All places lists Files and every writable family folder (`FamiliesModel.writableTops`); a share is offered only to items already in it, and items in a share never leave it.
@@ -1134,7 +1139,7 @@ Follows the web's `family-leave.ts`.
 
 ### Walks (key rotation of family folders)
 
-Follows the web's `walks.ts` and runRotation's family case. Code: `data/FamilyWalks.kt`.
+Follows the web's `walks.ts` and runRotation's family case. Code: `data/families/FamilyWalks.kt`.
 
 - Route 25's `rotation` is parsed (`SpaceRotation`, carried on `FamilyArea.rotation`).
 - `ownReasonToWalk`: the top folder listed at the run's target under the latest key.
@@ -1203,7 +1208,7 @@ Follows the web's `walks.ts` and runRotation's family case. Code: `data/FamilyWa
 | 29     | A folder to gather for rotation                  | `gather`              |
 | 30     | Delete a family folder                           | `deleteFolder`        |
 
-- Let them in: `letIn` in `data/FamilyManage.kt`.
+- Let them in: `letIn` in `data/families/FamilyManage.kt`.
     - It pins the newcomer first-seen (`firstSeen: "family"`) from route 16's identity, or hands back `Changed` for the account-change notice (`FamilyHost.accountChangedFor`).
     - It sends that person's kept entry first (`sendKept(only =)`). Another person's is `Other` and untouched.
     - It returns `Pending` while the entry stays unanswered. It signs anew only after a definite `stale` or a superseded roster.
@@ -1334,7 +1339,7 @@ Follows the web's MemberList.
 
 ### Removing members and deleting family folders
 
-Follows the web's `removal.ts`, `rotations.ts`, `outbox.ts`'s rebuild and `spaces.ts`'s deleteFamilyFolder, over the core's 5b builders. Code: `data/FamilyRemoval.kt`.
+Follows the web's `removal.ts`, `rotations.ts`, `outbox.ts`'s rebuild and `spaces.ts`'s deleteFamilyFolder, over the core's 5b builders. Code: `data/families/FamilyRemoval.kt`.
 
 #### `removeMember` (route 19)
 
@@ -1383,7 +1388,7 @@ Follows the web's `removal.ts`, `rotations.ts`, `outbox.ts`'s rebuild and `space
 
 ### The family outbox
 
-Code: `data/FamilyManage.kt`.
+Code: `data/families/FamilyManage.kt`.
 
 #### Files
 
@@ -1659,14 +1664,14 @@ Code: `files/ProviderFamilies.kt`.
 
 ### Plan on the family page
 
-- `ui/FamilyPlan.kt`, `data/FamilyPlan.kt`, `GET /api/billing/groups/:id`.
+- `ui/families/FamilyPlan.kt`, `data/families/FamilyPlan.kt`, `GET /api/billing/groups/:id`.
 - It shows the plan's tier and the pool's size, Used, Paid by (only as the server names the payer), and "Billing is managed on the web."
 - Nothing while billing is off.
 - Test: `FamilyPlanTest`, including a source scan: no family or account screen links to billing.
 
 ### Save to HushOS into a family folder
 
-Code: `data/SaveTargets.kt`, `ui/SaveToHushOS.kt` (iOS's SaveTargets). Test: `SaveTargetsTest`.
+Code: `data/transfers/SaveTargets.kt`, `ui/drive/SaveToHushOS.kt` (iOS's SaveTargets). Test: `SaveTargetsTest`.
 
 - The picker lists Files' own folders, then each family this account is an accepted member of, under its name.
     - Only the folders this phone may write in: `openable` and `WRITABLE`, never the trash.
@@ -1703,7 +1708,7 @@ Code: `data/SaveTargets.kt`, `ui/SaveToHushOS.kt` (iOS's SaveTargets). Test: `Sa
 - It keeps the settings key (stored once) and the settings document (compare-and-set) as the server does.
     - Why: the vault's sealed rollback marks need a settings key before anything opens.
 - `VaultAttributesTest` uses it for every re-save path.
-- The save path (`data/SaveRuns.kt`, docs/file-tools-design.md section 2): `SaveRunTest` holds a run's decisions against a stand-in drive (refused before anything is made, the core's room estimate, next free names, each result signed by its own sources, `stale` versions, a version kept through a cancel, a key change or key-only refusal looked up again with `startedFrom` kept, clean-up by delete forever or Trash, a row kept when an item is refused or nothing answers, a stop's network calls outside the run's lock, delete or keep at the next launch, no row written after a sign-out); `SaveResultTest` uploads a result from memory to `FakeDrive` (no plaintext file anywhere while its parts go up, the bytes land), loses a version race (`stale`, the upload aborted), and meets a key-only refusal (`SaveRekeyed`). Results signed by their sources go into family folders (`uploadInside`/`createFolder` `result`), as on the web and iOS.
+- The save path (`data/transfers/SaveRuns.kt`, docs/file-tools-design.md section 2): `SaveRunTest` holds a run's decisions against a stand-in drive (refused before anything is made, the core's room estimate, next free names, each result signed by its own sources, `stale` versions, a version kept through a cancel, a key change or key-only refusal looked up again with `startedFrom` kept, clean-up by delete forever or Trash, a row kept when an item is refused or nothing answers, a stop's network calls outside the run's lock, delete or keep at the next launch, no row written after a sign-out); `SaveResultTest` uploads a result from memory to `FakeDrive` (no plaintext file anywhere while its parts go up, the bytes land), loses a version race (`stale`, the upload aborted), and meets a key-only refusal (`SaveRekeyed`). Results signed by their sources go into family folders (`uploadInside`/`createFolder` `result`), as on the web and iOS.
 - Save path, round 2: a tool's new version leaves the file's name record as it is (no re-sign, no trust check: docs/editing-design.md section 3); key-change retries look the destination and the file up again from the server, folders included; aborts are read by `data.upload` (an older server's words still understood), `completing` asked again for about ten seconds; a sign-out abandons live runs (`SaveRuns.abandonAll` from `AccountStore.wipe`).
 - Save path, round 3: still `completing` after the tries is UNKNOWN (row kept, "may have been saved"); the journal's writes throw (`SaveUnrecorded`, once more first), and a begin whose row can't be written is aborted and left idle for `settleAll`; a late file that can't be removed gets a row (`keepLate`); a run checks its session at start and on every call; before a retry `VaultSaveWriter.refreshFolder` syncs the family (`familyJudge`), and a refresh the key change still holds up (`FamilyUploads.waits`) waits again, anything else stops the run; a result whose post-completion step fails is returned as landed, and only a completion naming another item (`ResultLanded`) stops the run; Keep always drops the row.
 - Save path, round 4: one lock per journal file (`SaveRunJournal`, removals included); a new folder's id is recorded before its creation is sent (`createFolder` `onMinted`); every failure after start goes through `stop`; a row that won't go is marked `done` (`retire`), never offered; the stop's words come from the clean-up (`remains`), and only a version whose completion was sent (`onCompleting`) may have been saved.

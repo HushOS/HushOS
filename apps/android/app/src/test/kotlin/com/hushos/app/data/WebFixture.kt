@@ -1,5 +1,8 @@
 package com.hushos.app.data
 
+import com.hushos.app.data.account.Auth
+import com.hushos.app.data.trust.ContactPin
+import com.hushos.app.data.trust.ServedIdentity
 import com.hushos.core.IdentityEnvelope
 import com.hushos.core.SuccessionLink
 import com.hushos.core.base64urlEncode

@@ -2,11 +2,11 @@ package com.hushos.app
 
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.hushos.app.data.DriveApi
-import com.hushos.app.data.OpenedVersion
-import com.hushos.app.data.PaddingDrains
-import com.hushos.app.data.Shared
-import com.hushos.app.data.toolReaderOf
+import com.hushos.app.data.drive.DriveApi
+import com.hushos.app.data.vault.OpenedVersion
+import com.hushos.app.data.transfers.PaddingDrains
+import com.hushos.app.data.drive.Shared
+import com.hushos.app.data.transfers.toolReaderOf
 import com.hushos.core.ByteRange
 import com.hushos.core.Content
 import com.hushos.core.RunControl

@@ -1,10 +1,10 @@
 package com.hushos.app.foreign
 
-import com.hushos.app.data.ArchiveSessions
-import com.hushos.app.data.OpenArchive
-import com.hushos.app.ui.ArchiveBrowse
-import com.hushos.app.ui.ArchiveSubject
-import com.hushos.app.ui.EntryDownload
+import com.hushos.app.data.transfers.ArchiveSessions
+import com.hushos.app.data.transfers.OpenArchive
+import com.hushos.app.ui.viewers.ArchiveBrowse
+import com.hushos.app.ui.viewers.ArchiveSubject
+import com.hushos.app.ui.viewers.EntryDownload
 import com.hushos.core.ArchiveException
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
@@ -70,7 +70,7 @@ class ArchiveBrowseTest {
             build = { entries, folders ->
                 words.set("Open the family again, then try again.")
                 sessions.closeWorkspaces(null, listOf(workspace))
-                com.hushos.app.data.ArchiveTree(entries, folders)
+                com.hushos.app.data.transfers.ArchiveTree(entries, folders)
             },
         )
         withTimeout(10_000) { while (browse.failure == null && browse.tree == null) kotlinx.coroutines.delay(20) }
@@ -110,7 +110,7 @@ class ArchiveBrowseTest {
     }
 
     /* The Save dialog's document as a file: made empty, or one already there that the person chose to replace. */
-    private class FileDestination(val file: File) : com.hushos.app.ui.SaveDestination {
+    private class FileDestination(val file: File) : com.hushos.app.ui.viewers.SaveDestination {
         override val key: String get() = file.absolutePath
         @Volatile var deleted = false
         val hold = java.util.concurrent.CountDownLatch(1)
@@ -214,7 +214,7 @@ class ArchiveBrowseTest {
         val second = FileDestination(file).apply { hold.countDown() }
         browse.startDownload(entry, second) {}
         val refused = browse.downloads.last()
-        assertEquals(com.hushos.app.ui.ALREADY_SAVING, refused.error.value)
+        assertEquals(com.hushos.app.ui.viewers.ALREADY_SAVING, refused.error.value)
         browse.stop(refused)
         first.hold.countDown()
         withTimeout(30_000) { while (!finished) kotlinx.coroutines.delay(20) }

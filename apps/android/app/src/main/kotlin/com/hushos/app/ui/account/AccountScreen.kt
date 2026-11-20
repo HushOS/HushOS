@@ -1,0 +1,963 @@
+package com.hushos.app.ui.account
+
+import androidx.compose.runtime.retain.retain
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.Badge
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Devices
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Password
+import androidx.compose.material.icons.outlined.PrivacyTip
+import androidx.compose.material.icons.outlined.Gavel
+import androidx.compose.material.icons.outlined.Group
+import androidx.compose.material.icons.outlined.Security
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Sync
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.repeatOnLifecycle
+import com.hushos.app.data.account.PlanDisplay
+import com.hushos.app.ui.Alpine
+import com.hushos.app.ui.AlpineChip
+import com.hushos.app.ui.DestinationBar
+import com.hushos.app.ui.FieldLabel
+import com.hushos.app.ui.Frame
+import com.hushos.app.ui.Meter
+import com.hushos.app.ui.OfflineCapsule
+import com.hushos.app.ui.SecureWindow
+import com.hushos.app.ui.SensitiveClipboard
+import com.hushos.app.ui.Subheader
+import com.hushos.app.ui.TrashScreen
+import com.hushos.app.ui.drive.DriveState
+import com.hushos.app.ui.drive.DriveViewModel
+import com.hushos.app.ui.drive.formatQuota
+import com.hushos.app.ui.drive.formatSpace
+import com.hushos.app.ui.families.FamiliesSection
+import com.hushos.app.ui.families.FamilyFolderScreen
+import com.hushos.app.ui.families.FamilyPage
+import com.hushos.app.ui.families.FamilyRoute
+import com.hushos.app.ui.openWebPage
+import com.hushos.app.ui.privacyUrl
+import com.hushos.app.ui.readableWidth
+import com.hushos.app.ui.rememberBackgroundAccess
+import com.hushos.app.ui.shareChooser
+import com.hushos.app.ui.sharing.PeopleSheet
+import com.hushos.app.ui.sharing.PersonAvatar
+import com.hushos.app.ui.termsUrl
+import com.hushos.tokens.AlpineRadius
+import com.hushos.tokens.AlpineSpace
+import kotlinx.coroutines.launch
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/* "3 Nov": a plan's dates, as the web writes them, never 2026-11-03. */
+private fun shortDate(iso: String?): String? = iso?.let {
+    runCatching {
+        DateTimeFormatter.ofPattern(android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.UK, "dMMM"), java.util.Locale.UK)
+            .format(Instant.parse(it).atZone(ZoneId.systemDefault()))
+    }.getOrNull()
+}
+
+private enum class Page { MAIN, PLAN, PASSWORD, TWO_STEP, PHRASE, DEVICES, SERVER, RESET, REPLACE, TRASH }
+
+/*
+ * Account, a tab of its own (the user's choice over the board's avatar): who is
+ * signed in, Plan and storage, sign-in and recovery, Trash, this phone, Advanced
+ * (sharing keys, the account's id and server, delete), and Sign out at the foot.
+ */
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+fun AccountScreen(model: DriveViewModel, state: DriveState) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    var page by rememberSaveable { mutableStateOf(Page.MAIN) }
+    // Advanced, folded away until its row is pressed; still open on the way back from one of its pages.
+    var advancedOpen by rememberSaveable { mutableStateOf(false) }
+    var editingName by rememberSaveable { mutableStateOf(false) }
+    var signingOut by rememberSaveable { mutableStateOf(false) }
+    var showingPeople by rememberSaveable { mutableStateOf(false) }
+    // Where Account is in a family (FamiliesSection): its page or one of its folders, one value, saved.
+    var familyRoute by rememberSaveable { mutableStateOf<String?>(null) }
+    // /app/trash: straight to Trash.
+    LaunchedEffect(state.request) {
+        // A family to open (an invitation joined, or "Open Lindqvist family"): its page, from Account's top.
+        state.request?.takeIf { it.startsWith("family:") }?.let { page = Page.MAIN; familyRoute = FamilyRoute.Page(it.removePrefix("family:")).save(); model.clearRequest() }
+        when (state.request) {
+            "trash" -> { page = Page.TRASH; model.clearRequest() }
+            // A file picker's "Save your recovery words": the words and, while unconfirmed, their check.
+            "words" -> { page = Page.PHRASE; model.clearRequest() }
+            // A tapped security notice: who is signed in where.
+            "devices" -> { page = Page.DEVICES; model.clearRequest() }
+        }
+    }
+    LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount(); model.refreshUser() }
+    // Requests from another device to confirm it's you: looked for every five seconds while Account (Devices included)
+    // is on screen and the app is in front. Nothing looks in the background.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            while (true) { model.approvals.loadNow(); kotlinx.coroutines.delay(5_000) }
+        }
+    }
+    // Two-step sign-in's row: kept as it was when the server can't be asked, gone when it says it has two-step off.
+    var twoStep by remember { mutableStateOf<com.hushos.app.data.account.TwoStepStatus?>(null) }
+    var twoStepLook by remember { mutableStateOf(0) }
+    LaunchedEffect(twoStepLook) { model.twoStep { com.hushos.app.data.account.TwoStep.status(it) }.onSuccess { twoStep = it } }
+    BackHandler(enabled = page != Page.MAIN) { page = Page.MAIN }
+    when (page) {
+        Page.TRASH -> { TrashScreen(model, state) { page = Page.MAIN; model.refreshStorage() }; return }
+        Page.PLAN -> { PlanScreen(model, state) { page = Page.MAIN }; return }
+        Page.PASSWORD -> { PasswordScreen(model) { page = Page.MAIN }; return }
+        Page.TWO_STEP -> { TwoStepScreen(model, state) { page = Page.MAIN; twoStepLook++ }; return }
+        Page.PHRASE -> { PhraseScreen(model, fresh = false) { page = Page.MAIN }; return }
+        Page.DEVICES -> { DevicesScreen(model) { page = Page.MAIN }; return }
+        // Advanced's rows are on this page, folded under their row: its pages come back here, where it is still open.
+        Page.SERVER -> { SelfHostingScreen(model, state, signedIn = true) { page = Page.MAIN }; return }
+        Page.RESET -> { ResetKeysScreen(model) { page = Page.MAIN }; return }
+        Page.REPLACE -> { ReplaceKeysScreen(model, state) { page = Page.MAIN }; return }
+        Page.MAIN -> {}
+    }
+    when (val route = FamilyRoute.of(familyRoute)) {
+        is FamilyRoute.Page -> { FamilyPage(model, route.groupId, openFolder = { familyRoute = FamilyRoute.Folder(route.groupId, it.id, it.workspaceId).save() }) { familyRoute = null }; return }
+        is FamilyRoute.Folder -> { FamilyFolderScreen(model, state, route.groupId, route.rootId, route.workspaceId) { familyRoute = FamilyRoute.Page(route.groupId).save() }; return }
+        null -> {}
+    }
+    val scroll = androidx.compose.material3.TopAppBarDefaults.enterAlwaysScrollBehavior()
+    Scaffold(
+        contentWindowInsets = WindowInsets(0), containerColor = alpine.ground,
+        modifier = Modifier.nestedScroll(scroll.nestedScrollConnection),
+        // A top-level destination: the same header as the other tabs, and no way "back" from a tab.
+        topBar = { DestinationBar("Account", scrollBehavior = scroll) },
+    ) { padding ->
+        Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
+            if (state.unreachable) OfflineCapsule()
+            state.user?.let { user ->
+                Row(Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+                    PersonAvatar(user.name.ifEmpty { user.email }, user.id, 48.dp)
+                    Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+                        Text(user.name.ifEmpty { "Signed in" }, style = MaterialTheme.typography.titleMedium)
+                        if (user.email.isNotEmpty()) Text(user.email, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    TextButton(onClick = { editingName = true }) { Text("Edit") }
+                }
+            }
+            Subheader("Plan and storage")
+            PlanCard(state) { page = Page.PLAN }
+            // As the web's sidebar row and iOS's section: one row per family, absent on a server without families.
+            FamiliesSection(model) { familyRoute = FamilyRoute.Page(it).save() }
+            NotificationsSection()
+            Subheader("Sign-in and recovery")
+            AccountRow("Change password", null, Icons.Outlined.Password) { page = Page.PASSWORD }
+            // Where this server offers it: nothing shows on one that has two-step off, or before it has answered.
+            twoStep?.let { AccountRow("Two-step sign-in", if (it.on) "On" else "Off", Icons.Outlined.Security) { page = Page.TWO_STEP } }
+            AccountRow("Recovery phrase", null, Icons.Outlined.Key) { page = Page.PHRASE }
+            AccountRow("Devices", null, Icons.Outlined.Devices) { page = Page.DEVICES }
+            // As on iOS: who you share with, and the words they check, beside sign-in and recovery.
+            AccountRow("Contacts", null, Icons.Outlined.Group) { showingPeople = true }
+            AccountRow("Your twelve words", "Read these to someone checking it’s you", Icons.Outlined.Badge) { model.openOwnWords() }
+            Subheader("Your files")
+            // Trash lives here, as it did before the redesign (the user's choice).
+            AccountRow("Trash", state.storage?.let { s -> trashSummary(s.trashItems, s.trashBytes) }, Icons.Outlined.Delete) { page = Page.TRASH }
+            Subheader("This phone")
+            AccountRow("HushOS in Files", "Open and save files from the Files app and other apps", Icons.Outlined.FolderOpen, onClick = null)
+            BackgroundStatus()
+            // Folded away, as on the web: the row opens the rest in place, and its chevron turns. Closed until pressed.
+            ExpandRow("Advanced", Icons.Outlined.Settings, advancedOpen) { advancedOpen = !advancedOpen }
+            AnimatedVisibility(advancedOpen) {
+                Column { AdvancedRows(model, state, onReset = { page = Page.RESET }, onReplace = { page = Page.REPLACE }, onServer = { page = Page.SERVER }) }
+            }
+            // The signed-in server's own pages (hushos.com's by default), as the stores require.
+            Subheader("About")
+            AccountRow("Privacy policy", null, Icons.Outlined.PrivacyTip) { openWebPage(context, privacyUrl(state.origin)) }
+            AccountRow("Terms", null, Icons.Outlined.Gavel) { openWebPage(context, termsUrl(state.origin)) }
+            HorizontalDivider(Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), color = alpine.divider)
+            // Sign out sits below everything else, away from Delete.
+            AccountRow("Sign out", null, Icons.AutoMirrored.Outlined.Logout) { signingOut = true }
+            Text("HushOS ${com.hushos.app.BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted,
+                modifier = Modifier.fillMaxWidth().padding(vertical = AlpineSpace.S6), textAlign = TextAlign.Center)
+        }
+    }
+    if (showingPeople) PeopleSheet(model, state) { showingPeople = false }
+    if (editingName) {
+        var name by rememberSaveable { mutableStateOf(state.user?.name.orEmpty()) }
+        AlertDialog(
+            onDismissRequest = { editingName = false },
+            title = { Text("Your name") },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true, label = { Text("Name") })
+            },
+            confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = {
+                editingName = false
+                model.updateName(name.trim()) { failure -> model.notify(failure ?: "Name saved") }
+            }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { editingName = false }) { Text("Cancel") } },
+        )
+    }
+    // Signing out removes everything of the account from the phone (AccountStore); kept files are the part people would miss.
+    val keptHere = signingOut && remember(signingOut) { com.hushos.app.data.drive.Offline.entries(context).isNotEmpty() || com.hushos.app.data.drive.Offline.folders(context).isNotEmpty() }
+    if (signingOut) AlertDialog(
+        onDismissRequest = { signingOut = false },
+        title = { Text("Sign out of HushOS?") },
+        text = { Text(if (keptHere) "Files kept on this phone are removed. This phone leaves your list of devices, and you’ll need your email and password to sign back in on it." else "This phone leaves your list of devices, and you’ll need your email and password to sign back in on it.") },
+        confirmButton = { TextButton(onClick = { signingOut = false; model.signOut() }) { Text("Sign out", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { signingOut = false }) { Text("Cancel") } },
+    )
+}
+
+@Composable
+internal fun AccountRow(title: String, detail: String?, icon: ImageVector, danger: Boolean = false, label: String? = null, onClick: (() -> Unit)?) {
+    val alpine = Alpine.colors
+    Row(
+        // `label`: what the press does, for a screen reader, where the title alone (one of two rows that say "Add") does not say it.
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).then(if (onClick != null) Modifier.clickable(onClickLabel = label, onClick = onClick) else Modifier).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = if (danger) alpine.danger else alpine.inkMuted)
+        Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = if (danger) alpine.danger else alpine.ink)
+            detail?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted) }
+        }
+        if (onClick != null && !danger) Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
+    }
+}
+
+/*
+ * What lets transfers carry on in the background, quietly: one line each, and Open
+ * settings beside any that is off. Read again whenever HushOS comes back from Settings.
+ */
+@Composable
+private fun BackgroundStatus() {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    val access = rememberBackgroundAccess()
+    val open = { intent: Intent -> runCatching { context.startActivity(intent) }; Unit }
+    Row(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+        Icon(Icons.Outlined.Sync, null, tint = alpine.inkMuted, modifier = Modifier.padding(top = 2.dp))
+        Column(Modifier.weight(1f).padding(start = AlpineSpace.S4)) {
+            Text("Background transfers", style = MaterialTheme.typography.bodyLarge, color = alpine.ink)
+            StatusLine(if (access.notifications) "Notifications on" else "Notifications off", ok = access.notifications) {
+                open(com.hushos.app.data.transfers.Background.notificationSettings(context))
+            }
+            StatusLine(if (access.battery) "Battery optimisation off for HushOS" else "Battery optimisation can pause transfers", ok = access.battery) {
+                open(com.hushos.app.data.transfers.Background.batterySettings())
+            }
+            StatusLine(if (access.data) "Background data allowed" else "Data Saver blocks background data", ok = access.data) {
+                open(com.hushos.app.data.transfers.Background.dataSettings(context))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusLine(text: String, ok: Boolean, onOpen: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = if (ok) 0.dp else 40.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(text, style = MaterialTheme.typography.bodyMedium, color = Alpine.colors.inkMuted, modifier = Modifier.weight(1f))
+        if (!ok) TextButton(onClick = onOpen) { Text("Open settings") }
+    }
+}
+
+/* Trash in one line, worded as on iOS: empty, or how many top-level items and their size. */
+private fun trashSummary(items: Int, bytes: Long): String = when {
+    items == 0 -> "Empty · items stay 30 days"
+    else -> listOfNotNull(if (items == 1) "1 item" else "$items items", bytes.takeIf { it > 0 }?.let(::formatSpace), "removed after 30 days").joinToString(" · ")
+}
+
+/* The plan and how full it is, as a card that opens Plan and storage. */
+@Composable
+private fun PlanCard(state: DriveState, onClick: () -> Unit) {
+    val alpine = Alpine.colors
+    val shape = RoundedCornerShape(AlpineRadius.Card)
+    Column(
+        Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2).fillMaxWidth().background(alpine.surface, shape)
+            .then(if (alpine.high) Modifier.border(1.dp, alpine.edge, shape) else Modifier).clickable(onClick = onClick).padding(AlpineSpace.S4),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(plan(state).name, style = MaterialTheme.typography.titleMedium)
+            }
+            Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted)
+        }
+        state.allowance?.let {
+            Text("${formatSpace(it.usedBytes)} of ${formatQuota(it.quotaBytes)}", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = AlpineSpace.S2))
+            Meter(it.usedBytes.toFloat() / maxOf(it.quotaBytes, 1L), Modifier.padding(top = AlpineSpace.S2))
+        }
+        planLine(state)?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = planInk(state), modifier = Modifier.padding(top = AlpineSpace.S2)) }
+    }
+}
+
+/* The plan as Account shows it: the family's while the storage is its pool (docs/families-shared-pool.md 9). */
+private fun plan(state: DriveState) = PlanDisplay.of(state.allowance, state.billing)
+
+/* Whose plan it is while pooled, else why a lapsed plan gives nothing, or when the live one renews or ends. */
+private fun planLine(state: DriveState): String? = plan(state).let { plan ->
+    plan.source ?: plan.lapsed?.line ?: (if (plan.overdue) "Payment overdue" else null)
+        ?: shortDate(plan.periodEnd)?.let { date -> if (plan.cancelAtPeriodEnd) "Ends $date" else "Renews $date" }
+}
+
+/* The plan's line: the danger colour while a payment is overdue or failed, ink while paused. */
+@Composable
+private fun planInk(state: DriveState) = plan(state).let { plan ->
+    val alpine = Alpine.colors
+    when {
+        plan.overdue || plan.lapsed?.paused == false -> alpine.danger
+        plan.lapsed != null -> alpine.ink
+        else -> alpine.inkMuted
+    }
+}
+
+/* A pushed page inside Account: a back arrow, a title, and its own scrolling column. */
+@Composable
+internal fun AccountPage(title: String, onBack: (() -> Unit)?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}, content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit) {
+    val alpine = Alpine.colors
+    Scaffold(contentWindowInsets = WindowInsets(0), containerColor = alpine.ground, topBar = { DestinationBar(title, onBack = onBack, actions = actions) }) { padding ->
+        // A settings page is a form: on a wide window its fields and buttons keep a phone's width.
+        Column(Modifier.padding(padding).fillMaxSize().readableWidth(Frame.Form).verticalScroll(rememberScrollState()).padding(bottom = AlpineSpace.S8)) {
+            content()
+        }
+    }
+}
+
+/*
+ * Plan and storage: the plan's name and storage, read-only, and what fills the
+ * space: files, earlier versions and the trash, each with its way to clear it.
+ */
+@Composable
+private fun PlanScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var removing by retain { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var showingTrash by retain { mutableStateOf(false) }
+    LaunchedEffect(Unit) { model.refreshStorage(); model.refreshAccount() }
+    if (showingTrash) {
+        BackHandler { showingTrash = false }
+        TrashScreen(model, state) { showingTrash = false; model.refreshStorage(); model.refreshAccount() }
+        return
+    }
+    AccountPage("Plan and storage", onBack) {
+        if (state.unreachable) OfflineCapsule()
+        val shape = RoundedCornerShape(AlpineRadius.Card)
+        Column(Modifier.padding(AlpineSpace.S4).fillMaxWidth().background(alpine.surface, shape).then(if (alpine.high) Modifier.border(1.dp, alpine.edge, shape) else Modifier).padding(AlpineSpace.S4)) {
+            Text(plan(state).name, style = MaterialTheme.typography.titleLarge)
+            // The plan's name and storage only: no way to the web's billing page (Google Play's
+            // payments policy; Apple's 3.1.3(f)). The renewal date is account information; while
+            // pooled, whose plan it is ("Shared with <family>") comes first.
+            val pooled = plan(state).source != null
+            val lapsed = plan(state).lapsed
+            Text((if (pooled) listOfNotNull(planLine(state), state.allowance?.let { formatQuota(it.quotaBytes) })
+                else listOfNotNull(state.allowance?.let { formatQuota(it.quotaBytes) }, planLine(state)?.let { line -> if (lapsed != null) line else line.replaceFirstChar { it.lowercase() } })).joinToString(" · "),
+                style = MaterialTheme.typography.bodyMedium, color = planInk(state))
+            // Said, never linked: the app holds no way to where plans are paid for.
+            if (lapsed != null) Text("${lapsed.room} Nothing is deleted, and uploads pause while you’re over it.",
+                style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(top = AlpineSpace.S2))
+        }
+        val allowance = state.allowance
+        val storage = state.storage
+        if (allowance != null) {
+            val trash = storage?.trashBytes ?: 0L
+            val versions = storage?.supersededBytes ?: 0L
+            val files = (allowance.usedBytes - trash - versions).coerceAtLeast(0L)
+            Text("${formatSpace(allowance.usedBytes)} of ${formatQuota(allowance.quotaBytes)}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = AlpineSpace.S4))
+            // In a pool the total is counted in whole GB, part by part, and the rest is everyone's
+            // (the family folders and each member's own files): no Files row or segment, which
+            // would take this person's exact bytes off a rounded total.
+            val family = plan(state).family
+            SplitMeter(if (family == null) listOf(files to alpine.primary, versions to alpine.folderBack, trash to alpine.inkMuted) else listOf(allowance.usedBytes to alpine.primary),
+                allowance.quotaBytes, Modifier.padding(AlpineSpace.S4))
+            if (family == null) StorageRow("Files", formatSpace(files), alpine.primary, null)
+            StorageRow("Earlier versions", formatSpace(versions), alpine.folderBack, if (versions > 0) "Remove" to { removing = true } else null)
+            StorageRow("Trash", "${formatSpace(trash)} · empties itself after 30 days", alpine.inkMuted, "Open trash" to { showingTrash = true })
+            if (family != null) Text("Shared with $family, counted in whole GB. Your trash and earlier versions count until they’re removed.",
+                style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted, modifier = Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
+            if (busy) Row(Modifier.padding(AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp); Text("Removing…", modifier = Modifier.padding(start = AlpineSpace.S2))
+            }
+        }
+    }
+    if (removing) AlertDialog(
+        onDismissRequest = { removing = false },
+        title = { Text("Remove earlier versions?") },
+        text = { Text("The ${formatSpace(state.storage?.supersededBytes ?: 0)} of earlier versions is deleted and can’t be restored.") },
+        confirmButton = { TextButton(onClick = {
+            removing = false; busy = true
+            val freed = state.storage?.supersededBytes ?: 0
+            val count = state.storage?.supersededVersions ?: 0
+            scope.launch {
+                if (model.discardEarlierVersions()) model.notify("Removed ${if (count == 1) "1 earlier version" else "$count earlier versions"} · ${formatSpace(freed)} freed")
+                else model.notify("Couldn’t remove the earlier versions. Check your connection and try again.")
+                busy = false
+            }
+        }) { Text("Remove", color = alpine.danger) } },
+        dismissButton = { TextButton(onClick = { removing = false }) { Text("Cancel") } },
+    )
+}
+
+/* The meter split by what fills it, no stop dot and no gaps. */
+@Composable
+private fun SplitMeter(parts: List<Pair<Long, androidx.compose.ui.graphics.Color>>, total: Long, modifier: Modifier = Modifier) {
+    val alpine = Alpine.colors
+    Row(modifier.fillMaxWidth().height(10.dp).clip(CircleShape).background(alpine.ink.copy(alpha = if (alpine.high) 0.2f else 0.1f))) {
+        for ((bytes, colour) in parts) {
+            val share = (bytes.toFloat() / maxOf(total, 1L)).coerceIn(0f, 1f)
+            if (share > 0f) Box(Modifier.weight(share).height(10.dp).background(colour))
+        }
+        val used = parts.sumOf { it.first }.toFloat() / maxOf(total, 1L)
+        if (used < 1f) Spacer(Modifier.weight((1f - used).coerceAtLeast(0.0001f)))
+    }
+}
+
+@Composable
+private fun StorageRow(label: String, value: String, colour: androidx.compose.ui.graphics.Color, action: Pair<String, () -> Unit>?) {
+    val alpine = Alpine.colors
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = AlpineSpace.S4, end = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(12.dp).background(colour, CircleShape))
+        Column(Modifier.weight(1f).padding(start = AlpineSpace.S3)) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+        }
+        action?.let { (text, run) -> TextButton(onClick = run) { Text(text) } }
+    }
+}
+
+/* A password field with the eye, as on sign-in. */
+@Composable
+fun PasswordField(value: String, onChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, error: String? = null, hint: String? = null, enabled: Boolean = true, placeholder: String? = null, onGo: (() -> Unit)? = null) {
+    var shown by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value, onValueChange = onChange, label = { Text(label) }, singleLine = true, enabled = enabled, isError = error != null,
+        placeholder = placeholder?.let { { Text(it) } },
+        supportingText = (error ?: hint)?.let { { Text(it) } },
+        visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = if (onGo != null) ImeAction.Go else ImeAction.Default),
+        keyboardActions = KeyboardActions(onGo = { onGo?.invoke() }),
+        trailingIcon = { IconButton(onClick = { shown = !shown }) { Icon(if (shown) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (shown) "Hide password" else "Show password") } },
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
+/* Change password: a page of its own, saying what you'll notice afterwards. */
+@Composable
+private fun PasswordScreen(model: DriveViewModel, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    // Passwords stay in memory, never in saved state (which outlives the process on disk).
+    var current by retain { mutableStateOf("") }
+    var new by retain { mutableStateOf("") }
+    var repeat by retain { mutableStateOf("") }
+    var pending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val mismatch = repeat.isNotEmpty() && new != repeat
+    // The second step, for an account that has it on: its fields sit under the passwords.
+    val step = retain { StepUpHolder(model, com.hushos.app.data.account.StepPurpose.PASSWORD) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { step.prepare() }
+    AccountPage("Change password", onBack = if (pending) null else onBack) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            PasswordField(current, { current = it; error = null }, "Current password", error = error, enabled = !pending)
+            PasswordField(new, { new = it }, "New password", hint = "At least 12 characters. A few unrelated words work well.", enabled = !pending)
+            PasswordField(repeat, { repeat = it }, "Repeat new password", error = if (mismatch) "The new passwords don’t match." else null, enabled = !pending)
+            StepUpFields(step, enabled = !pending)
+            Text("Your other devices will be signed out.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            Button(
+                enabled = !pending && !step.asking && current.isNotEmpty() && new.length >= 12 && new == repeat,
+                onClick = {
+                    // A passkey or security key, when it is the step's way, is asked by this press; the change goes once it answered.
+                    scope.withStep(step, sheet) { twoStep ->
+                        pending = true
+                        model.changePassword(current, new, twoStep) { failure ->
+                            if (failure == null) { pending = false; model.notify("Your password was changed."); onBack() }
+                            else scope.launch { error = step.failed(failure); pending = false }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+            ) { Text(if (pending) "Changing…" else "Change password") }
+        }
+    }
+}
+
+/*
+ * The recovery phrase on a page of its own, so 24 words fit: Save the kit (the
+ * web's kit file, through the share sheet), Copy, and, while the phrase isn't
+ * confirmed as saved, the web's check: say it's saved, then pick three words back.
+ * `fresh`: the phrase was just made (Rotate account key, recovery), read back from the account here; no way out but "I’ve saved it".
+ * `firstKit`: a new account's first phrase (sign-up, or words this phone still waits on), in the web's setup words.
+ */
+@Composable
+fun PhraseScreen(model: DriveViewModel, fresh: Boolean, firstKit: Boolean = false, onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var kit by remember { mutableStateOf<DriveViewModel.RecoveryKit?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    var saved by rememberSaveable { mutableStateOf(false) }
+    var checking by rememberSaveable { mutableStateOf(false) }
+    var attempt by remember { mutableStateOf(0) }
+    SecureWindow()
+    LaunchedEffect(attempt) { failed = false; kit = model.recoveryKit(); if (kit == null) failed = true }
+    // The kit file is only on this phone while this page is open.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
+    val current = kit
+    if (checking && current != null) {
+        BackHandler { checking = false }
+        CheckWordsScreen(current.phrase, onBack = { checking = false }) {
+            scope.launch {
+                when (model.confirmRecovery(current)) {
+                    true -> { model.notify("Recovery phrase saved"); onDone() }
+                    false -> model.notify("Couldn’t record that. Check your connection and try again.")
+                    // The session ended: sign-in is on screen now, and the words come first after it.
+                    null -> {}
+                }
+            }
+        }
+        return
+    }
+    AccountPage(if (firstKit) "Save your recovery kit" else if (fresh) "Your new recovery phrase" else "Recovery phrase", onBack = if (fresh) null else onDone) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+            Text(
+                if (firstKit) "If you forget your password, these words are the only way back into your account."
+                else if (fresh) "Your old phrase and any printed kit no longer work. Save these 24 words instead."
+                else "These 24 words get you back in if you forget your password. Keep them somewhere private and offline.",
+                style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted,
+            )
+            when {
+                failed -> Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                    Text("Your recovery phrase didn’t open. Try again.", color = alpine.danger)
+                    Button(onClick = { attempt++ }) { Text("Try again") }
+                }
+                current == null -> Box(Modifier.fillMaxWidth().padding(AlpineSpace.S8), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                else -> {
+                    PhraseWords(current.phrase)
+                    // One filled button a screen: while the check below is offered, it is that one.
+                    val checkOffered = fresh || !current.confirmed
+                    Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                        if (checkOffered) OutlinedButton(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
+                        else Button(onClick = { shareKit(context, model.state.value.user, current) }) { Text("Save the kit") }
+                        OutlinedButton(onClick = {
+                            SensitiveClipboard.copy(context, "Recovery phrase", current.phrase)
+                            model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
+                        }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
+                    }
+                    Text(if (firstKit) "Save it to your files, print it, or write the words down, and keep it somewhere safe."
+                        else "Keep it somewhere private and offline. Anyone with these words and your email can get into your account.",
+                        style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
+                    if (checkOffered) {
+                        Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = saved, onCheckedChange = null)
+                            Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
+                        }
+                        Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                            Text(if (firstKit) "Continue" else if (fresh) "I’ve saved it" else "Check three words")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Twenty-four words, numbered, two to a row. */
+@Composable
+internal fun PhraseWords(phrase: String) {
+    val alpine = Alpine.colors
+    val words = phrase.trim().split(Regex("\\s+"))
+    Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+        words.chunked(2).forEachIndexed { row, pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                pair.forEachIndexed { column, word ->
+                    Row(Modifier.weight(1f).background(alpine.surface, RoundedCornerShape(10.dp)).then(if (alpine.high) Modifier.border(1.dp, alpine.edge, RoundedCornerShape(10.dp)) else Modifier)
+                        .padding(horizontal = AlpineSpace.S3, vertical = AlpineSpace.S2), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${row * 2 + column + 1}", style = MaterialTheme.typography.labelSmall, color = alpine.inkMuted, modifier = Modifier.width(22.dp))
+                        Text(word, style = MaterialTheme.typography.bodyLarge.copy(fontFamily = FontFamily.Monospace))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* The kit as the web writes it (hushos-recovery-kit.txt), handed to the share sheet: print, save to Files, any app. */
+private fun shareKit(context: Context, user: com.hushos.app.data.account.SessionUser?, kit: DriveViewModel.RecoveryKit) =
+    shareKit(context, user?.email.orEmpty(), user?.id.orEmpty(), kit)
+
+/* The same, for an account named by the caller: new words held with no session name it themselves. */
+private fun shareKit(context: Context, email: String, userId: String, kit: DriveViewModel.RecoveryKit) {
+    val words = kit.phrase.trim().split(Regex("\\s+"))
+    val numbered = words.mapIndexed { i, w -> "${(i + 1).toString().padStart(2, ' ')}. $w".padEnd(16, ' ') }
+    val lines = numbered.chunked(4).map { it.joinToString("").trimEnd() }
+    val text = listOf(
+        "HushOS recovery kit",
+        "Saved ${java.time.LocalDate.now()}",
+        "",
+        "Keep this file private, and keep it somewhere you will find it again.",
+        "Anyone who has it can get into your account. If you lose it and forget",
+        "your password, nobody can get you back in, including HushOS.",
+        "",
+        "YOUR ACCOUNT",
+        "Email:       $email",
+        "Account ID:  $userId",
+        "",
+        "YOUR RECOVERY PHRASE (${words.size} words, in this order)",
+        "This is what unlocks your account if you forget your password.",
+        "",
+    ) + lines + listOf(
+        "",
+        "The same phrase on one line, for pasting:",
+        words.joinToString(" "),
+        "",
+        "HOW TO USE IT",
+        "1. Open HushOS and choose \"Forgot your password?\".",
+        "2. Confirm your email with the link we send.",
+        "3. Choose this file when asked for your kit, or type the words above in order.",
+        "",
+        "WHEN THIS KIT STOPS WORKING",
+        "Resetting your password with this phrase, making a new recovery phrase,",
+        "or rotating the account key in Settings makes a new phrase. Save a new kit then.",
+        "Changing your password in Settings keeps this phrase as it is.",
+        "",
+        "FOR RECOVERY TOOLS",
+        "The block below is your account key, locked with the phrase above. You do",
+        "not need it to reset your password in HushOS. It is here so the phrase can",
+        "open your key even without the service.",
+        "",
+        kit.recovery.toString(4),
+    )
+    val file = File(context.cacheDir, "kit/hushos-recovery-kit.txt").also { it.parentFile?.mkdirs() }
+    file.writeText(text.joinToString("\n"))
+    val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.shared", file)
+    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_STREAM, uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    context.startActivity(shareChooser(context, send, "Save your recovery kit"))
+}
+
+/* Three words picked back out of the kit before the phrase counts as saved, as on the web: each offered with two other words of the same phrase. */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+internal fun CheckWordsScreen(phrase: String, onBack: () -> Unit, onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    val words = remember(phrase) { phrase.trim().split(Regex("\\s+")) }
+    val positions = remember(phrase) { words.indices.shuffled().take(3).sorted() }
+    val options = remember(phrase) {
+        positions.associateWith { at -> (words.filterIndexed { i, _ -> i != at }.distinct().filter { it != words[at] }.shuffled().take(2) + words[at]).shuffled() }
+    }
+    var picked by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    val right = positions.all { picked[it] == words[it] }
+    AccountPage("Check you saved it", onBack) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+            Text("Pick the missing words from your kit.", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+            for (at in positions) Column(verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                FieldLabel("Word ${at + 1}")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                    for (word in options[at].orEmpty()) AlpineChip(word, selected = picked[at] == word, onClick = { picked = picked + (at to word) })
+                }
+                val choice = picked[at]
+                if (choice != null && choice != words[at]) Text("That isn’t word ${at + 1}. Look at your kit again.", style = MaterialTheme.typography.bodySmall, color = alpine.danger)
+            }
+            Button(enabled = right, onClick = onDone, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Finish") }
+            TextButton(onClick = onBack) { Text("Show my words again") }
+        }
+    }
+}
+
+/* A row that opens what is folded under it, in place: its chevron turns, and a screen reader hears whether it is open. */
+@Composable
+private fun ExpandRow(title: String, icon: ImageVector, open: Boolean, onToggle: () -> Unit) {
+    val alpine = Alpine.colors
+    val turn by animateFloatAsState(if (open) 90f else 0f, label = "chevron")
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
+            .padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, null, tint = alpine.inkMuted)
+        Text(title, style = MaterialTheme.typography.bodyLarge, color = alpine.ink, modifier = Modifier.weight(1f).padding(start = AlpineSpace.S4))
+        Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, null, tint = alpine.inkMuted, modifier = Modifier.rotate(turn))
+    }
+}
+
+/* Advanced's rows, shown on Account under its row while that is open: sharing keys, what identifies this account, and deleting it. */
+@Composable
+private fun AdvancedRows(model: DriveViewModel, state: DriveState, onReset: () -> Unit, onReplace: () -> Unit, onServer: () -> Unit) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    var deleting by rememberSaveable { mutableStateOf(false) }
+    Column {
+        // What each does is said by the page it opens, not under its row.
+        AccountRow("Rotate account key", null, Icons.Outlined.Sync, onClick = onReset)
+        AccountRow("Replace sharing keys", state.resealing?.let { (done, total) -> "Sealing your shares again · $done of $total" }, Icons.Outlined.Key, onClick = onReplace)
+        Subheader("About this account")
+        state.user?.id?.let { id ->
+            Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable {
+                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("Account ID", id))
+                model.notify("Account ID copied")
+            }.padding(horizontal = AlpineSpace.S4), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Account ID", style = MaterialTheme.typography.bodyLarge)
+                    Text(id, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace), color = alpine.inkMuted)
+                }
+                Icon(Icons.Outlined.ContentCopy, "Copy account ID", tint = alpine.inkMuted)
+            }
+        }
+        // The server this phone signs in to; it opens Self-hosting, read-only while signed in.
+        Column(Modifier.fillMaxWidth().heightIn(min = 56.dp).clickable(onClick = onServer).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
+            Text("Server address", style = MaterialTheme.typography.bodyLarge)
+            Text(state.origin.substringAfter("://").trimEnd('/') + if (state.origin.contains("hushos.com")) "" else " · self-hosted", style = MaterialTheme.typography.bodyMedium, color = alpine.inkMuted)
+        }
+        HorizontalDivider(Modifier.padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2), color = alpine.divider)
+        AccountRow("Delete account", null, Icons.Outlined.DeleteForever, danger = true) { deleting = true }
+    }
+    if (deleting) {
+        var password by retain { mutableStateOf("") }
+        var typed by rememberSaveable { mutableStateOf("") }
+        var pending by remember { mutableStateOf(false) }
+        var error by remember { mutableStateOf<String?>(null) }
+        // The second step, for an account that has it on: asked for in the same dialog, before anything is deleted.
+        val step = retain { StepUpHolder(model, com.hushos.app.data.account.StepPurpose.DELETE) }
+        val sheet = rememberKeySheet()
+        val scope = rememberCoroutineScope()
+        LaunchedEffect(Unit) { step.prepare() }
+        AlertDialog(
+            onDismissRequest = { if (!pending) deleting = false },
+            // A dialog is a window of its own: the page's secure flag does not reach it. Whenever the step here can be
+            // answered with the recovery phrase, or with another device (whose code is shown here), the dialog itself
+            // stays out of screenshots, recordings and recents.
+            properties = androidx.compose.ui.window.DialogProperties(
+                securePolicy = if (step.step.methods.any { it.secret }) androidx.compose.ui.window.SecureFlagPolicy.SecureOn
+                    else androidx.compose.ui.window.SecureFlagPolicy.Inherit,
+            ),
+            title = { Text("Delete account") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+                    Text("Every file, earlier version, share and link is deleted with the account, and can’t be recovered.")
+                    PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
+                    OutlinedTextField(value = typed, onValueChange = { typed = it }, singleLine = true, label = { Text("Type DELETE to confirm") }, enabled = !pending, modifier = Modifier.fillMaxWidth())
+                    StepUpFields(step, enabled = !pending)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !pending && !step.asking && password.isNotEmpty() && typed == "DELETE", onClick = {
+                    scope.withStep(step, sheet) { twoStep ->
+                        pending = true
+                        model.deleteAccount(password, twoStep) { failure ->
+                            if (failure == null) pending = false else scope.launch { error = step.failed(failure); pending = false }
+                        }
+                    }
+                }) { Text(if (pending) "Deleting…" else "Delete forever", color = alpine.danger) }
+            },
+            dismissButton = { TextButton(enabled = !pending, onClick = { deleting = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/*
+ * Rotate account key (was "Reset sharing keys", "Rotate keys"): when you'd use it and what changes, the
+ * password, then the new phrase, which has no way out but saving it.
+ */
+@Composable
+private fun ResetKeysScreen(model: DriveViewModel, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    var password by retain { mutableStateOf("") }
+    var pending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    // Only whether the keys were reset is saved state: the phrase is read again from the account when the page shows,
+    // so it never lands in the saved-instance bundle (which the system writes to disk).
+    var reset by rememberSaveable { mutableStateOf(false) }
+    val step = retain { StepUpHolder(model, com.hushos.app.data.account.StepPurpose.MASTER_KEY) }
+    val sheet = rememberKeySheet()
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { step.prepare() }
+    if (reset) {
+        BackHandler {}
+        PhraseScreen(model, fresh = true) { reset = false; onBack() }
+        return
+    }
+    AccountPage("Rotate account key", onBack = if (pending) null else onBack) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            Text("Your recovery phrase is replaced, and your other devices are signed out.", style = MaterialTheme.typography.bodyLarge)
+            PasswordField(password, { password = it; error = null }, "Password", error = error, enabled = !pending)
+            StepUpFields(step, enabled = !pending)
+            Button(enabled = !pending && !step.asking && password.isNotEmpty(), onClick = {
+                scope.withStep(step, sheet) { twoStep ->
+                    pending = true
+                    model.rotateKeys(password, twoStep) { made, failure ->
+                        if (made) {
+                            // The password has done its work: it is not left in a form that comes back after the sign-in.
+                            password = ""
+                            pending = false
+                            // Signed straight back in: the new words, read from the account. Otherwise the app's shell is
+                            // showing them from memory (DriveViewModel.heldWords), and this page is done with.
+                            if (model.heldWords == null) reset = true else onBack()
+                        } else scope.launch { error = failure?.let { step.failed(it) }; pending = false }
+                    }
+                }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(if (pending) "Rotating…" else "Rotate") }
+        }
+    }
+}
+
+/*
+ * New recovery words held in memory with no session to read them back with (DriveViewModel.HeldWords): after a
+ * rotation whose sign-in is still to come, or a phrase reset whose sign-in didn't happen. Drawn by the app's shell in
+ * place of everything else, tabs included, so nothing leaves them but saving and checking them.
+ */
+@Composable
+internal fun FreshWordsScreen(model: DriveViewModel, held: DriveViewModel.HeldWords, onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    val context = LocalContext.current
+    val kit = held.kit
+    val phrase = kit.phrase
+    // The kit file is only on this phone while this page is open.
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { File(context.cacheDir, "kit").deleteRecursively() } }
+    var saved by rememberSaveable { mutableStateOf(false) }
+    var checking by rememberSaveable { mutableStateOf(false) }
+    SecureWindow()
+    if (checking) {
+        BackHandler { checking = false }
+        CheckWordsScreen(phrase, onBack = { checking = false }) { model.notify("Recovery phrase saved"); onDone() }
+        return
+    }
+    BackHandler {}
+    // The web's panel for words shown to someone not signed in again, in its words (StepWords.NEW_PHRASE_…).
+    AccountPage(com.hushos.app.data.account.StepWords.NEW_PHRASE_TITLE, onBack = null) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S4)) {
+            // Nothing confirmed the change was made: the old words are not said to be dead.
+            Text(held.lead, style = MaterialTheme.typography.bodyMedium, color = if (held.certain) alpine.inkMuted else alpine.warning)
+            PhraseWords(phrase)
+            Row(horizontalArrangement = Arrangement.spacedBy(AlpineSpace.S2)) {
+                OutlinedButton(onClick = { shareKit(context, held.email, held.userId, kit) }) { Text("Save the kit") }
+                OutlinedButton(onClick = {
+                    SensitiveClipboard.copy(context, "Recovery phrase", phrase)
+                    model.notify("Copied. Paste it somewhere private, then clear your clipboard.")
+                }) { Icon(Icons.Outlined.ContentCopy, null, Modifier.size(18.dp)); Spacer(Modifier.width(AlpineSpace.S2)); Text("Copy") }
+            }
+            Text(com.hushos.app.data.account.StepWords.NEW_PHRASE_ONCE, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted)
+            Row(Modifier.fillMaxWidth().toggleable(value = saved, role = Role.Checkbox) { saved = it }, verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = saved, onCheckedChange = null)
+                Text("I’ve saved my kit or written the words down, somewhere private.", modifier = Modifier.padding(start = AlpineSpace.S3))
+            }
+            Button(enabled = saved, onClick = { checking = true }, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text(com.hushos.app.data.account.StepWords.NEW_PHRASE_SAVED) }
+        }
+    }
+}
+
+/*
+ * Replace sharing keys: a new identity, signed by the current one (a succession), so the people who checked this
+ * account's words follow it without comparing from scratch; what this account shared is sealed again under it.
+ * Nothing about the password, the phrase or the files changes, so no password is asked.
+ */
+@Composable
+private fun ReplaceKeysScreen(model: DriveViewModel, state: DriveState, onBack: () -> Unit) {
+    val alpine = Alpine.colors
+    var pending by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    AccountPage("Replace sharing keys", onBack = if (pending) null else onBack) {
+        Column(Modifier.padding(horizontal = AlpineSpace.S4), verticalArrangement = Arrangement.spacedBy(AlpineSpace.S3)) {
+            Text("Your twelve words change.", style = MaterialTheme.typography.bodyLarge)
+            error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = alpine.danger) }
+            Button(enabled = !pending && state.resealing == null, onClick = {
+                pending = true; error = null
+                model.replaceSharingKeys { failure ->
+                    pending = false
+                    if (failure == null) onBack() else error = failure
+                }
+            }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                Text(when {
+                    pending && state.resealing != null -> "Sealing shares again… ${state.resealing.first} of ${state.resealing.second}"
+                    pending -> "Replacing…"
+                    else -> "Replace keys"
+                })
+            }
+        }
+    }
+}
+
+/* After Delete account: a page that says so, instead of dropping silently to sign in. */
+@Composable
+fun AccountDeletedScreen(onDone: () -> Unit) {
+    val alpine = Alpine.colors
+    Column(Modifier.fillMaxSize().background(alpine.ground).padding(AlpineSpace.S6), verticalArrangement = Arrangement.Center) {
+        Text("Your account is deleted", style = MaterialTheme.typography.headlineLarge)
+        Text("Your files, shares, links and account are gone from HushOS. This can’t be undone.", style = MaterialTheme.typography.bodyLarge, color = alpine.inkMuted,
+            modifier = Modifier.padding(top = AlpineSpace.S3, bottom = AlpineSpace.S6))
+        Button(onClick = onDone, modifier = Modifier.fillMaxWidth().height(48.dp)) { Text("Done") }
+    }
+}

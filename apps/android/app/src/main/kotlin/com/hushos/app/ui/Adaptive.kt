@@ -13,7 +13,8 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass
-import com.hushos.app.data.Opened
+import com.hushos.app.data.vault.Opened
+import com.hushos.app.ui.families.outOfReach
 
 /*
  * Foldables, tablets and windows of any size, following Google's large screen guidelines and

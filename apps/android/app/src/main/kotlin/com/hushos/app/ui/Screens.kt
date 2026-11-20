@@ -92,6 +92,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.material3.LinearProgressIndicator
+import com.hushos.app.ui.drive.DriveState
+import com.hushos.app.ui.drive.DriveViewModel
+import com.hushos.app.ui.drive.ItemHeader
+import com.hushos.app.ui.drive.NodeRow
+import com.hushos.app.ui.drive.OFFERED_TAG_COLOURS
+import com.hushos.app.ui.drive.RestoreProblem
+import com.hushos.app.ui.drive.mimeFor
+import com.hushos.app.ui.drive.onTagColour
+import com.hushos.app.ui.drive.tagColour
+import com.hushos.app.ui.drive.whenText
 import com.hushos.tokens.AlpineSpace
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -113,8 +123,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.hushos.app.data.Opened
-import com.hushos.app.data.SharedByMe
+import com.hushos.app.data.vault.Opened
+import com.hushos.app.data.trust.SharedByMe
 import kotlinx.coroutines.launch
 
 /* Opens a decrypted file with whatever app handles its type. */
@@ -122,7 +132,7 @@ fun openWith(context: android.content.Context, uri: android.net.Uri, mime: Strin
     val type = name?.let { mimeFor(it, mime) } ?: mime
     // Markdown opens in HushOS's own viewer, as on the web and iPhone: Android has no viewer of its own, and a
     // text editor shows the raw marks. Past the web's limit it goes to another app as before.
-    if (model != null && name != null && com.hushos.app.data.MarkdownDocument.handles(name, type) && sizeOf(context, uri)?.let { it <= com.hushos.app.data.MarkdownDocument.LIMIT } == true) {
+    if (model != null && name != null && com.hushos.app.data.editor.MarkdownDocument.handles(name, type) && sizeOf(context, uri)?.let { it <= com.hushos.app.data.editor.MarkdownDocument.LIMIT } == true) {
         model.read(name, uri, type, node, workspace)
         return
     }
@@ -160,10 +170,10 @@ fun openElsewhere(context: android.content.Context, uri: android.net.Uri, type: 
 fun TagManagerSheet(model: DriveViewModel, state: DriveState, dismiss: () -> Unit) {
     val alpine = Alpine.colors
     var newName by rememberSaveable { mutableStateOf("") }
-    var renaming by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var renaming by retain { mutableStateOf<com.hushos.app.data.drive.Tag?>(null) }
     var renameDraft by rememberSaveable { mutableStateOf("") }
-    var deleting by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
-    var colouring by retain { mutableStateOf<com.hushos.app.data.Tag?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.drive.Tag?>(null) }
+    var colouring by retain { mutableStateOf<com.hushos.app.data.drive.Tag?>(null) }
     LaunchedEffect(Unit) { model.refreshTags() }
     Sheet(onDismissRequest = dismiss) {
         Text("Tags", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
@@ -241,7 +251,7 @@ fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDism
                                 .then(if (on) Modifier.border(2.dp, alpine.ink, CircleShape) else Modifier)
                                 .padding(4.dp).background(tagColour(colour), CircleShape).clip(CircleShape)
                                 .selectable(selected = on, role = androidx.compose.ui.semantics.Role.RadioButton) { choice = colour; hex = "" }
-                                .semantics { contentDescription = com.hushos.app.data.TagRegistry.colourName(colour) },
+                                .semantics { contentDescription = com.hushos.app.data.drive.TagRegistry.colourName(colour) },
                             contentAlignment = Alignment.Center,
                         ) { if (on) Icon(Icons.Outlined.Check, null, tint = onTagColour(colour), modifier = Modifier.size(20.dp)) }
                     }
@@ -271,8 +281,8 @@ fun ColourDialog(name: String, current: String, onPick: (String) -> Unit, onDism
 fun TrashScreen(model: DriveViewModel, state: DriveState, onBack: (() -> Unit)? = null) {
     val alpine = Alpine.colors
     var confirmEmpty by rememberSaveable { mutableStateOf(false) }
-    var selected by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
-    var deleting by retain { mutableStateOf<com.hushos.app.data.TrashItem?>(null) }
+    var selected by retain { mutableStateOf<com.hushos.app.data.vault.TrashItem?>(null) }
+    var deleting by retain { mutableStateOf<com.hushos.app.data.vault.TrashItem?>(null) }
     // Rows picked to restore or delete together; a long press starts it, as in Files.
     var picked by retain { mutableStateOf<Set<String>>(emptySet()) }
     var confirmMany by rememberSaveable { mutableStateOf(false) }
@@ -420,7 +430,7 @@ private fun RestoreProblemBanner(problem: RestoreProblem, retry: () -> Unit, dis
 }
 
 /* "Was in Work · Trashed today": where it was and when it went, so Restore isn't a guess. */
-private fun trashLine(entry: com.hushos.app.data.TrashItem): String {
+private fun trashLine(entry: com.hushos.app.data.vault.TrashItem): String {
     val trashed = entry.item.node.trashedAt?.let { runCatching { java.time.Instant.parse(it).toEpochMilli() }.getOrNull() }
         ?.let { whenText(it) }?.let { if (it.startsWith("Today")) "today" else if (it == "Yesterday") "yesterday" else it }
     return listOfNotNull(entry.wasIn?.let { "Was in $it" }, trashed?.let { "Trashed $it" }).joinToString(" · ")
