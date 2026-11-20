@@ -180,9 +180,19 @@ test.afterAll(async () => {
     await page.context().close();
 });
 
-/* A script's address without its query, from a request for one; null for anything else. */
-const scriptOf = (request: Request) =>
-    request.resourceType() === 'script' ? request.url().split('?')[0]! : null;
+/*
+ * A script's address without its query, from a request for one; null for anything else. WebKit
+ * reports a module worker's own script as 'xhr', not 'script' (a CI trace showed the editor's
+ * text-check worker fetched, 200, as xhr), so there an xhr for a script file counts as a script
+ * too. Chromium reports it as 'script', and only that counts there.
+ */
+const scriptOf = (request: Request) => {
+    const url = request.url().split('?')[0]!;
+    const type = request.resourceType();
+    if (type === 'script') return url;
+    const webkit = test.info().project.use.browserName === 'webkit';
+    return webkit && type === 'xhr' && /\.m?[jt]sx?$/.test(url) ? url : null;
+};
 
 /* Every script `work` makes the page fetch (a worker's included), cached or not. */
 async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
@@ -627,14 +637,21 @@ async function previewAtLine(p: Page, line: number | null) {
     return holding.top <= 1 && (next ? next.top : holding.bottom) >= -1;
 }
 
-/* Whether the source's top line is that of the preview block at the top of its view, or one before the next block. */
+/*
+ * Whether the source's top line is that of the preview block at the top of its view, or one before
+ * the next block. A block whose top is within 2px of the view's top is on the boundary: the source
+ * may show its first line or the blank line before it (the link maps the gap above a block to the
+ * line before it, and a pixel either way is the same place), so either side of it counts.
+ */
 async function sourceAtPreview(p: Page) {
     const line = await sourceTopLine(p);
     const { blocks } = await previewLayout(p);
-    const atTop = blocks.filter((block) => block.top <= 1).at(-1);
-    if (line === null || !atTop) return false;
-    const next = blocks.find((block) => block.top > 1);
-    return line >= atTop.start && line <= (next ? next.start : atTop.end + 1);
+    const above = blocks.filter((block) => block.top < -2).at(-1);
+    const boundary = blocks.find((block) => Math.abs(block.top) <= 2);
+    const from = above ?? boundary;
+    if (line === null || !from) return false;
+    const next = blocks.find((block) => block.top > 2);
+    return line >= from.start && line <= (next ? next.start : from.end + 1);
 }
 
 /* Sets a scroller's position as a person's scroll would: the page sees an ordinary scroll event. */
@@ -658,18 +675,25 @@ test('the source and the preview scroll together, both ways', async () => {
     expect(await shown.evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
 
     // The preview scrolled with the wheel: the source follows to the block now at its top.
+    const previewBefore = await shown.evaluate((element) => element.scrollTop);
+    const sourceBefore = await source.evaluate((element) => element.scrollTop);
     const box = (await shown.boundingBox())!;
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.wheel(0, 1_500);
-    await expect.poll(() => sourceAtPreview(page)).toBe(true);
-    // The wheel's smooth scroll has finished: two reads a moment apart agree.
+    // The wheel's scroll has moved the preview and finished (smooth or not): two reads a moment
+    // apart agree. Only then is the source compared, never against where both started.
     await expect
         .poll(async () => {
             const before = await shown.evaluate((element) => element.scrollTop);
             await page.waitForTimeout(200);
-            return (await shown.evaluate((element) => element.scrollTop)) === before;
+            const after = await shown.evaluate((element) => element.scrollTop);
+            return after === before && after > previewBefore + 500;
         })
         .toBe(true);
+    await expect.poll(() => sourceAtPreview(page)).toBe(true);
+    expect(await source.evaluate((element) => element.scrollTop)).toBeGreaterThan(
+        sourceBefore + 500,
+    );
 
     // Scrolled into the blank lines past the last block, the preview stops at its end. Its own
     // scroll coming back must not move the source (to the line at the preview's end, or anywhere).
