@@ -1,0 +1,19 @@
+e2e/durations.json
+  s_c60e24772e04af::t_2dafbee338c73e 2,4-8,10-11,13-16,24,35-45,47-50,53-55,59,62-74,82,93-99,101-108,111-114,117,121-122,125,129-130,134,136-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5e13947db7e1455d11e8e5648919ec23e5ec9577",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
