@@ -57,6 +57,12 @@ pub use tools::images_pdf::{
     ImagesPdfError, ImagesPdfLimits, ImagesPdfWriter, PageLayout, PageSize, IMAGES_PDF_CARD_BYTES,
     IMAGES_PDF_MAX_IMAGES, IMAGES_PDF_MAX_INPUT_BYTES, IMAGES_PDF_MAX_OUTPUT_BYTES, IMAGES_PDF_MAX_PIXELS,
 };
+pub use tools::pdf_tools::{
+    pdf_image_size, pdf_inspect, pdf_tools_limits, rotation_of, PdfInspection, PdfPage, PdfPagePlan,
+    PdfPagesWriter, PdfRefusal, PdfToolsError, PdfToolsLimits, NESTING_MAX_DEPTH, PAGE_TREE_MAX_DEPTH,
+    PDF_IMAGES_CARD_PAGES, PDF_IMAGES_MAX_PAGES, PDF_IMAGES_MAX_PIXELS, PDF_TOOLS_CARD_BYTES,
+    PDF_TOOLS_MAX_FILES, PDF_TOOLS_MAX_INPUT_BYTES, PDF_TOOLS_MAX_OUTPUT_BYTES, PDF_TOOLS_MAX_PAGES,
+};
 pub use tools::text_edit::{
     text_edit_limit, text_editable_kind, text_encode, text_open, text_read_only, LineEnding, TextEncoding,
     TextFormat, TextOpened, TextReadOnly, TEXT_EDIT_LIMIT,

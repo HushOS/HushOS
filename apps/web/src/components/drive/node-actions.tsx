@@ -5,6 +5,7 @@ import {
     EllipsisIcon,
     EyeIcon,
     FileImageIcon,
+    FileStackIcon,
     FileTextIcon,
     FlagIcon,
     FolderInputIcon,
@@ -46,6 +47,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { formatBytes, nodeSize } from '@/lib/drive/drive';
 import { pdfable } from '@/lib/images-pdf/limits';
+import { isPdf } from '@/lib/pdf-tools/names';
 import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import { useState, useSyncExternalStore } from 'react';
 
@@ -121,7 +123,18 @@ export type NodeActions = {
     onTrash: ((nodes: DriveNode[]) => void) | null;
     /* Convert, then One PDF: where results may be saved into the folder these items are in. */
     onImagesPdf?: ((nodes: DriveNode[]) => void) | null;
+    /* Edit pages on PDFs: where results may be saved into the folder these items are in. */
+    onPdfPages?: ((nodes: DriveNode[]) => void) | null;
 };
+
+/* Edit pages for a selection that is all PDFs (one is edited, several are merged), or null. */
+export function pdfPagesEntry(
+    targets: DriveNode[],
+    onPdfPages: ((nodes: DriveNode[]) => void) | null | undefined,
+): MenuEntry | null {
+    if (!onPdfPages || targets.length === 0 || !targets.every(isPdf)) return null;
+    return { label: 'Edit pages', icon: FileStackIcon, onSelect: () => onPdfPages(targets) };
+}
 
 /* Convert's entry for a selection that is all images a PDF takes, or null. */
 export function convertEntry(
@@ -173,6 +186,8 @@ export function nodeEntries(
         });
     const convert = convertEntry(targets, actions.onImagesPdf);
     if (convert) open.push(convert);
+    const pages = pdfPagesEntry(targets, actions.onPdfPages);
+    if (pages) open.push(pages);
     const organise: MenuEntry[] = [];
     if (onRename && !many)
         organise.push({
@@ -435,6 +450,7 @@ export function NodeSelectionBar({
     onClear,
     onColour,
     onImagesPdf,
+    onPdfPages,
 }: {
     selection: DriveNode[];
     own: boolean;
@@ -458,6 +474,8 @@ export function NodeSelectionBar({
     onColour?: (() => void) | null;
     /* Convert, then One PDF; absent where results may not be saved here. */
     onImagesPdf?: ((nodes: DriveNode[]) => void) | null;
+    /* Edit pages; absent where results may not be saved here. */
+    onPdfPages?: ((nodes: DriveNode[]) => void) | null;
 }) {
     // Rows leave the list as each lands in the trash. The bar keeps what it was acting on until
     // the batch is done: its count and its actions (Share and Rename would appear for the last
@@ -470,8 +488,10 @@ export function NodeSelectionBar({
     const single = items.length === 1 ? items[0]! : null;
     const canColour = Boolean(onColour) && items.every((node) => node.kind === 'folder');
     const convert = convertEntry(items, onImagesPdf);
-    /* What More holds on a wide screen: Convert, Colour, Versions, Info, Select all. */
-    const moreWide = Boolean(convert) || canColour || items.length === 1 || !allSelected;
+    const pages = pdfPagesEntry(items, onPdfPages);
+    /* What More holds on a wide screen: Convert, Edit pages, Colour, Versions, Info, Select all. */
+    const moreWide =
+        Boolean(convert) || Boolean(pages) || canColour || items.length === 1 || !allSelected;
     return (
         <SelectionBar label={`${items.length} selected`} onClear={onClear}>
             {single && own && (
@@ -577,6 +597,11 @@ export function NodeSelectionBar({
                         </DropdownMenuItem>
                     )}
                     {convert && <SubmenuEntry entry={convert} />}
+                    {pages && (
+                        <DropdownMenuItem onClick={pages.onSelect}>
+                            <FileStackIcon aria-hidden="true" /> {pages.label}
+                        </DropdownMenuItem>
+                    )}
                     {canColour && (
                         <DropdownMenuItem onClick={() => onColour?.()}>
                             <PaletteIcon aria-hidden="true" /> Colour

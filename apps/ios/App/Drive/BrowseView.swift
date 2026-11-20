@@ -639,6 +639,9 @@ private struct SelectBar: View {
                     Button("One PDF", systemImage: "doc.richtext") { action = .onePdf(items); done() }
                 }
                 .disabled(!items.allSatisfy { ImagesPdf.takes($0) && store.mayEdit($0) })
+                // Edit pages: every one a PDF (several are merged), in a folder this person may add to.
+                Button("Edit pages", systemImage: "square.stack") { action = .editPages(items); done() }
+                    .disabled(items.isEmpty || !items.allSatisfy { PdfPages.takes($0) && store.mayEdit($0) })
             } label: {
                 label("More", "ellipsis")
             }

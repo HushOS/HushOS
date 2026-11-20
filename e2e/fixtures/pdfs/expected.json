@@ -1,0 +1,1200 @@
+{
+    "canary": "HUSHOS-CANARY-PDF-5b1e",
+    "infoCanary": "HUSHOS-CANARY-INFO-c37a",
+    "files": [
+        {
+            "file": "plain.pdf",
+            "note": "A plain three-page PDF: Letter, A4 and a small page.",
+            "sha256": "1e86ccf8cc715ecfddf762a18a2e793b55a2380be89555a3a0762487cbefdc00",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                },
+                {
+                    "width": 400,
+                    "height": 600,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "rotated.pdf",
+            "note": "Already rotated: one page inherits 180 from its tree, one sets 90.",
+            "sha256": "cf4d0499c76287b1018bd67c19d9af2d4e0920edff34b3267747ca17c7c752d4",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 180
+                },
+                {
+                    "width": 720,
+                    "height": 405,
+                    "rotate": 90
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "nested.pdf",
+            "note": "A two-level page tree with inherited MediaBox, Resources and Rotate.",
+            "sha256": "810a3b776d98002f4458bcc86d11728161f1b7610b44b456cedab0423f977757",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 270
+                },
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 270
+                },
+                {
+                    "width": 400,
+                    "height": 600,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "encrypted.pdf",
+            "note": "A password (/Encrypt): refused.",
+            "sha256": "821acfeca60e78451c0e5f6f7baf2e6ac534fd84205b2d448c268e03d0cfab5b",
+            "outcome": "encrypted"
+        },
+        {
+            "file": "signed.pdf",
+            "note": "A signature field with a /ByteRange: a warning.",
+            "sha256": "502e190b045e1d4223603c2c1e9f4ecd934d6f8f1136083c3b8b4ec474abbfd8",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": true,
+            "outline": false,
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "unsigned-field.pdf",
+            "note": "An empty signature field: a form, not a signature.",
+            "sha256": "64c64ec8ee21a7c67abc27bc62c88aef883464698ec22c01571a049a4e0740eb",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "outline-form.pdf",
+            "note": "Bookmarks and a text field: a warning.",
+            "sha256": "22f04266f2f2c52972de6aaaaff096e8a854e5913824b6306c55ea2cf067e85a",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": true,
+            "form": true,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "damaged.pdf",
+            "note": "Cut off before its catalog: refused as damaged.",
+            "sha256": "ad092488c092d5b956c238458020bad9fc51bdc6b4b95b902844701f5db9928b",
+            "outcome": "damaged"
+        },
+        {
+            "file": "truncated-tail.pdf",
+            "note": "Its cross-reference table cut off: read anyway.",
+            "sha256": "f73962bdff046e1f49f56ab50ba72cd6dcd6385f279c817f3559d31a7cd08e0d",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                },
+                {
+                    "width": 400,
+                    "height": 600,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "object-streams.pdf",
+            "note": "Object streams and a cross-reference stream.",
+            "sha256": "bca3cd86652dadb0388ba6917d641f2bf6c346ffefabecca85174bef9ce7debd",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 720,
+                    "height": 405,
+                    "rotate": 90
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "incremental.pdf",
+            "note": "An incremental update that rotates page 1 and adds page 3.",
+            "sha256": "b8a54d5a11d4d2b9bcf786b86c0b040ee3141f71a5772b84371c629c682d251c",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 270
+                },
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                },
+                {
+                    "width": 400,
+                    "height": 600,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "tree-cycle.pdf",
+            "note": "A page tree that points back at itself: refused.",
+            "sha256": "69efee7558f4a9386db18ea8543098d7b8d0fee29df329da468f4ab43545a449",
+            "outcome": "damaged"
+        },
+        {
+            "file": "reference-cycle.pdf",
+            "note": "Resources that reach themselves: copied once.",
+            "sha256": "53832389bce05e494479725011c22b8b0a7b5e9caadfc6c95436dfd13cc23398",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "deep-tree.pdf",
+            "note": "A page tree 300 levels deep: refused.",
+            "sha256": "6e2d4c8f65bee880f7588befb8dd4f939f54c9bf011d2d08f87041bcf30d5501",
+            "outcome": "damaged"
+        },
+        {
+            "file": "deep-array.pdf",
+            "note": "Arrays nested 50,000 deep in the page: refused.",
+            "sha256": "4437bec89205d191350084895f3525c9c93e7a04db515fece81d8fd2efbbdab8",
+            "outcome": "damaged"
+        },
+        {
+            "file": "layered.pdf",
+            "note": "Two layers, one switched off: it stays off in every copy.",
+            "sha256": "51c8c3d96fb423153f04e31e55319dedfd1423ead339e15011551572079308c3",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 2,
+            "hiddenLayers": 1
+        },
+        {
+            "file": "layered-base-off.pdf",
+            "note": "Layers off unless listed on: the unlisted one stays off.",
+            "sha256": "34b41001bd5ddec564d2cd98f280efd45fa5772c1d7928fd879747b53a85c93a",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 2,
+            "hiddenLayers": 1
+        },
+        {
+            "file": "null-inherited.pdf",
+            "note": "A page whose own /Resources and /MediaBox are null: its tree's count.",
+            "sha256": "97041ed022386871609523f7ea375b7b441c313c28e6ec83fe7ca40f5caa91d3",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 595,
+                    "height": 842,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "user-unit.pdf",
+            "note": "A page in units of two points: its size is twice its MediaBox.",
+            "sha256": "ed96341594683e5fc213072d5f214cf7226420ef6af3fb5cab4d3465977d8ed1",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 600,
+                    "height": 400,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "empty-wide.pdf",
+            "note": "2,300 empty page tree nodes: more work than 2,000 pages allow.",
+            "sha256": "4efaa9cc49841a8253af7be235e7a9f550345ea149f01170a074a1537d488cf1",
+            "outcome": "too-many-pages"
+        },
+        {
+            "file": "annotated.pdf",
+            "note": "A square annotation with its own appearance: drawn in images.",
+            "sha256": "8bf95926ae6606fd7d90faa821842afdcd1a67ba5c31e59456a1d9fd92856c7b",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "transparency.pdf",
+            "note": "A transparency group: drawn on a canvas of its own.",
+            "sha256": "f7eddc831b305f62494710cbf578da183e50f130d83698cc0e30ed09330a5cf4",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        },
+        {
+            "file": "scans.pdf",
+            "note": "Three scans sharing one /Resources: a page copied alone brings only its own image.",
+            "sha256": "76b1a392704af364e45ef09d7f29d234fdbc85e7cb467194350866fcb7d3cd55",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
+        }
+    ],
+    "operations": [
+        {
+            "name": "rotate page 2 of plain",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 1,
+                            "rotate": 90
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 90
+                        },
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "reorder plain 3, 1, 2",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "remove page 2 of plain",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "split plain into 1-2 and 3",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "split rotated per page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "rotated.pdf",
+                            "page": 0,
+                            "rotate": 180
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 180
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "rotated.pdf",
+                            "page": 1,
+                            "rotate": 90
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 720,
+                            "height": 405,
+                            "rotate": 90
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "rotate the rotated back upright",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "rotated.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "rotated.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 720,
+                            "height": 405,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "merge plain, rotated and nested",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "plain.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "plain.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "rotated.pdf",
+                            "page": 0,
+                            "rotate": 180
+                        },
+                        {
+                            "file": "rotated.pdf",
+                            "page": 1,
+                            "rotate": 90
+                        },
+                        {
+                            "file": "nested.pdf",
+                            "page": 0,
+                            "rotate": 270
+                        },
+                        {
+                            "file": "nested.pdf",
+                            "page": 1,
+                            "rotate": 270
+                        },
+                        {
+                            "file": "nested.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 180
+                        },
+                        {
+                            "width": 720,
+                            "height": 405,
+                            "rotate": 90
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 270
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 270
+                        },
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "merge object streams and incremental, reversed",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "incremental.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "incremental.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "incremental.pdf",
+                            "page": 0,
+                            "rotate": 270
+                        },
+                        {
+                            "file": "object-streams.pdf",
+                            "page": 2,
+                            "rotate": 90
+                        },
+                        {
+                            "file": "object-streams.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "object-streams.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 270
+                        },
+                        {
+                            "width": 720,
+                            "height": 405,
+                            "rotate": 90
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the reference cycle",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "reference-cycle.pdf",
+                            "page": 0,
+                            "rotate": 90
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 90
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the signed and the form",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "signed.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "outline-form.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "outline-form.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the truncated",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "truncated-tail.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "truncated-tail.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 400,
+                            "height": 600,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the layered page turned",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "layered.pdf",
+                            "page": 0,
+                            "rotate": 90
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 90
+                        }
+                    ],
+                    "layers": 2,
+                    "hiddenLayers": 1,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "merge both layered PDFs",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "layered.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "layered-base-off.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 4,
+                    "hiddenLayers": 2,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the null-inherited page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "null-inherited.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 595,
+                            "height": 842,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the user-unit page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "user-unit.pdf",
+                            "page": 0,
+                            "rotate": 270
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 600,
+                            "height": 400,
+                            "rotate": 270
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "copy the transparency and the annotated",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "transparency.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "annotated.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "split the scans per page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-ONE-81fa"],
+                    "absent": ["HUSHOS-SCAN-TWO-29cd", "HUSHOS-SCAN-THREE-c04e"]
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-TWO-29cd"],
+                    "absent": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-THREE-c04e"]
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-THREE-c04e"],
+                    "absent": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-TWO-29cd"]
+                }
+            ]
+        },
+        {
+            "name": "remove the second scan",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "scans.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-THREE-c04e"],
+                    "absent": ["HUSHOS-SCAN-TWO-29cd"]
+                }
+            ]
+        }
+    ]
+}

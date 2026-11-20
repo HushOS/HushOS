@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Transform
 import androidx.compose.foundation.selection.selectable
 import com.hushos.app.ui.AccessText
@@ -33,6 +34,7 @@ import com.hushos.app.ui.sharing.whoCanOpenSentence
 import com.hushos.app.ui.viewers.ConvertSheet
 import com.hushos.app.ui.viewers.EditorWords
 import com.hushos.app.ui.viewers.ImagesPdfSheet
+import com.hushos.app.ui.viewers.PdfPagesSheet
 import com.hushos.core.folderSwatches
 import com.hushos.core.folderColour
 import com.hushos.core.swatchArgb
@@ -155,7 +157,7 @@ import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /* Which part of the item sheet opens first: the menu, or one action straight from the selection bar or Info. */
-enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT, CONVERT, ONE_PDF }
+enum class ItemSheet { MENU, RENAME, MOVE, COLOUR, VERSIONS, TAGS, INFO, SHARE, SEND, REPORT, CONVERT, ONE_PDF, PDF_PAGES }
 
 /*
  * Whether this person may change the file's text here: never through ownerOf's ME guess while the own root isn't loaded;
@@ -270,6 +272,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             // Convert, then One PDF: a new file beside it, while this phone may write the family's folder.
             if (com.hushos.app.data.transfers.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
+            // Edit pages: a new version or new files beside it, while this phone may write the family's folder.
+            if (com.hushos.app.data.transfers.PdfPages.takes(item) && mayEditText(model, state, item)) SheetRow("Edit pages", Icons.Outlined.Layers) { sheet = ItemSheet.PDF_PAGES }
             if (canEdit) {
                 SheetDivider()
                 SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
@@ -335,6 +339,8 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
             if (editsAsText(item) && mayEditText(model, state, item)) SheetRow(EditorWords.EDIT, Icons.Outlined.EditNote) { model.edit(item); dismiss() }
             // Convert, then One PDF: a new file beside it, for whoever may add one there.
             if (com.hushos.app.data.transfers.ImagesPdf.takes(item) && mayEditText(model, state, item)) SheetRow("Convert", Icons.Outlined.Transform) { sheet = ItemSheet.CONVERT }
+            // Edit pages: a new version or new files beside it, for whoever may change the folder's files.
+            if (com.hushos.app.data.transfers.PdfPages.takes(item) && mayEditText(model, state, item)) SheetRow("Edit pages", Icons.Outlined.Layers) { sheet = ItemSheet.PDF_PAGES }
             if (canEdit) SheetRow("Rename", Icons.Outlined.Edit) { sheet = ItemSheet.RENAME }
             if (canEdit) SheetRow("Move", Icons.AutoMirrored.Outlined.DriveFileMove) { sheet = ItemSheet.MOVE }
             SheetRow("Copy", Icons.Outlined.ContentCopy) { model.copy(listOf(item)); dismiss() }
@@ -361,6 +367,7 @@ fun ItemActions(model: DriveViewModel, state: DriveState, item: Opened, open: It
         ItemSheet.SEND -> SendCopy(model, state, listOf(item), dismiss)
         ItemSheet.CONVERT -> ConvertSheet(onePdf = { sheet = ItemSheet.ONE_PDF }, dismiss = dismiss)
         ItemSheet.ONE_PDF -> ImagesPdfSheet(model, state, listOf(item), dismiss)
+        ItemSheet.PDF_PAGES -> PdfPagesSheet(model, state, listOf(item), dismiss)
         // Main shows Info: beside the list when the window has room, otherwise as this same sheet.
         ItemSheet.INFO -> LocalInfo.current?.let { host -> LaunchedEffect(item.id) { host.open(item); dismiss() } }
             ?: InfoSheet(model, state, item, onShare = { sheet = ItemSheet.SHARE }, onTags = { sheet = ItemSheet.TAGS }, dismiss = dismiss)

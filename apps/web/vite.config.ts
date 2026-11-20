@@ -189,6 +189,44 @@ function zipJsWithoutCodecImport(): Plugin {
 }
 
 /*
+ * pdf.js runs inside Save as images' tools worker (lib/pdf-tools/pdf-render.tool-worker.ts), whose
+ * policy loads nothing at run time; check-worker-code.ts fails the build if the built worker has any
+ * import at all. pdf.js has two: its fake worker importing `workerSrc` (never reached: the tools worker
+ * hands pdf.js its worker code as `globalThis.pdfjsWorker`), and a decoder's JavaScript fallback for
+ * when WebAssembly is off (never reached: the tools worker's policy allows WebAssembly). Only the copies
+ * the tools worker imports, by `?tool-worker`, are changed; the viewer's and thumbnailer's pdf.js are
+ * left as they are. The match is on the exact text: if an upgrade changes it, this plugin stops the build.
+ */
+function pdfjsWithoutImports(): Plugin {
+    const rewrites: [RegExp, string, string][] = [
+        [
+            /pdfjs-dist[\\/]build[\\/]pdf\.mjs$/,
+            'const worker = await import(\n      /*webpackIgnore: true*/\n      /*@vite-ignore*/\n      this.workerSrc);',
+            'const worker = await Promise.reject(new Error("HushOS starts no pdf.js worker here."));',
+        ],
+        [
+            /pdfjs-dist[\\/]build[\\/]pdf\.worker\.mjs$/,
+            '} = await import(\n    /*webpackIgnore: true*/\n    /*@vite-ignore*/\n    `${WasmImage.#wasmUrl}${this._noWasmFilename}`);',
+            '} = await Promise.reject(new Error("HushOS loads no decoder fallbacks here."));',
+        ],
+    ];
+    return {
+        name: 'hushos:pdfjs-without-imports',
+        enforce: 'pre',
+        transform(code, id) {
+            const [file, query] = id.split('?');
+            if (query !== 'tool-worker') return null;
+            const rewrite = rewrites.find(([pattern]) => pattern.test(file!));
+            if (!rewrite) return null;
+            const [, from, to] = rewrite;
+            if (!code.includes(from))
+                this.error(`pdf.js no longer imports where expected: check ${file}.`);
+            return code.replace(from, to);
+        },
+    };
+}
+
+/*
  * pdf-lib (@cantoo/pdf-lib) runs in the PDF tools worker, which no policy lets run dynamic code;
  * check-worker-code.ts fails the build on any use of `Function` as a value, called or not. pdf-lib
  * uses it only as a type tag in its argument checks (`[Function]`, and `type === Function` in
@@ -232,7 +270,13 @@ export default defineConfig({
     },
     resolve: { tsconfigPaths: true },
     // Worker bundles take only these plugins in a build (the list below applies to them in dev).
-    worker: { plugins: () => [zipJsWithoutCodecImport(), pdfLibWithoutFunctionTag()] },
+    worker: {
+        plugins: () => [
+            zipJsWithoutCodecImport(),
+            pdfLibWithoutFunctionTag(),
+            pdfjsWithoutImports(),
+        ],
+    },
     // Loaded by the runtime from the output's node_modules, never bundled: their dependencies
     // need their own load order (nitro.config.ts, `traceDeps`).
     ssr: {

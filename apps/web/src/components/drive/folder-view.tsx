@@ -150,6 +150,11 @@ import {
  */
 
 // One PDF's dialog arrives when it is first asked for, not with the folder view.
+const PdfPagesDialog = lazy(() =>
+    import('@/components/drive/dialogs/pdf-pages-dialog').then((m) => ({
+        default: m.PdfPagesDialog,
+    })),
+);
 const ImagesPdfDialog = lazy(() =>
     import('@/components/drive/dialogs/images-pdf-dialog').then((m) => ({
         default: m.ImagesPdfDialog,
@@ -552,6 +557,7 @@ export function FolderView({ folderId }: { folderId: string }) {
     const [colouring, setColouring] = useState<DriveNode[] | null>(null);
     // Convert, then One PDF: the images, in the order they were selected in the list.
     const [pdfImages, setPdfImages] = useState<DriveNode[] | null>(null);
+    const [pdfPages, setPdfPages] = useState<DriveNode[] | null>(null);
     // Tag colours are this workspace's; a shared item's tags read by name alone.
     const registry = useQuery({ ...tagsQueryOptions, enabled: !area }).data ?? null;
     const [trashing, setTrashing] = useState(false);
@@ -603,8 +609,9 @@ export function FolderView({ folderId }: { folderId: string }) {
         tagging !== null ||
         paletteOpen ||
         previewing !== null ||
-        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
-        pdfImages !== null;
+        // One PDF's and Edit pages' dialogs: Delete or Enter there acts on their controls, never the files behind.
+        pdfImages !== null ||
+        pdfPages !== null;
     const enabled = !dialogOpen;
     const page = folderLink(here, folderId);
     function showPreview(node: DriveNode | null, replace = false) {
@@ -1376,6 +1383,7 @@ export function FolderView({ folderId }: { folderId: string }) {
         onReport: setReporting,
         onTrash: (nodes) => void trash(nodes),
         onImagesPdf: setPdfImages,
+        onPdfPages: setPdfPages,
     };
     /*
      * A node's menu: its own actions, or the selection's when it is part of one. A family
@@ -1398,6 +1406,7 @@ export function FolderView({ folderId }: { folderId: string }) {
             onColour: writable ? setColouring : null,
             // A result is a new file here: only where files may be added.
             onImagesPdf: canAdd && !waiting ? actions.onImagesPdf : null,
+            onPdfPages: canAdd && !waiting ? actions.onPdfPages : null,
         });
     }
 
@@ -1802,10 +1811,35 @@ export function FolderView({ folderId }: { folderId: string }) {
                     onClear={clear}
                     onColour={writable ? () => setColouring(selection) : null}
                     onImagesPdf={canAdd && !waiting ? setPdfImages : null}
+                    onPdfPages={canAdd && !waiting ? setPdfPages : null}
                 />
             )}
             {folder && (
                 <CreateFolderDialog parent={folder} open={creating} onOpenChange={setCreating} />
+            )}
+            {folder && pdfPages && (
+                <Suspense fallback={null}>
+                    <PdfPagesDialog
+                        folder={folder}
+                        files={pdfPages}
+                        onOpenChange={(open) => !open && setPdfPages(null)}
+                        onSave={(choice) => {
+                            const sources = pdfPages;
+                            clear();
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/pdf-tools/make').then(({ savePdfPages }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void savePdfPages(queryClient, {
+                                    folder,
+                                    folderName: crumbName(folder),
+                                    sources,
+                                    ...choice,
+                                });
+                            });
+                        }}
+                    />
+                </Suspense>
             )}
             {folder && pdfImages && (
                 <Suspense fallback={null}>

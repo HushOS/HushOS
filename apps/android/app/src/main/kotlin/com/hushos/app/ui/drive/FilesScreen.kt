@@ -1,6 +1,7 @@
 package com.hushos.app.ui.drive
 
 import androidx.compose.material.icons.outlined.Palette
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Transform
 import androidx.compose.runtime.retain.retain
 import androidx.activity.compose.BackHandler
@@ -111,6 +112,7 @@ import com.hushos.app.ui.sortItems
 import com.hushos.app.ui.sortLabel
 import com.hushos.app.ui.viewers.ConvertSheet
 import com.hushos.app.ui.viewers.ImagesPdfSheet
+import com.hushos.app.ui.viewers.PdfPagesSheet
 import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.launch
 
@@ -252,6 +254,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     // Convert's choices, then One PDF, for the selection.
     var convertingMany by retain { mutableStateOf<List<Opened>?>(null) }
     var pdfMany by retain { mutableStateOf<List<Opened>?>(null) }
+    var pagesMany by retain { mutableStateOf<List<Opened>?>(null) }
     var taggingMany by retain { mutableStateOf<List<Opened>?>(null) }
     var colouringMany by retain { mutableStateOf<List<Opened>?>(null) }
     var selectMenu by remember { mutableStateOf(false) }
@@ -340,6 +343,9 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
                                 if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Convert") }, leadingIcon = { Icon(Icons.Outlined.Transform, null) },
                                     enabled = shown.isNotEmpty() && shown.all { com.hushos.app.data.transfers.ImagesPdf.takes(it) && mayEditText(model, state, it) },
                                     onClick = { selectMenu = false; convertingMany = shown; clearSelection() })
+                                if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Edit pages") }, leadingIcon = { Icon(Icons.Outlined.Layers, null) },
+                                    enabled = shown.isNotEmpty() && shown.all { com.hushos.app.data.transfers.PdfPages.takes(it) && mayEditText(model, state, it) },
+                                    onClick = { selectMenu = false; pagesMany = shown; clearSelection() })
                                 if (owner != Owner.VIEW) DropdownMenuItem(text = { Text("Colour") }, leadingIcon = { Icon(Icons.Outlined.Palette, null) }, enabled = chosen.isNotEmpty() && chosen.all { it.isFolder },
                                     onClick = { selectMenu = false; colouringMany = chosen; clearSelection() })
                                 if (owner != Owner.ME && !family) DropdownMenuItem(text = { Text("Save a copy to my files") }, leadingIcon = { Icon(Icons.Outlined.LibraryAdd, null) }, enabled = chosen.isNotEmpty(),
@@ -523,6 +529,7 @@ fun BrowseScreen(model: DriveViewModel, state: DriveState, start: Opened? = null
     sendingMany?.let { items -> SendCopy(model, state, items) { sendingMany = null } }
     convertingMany?.let { items -> ConvertSheet(onePdf = { convertingMany = null; pdfMany = items }, dismiss = { convertingMany = null }) }
     pdfMany?.let { items -> ImagesPdfSheet(model, state, items) { pdfMany = null } }
+    pagesMany?.let { items -> PdfPagesSheet(model, state, items) { pagesMany = null } }
     taggingMany?.let { items -> ItemTagsSheet(model, state, items) { taggingMany = null } }
     colouringMany?.let { items -> FolderColourDialog(items, onPick = { model.recolour(items, it); colouringMany = null }, onDismiss = { colouringMany = null }) }
     sheetFor?.let { (item, open) ->

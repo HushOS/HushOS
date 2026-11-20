@@ -20,6 +20,8 @@ enum NodeAction: Identifiable {
     case report(Opened)
     /* Convert, then One PDF: the images, in the list's order. */
     case onePdf([Opened])
+    /* Edit pages: one PDF, or several to merge, in the list's order. */
+    case editPages([Opened])
 
     var id: String {
         switch self {
@@ -32,6 +34,7 @@ enum NodeAction: Identifiable {
         case .info(let item): return "info-\(item.id)"
         case .report(let item): return "report-\(item.id)"
         case .onePdf(let items): return "pdf-" + items.map(\.id).joined(separator: ",")
+        case .editPages(let items): return "pages-" + items.map(\.id).joined(separator: ",")
         }
     }
 }
@@ -99,6 +102,7 @@ private struct NodeActionSheets: ViewModifier {
                 case .tags(let item): ItemTagsSheet(item: item).environment(store)
                 case .colour(let items): FolderColourSheet(folders: items).environment(store)
                 case .onePdf(let items): ImagesPdfSheet(images: items).environment(store)
+                case .editPages(let items): PdfPagesSheet(files: items).environment(store)
                 case .info(let item): InfoSheet(item: item, open: { next in action = next }).environment(store)
                 case .report(let item):
                     ReportSheet(item: item, from: store.mounts.first { $0.share.workspaceId == item.node.workspaceId }?.share.granter.name) { category, reason, email in
@@ -233,6 +237,9 @@ struct NodeMenu: View {
                 Menu("Convert", systemImage: "photo.on.rectangle") {
                     Button("One PDF", systemImage: "doc.richtext") { action = .onePdf([item]) }
                 }
+            }
+            if PdfPages.takes(item) && store.mayEdit(item) {
+                Button("Edit pages", systemImage: "square.stack") { action = .editPages([item]) }
             }
         }
         Section {

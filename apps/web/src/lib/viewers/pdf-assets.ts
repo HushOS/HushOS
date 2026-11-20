@@ -46,3 +46,30 @@ export function pdfAssetsReady() {
     })();
     return ready;
 }
+
+let files: Promise<Record<string, ArrayBuffer>> | null = null;
+
+/*
+ * Every asset as bytes by its path under pdf.js's folder ("wasm/openjpeg.wasm"), for a tools worker that
+ * may fetch nothing itself (Save as images): read from the HTTP cache pdfAssetsReady filled. A file that
+ * can't be read is left out, as pdfAssetsReady leaves it: pdf.js then does without it.
+ */
+export function pdfAssetFiles(origin: string) {
+    files ??= (async () => {
+        await pdfAssetsReady();
+        const entries = await Promise.all(
+            preload.map(async (file) => {
+                try {
+                    const response = await fetch(new URL(base + file, origin), {
+                        cache: 'force-cache',
+                    });
+                    return response.ok ? ([file, await response.arrayBuffer()] as const) : null;
+                } catch {
+                    return null;
+                }
+            }),
+        );
+        return Object.fromEntries(entries.filter((entry) => entry !== null));
+    })();
+    return files;
+}
