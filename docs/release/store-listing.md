@@ -214,7 +214,7 @@ The first release of HushOS for Android.
 </en-US>
 ```
 
-**Graphics:** `docs/release/assets/google-play-icon.png` (512×512, 32-bit PNG) and `docs/release/assets/google-feature-graphic.png` (1024×500, 24-bit PNG, no alpha), both made by `bun run --cwd apps/web store:graphics` from `apps/web/src/lib/brand.ts`. The feature graphic is the home page's social card cut to Play's size: the mark, "Nobody else can look inside.", "End-to-end encrypted cloud storage. Open source." and the dithered HUSH panel (redrawn 2026-10-19; the earlier one was the plain white card from before the site's Dither identity).
+**Graphics:** `docs/release/assets/google-play-icon.png` (512×512, 32-bit PNG) and `docs/release/assets/google-feature-graphic.png` (1024×500, 24-bit PNG, no alpha), both made by `bun run --cwd apps/web store:graphics` from `apps/web/src/lib/site/brand.ts`. The feature graphic is the home page's social card cut to Play's size: the mark, "Nobody else can look inside.", "End-to-end encrypted cloud storage. Open source." and the dithered HUSH panel (redrawn 2026-10-19; the earlier one was the plain white card from before the site's Dither identity).
 
 **Data-sync video** (google.md 3.2): `docs/release/assets/android-data-sync.mp4`, 56 s, 1080×1920, recorded on the store emulator on 2026-10-19. A 400 MB upload is started from Files › Work, the app goes Home, and the shade shows "Uploading 1 file" from about 30% to "1 file uploaded". Then the app reopens with the file in place. The notification never names the file. The emulator's own "Serial console enabled" notice shows under it; a take on a real phone would be cleaner.
 

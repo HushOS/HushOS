@@ -487,12 +487,12 @@ The server's management area states this when `RELAY_URL` points at a relay outs
 
 ### The web
 
-- **The crypto worker** (`@hushos/auth/worker`, run by `apps/web/src/lib/auth.worker.ts`) gains a collab module and owns the WebSocket: it makes the join's keys and certificate, derives the lobby key from the node key it already holds, checks joins and rekeys, holds session keys and sequence windows, seals and opens every frame, and refreshes tickets. Session keys and certificate keys never leave it and are never written to IndexedDB.
+- **The crypto worker** (`@hushos/auth/worker`, run by `apps/web/src/lib/auth/auth.worker.ts`) gains a collab module and owns the WebSocket: it makes the join's keys and certificate, derives the lobby key from the node key it already holds, checks joins and rekeys, holds session keys and sequence windows, seals and opens every frame, and refreshes tickets. Session keys and certificate keys never leave it and are never written to IndexedDB.
 - **The page** holds the Yjs document and the editor. A small provider class (`HushProvider`, the interface `y-websocket`'s provider has: status, synced, awareness) passes plaintext updates and awareness to and from the worker by `postMessage`. The page needs plaintext to show the text, so that crossing reveals nothing new.
 - **CodeMirror:** `yCollab(ytext, awareness, { undoManager })` from `y-codemirror.next`. `Y.UndoManager` tracks only local changes, so undo undoes one's own typing, never someone else's.
 - **Lexical:** `CollaborationPlugin` from `@lexical/yjs` with a `providerFactory` that returns `HushProvider`, `shouldBootstrap` only for the seeding host.
 - **Tables:** the CSV Table tab writes each cell edit as a splice of that cell's raw text in the Yjs text, and the grid re-parses from the text, so milestone 1's byte-exact rule holds with several people editing.
-- **Preload:** Yjs, `y-codemirror.next` and the provider join the post-unlock preload (`lib/preload.ts`), as every viewer and editor chunk does since round 3, so fetching them does not say that someone is about to edit together. `@lexical/yjs` joins it with Notes and documents.
+- **Preload:** Yjs, `y-codemirror.next` and the provider join the post-unlock preload (`lib/viewers/preload.ts`), as every viewer and editor chunk does since round 3, so fetching them does not say that someone is about to edit together. `@lexical/yjs` joins it with Notes and documents.
 - **Lock and sign-out** end every session: the worker sends `leave`, the host (if it was this device and editors remain) hands over, keys are dropped, and the draft stays sealed as milestone 1 keeps it.
 
 ### The phones

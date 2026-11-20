@@ -360,7 +360,7 @@ The server can list one folder. It cannot answer "everything tagged Home" or "fi
 - Tombstones are kept 90 days. The workspace records the change sequence of the newest tombstone the purge job dropped.
 - A feed asked from a cursor below it answers `resync`. On that, the device throws the mirror away and starts from 0 rather than keep a deletion it never heard of.
 - It is dropped when another workspace opens on the device.
-- It is deleted at sign-out with everything else the browser keeps for the account (`apps/web/src/lib/device-data.ts`).
+- It is deleted at sign-out with everything else the browser keeps for the account (`apps/web/src/lib/account/device-data.ts`).
 - While the browser is only locked it stays, unsealed beyond the server's own envelopes: its ids, sizes, times and writers' ids read as they do to the server.
 - A row whose parent is missing is a page the device missed, and the build starts over once.
 

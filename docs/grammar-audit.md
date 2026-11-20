@@ -171,7 +171,7 @@ First audit: 2.
 **Today.**
 
 - Rename (menu, selection bar, F2) opens a dialog with one field.
-- Where: `apps/web/src/components/drive/rename-dialog.tsx`, mounted in `folder-view.tsx` 1540 and `home-view.tsx` 698.
+- Where: `apps/web/src/components/drive/dialogs/rename-dialog.tsx`, mounted in `folder-view.tsx` 1540 and `home-view.tsx` 698.
 - Account's Name is already inline: `apps/web/src/routes/_authenticated/app/account.tsx` 248–358.
 
 **The rules call for.**
@@ -188,7 +188,7 @@ First audit: 4.
 
 **Today.**
 
-- The Move dialog just closes: a cue if Interface sounds are on, and no toast. `apps/web/src/components/drive/move-dialog.tsx` 131–155.
+- The Move dialog just closes: a cue if Interface sounds are on, and no toast. `apps/web/src/components/drive/dialogs/move-dialog.tsx` 131–155.
 - A drag onto a folder gets a toast with Undo: `folder-view.tsx` 650–708.
 - A drag onto a crumb gets a toast without Undo: `folder-view.tsx` 740–758.
 
@@ -206,7 +206,7 @@ New in this pass.
 **Today.**
 
 - Colour, on a folder's menu or the selection bar, opens a dialog of swatches and a custom colour, with Save.
-- Where: `apps/web/src/components/drive/folder-colour-dialog.tsx` 37–57, offered from `node-actions.tsx` 175–179, mounted in `folder-view.tsx` 1593.
+- Where: `apps/web/src/components/drive/dialogs/folder-colour-dialog.tsx` 37–57, offered from `node-actions.tsx` 175–179, mounted in `folder-view.tsx` 1593.
 - A tag's colour is already a popover applied as it's chosen: `tags-view.tsx` 219–243, `tag-colour.tsx` 351–385.
 
 **The rules call for.**
@@ -224,7 +224,7 @@ First audit: 15.
 
 - Versions of “report.pdf” is a dialog. Restore is a button inside it.
 - Delete the earlier version asks in a second dialog over it.
-- Where: `apps/web/src/components/drive/versions-dialog.tsx` 84–90, 250–257 (Restore), 325–350 (the confirm).
+- Where: `apps/web/src/components/drive/dialogs/versions-dialog.tsx` 84–90, 250–257 (Restore), 325–350 (the confirm).
 
 **The rules call for.**
 
@@ -241,7 +241,7 @@ First audit: 16.
 **Today.**
 
 - A dialog with one field. It also makes chains ("Reports/2026/Q3").
-- Where: `apps/web/src/components/drive/create-folder-dialog.tsx`, mounted in `folder-view.tsx` 1538 and `home-view.tsx` 691.
+- Where: `apps/web/src/components/drive/dialogs/create-folder-dialog.tsx`, mounted in `folder-view.tsx` 1538 and `home-view.tsx` 691.
 
 **The rules call for.** A new row in the list, its name field focused, chains included.
 
@@ -254,7 +254,7 @@ First audit: 17.
 **Today.**
 
 - Tags for “report.pdf” is a dialog listing every tag as on, some or off, with Save tags.
-- Where: `apps/web/src/components/drive/tag-dialog.tsx` 192, 316.
+- Where: `apps/web/src/components/drive/tags/tag-dialog.tsx` 192, 316.
 
 **The rules call for.** A choice among a few values: a popover anchored to Tags, applied as each tag is chosen, with a new tag made in its field.
 
@@ -267,7 +267,7 @@ First audit: 18.
 **Today.**
 
 - Below 1024px, Info is a dialog.
-- Where: `apps/web/src/components/drive/info-dialog.tsx`; the width check is `useWideScreen`, `node-actions.tsx` 50–60.
+- Where: `apps/web/src/components/drive/dialogs/info-dialog.tsx`; the width check is `useWideScreen`, `node-actions.tsx` 50–60.
 
 **The rules call for.** A panel without room becomes a sheet from an edge: the bottom on a phone, the right on a tablet.
 
@@ -280,7 +280,7 @@ First audit: 19.
 **Today.**
 
 - The button turns to "Copied", and a toast says "Link copied" with what the link allows.
-- Where: `apps/web/src/components/drive/share-dialog.tsx` 1063–1078, 1157.
+- Where: `apps/web/src/components/drive/sharing/share-dialog.tsx` 1063–1078, 1157.
 
 **The rules call for.**
 
@@ -296,7 +296,7 @@ First audit: 20.
 
 **Today.**
 
-- `apps/web/src/components/drive/share-dialog.tsx` 471.
+- `apps/web/src/components/drive/sharing/share-dialog.tsx` 471.
 - DESIGN.md, under Components, says the sheet is "Share" on every client.
 
 **The rules call for.**
@@ -316,7 +316,7 @@ First audit: 21, changed.
 
 **Today.**
 
-- Add someone is still a dialog: `apps/web/src/routes/_authenticated/app/_drive/contacts.tsx` 136–141, `components/drive/add-someone.tsx`.
+- Add someone is still a dialog: `apps/web/src/routes/_authenticated/app/_drive/contacts.tsx` 136–141, `components/drive/sharing/add-someone.tsx`.
 - Remove asks once: `contacts.tsx` 317–345.
 
 **The rules call for.**
@@ -338,7 +338,7 @@ First audit: 23.
 **Today.**
 
 - The account menu's Lock on this browser, and Account's button of the same name, ask "Lock HushOS on this browser?"
-- Where: `apps/web/src/components/device-control.tsx` 79–100; opened from `user-menu.tsx` 143–150 and `routes/_authenticated/app/account.tsx` 417–423.
+- Where: `apps/web/src/components/account/device-control.tsx` 79–100; opened from `user-menu.tsx` 143–150 and `routes/_authenticated/app/account.tsx` 417–423.
 - Lock instead, inside the Sign out confirm, locks at once: `user-menu.tsx` 219–232.
 
 **The rules call for.**
@@ -354,8 +354,8 @@ First audit: 22, now with Rename family too.
 
 **Today.** Each is a one-field dialog, beside Account's inline Name.
 
-- Rename device: `apps/web/src/components/account-devices.tsx` 210–300.
-- Rename tag: `apps/web/src/components/drive/tag-view.tsx` 348–436, also opened from `tags-view.tsx` 263.
+- Rename device: `apps/web/src/components/account/account-devices.tsx` 210–300.
+- Rename tag: `apps/web/src/components/drive/tags/tag-view.tsx` 348–436, also opened from `tags-view.tsx` 263.
 - Rename family (**Family**): `apps/web/src/components/families/rename-dialog.tsx`, opened from the page title in `family-page.tsx` 230–235.
 
 **The rules call for.** Inline, as Name.
@@ -425,7 +425,7 @@ First audit: 10.
 
 - The Move dialog's heading "Places" lists My files and each family's folders.
 - Its note says "Moving to another place…".
-- Where: `apps/web/src/components/drive/move-dialog.tsx` 201, 209, 326.
+- Where: `apps/web/src/components/drive/dialogs/move-dialog.tsx` 201, 209, 326.
 - Billing's places are a plan's room for people (Add places, "4 of 8 places taken").
 
 **The rules call for.**
@@ -443,7 +443,7 @@ First audit: 25.
 
 - `Skeleton`: `apps/web/src/components/ui/skeleton.tsx` 7.
 - The file list's loading rows: `apps/web/src/components/drive/file-list.tsx` 765–767.
-- The storage card's placeholder: `apps/web/src/components/storage-card.tsx` 89.
+- The storage card's placeholder: `apps/web/src/components/account/storage-card.tsx` 89.
 
 **The rules call for.** Nothing pulses. Loading rows are still, as the drive's "Opening your files" line already is.
 
