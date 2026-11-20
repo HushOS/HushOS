@@ -11,7 +11,7 @@ import Testing
  * throwaway key: one granting another app's group and the team's HushOS group, one granting none.
  */
 @Suite struct AppGroupTests {
-    private static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../Fixtures").standardized
+    private static let fixtures = Checkout.file("apps/ios/Packages/HushOSKit/Tests/Fixtures")
     private func profile(_ name: String) throws -> Data { try Data(contentsOf: Self.fixtures.appendingPathComponent("\(name).mobileprovision")) }
 
     @Test func aSideloadedProfileGivesTheTeamsGroupNotTheBuiltOne() throws {

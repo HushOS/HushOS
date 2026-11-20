@@ -18,8 +18,7 @@ struct MasterKeyRotationTests {
     let oldRoot: Data
 
     init() throws {
-        let here = URL(fileURLWithPath: #filePath)
-        let file = here.deletingLastPathComponent().appendingPathComponent("../../../../../../crates/hushos-core/fixtures/web.json").standardized
+        let file = Checkout.file("crates/hushos-core/fixtures/web.json")
         web = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as! [String: Any]
         area = web["areaSelfGrant"] as! [String: Any]
         userId = area["userId"] as! String

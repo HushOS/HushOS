@@ -5,7 +5,7 @@ import HushOSCore
  * Passkeys and security keys as the second step (docs/two-step-design.md 3, 6, 12): which server
  * this build can use one for, what the app tells a server it can answer (`twoStepMethods`) and
  * when, and the bytes between the core's base64url and what AuthenticationServices takes and hands
- * back. The system's sheet itself is the app's (`App/PasskeySheet.swift`); everything here is
+ * back. The system's sheet itself is the app's (`App/Account/PasskeySheet.swift`); everything here is
  * plain values, so it is tested without one.
  */
 

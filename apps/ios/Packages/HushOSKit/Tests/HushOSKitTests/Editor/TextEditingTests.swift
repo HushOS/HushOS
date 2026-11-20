@@ -35,10 +35,7 @@ private struct Cases: Decodable { let bytes: [ByteCase]; let edits: [EditCase]; 
 private func saved(_ text: String, from original: Data) -> Data? { TextEditing.SaveState(opening: original)?.bytes(for: text) }
 
 private let cases: Cases = {
-    // This file, then Tests/HushOSKitTests up to the repository root: seven steps.
-    var url = URL(fileURLWithPath: #filePath)
-    for _ in 0 ..< 7 { url.deleteLastPathComponent() }
-    let data = try! Data(contentsOf: url.appendingPathComponent("crates/hushos-core/fixtures/text-edit-cases.json"))
+    let data = try! Data(contentsOf: Checkout.file("crates/hushos-core/fixtures/text-edit-cases.json"))
     return try! JSONDecoder().decode(Cases.self, from: data)
 }()
 

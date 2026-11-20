@@ -15,11 +15,7 @@ import UniformTypeIdentifiers
  * Each page is drawn and looked at where a person looks: red along the top, green down the left.
  */
 @Suite struct ImagesPdfTests {
-    /* This file sits seven folders down from the checkout's root. */
-    static let fixtures = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("e2e/fixtures/images")
+    static let fixtures = Checkout.file("e2e/fixtures/images")
 
     static func fixture(_ name: String) throws -> Data { try Data(contentsOf: fixtures.appendingPathComponent(name)) }
 

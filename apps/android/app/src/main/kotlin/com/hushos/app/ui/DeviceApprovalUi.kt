@@ -108,7 +108,7 @@ import kotlinx.coroutines.withContext
  * Turning the method on is answered the other way round: the answering sheet approves on a press,
  * draws a code and shows it; the asking page shows no code and no QR code, takes that code typed and
  * sends it as typed, with nothing here to check it against.
- * The twin of the iPhone app's `App/DeviceApproval.swift`.
+ * The twin of the iPhone app's `App/Account/DeviceApproval.swift`.
  */
 
 /* MARK: Asking */

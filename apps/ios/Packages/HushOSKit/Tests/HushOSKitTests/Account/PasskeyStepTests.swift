@@ -264,8 +264,7 @@ private final class Key: @unchecked Sendable {
 /* What the system's sheet is asked and hands back, against the fixture the core and the web share. */
 @Suite struct KeyBytesTests {
     static func fixture() throws -> [String: Any] {
-        let here = URL(fileURLWithPath: #filePath)
-        let file = here.deletingLastPathComponent().appendingPathComponent("../../../../../../crates/hushos-core/fixtures/two-step-keys.json").standardized
+        let file = Checkout.file("crates/hushos-core/fixtures/two-step-keys.json")
         return try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     }
 

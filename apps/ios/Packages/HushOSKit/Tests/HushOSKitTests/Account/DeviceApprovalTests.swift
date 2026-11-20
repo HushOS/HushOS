@@ -1117,8 +1117,7 @@ private func wrong(_ code: String) -> String {
 
     /* The web's own requests (the fixture the core holds itself to): this phone expects the web's code and signs the web's statement. */
     @Test func aRequestMadeInABrowserIsAnsweredToTheBrowsersBytes() async throws {
-        let here = URL(fileURLWithPath: #filePath)
-        let file = here.deletingLastPathComponent().appendingPathComponent("../../../../../../crates/hushos-core/fixtures/web-device-approval.json").standardized
+        let file = Checkout.file("crates/hushos-core/fixtures/web-device-approval.json")
         let fixture = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         let cases = try #require(fixture["cases"] as? [[String: Any]])
         #expect(!cases.isEmpty)
