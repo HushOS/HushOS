@@ -1,0 +1,19 @@
+.github/workflows/webkit.yml
+  s_c60e24772e04af::t_20c5e00a407cb8 145-146,148-152
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "573584115735aa7dbf2f3f1dc91c12094d50c987",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
