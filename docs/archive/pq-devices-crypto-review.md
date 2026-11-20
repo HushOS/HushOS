@@ -56,7 +56,7 @@ Replace the §9 test with this one: a server that substitutes keys on both sides
 
 **What.** Envelope-migrations §7 (lines 145–151) and devices-design §6 (line 214) let a conversion go through at once from "a device approved ... by the phrase or at enrolment". But a guardian holds the child's root, through the guardian seal (groups-design 2.9), and the root opens the phrase:
 
-- The recovery envelope's `encryptedRecoveryKey` is the recovery secret sealed under `HKDF(root, salt, "hushos/recovery/secret-backup/v1")` (`packages/crypto/src/recovery.ts:146-166`).
+- The recovery envelope's `encryptedRecoveryKey` is the recovery secret sealed under `HKDF(root, salt, "hushos/recovery/secret-backup/v1")` (`packages/crypto/src/account/recovery.ts:146-166`).
 - That backup is how `/app/recovery-key` shows the phrase again (`packages/crypto/src/session.ts:1421-1434`).
 
 Separately, "approved by another of the child's devices" is conferred by any device. A device of the `guardian` or `password` class can approve a second device, and that second device then counts as the child's.
@@ -129,7 +129,7 @@ Accept that a password change then makes the other devices approve again, and sa
 
 ### H4. The v2 succession chain is specified "by keys", but the code compares only X25519 and Ed25519
 
-**What.** Identity-pq §2 (line 95) says `verifySuccessionChain` "keeps its continuity rules (by keys ...)". In both twins, the chain starts and continues on X25519 and Ed25519 alone, and each link is verified under the key the link itself names (`packages/crypto/src/identity.ts:585-619`, `crates/hushos-core/src/identity.rs:563-592`). `PinnedKeys` has no ML-DSA field.
+**What.** Identity-pq §2 (line 95) says `verifySuccessionChain` "keeps its continuity rules (by keys ...)". In both twins, the chain starts and continues on X25519 and Ed25519 alone, and each link is verified under the key the link itself names (`packages/crypto/src/account/identity.ts:585-619`, `crates/hushos-core/src/identity.rs:563-592`). `PinnedKeys` has no ML-DSA field.
 
 **Attack.** Suppose the code is extended the obvious way: `oldMlDsa` and `newMlDsa` are added to the statement, and the hybrid signature is verified under the link's own keys. A quantum forger can then start a chain at the pinned X25519 and Ed25519 keys with an `oldMlDsa` of their own. The Ed25519 half verifies under the pinned key, the ML-DSA half verifies under the forger's key, and the pin moves to the forger. This is the forged succession that the post-quantum design exists to stop.
 
@@ -144,7 +144,7 @@ Add this test: a link whose ML-DSA half is valid under any key other than the pi
 
 ### H5. Links survive conversion, and the guardian already has every link's URL
 
-**What.** Envelope-migrations §7, step 3 (line 131), says that "links are re-sealed by the rotation as today". The owner's sealed copy of each link (`secretEnvelope`, holding the fragment secret, the path token and the password's stretched key) is sealed under the node key (`packages/crypto/src/links.ts:163-200`). Rotation seals the link again with the same secret (`packages/drive/src/client.ts:1455-1465`).
+**What.** Envelope-migrations §7, step 3 (line 131), says that "links are re-sealed by the rotation as today". The owner's sealed copy of each link (`secretEnvelope`, holding the fragment secret, the path token and the password's stretched key) is sealed under the node key (`packages/crypto/src/drive/links.ts:163-200`). Rotation seals the link again with the same secret (`packages/drive/src/client.ts:1455-1465`).
 
 **Attack.** Before `adult_from`, the guardian browses the child's space, which is allowed. Using node keys under the old workspace key, they open every `secretEnvelope` and collect each full URL. After conversion the links still work with the same secrets. As an anonymous visitor, the guardian opens every linked file and folder, including anything added to a linked folder later. No help from the server is needed. The claim that "they hold nothing that opens what comes next" (line 128) is false for every linked subtree.
 
@@ -206,8 +206,8 @@ Microsoft's number matching makes the person type the number for this reason.
 
 Three flows write a password envelope today, and none of them is excluded under Keys need a device:
 
-- **The phrase reset.** The reset message even signs over `envelope` (`packages/crypto/src/recovery.ts:52-84`). Devices-design line 135 says only that the reset "replaces the password".
-- **Master-key rotation** (`packages/crypto/src/security.ts:149-191`). It also opens the root from the password envelope that level 2 has deleted.
+- **The phrase reset.** The reset message even signs over `envelope` (`packages/crypto/src/account/recovery.ts:52-84`). Devices-design line 135 says only that the reset "replaces the password".
+- **Master-key rotation** (`packages/crypto/src/trust/security.ts:149-191`). It also opens the root from the password envelope that level 2 has deleted.
 - **The conversion switch**, which writes "the new root's password envelope" (envelope-migrations line 121).
 
 Any of these silently returns the account to level 1, cryptographically.
@@ -246,7 +246,7 @@ This makes H2's fix mandatory.
 
 ### M4. Version 3 pins do not fit in the settings document
 
-Identity-pq §2 says that "Comparing words writes a version 3 pin: all four public keys". In base64url that is 43 + 43 + 2603 + 1579 = 4268 characters per contact, before names and the other fields. Settings are capped at 64 KiB in both twins (`packages/crypto/src/contacts.ts:20`, `crates/hushos-core/src/contacts.rs:17`), and the sharing ledger and group pins share that space. After about a dozen contacts, saving fails with "Settings are too large.", and no new pin or ledger entry can be saved.
+Identity-pq §2 says that "Comparing words writes a version 3 pin: all four public keys". In base64url that is 43 + 43 + 2603 + 1579 = 4268 characters per contact, before names and the other fields. Settings are capped at 64 KiB in both twins (`packages/crypto/src/trust/contacts.ts:20`, `crates/hushos-core/src/contacts.rs:17`), and the sharing ledger and group pins share that space. After about a dozen contacts, saving fails with "Settings are too large.", and no new pin or ledger entry can be saved.
 
 **Fix.** Pins keep SHA-256 digests of the ML-DSA and ML-KEM keys, as `kemPublicKeyHash` already does, and compare the served keys against them. Do the same for group pins (`firstMlDsaPublicKey`) and for any ML-DSA key added to roster entries.
 
@@ -267,7 +267,7 @@ The rollback mark does not catch this, because the sequence number does not go d
 
 Identity-pq §2 (line 81) says that a pin from before the release trusts nothing "when the served identity is version 2". It does not say what happens when the server serves the stripped version 1 form: the same X25519 and Ed25519 keys, with no ML-DSA key.
 
-Today `pinVerified` (`packages/crypto/src/pins.ts:14-29`) checks only the v2 fingerprint. `trustGrantee` accepts a KEM key on the strength of an Ed25519 binding by the pinned key (`apps/web/src/lib/trust/contacts.ts:536-558`). So the server can keep every reader who hasn't compared words again on pre-release trust by serving version 1. That includes KEM keys vouched for only by Ed25519, which is the second attack in identity-pq's "Why, and what it fixes".
+Today `pinVerified` (`packages/crypto/src/trust/pins.ts:14-29`) checks only the v2 fingerprint. `trustGrantee` accepts a KEM key on the strength of an Ed25519 binding by the pinned key (`apps/web/src/lib/trust/contacts.ts:536-558`). So the server can keep every reader who hasn't compared words again on pre-release trust by serving version 1. That includes KEM keys vouched for only by Ed25519, which is the second attack in identity-pq's "Why, and what it fixes".
 
 **Fix.**
 
@@ -383,7 +383,7 @@ Envelope-migrations line 130 says that "Uploads made meanwhile are written under
 
     Not carrying v2 pins forward is sufficient once M6 is closed.
 
-- **Settings document v2.** The document version sits inside the AEAD, so only the person's own devices can write either form. Old web and Rust clients refuse a v2 document (`packages/crypto/src/contacts.ts:233`, `crates/hushos-core/src/contacts.rs:263`), so the gate fails closed as claimed, apart from M5.
+- **Settings document v2.** The document version sits inside the AEAD, so only the person's own devices can write either form. Old web and Rust clients refuse a v2 document (`packages/crypto/src/trust/contacts.ts:233`, `crates/hushos-core/src/contacts.rs:263`), so the gate fails closed as claimed, apart from M5.
 - **Confidentiality of the device key transfer.** It uses X25519 plus ML-KEM-768 with suite 3's salt. The associated data binds `userId`, `requestId` and the root's `keyVersion`, so nothing replays across requests. Once C1 is fixed, authentication by short code depends only on the hash, so it is already post-quantum.
 - **Level 1.** The description is accurate: a gate on the server that stops a password thief when the server is honest, and nothing when it is breached. One thing is missing: a breached server can also test password guesses offline against the OPAQUE record, so "together with the password" includes a guessed one. `finishLogin` returns the envelope today (`packages/auth/src/server.ts:432-444`), so level 1 has to hold it back there and in `startSecurityChange`.
 - **Push payloads.** Only random event ids reach APNs, FCM and Web Push (RFC 8291). The text is written on the device.

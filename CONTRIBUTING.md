@@ -699,7 +699,7 @@ Both twins share target names and input formats, so any finding replays in the o
 | -------------- | ---------------------------------------------------------------------------------------------------- |
 | Rust           | cargo-fuzz targets in `crates/hushos-core/fuzz`, its own workspace. Verdicts in `src/targets.rs`.    |
 | TypeScript     | Jazzer.js targets in `packages/crypto/fuzz`. Verdicts in `verdicts.ts`, entry points in `jazzer.ts`. |
-| Property tests | `packages/crypto/src/*.property.test.ts` (fast-check), run by `bun run test`                         |
+| Property tests | `packages/crypto/src/**/*.property.test.ts` (fast-check), run by `bun run test`                      |
 | Differential   | `bun run fuzz:diff` feeds both twins the same inputs                                                 |
 
 Rust:
