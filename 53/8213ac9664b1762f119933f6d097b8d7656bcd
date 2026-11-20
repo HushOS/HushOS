@@ -1,0 +1,140 @@
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/PdfPagesSheet.kt
+  s_c60e24772e04af::t_ca20d004eccafe 1-305
+apps/web/src/components/drive/dialogs/pdf-pages-dialog.tsx
+  s_c60e24772e04af::t_5c62d21969ff5c 1-655,658-659
+  s_c60e24772e04af::t_de22d8909499ba 656-657,660-683
+apps/android/app/src/androidTest/kotlin/com/hushos/app/PdfPagesDeviceTest.kt
+  s_c60e24772e04af::t_72dceb74ac4900 1-99
+  s_c60e24772e04af::t_de4fa51b138f0f 100
+apps/web/src/lib/pdf-tools/structure.ts
+  s_c60e24772e04af::t_aa57e874c7e0f5 1-359
+  s_c60e24772e04af::t_6377c4bd471aa9 360-369
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Transfers/PdfPages.swift
+  s_c60e24772e04af::t_d1440e4f4841b6 1-418
+  s_c60e24772e04af::t_1316cdb274dc27 419-426
+apps/web/src/lib/pdf-tools/make.ts
+  s_c60e24772e04af::t_b69d6771a3b65b 1-452,457
+  s_c60e24772e04af::t_063517321a0822 453-456,458-481
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/PdfPages.kt
+  s_c60e24772e04af::t_baf4cbbaa21399 1-419
+apps/web/src/lib/pdf-tools/names.ts
+  s_c60e24772e04af::t_debc4a6238bd00 1-84
+  s_c60e24772e04af::t_dc9e644a68c640 85-90
+crates/hushos-core/src/tools/pdf_tools.rs
+  s_c60e24772e04af::t_4c7e854b614eb3 1-676,678-679
+  s_c60e24772e04af::t_0d0d7aa0908dc1 677,680-704
+e2e/fixtures/pdfs/make.py
+  s_c60e24772e04af::t_93271ff10c282a 1-573
+crates/hushos-core/src/tools/pdf_tools/tests.rs
+  s_c60e24772e04af::t_e0e2e440454fed 1-278
+  s_c60e24772e04af::t_6d74e330dc515c 279-298
+apps/web/src/lib/pdf-tools/pdf-tools.tool-worker.ts
+  s_c60e24772e04af::t_e5d9dc6a4c873e 1-100
+  s_c60e24772e04af::t_70849172655f74 101-104
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Transfers/PdfPagesTests.swift
+  s_c60e24772e04af::t_ecf504aa50c3e3 1-161
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/PdfPagesTest.kt
+  s_c60e24772e04af::t_ecdd091f3c0f6f 1-142
+apps/web/src/lib/pdf-tools/names.test.ts
+  s_c60e24772e04af::t_90b419b7aab044 1-95
+apps/web/src/lib/pdf-tools/page-thumbnails.ts
+  s_c60e24772e04af::t_8f635208da4d5b 1-93
+  s_c60e24772e04af::t_2bc93ba05c1358 94-102
+e2e/pdf-tools.spec.ts
+  s_c60e24772e04af::t_e5844e10fec0ff 1-475,479-480
+  s_c60e24772e04af::t_1a94840adc3b82 476-478,481-486
+apps/web/src/lib/pdf-tools/protocol.ts
+  s_c60e24772e04af::t_a8c122d8d5f8fa 1-90
+  s_c60e24772e04af::t_7e52fc95318cb4 91-94
+apps/ios/App/Viewers/PdfPagesSheet.swift
+  s_c60e24772e04af::t_996d8400e5d662 1-366
+apps/web/src/lib/pdf-tools/structure.test.ts
+  s_c60e24772e04af::t_07227b34fc5c25 1-181
+apps/web/src/lib/pdf-tools/pdf-render.worker.ts
+  s_c60e24772e04af::t_15db24c720348e 1-112
+  s_c60e24772e04af::t_a2613e11fe81c5 113-147
+Cargo.lock
+  s_c60e24772e04af::t_29e847606f9110 5-10,28,33-43,51-52,58-72,319-337,389-397,429,452,464,468-477,570-581,679,693,840-848,935-949,1026-1027,1375,1391,1624-1633,1806-1832,1873-1882,1938-1964,1975-1983,2356-2361,2538,2808-2813,3802,3805-3810
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/DriveViewModel.kt
+  s_c60e24772e04af::t_ac17a9325d5534 650,980,1021,2696-2813
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/FilesScreen.kt
+  s_c60e24772e04af::t_96938d8e5d4d7f 4,115,257,346-348,532
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/ItemActions.kt
+  s_c60e24772e04af::t_4d36ebb78a4c79 8,37,160,275-276,342-343,370
+apps/ios/App/Drive/BrowseView.swift
+  s_c60e24772e04af::t_c84732deecca3d 642-644
+apps/ios/App/Drive/NodeActions.swift
+  s_c60e24772e04af::t_ff09f6ce52113e 23-24,37,105,241-243
+apps/web/scripts/check-worker-code.ts
+  s_c60e24772e04af::t_0dd6e2bfe6ae63 29-30
+apps/web/src/components/drive/folder-view.tsx
+  s_c60e24772e04af::t_499b7e5a071de6 153-157,560,612-614,1386,1409,1814,1820-1843
+apps/web/src/components/drive/home-view.tsx
+  s_c60e24772e04af::t_463dc5c5c12087 85-89,150-154,188-190,399,431-458,768,771-794
+apps/web/src/components/drive/node-actions.tsx
+  s_c60e24772e04af::t_dbdd09f17dacce 8,50,126-127,130-138,189-190,453,477-478,491-494,600-604
+apps/web/src/content/roadmap.ts
+  s_c60e24772e04af::t_412e71a1bb8aa4 53,292
+apps/web/src/lib/pdf-tools/pdf-reader.testkit.ts
+  s_c60e24772e04af::t_051e49437ede9e 1-27
+apps/web/src/lib/tools/run.test.ts
+  s_c60e24772e04af::t_bf0475b80e8d3d 841-867
+apps/web/src/lib/tools/run.ts
+  s_c60e24772e04af::t_f63604bf1d6fc8 86-91,243,495,583-590
+crates/hushos-core/Cargo.toml
+  s_c60e24772e04af::t_6b92df9627bb9b 58-61
+crates/hushos-core/fuzz/Cargo.lock
+  s_c60e24772e04af::t_49724c3ae2c67f 5-10,28,33-43,51-52,58-72,118-123,152-179,205,209-219,227-228,240,244-253,272-283,350,473,489-497,575-595,630-631,667,691-696,719,724,733,737,773-782,792-801,854-896,903-912,957-992,1025,1130-1140,1166-1171,1181-1186,1193,1196-1201,1356-1367,1397-1407,1468-1473,1489-1494,1536-1541
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_7cadbaed76e7ec 60-65
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_cf52d63f72f819 1,5
+docs/file-tools-design.md
+  s_c60e24772e04af::t_66f1a90fce777f 340-342,354,403,521,601-627
+e2e/durations.json
+  s_c60e24772e04af::t_1a6c17b4e8fac9 44
+e2e/fixtures/pdfs/damaged.pdf
+  s_c60e24772e04af::t_cbcf153485a0c6 1-21
+e2e/fixtures/pdfs/deep-array.pdf
+  s_c60e24772e04af::t_7abeba5ea99819 1-42
+e2e/fixtures/pdfs/deep-tree.pdf
+  s_c60e24772e04af::t_90ac1ae6cb0c92 1-1327
+e2e/fixtures/pdfs/expected.json
+  s_c60e24772e04af::t_e5192ce52c1ce8 1-741
+e2e/fixtures/pdfs/incremental.pdf
+  s_c60e24772e04af::t_7da5ad2f3cd361 1-93
+e2e/fixtures/pdfs/nested.pdf
+  s_c60e24772e04af::t_ec820e4bce89b9 1-76
+e2e/fixtures/pdfs/outline-form.pdf
+  s_c60e24772e04af::t_f4465356726266 1-98
+e2e/fixtures/pdfs/plain.pdf
+  s_c60e24772e04af::t_cd16647c15bd3d 1-73
+e2e/fixtures/pdfs/reference-cycle.pdf
+  s_c60e24772e04af::t_d64ab7ca46078d 1-51
+e2e/fixtures/pdfs/rotated.pdf
+  s_c60e24772e04af::t_94eed024e624cf 1-59
+e2e/fixtures/pdfs/signed.pdf
+  s_c60e24772e04af::t_2c3c75cc8f6ef5 1-71
+e2e/fixtures/pdfs/tree-cycle.pdf
+  s_c60e24772e04af::t_e3c668e40753c3 1-45
+e2e/fixtures/pdfs/truncated-tail.pdf
+  s_c60e24772e04af::t_fc4aa71edd50af 1-71
+e2e/fixtures/pdfs/unsigned-field.pdf
+  s_c60e24772e04af::t_429950370e073d 1-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "538213ac9664b1762f119933f6d097b8d7656bcd",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
