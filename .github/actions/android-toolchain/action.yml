@@ -16,8 +16,8 @@ runs:
         - uses: oven-sh/setup-bun@v2
           with:
               bun-version: 1.4.4
-        # The runner points ANDROID_NDK_HOME (and its aliases) at its own default NDK, and
-        # build-core.sh would take the newest one installed: both are pinned here instead, or
+        # The runner points ANDROID_NDK_HOME (and its aliases) at its own default NDK: the pinned
+        # one is installed and named here instead (build-core.sh reads the same ndkVersion), or
         # the core would be built with one NDK and stripped by AGP with another.
         - name: NDK and build-tools
           shell: bash

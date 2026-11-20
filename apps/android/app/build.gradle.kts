@@ -98,9 +98,9 @@ val buildNumber: Int = (project.findProperty("buildNumber") as String?)?.toInt()
 android {
     namespace = "com.hushos.app"
     compileSdk = 37
-    // The NDK the Rust core is built with (scripts/build-core.sh takes the newest installed): AGP strips the packaged native
+    // The NDK the Rust core is built with (scripts/build-core.sh and CI read this line): AGP strips the packaged native
     // libraries and extracts their symbols with it. Without one it packages them unstripped and extracts nothing.
-    ndkVersion = "27.1.12297006"
+    ndkVersion = "30.0.16248370"
 
     defaultConfig {
         applicationId = "com.hushos.app"

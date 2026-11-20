@@ -34,7 +34,9 @@ if [[ -z "${HUSHOS_UPLOAD_STORE_PASSWORD:-}" ]]; then
     export HUSHOS_UPLOAD_STORE_PASSWORD
 fi
 
-[[ -d core/src/main/jniLibs ]] || (cd ../.. && bun run core:android)
+# Always through the core build: libraries left by an earlier build may be from another commit or NDK, and an
+# unchanged core rebuilds in seconds.
+(cd ../.. && bun run core:android)
 ./gradlew :app:bundleRelease -q -PbuildNumber="$BUILD"
 AAB=app/build/outputs/bundle/release/app-release.aab
 # Refuse to hand over a bundle signed with the debug key (Play would refuse it too, later).
