@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.10.0](https://github.com/HushOS/HushOS/compare/v1.9.0...v1.10.0) (2026-11-20)
+
+
+### Features
+
+* **apps:** edit text and code files, on the web, iPhone and Android ([#455](https://github.com/HushOS/HushOS/issues/455)) ([8c30d42](https://github.com/HushOS/HushOS/commit/8c30d42e1c2dca06af9426e640a1fd77c7819888))
+* **apps:** edit the pages of PDFs, on the web, iPhone and Android ([#472](https://github.com/HushOS/HushOS/issues/472)) ([80c32dc](https://github.com/HushOS/HushOS/commit/80c32dcf1c0e0cac222ec92a3d0535a4d86f491d))
+* **apps:** edit UTF-16, byte-order-marked and CRLF text, with a Markdown preview, on the web, iPhone and Android ([#458](https://github.com/HushOS/HushOS/issues/458)) ([3450039](https://github.com/HushOS/HushOS/commit/3450039c46ea99853f7a1bce78596c24999bbb04))
+* **apps:** follow typing and scroll in the Markdown preview, draw Mermaid on the web, side by side on wide phones ([#464](https://github.com/HushOS/HushOS/issues/464)) ([e214a64](https://github.com/HushOS/HushOS/commit/e214a64b44158cf6d5dbeb84b018ee1079d77b40))
+* **apps:** keep sealed drafts of unsaved text, on the web, iPhone and Android ([#465](https://github.com/HushOS/HushOS/issues/465)) ([75fa4db](https://github.com/HushOS/HushOS/commit/75fa4db6f59487771ae245ebe6ec1cba65a84e54))
+* **apps:** make one PDF from a selection of images, on the web, iPhone and Android ([#463](https://github.com/HushOS/HushOS/issues/463)) ([1322bca](https://github.com/HushOS/HushOS/commit/1322bca4ac87891c31892f915d8e49436418c101))
+* **apps:** start the second step on the usual way, with ten device requests a day and the prompt's rows on every client ([#452](https://github.com/HushOS/HushOS/issues/452)) ([b70ae3d](https://github.com/HushOS/HushOS/commit/b70ae3db40c9a3c743cfdf5f47acff14c4a1d0bd))
+
+
+### Bug fixes
+
+* **web:** keep the AWS SDK out of the server bundle ([#460](https://github.com/HushOS/HushOS/issues/460)) ([d6ea254](https://github.com/HushOS/HushOS/commit/d6ea2546b7d0c3caed5fd63fb71e4a5f6aac0482))
+* **web:** ring the item the keyboard highlights in menus, selects and lists ([#454](https://github.com/HushOS/HushOS/issues/454)) ([9125ba4](https://github.com/HushOS/HushOS/commit/9125ba40e730829483d7d447106eec6b555a9aaf))
+* **web:** run the built server's modules in source order ([#462](https://github.com/HushOS/HushOS/issues/462)) ([8d620fe](https://github.com/HushOS/HushOS/commit/8d620fea4499c1b1135e2415dd8653bbae2b036f))
+
 ## [1.9.0](https://github.com/HushOS/HushOS/compare/v1.8.0...v1.9.0) (2026-11-18)
 
 
