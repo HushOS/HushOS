@@ -1,0 +1,564 @@
+apps/android/app/src/androidTest/kotlin/com/hushos/app/ImagesPdfDeviceTest.kt
+  s_c60e24772e04af::t_add2371907da53 11-12
+apps/android/app/src/androidTest/kotlin/com/hushos/app/ToolCutoffTest.kt
+  s_c60e24772e04af::t_9b29662516144d 5-9
+apps/android/app/src/main/kotlin/com/hushos/app/HushOSApplication.kt
+  s_c60e24772e04af::t_85503273aa7589 4,16,31
+apps/android/app/src/main/kotlin/com/hushos/app/MainActivity.kt
+  s_c60e24772e04af::t_7457417dd811e9 9,71-72
+apps/android/app/src/main/kotlin/com/hushos/app/PickerSignInActivity.kt
+  s_c60e24772e04af::t_2bc41413505dfb 11,13
+apps/android/app/src/main/kotlin/com/hushos/app/ShareActivity.kt
+  s_c60e24772e04af::t_16155c47eeead3 10-11
+apps/android/app/src/main/kotlin/com/hushos/app/data/FamilyWalkWork.kt
+  s_c60e24772e04af::t_23db95baa25a5d 14-22
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/DeviceName.kt
+  s_c60e24772e04af::t_916e88a560a17a 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/RecoveryKitText.kt
+  s_c60e24772e04af::t_662ce6df02314c 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/RecoveryWords.kt
+  s_c60e24772e04af::t_5a545e86640dfb 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/ServerAddress.kt
+  s_c60e24772e04af::t_67f121ecd7bf56 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/SessionGuard.kt
+  s_c60e24772e04af::t_0692d6c9b7669c 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/SignupRules.kt
+  s_c60e24772e04af::t_d325a0252b5e4a 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/FilesRoots.kt
+  s_c60e24772e04af::t_8b695d9bfd3bb5 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/KeepRules.kt
+  s_c60e24772e04af::t_8fb36e28e7f51c 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Names.kt
+  s_c60e24772e04af::t_7eaba1d5696d63 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/SharedText.kt
+  s_c60e24772e04af::t_5758096ab90618 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/editor/MarkdownLines.kt
+  s_c60e24772e04af::t_9917274ee28502 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/ArchiveWords.kt
+  s_c60e24772e04af::t_d6a62d255098d2 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/Attempt.kt
+  s_c60e24772e04af::t_5dcbe3f321c507 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/Background.kt
+  s_c60e24772e04af::t_8ffa1a3087dacf 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/JobEnd.kt
+  s_c60e24772e04af::t_692971dd598bae 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/LandedJobs.kt
+  s_c60e24772e04af::t_215a2180876e51 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/UploadNames.kt
+  s_c60e24772e04af::t_08bfe9e55db7ae 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/Fingerprint.kt
+  s_c60e24772e04af::t_66974427f6269a 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/vault/Vault.kt
+  s_c60e24772e04af::t_262d6bb8a6452d 1,6-110
+apps/android/app/src/main/kotlin/com/hushos/app/files/HushOSDocumentsProvider.kt
+  s_c60e24772e04af::t_ae5450f82b16f6 17-28,81,130,213,449,474,485,496,507,516,559,600,602,609,625,629,650,670,683,695
+apps/android/app/src/main/kotlin/com/hushos/app/files/ProviderFamilies.kt
+  s_c60e24772e04af::t_57a65d0d172656 6-17,19-22,278,375,478,554,587
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/PasskeySheet.kt
+  s_c60e24772e04af::t_be6331ecfc16c8 1,15-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/DriveViewModel.kt
+  s_c60e24772e04af::t_84a6ab3246dc5d 1,14-81,149,170,211,277,309,330,332,334,339,351,366,388,442,444,446,464,516,573,578,600,611-612,615,617,622,632,677,689,701-702,712-713,733,737,757,769,784,800-801,803-804,807-809,813,816,819-820,824,834-835,843,850,855-857,869,880-881,894,898,919,924,927,934,940,944,970-971,1040-1041,1046-1047,1068,1071,1079,1136,1162,1164,1170-1171,1273,1306,1363,1448,1464,1472-1473,1475-1476,1488-1489,1491-1495,1497-1499,1501-1502,1505-1506,1510-1512,1564,1586,1602,1628,1650-1651,1656,1712,1744,1767-1769,1787,1825,1929,1935,1947,1952-1953,1960,1969,1991,2086,2110,2134,2168-2169,2172,2184,2200,2208,2239,2252,2278,2313,2423,2498-2499,2502-2503,2541,2556,2568,2631,2660,2668,2671,2673,2686-2689,2697,2733,2751,2755,2795,2833,2970,2972,3008,3012,3037,3039,3068,3072-3073,3100,3103,3121,3134,3233
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/FolderRefresh.kt
+  s_c60e24772e04af::t_7911672835f908 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/TrashBatch.kt
+  s_c60e24772e04af::t_4fd10b587d096c 1,3-9
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/SharingRefresh.kt
+  s_c60e24772e04af::t_544726e61a3a65 1
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/ArchiveBrowse.kt
+  s_c60e24772e04af::t_9e8e774259dc75 1,9-11,60,64,209,230
+apps/android/app/src/test/kotlin/com/hushos/app/LinkFilterTest.kt
+  s_c60e24772e04af::t_0d38feebeb6f58 7-9
+apps/android/app/src/test/kotlin/com/hushos/app/data/ApprovalServer.kt
+  s_c60e24772e04af::t_a0ca6ea0c42747 3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/FakeDrive.kt
+  s_c60e24772e04af::t_acc91baf88f903 3-10
+apps/android/app/src/test/kotlin/com/hushos/app/data/FamilyFixture.kt
+  s_c60e24772e04af::t_47320b13c7d124 4-12
+apps/android/app/src/test/kotlin/com/hushos/app/data/WebFixture.kt
+  s_c60e24772e04af::t_58e5ff46a68d01 3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/AccountStoreTest.kt
+  s_c60e24772e04af::t_a4dba2871be06e 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/DeviceApprovalTest.kt
+  s_c60e24772e04af::t_b788fd219dff03 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/DeviceIdentityTest.kt
+  s_c60e24772e04af::t_480ca266cfd16a 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/DeviceNameTest.kt
+  s_c60e24772e04af::t_867d8bb0765763 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/OwnIdentityTest.kt
+  s_c60e24772e04af::t_0662897777f995 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/PasskeysTest.kt
+  s_c60e24772e04af::t_e19093ca382eca 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/RecoveryKitTextTest.kt
+  s_c60e24772e04af::t_e2fd61f019236d 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/RecoveryWordsTest.kt
+  s_c60e24772e04af::t_8aeda9fe2a65a2 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/ServerAddressTest.kt
+  s_c60e24772e04af::t_5a93815ec7eaeb 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SessionCheckTest.kt
+  s_c60e24772e04af::t_22a47315dfbb4c 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SessionGuardTest.kt
+  s_c60e24772e04af::t_21aa374a2903f6 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SettingsKeyTest.kt
+  s_c60e24772e04af::t_89bc31d0a2cc12 1,3-7
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SettingsReuseTest.kt
+  s_c60e24772e04af::t_7ffbc31bb8d992 1,4-9
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SettingsTest.kt
+  s_c60e24772e04af::t_b606223b412f53 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SignupRulesTest.kt
+  s_c60e24772e04af::t_1423433d6545f5 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/TwoStepTest.kt
+  s_c60e24772e04af::t_ab6d6fd9cdd470 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/DriveRootTest.kt
+  s_c60e24772e04af::t_b5102f9e77645b 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/FilesChangesTest.kt
+  s_c60e24772e04af::t_7d8b831266aa32 1,6-7
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/FilesRootsTest.kt
+  s_c60e24772e04af::t_b7a02da4773a7b 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/FolderPickTest.kt
+  s_c60e24772e04af::t_0a1ecc7cc81b3c 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/InfoShareListTest.kt
+  s_c60e24772e04af::t_df515afea6fe73 1,4-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/KeepRulesTest.kt
+  s_c60e24772e04af::t_b293a8ccea93e1 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/NamesTest.kt
+  s_c60e24772e04af::t_8bd6f263ba1ce6 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/NodeAttributesTest.kt
+  s_c60e24772e04af::t_a82e82b7c6105b 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/NodeCacheTest.kt
+  s_c60e24772e04af::t_8c3d6d144781d2 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/PeopleFilterTest.kt
+  s_c60e24772e04af::t_4800c6d891ee6c 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/RestoredVersionTest.kt
+  s_c60e24772e04af::t_401b091b89b672 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/SavedCopyTest.kt
+  s_c60e24772e04af::t_0516285d31aa37 1,3-13
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/ScopedIdsTest.kt
+  s_c60e24772e04af::t_b929472e9b7f05 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/ShareOpenTest.kt
+  s_c60e24772e04af::t_59eb428ce28cac 1,3-11
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/SharedLoadTest.kt
+  s_c60e24772e04af::t_076c7c9f393577 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/TagsTest.kt
+  s_c60e24772e04af::t_1517cca7c6f916 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/TrashBatchesTest.kt
+  s_c60e24772e04af::t_f2d8124189dc95 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/editor/DraftsTest.kt
+  s_c60e24772e04af::t_ce543f145ce536 1,3-7,30
+apps/android/app/src/test/kotlin/com/hushos/app/data/editor/MarkdownDocumentTest.kt
+  s_c60e24772e04af::t_3589880ba85700 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/editor/MarkdownLinesTest.kt
+  s_c60e24772e04af::t_68017ab7d67af3 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/editor/TextEditingTest.kt
+  s_c60e24772e04af::t_a4eb5b92fb9a79 1,3-19
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyLeaveTest.kt
+  s_c60e24772e04af::t_f1a1a558b2108d 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyRemovalTest.kt
+  s_c60e24772e04af::t_7f4ca8024e57aa 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyRolesTest.kt
+  s_c60e24772e04af::t_39e089f8241163 1,3-7
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyUploadsTest.kt
+  s_c60e24772e04af::t_533f641f3d7197 1,3-23
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyWalksTest.kt
+  s_c60e24772e04af::t_0d4c8f572a04ef 1,3-12
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/JoinedLoadsTest.kt
+  s_c60e24772e04af::t_0e72b8338dd5e8 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/PlanStandingTest.kt
+  s_c60e24772e04af::t_30efb5bd37a526 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/StoragePoolTest.kt
+  s_c60e24772e04af::t_96d914ebf35929 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/platform/AppLinksTest.kt
+  s_c60e24772e04af::t_11934b5171da68 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/platform/ProblemsTest.kt
+  s_c60e24772e04af::t_a35b68d4eac807 1,3-10
+apps/android/app/src/test/kotlin/com/hushos/app/data/platform/PushAskTest.kt
+  s_c60e24772e04af::t_c1923c4f03f2a0 1,3-7
+apps/android/app/src/test/kotlin/com/hushos/app/data/platform/PushRegistrarTest.kt
+  s_c60e24772e04af::t_08de058fdda163 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/AttemptTest.kt
+  s_c60e24772e04af::t_517976ec1092cc 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/BackgroundTest.kt
+  s_c60e24772e04af::t_86ddf7872aebf5 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/FailedTransfersTest.kt
+  s_c60e24772e04af::t_23224622ee2e91 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/ImagesPdfTest.kt
+  s_c60e24772e04af::t_868de3e9bcb8d7 1,3-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/JobEndTest.kt
+  s_c60e24772e04af::t_15d7429af383d8 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/JobLocksTest.kt
+  s_c60e24772e04af::t_9b2a23cc59d543 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/JobNamesTest.kt
+  s_c60e24772e04af::t_9e3dcfaccf539b 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/LandedJobsTest.kt
+  s_c60e24772e04af::t_7e5cd21857be04 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/OneAfterAnotherTest.kt
+  s_c60e24772e04af::t_d2a852401d1970 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/ResumableTest.kt
+  s_c60e24772e04af::t_aae54c61307115 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/SaveRunEngineTest.kt
+  s_c60e24772e04af::t_995f482825b2a8 1,4-11
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/SaveRunFaultTest.kt
+  s_c60e24772e04af::t_f793480a7c724e 1,3-9
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/SaveRunTest.kt
+  s_c60e24772e04af::t_08f7073ffb65c1 1,4-24
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/SaveTargetsTest.kt
+  s_c60e24772e04af::t_914dbb8ec7d7e3 1,4-11
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/TransferNamesTest.kt
+  s_c60e24772e04af::t_130da2f334d959 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/UploadFinishTest.kt
+  s_c60e24772e04af::t_1736ea688a777d 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/UploadNamesTest.kt
+  s_c60e24772e04af::t_57e99b3191ca3e 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/UploadWorkerTest.kt
+  s_c60e24772e04af::t_05067b4e46deba 1,11-21
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/ContactGuardTest.kt
+  s_c60e24772e04af::t_d8f330b5beb4ad 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/FingerprintTest.kt
+  s_c60e24772e04af::t_97f44a6f6a8148 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/IntegrityTest.kt
+  s_c60e24772e04af::t_c49c183695a8bc 1,3-10
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/SharingTrustTest.kt
+  s_c60e24772e04af::t_846799f6409246 1,3-10
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/SuccessionPinTest.kt
+  s_c60e24772e04af::t_e8740559f2f805 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/TrustLoadsTest.kt
+  s_c60e24772e04af::t_11e69c78c67219 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/vault/MasterKeyRotationTest.kt
+  s_c60e24772e04af::t_8675ff4edbb807 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/data/vault/ResealTest.kt
+  s_c60e24772e04af::t_2ed70d48f9776c 1,3-11
+apps/android/app/src/test/kotlin/com/hushos/app/data/vault/RotationRaceTest.kt
+  s_c60e24772e04af::t_a0c124bbc45b97 1,4-6
+apps/android/app/src/test/kotlin/com/hushos/app/data/vault/VaultAttributesTest.kt
+  s_c60e24772e04af::t_f4306e66270647 1,4-10
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesSaveOrderTest.kt
+  s_c60e24772e04af::t_9db1d228d1c1ce 13-16,19-22,25-28,1399
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesTreeGrantsTest.kt
+  s_c60e24772e04af::t_935cda3e35ffe0 5,8-9,37,115
+apps/android/app/src/test/kotlin/com/hushos/app/files/FilesWriteModesTest.kt
+  s_c60e24772e04af::t_605bebdef5ec53 5,8-9,45,162-164
+apps/android/app/src/test/kotlin/com/hushos/app/files/ProviderFamiliesTest.kt
+  s_c60e24772e04af::t_2d29b574361b3f 9,11,13-23,25,35,85,121,299-300,860,1165,1192,1267,1508,1528,1535-1536,1556,1576,1591,1595-1596,1600,1622,1626,1628,1650,1654-1655,1673,1679,1696,1735,1739-1740,1747,1831,1875,1906-1907,1948,1968,2022
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveBrowseTest.kt
+  s_c60e24772e04af::t_45a234b40eb0b7 3-7,73,113,217
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ArchiveSessionsTest.kt
+  s_c60e24772e04af::t_5140cd31cade22 3-5,174-176,180,193
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/ToolRunsTest.kt
+  s_c60e24772e04af::t_978b512bd8683b 3-12,491
+apps/android/app/src/test/kotlin/com/hushos/app/ui/NoticeQueueTest.kt
+  s_c60e24772e04af::t_89511991c65af3 3
+apps/android/app/src/test/kotlin/com/hushos/app/ui/account/ApprovalInboxTest.kt
+  s_c60e24772e04af::t_3dc729ee36599f 1,3,5-12,258,282
+apps/android/app/src/test/kotlin/com/hushos/app/ui/account/DeviceSetupTest.kt
+  s_c60e24772e04af::t_b986af84494430 1,3,5-17
+apps/android/app/src/test/kotlin/com/hushos/app/ui/account/PasskeySheetTest.kt
+  s_c60e24772e04af::t_e87e55bb22a071 1,10-11
+apps/android/app/src/test/kotlin/com/hushos/app/ui/account/PickerReturnTest.kt
+  s_c60e24772e04af::t_d97920e029d30b 1,3-5
+apps/android/app/src/test/kotlin/com/hushos/app/ui/drive/AfterAddTest.kt
+  s_c60e24772e04af::t_397b942efb2dbd 1,3-8
+apps/android/app/src/test/kotlin/com/hushos/app/ui/drive/FolderRefreshTest.kt
+  s_c60e24772e04af::t_12cc9a9dda92b4 1,3-4
+apps/android/app/src/test/kotlin/com/hushos/app/ui/drive/TrashBatchTest.kt
+  s_c60e24772e04af::t_b6a18506568024 1,3-11
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamiliesModelRacesTest.kt
+  s_c60e24772e04af::t_09150160cd5eb9 1,4,7-13,15,97,105,131,135,226-227,277
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamiliesModelSessionTest.kt
+  s_c60e24772e04af::t_2b6696506ae066 1,4,7-11
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamiliesSessionTest.kt
+  s_c60e24772e04af::t_abf8cec08d573a 1-10,206,238-240
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyFoldersTest.kt
+  s_c60e24772e04af::t_59a9982e046ec5 1,3-4,49,54
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyManageModelTest.kt
+  s_c60e24772e04af::t_12a82a52ec84d1 1,4,7-19,199,316,327,364,373,392,426,443,451,457
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyPlanTest.kt
+  s_c60e24772e04af::t_66449b372d215f 1,3-4
+  s_c60e24772e04af::t_f43c887ba1ec2e 93
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyRemovalModelTest.kt
+  s_c60e24772e04af::t_f55fb7ead8dfee 1,4,6-8,48
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyRolesModelTest.kt
+  s_c60e24772e04af::t_789a726b08aeb0 1,4,7-18,120,139,146,211
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/FamilyWorkScheduleTest.kt
+  s_c60e24772e04af::t_a5da51c1a2be91 1,4,7-11
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/LeaveDialogStateTest.kt
+  s_c60e24772e04af::t_c3aea03d2554aa 1,4,7-12
+apps/android/app/src/test/kotlin/com/hushos/app/ui/families/PersonalCheckTest.kt
+  s_c60e24772e04af::t_74f0e75e86d13c 1,3
+apps/android/app/src/test/kotlin/com/hushos/app/ui/sharing/SharingRefreshTest.kt
+  s_c60e24772e04af::t_725163015fe35a 1
+apps/android/app/src/test/kotlin/com/hushos/app/ui/viewers/ArchiveTextBlocksTest.kt
+  s_c60e24772e04af::t_f0187a36d46e0a 1
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Transfers/ArchiveWords.swift
+  s_c60e24772e04af::t_d17417b042bb93 6
+apps/web/src/lib/archives/words.ts
+  s_c60e24772e04af::t_50774bcae3d965 6
+apps/android/app/src/main/kotlin/com/hushos/app/data/PushTokens.kt
+  s_f4e92488d5dd9a::t_d8301b56339bcc 11-13
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferNotices.kt
+  s_f4e92488d5dd9a::t_c45170208e6c57 16-17
+apps/android/app/src/main/kotlin/com/hushos/app/data/TransferQueue.kt
+  s_f4e92488d5dd9a::t_551fb7504c0617 19-43
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/AccountStore.kt
+  s_f4e92488d5dd9a::t_f9dbac052e48df 1,4-27
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/Auth.kt
+  s_f4e92488d5dd9a::t_2b6e2d6bf40ee6 1,4-11
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/DeviceApproval.kt
+  s_f4e92488d5dd9a::t_3411b6996a7701 1,4-6,82
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/OwnIdentity.kt
+  s_f4e92488d5dd9a::t_b3f37986f52675 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/Passkeys.kt
+  s_f4e92488d5dd9a::t_e7cd9c71cf5b33 1,5,19
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/SettingsMark.kt
+  s_f4e92488d5dd9a::t_834dd6c5462726 1,4-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/account/TwoStep.kt
+  s_f4e92488d5dd9a::t_9c3e32a89fe44a 1,3-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Catalogue.kt
+  s_f4e92488d5dd9a::t_588eefeffabf68 1,3-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/DecryptedCopies.kt
+  s_f4e92488d5dd9a::t_0ce46521095a90 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/DriveApi.kt
+  s_f4e92488d5dd9a::t_1ca01ded874d8b 1,3-8
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/DriveRoot.kt
+  s_f4e92488d5dd9a::t_0b192667afbeb8 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/FolderPick.kt
+  s_f4e92488d5dd9a::t_2441bb562c2c37 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Ids.kt
+  s_f4e92488d5dd9a::t_58e3d89e54eae2 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/ItemKind.kt
+  s_f4e92488d5dd9a::t_14b569808b2d30 1-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Links.kt
+  s_f4e92488d5dd9a::t_dfd5224424e7a5 1,3-9
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Mirror.kt
+  s_f4e92488d5dd9a::t_1edc02d9c1a248 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/NodeCache.kt
+  s_f4e92488d5dd9a::t_7d21aed827d4af 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Offline.kt
+  s_f4e92488d5dd9a::t_53f2c7fdc9a1f5 1,4
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Places.kt
+  s_f4e92488d5dd9a::t_5ad8df1b57032e 1,4
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Shared.kt
+  s_f4e92488d5dd9a::t_5088459f4b84de 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/Tags.kt
+  s_f4e92488d5dd9a::t_16706f827c5684 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/drive/TrashBatches.kt
+  s_f4e92488d5dd9a::t_80650224e25afc 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/editor/Drafts.kt
+  s_f4e92488d5dd9a::t_2ef88c4468905f 1,4-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/editor/MarkdownDocument.kt
+  s_f4e92488d5dd9a::t_c437bf885f8849 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/editor/TextEditing.kt
+  s_f4e92488d5dd9a::t_c8f4f0a1ed3d71 1,3-12
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyCheck.kt
+  s_f4e92488d5dd9a::t_4f5fddc1476330 1,3-16
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyGuard.kt
+  s_f4e92488d5dd9a::t_acaf232800c1d0 1,4-10
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyJoin.kt
+  s_f4e92488d5dd9a::t_6a9dbf12079d7a 1,3-12
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyLines.kt
+  s_f4e92488d5dd9a::t_14bbaaaa6918ed 1,3-7
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyManage.kt
+  s_f4e92488d5dd9a::t_63dbb51eb5f4ed 1,3-15
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyPlan.kt
+  s_f4e92488d5dd9a::t_3de1b2d231cd62 1,3-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyRecords.kt
+  s_f4e92488d5dd9a::t_2fdab55bbdf251 1,4-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyRemoval.kt
+  s_f4e92488d5dd9a::t_b62e19b1e8e50a 1,3-9
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilySessions.kt
+  s_f4e92488d5dd9a::t_4fc8809a0d7953 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilySettings.kt
+  s_f4e92488d5dd9a::t_4773f4eeeff1f5 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilySync.kt
+  s_f4e92488d5dd9a::t_54e480720da181 1,3-35
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyUploads.kt
+  s_f4e92488d5dd9a::t_001be2661947e0 1,3-10
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/FamilyWalks.kt
+  s_f4e92488d5dd9a::t_03a1d9464a058e 1,3-16
+apps/android/app/src/main/kotlin/com/hushos/app/data/families/GroupsApi.kt
+  s_f4e92488d5dd9a::t_5918479eaa3682 1,3-9
+apps/android/app/src/main/kotlin/com/hushos/app/data/platform/AppLinks.kt
+  s_f4e92488d5dd9a::t_923f190046ff6d 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/platform/Problems.kt
+  s_f4e92488d5dd9a::t_383402e4f656fb 1-10
+apps/android/app/src/main/kotlin/com/hushos/app/data/platform/PushAsk.kt
+  s_f4e92488d5dd9a::t_1f1b7ca93b5bad 1,4-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/platform/PushNotifications.kt
+  s_f4e92488d5dd9a::t_7e9fd215e30c4c 1,11-17
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/ArchiveSessions.kt
+  s_f4e92488d5dd9a::t_26a1fcae743d90 1,3-18
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/ArchiveTree.kt
+  s_f4e92488d5dd9a::t_386ca798d8ae1f 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/FailedTransfers.kt
+  s_f4e92488d5dd9a::t_0b6f024967d379 1,3
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/ImagesPdf.kt
+  s_f4e92488d5dd9a::t_a0ce1131a833af 1,7-10
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/JobLocks.kt
+  s_f4e92488d5dd9a::t_2c05ef2b2fc67e 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/JobNames.kt
+  s_f4e92488d5dd9a::t_1c6ea24fe63b72 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/OneAfterAnother.kt
+  s_f4e92488d5dd9a::t_7d5c94db0de9d6 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/Reservations.kt
+  s_f4e92488d5dd9a::t_f8af6b5330c5c2 1,4
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/Resumable.kt
+  s_f4e92488d5dd9a::t_4d4aae4a98f551 1,5-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/SaveRuns.kt
+  s_f4e92488d5dd9a::t_34e9b8eb7f630e 1,3-29
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/SaveTargets.kt
+  s_f4e92488d5dd9a::t_2e5fe937e514e4 1,3-18
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/ToolRuns.kt
+  s_f4e92488d5dd9a::t_ae378c92ed9e7b 1,3-10
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/UploadFinish.kt
+  s_f4e92488d5dd9a::t_f8088a60d3a5b0 1,3-4
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/WriteBacks.kt
+  s_f4e92488d5dd9a::t_d580bab01d5fd5 1,4-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/ContactGuard.kt
+  s_f4e92488d5dd9a::t_648069b4a2ee71 1,4-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/ContactTrust.kt
+  s_f4e92488d5dd9a::t_beabbe05987e4a 1,3-6
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/Contacts.kt
+  s_f4e92488d5dd9a::t_bc1dd155a644ef 1,3-8
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/Integrity.kt
+  s_f4e92488d5dd9a::t_3bc8643e5700ce 1,3-5
+apps/android/app/src/main/kotlin/com/hushos/app/data/trust/ShareSeals.kt
+  s_f4e92488d5dd9a::t_251618903e365a 1
+apps/android/app/src/main/kotlin/com/hushos/app/data/vault/KitScan.kt
+  s_f4e92488d5dd9a::t_17e5e560906866 1,16
+apps/android/app/src/main/kotlin/com/hushos/app/data/vault/Rotation.kt
+  s_f4e92488d5dd9a::t_f8b97f1ace8401 1,3-18
+apps/android/app/src/main/kotlin/com/hushos/app/data/vault/VaultFamilies.kt
+  s_f4e92488d5dd9a::t_69d5db813bfd81 1,3-32
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Adaptive.kt
+  s_f4e92488d5dd9a::t_720d893fc0e396 16-17
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Components.kt
+  s_f4e92488d5dd9a::t_8441b809ae9173 69-71,410,431
+apps/android/app/src/main/kotlin/com/hushos/app/ui/HushOSApp.kt
+  s_f4e92488d5dd9a::t_e350a4817abfc6 45-76,174,200,260,264,343,358,386,575,577,582,605,616,625,627,630,633,700
+apps/android/app/src/main/kotlin/com/hushos/app/ui/NoticeQueue.kt
+  s_f4e92488d5dd9a::t_29a128d7480d22 3-5
+apps/android/app/src/main/kotlin/com/hushos/app/ui/Screens.kt
+  s_f4e92488d5dd9a::t_78daf84afbc116 95-104,126-127,135,173,175-176,254,284-285,433
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/AccountScreen.kt
+  s_f4e92488d5dd9a::t_d903887788fb3a 1,95-122,181,183,275,317,320,323,529,659,794,844,900,912,917
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/DeviceApprovalUi.kt
+  s_f4e92488d5dd9a::t_efa49e889beb5c 1,65-90,111
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/DevicesScreen.kt
+  s_f4e92488d5dd9a::t_10eabe7d2631e9 1,31-37
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/NotificationsSection.kt
+  s_f4e92488d5dd9a::t_5a1bc9955e2508 1,26,32,34-36,157-158,179
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/PickerSignIn.kt
+  s_f4e92488d5dd9a::t_3d77418b2b44df 1,24-27,76,80,89
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/RecoverScreen.kt
+  s_f4e92488d5dd9a::t_54e4bad4e7f481 1,70-77
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/SelfHosting.kt
+  s_f4e92488d5dd9a::t_c6f7771082c0d7 1,30-34
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/SignInScreen.kt
+  s_f4e92488d5dd9a::t_dc9ed86fe77545 1,48-55
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/SignupScreen.kt
+  s_f4e92488d5dd9a::t_fe820acce7bf3d 1,44-53
+apps/android/app/src/main/kotlin/com/hushos/app/ui/account/TwoStepScreen.kt
+  s_f4e92488d5dd9a::t_f44b96dd6f3900 1,80-107,305,357,605,1235
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/AddMenu.kt
+  s_f4e92488d5dd9a::t_6412bceceb0eb0 1,68-70
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/FilesScreen.kt
+  s_f4e92488d5dd9a::t_e8a15156730f15 1,92-113,341,547
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/HomeScreen.kt
+  s_f4e92488d5dd9a::t_22c91436125f74 1,75-91
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/ItemActions.kt
+  s_f4e92488d5dd9a::t_83923745b13724 1,10-35,145-150,173,272,337,564,847,874,876,1012,1062
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/NodeRow.kt
+  s_f4e92488d5dd9a::t_a5bf23d15e031b 1,3-10,73,203,374
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/NodeTile.kt
+  s_f4e92488d5dd9a::t_766a308ddabccb 1,56-58
+apps/android/app/src/main/kotlin/com/hushos/app/ui/drive/SaveToHushOS.kt
+  s_f4e92488d5dd9a::t_1c5b2f8d1e798b 1,46-52,54-60,94,97,156,182,184,207-208,218-219,231,233,241,243
+apps/android/app/src/main/kotlin/com/hushos/app/ui/families/Families.kt
+  s_f4e92488d5dd9a::t_2cc3a047a6d20a 1,53-72,143,151,234,250,356,523,536,594,626,649,653-656,707,710,712,724,726-729,731,757,760
+apps/android/app/src/main/kotlin/com/hushos/app/ui/families/FamiliesModel.kt
+  s_f4e92488d5dd9a::t_eb146d78dce073 1,7-42,150,161-163,167,183,188-190,197,240-241,247-248,274,279,283-284,291,295-297,314-315,324,326-327,331,341-344,347,349,441,448,464,470-474,501,510,520,546,548,556-560,572,584,589,592,597,612-613,619,653,658-660,666,678,688-689,692,822-824,842,1489,1491,1508-1509,1515
+apps/android/app/src/main/kotlin/com/hushos/app/ui/families/FamilyCheck.kt
+  s_f4e92488d5dd9a::t_c3e42956a0e2a8 1,33-50
+apps/android/app/src/main/kotlin/com/hushos/app/ui/families/FamilyJoin.kt
+  s_f4e92488d5dd9a::t_1d29c48e483fad 1,32-46
+apps/android/app/src/main/kotlin/com/hushos/app/ui/families/FamilyPlan.kt
+  s_f4e92488d5dd9a::t_35fe98bb3db471 1,20-26
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/Access.kt
+  s_f4e92488d5dd9a::t_110ebd398d6aff 1,3-6
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/ContactsUi.kt
+  s_f4e92488d5dd9a::t_38c51f3225b2b0 1,56-66
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/LinksUi.kt
+  s_f4e92488d5dd9a::t_adf6c6256f18b2 1,111-153,1087,1132-1136,1146,1156,1158,1166,1214,1234
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/SharedScreen.kt
+  s_f4e92488d5dd9a::t_c9e03fc491624b 1,74-100,236
+apps/android/app/src/main/kotlin/com/hushos/app/ui/sharing/Unverified.kt
+  s_f4e92488d5dd9a::t_4688f7f8e0dd3b 1,24-32,47
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/ArchiveScreen.kt
+  s_f4e92488d5dd9a::t_e5f0b6c6d4fd83 1,77-94,124,126,548
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/ImagesPdfSheet.kt
+  s_f4e92488d5dd9a::t_1a6cb532250ead 1,58-67
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/MarkdownViewer.kt
+  s_f4e92488d5dd9a::t_5475b64476196e 1,66-75
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/TextEditor.kt
+  s_f4e92488d5dd9a::t_b165f201bd5052 1,64-95,170,176,179,1013
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/OpenedIdentitiesTest.kt
+  s_f4e92488d5dd9a::t_4ce3213aed60c7 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/account/SettingsMarkTest.kt
+  s_f4e92488d5dd9a::t_fbfb2732b0ec53 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/drive/LinkRoutesTest.kt
+  s_f4e92488d5dd9a::t_2e39a944dfd1fb 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyCheckTest.kt
+  s_f4e92488d5dd9a::t_e979e68c201c90 1,3-12
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyGuardTest.kt
+  s_f4e92488d5dd9a::t_ca80131e4b9190 1,3-12
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyJoinTest.kt
+  s_f4e92488d5dd9a::t_806af149760903 1,3-9
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyManageTest.kt
+  s_f4e92488d5dd9a::t_d2454293504845 1,3-8
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilySyncTest.kt
+  s_f4e92488d5dd9a::t_61cafc14865799 1,3-35
+apps/android/app/src/test/kotlin/com/hushos/app/data/families/FamilyWritesTest.kt
+  s_f4e92488d5dd9a::t_a559866065326c 1,3-28
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/ArchiveTreeTest.kt
+  s_f4e92488d5dd9a::t_f84ff8fcd75617 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/ContactTrustTest.kt
+  s_f4e92488d5dd9a::t_aa49e39637662b 1,4-16
+apps/android/app/src/test/kotlin/com/hushos/app/data/trust/ShareSealsTest.kt
+  s_f4e92488d5dd9a::t_5af720ecf8074b 1
+apps/android/app/src/test/kotlin/com/hushos/app/data/vault/RotationPartsTest.kt
+  s_f4e92488d5dd9a::t_c91babb3df6ad9 1
+apps/android/app/src/test/kotlin/com/hushos/app/ui/account/DeviceApprovalUiTest.kt
+  s_f4e92488d5dd9a::t_a7c97952cb8b4a 1,3,5-18,170
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_5c07c10a8cd080 75-103,161,167,188,194,203,220,247,269,293,322,333,340,344,375,378,383,388,408,428,472-473,475,482,496,527,534,548,558,581,672,692,694,700-701,708,711,741,961,967,978,1016,1022,1102,1107,1112,1142,1211,1342,1391,1667,1674,1711
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_55743d0b6b7513 785
+docs/editing-design.md
+  s_c60e24772e04af::t_df1388cff763e1 169
+docs/file-tools-design.md
+  s_c60e24772e04af::t_7d3917afb5349e 405,573
+docs/push-relay-plan.md
+  s_c60e24772e04af::t_a4bc1e68654710 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f8dbf5528483aed910cf95510936dc290fe26826",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_f4e92488d5dd9a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a129b84148e38de9d",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
