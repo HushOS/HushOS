@@ -356,6 +356,27 @@ const scrollTo = (scroller: ReturnType<Page['locator']>, top: number) =>
         return element.scrollTop;
     }, top);
 
+/*
+ * Moves the source's view a few pixels into the line its top is on, when that top is within 2px of
+ * the line's edge. On an edge the gutter can read one line and the editor the one beside it (a
+ * pixel either way is the same place), and which one depends on the fonts: Linux CI's put 6,000 px
+ * exactly on a heading's top edge, the editor took the blank line above it, and the preview
+ * showed the gap before the heading.
+ */
+const offLineEdge = (scroller: ReturnType<Page['locator']>) =>
+    scroller.evaluate((element) => {
+        const top = element.getBoundingClientRect().top;
+        for (const gutter of element.querySelectorAll('.cm-lineNumbers .cm-gutterElement')) {
+            const box = gutter.getBoundingClientRect();
+            if (!box.height || box.bottom <= top || !/^\d+$/.test(gutter.textContent ?? ''))
+                continue;
+            if (top - box.top < 2) element.scrollTop += 3;
+            else if (box.bottom - top < 2) element.scrollTop -= 3;
+            break;
+        }
+        return element.scrollTop;
+    });
+
 test('the source and the preview scroll together, both ways', async () => {
     await openEditor(page, 'scroll.md');
     const preview = dialog(page).getByRole('region', { name: 'Preview' });
@@ -365,6 +386,7 @@ test('the source and the preview scroll together, both ways', async () => {
 
     // The source scrolled: the block holding its top line comes to the top of the preview.
     await scrollTo(source, 5_000);
+    await offLineEdge(source);
     await expect.poll(async () => previewAtLine(page, await sourceTopLine(page))).toBe(true);
     expect(await shown.evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
 
@@ -437,6 +459,7 @@ test('on a narrow screen, switching between Source and Preview keeps the place',
     const source = sourceScroller(page);
     await expect(dialog(page).getByRole('button', { name: 'Preview', exact: true })).toBeVisible();
     await scrollTo(source, 6_000);
+    await offLineEdge(source);
     await page.waitForTimeout(300);
     const line = (await sourceTopLine(page))!;
     await dialog(page).getByRole('button', { name: 'Preview', exact: true }).click();
