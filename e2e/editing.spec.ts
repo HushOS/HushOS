@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test, type Page, type Request, type Route } from '@playwright/test';
+import { expect, test, type Page, type Request, type Route, type Worker } from '@playwright/test';
 import {
     addContact,
     grip,
@@ -194,18 +194,28 @@ const scriptOf = (request: Request) => {
     return webkit && type === 'xhr' && /\.m?[jt]sx?$/.test(url) ? url : null;
 };
 
-/* Every script `work` makes the page fetch (a worker's included), cached or not. */
+/*
+ * Every script `work` makes the page fetch (a worker's included), cached or not, and every worker
+ * it starts: WebKit can start a worker from its memory cache with no request to see, but every
+ * browser reports the worker itself.
+ */
 async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
     const fetched = new Set<string>();
     const listen = (request: Request) => {
         const url = scriptOf(request);
         if (url) fetched.add(url);
     };
+    const started = (worker: Worker) => {
+        const url = worker.url();
+        if (url.startsWith('http')) fetched.add(url.split('?')[0]!);
+    };
     p.on('request', listen);
+    p.on('worker', started);
     try {
         await work();
     } finally {
         p.off('request', listen);
+        p.off('worker', started);
     }
     return fetched;
 }
