@@ -4,10 +4,10 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { afterFamilyChange } from '@/lib/families';
+import { afterFamilyChange } from '@/lib/families/families';
 import { groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * Renaming the family (route 4, for those who manage it): the name prefilled, Save. The new

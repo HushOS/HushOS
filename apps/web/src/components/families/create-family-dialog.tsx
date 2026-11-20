@@ -12,17 +12,21 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { groupBillingApi } from '@/lib/billing-api';
-import { authError } from '@/lib/form';
-import { usePageRestored } from '@/lib/page-restore';
-import { familyTierName } from '@/lib/plans';
-import { tierTooSmall } from '@/lib/family-billing';
-import { catalogueQueryOptions, formatQuota, storageQueryOptions } from '@/lib/queries';
-import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families';
-import { checkoutNotOpening, checkoutOpening, leftForCheckout } from '@/lib/family-checkout';
+import { groupBillingApi } from '@/lib/billing/billing-api';
+import { authError } from '@/lib/platform/form';
+import { usePageRestored } from '@/lib/platform/page-restore';
+import { familyTierName } from '@/lib/billing/plans';
+import { tierTooSmall } from '@/lib/families/family-billing';
+import { catalogueQueryOptions, formatQuota, storageQueryOptions } from '@/lib/billing/queries';
+import { afterFamilyChange, familiesQueryOptions, familyContext } from '@/lib/families/families';
+import {
+    checkoutNotOpening,
+    checkoutOpening,
+    leftForCheckout,
+} from '@/lib/families/family-checkout';
 import { createInFamilyCopy, errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { createFamily } from '@/lib/groups/outbox';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * "Create a family": one name, then the worker makes the family's keys, its
@@ -115,7 +119,7 @@ export function CreateFamilyDialog({
         const from = place();
         const stillHere = () => mounted.current && place() === from;
         // From here until the browser leaves for the checkout, the page under this dialog stays
-        // as it is whatever reads the families again (lib/family-checkout.ts).
+        // as it is whatever reads the families again (lib/families/family-checkout.ts).
         if (plan) checkoutOpening(userId);
         let left = false;
         try {

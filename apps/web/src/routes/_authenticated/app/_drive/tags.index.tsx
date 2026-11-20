@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { TagsView } from '@/components/drive/tags-view';
+import { TagsView } from '@/components/drive/tags/tags-view';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/tags/')({
     head: () => ({ meta: [{ title: 'Tags · HushOS' }] }),

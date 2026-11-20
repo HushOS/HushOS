@@ -1,7 +1,7 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { AppLinksPage } from '@/components/app-links-page';
-import { appStoreRedirect } from '@/lib/app-links';
-import { cardMeta, publicOrigin } from '@/lib/social';
+import { AppLinksPage } from '@/components/site/app-links-page';
+import { appStoreRedirect } from '@/lib/site/app-links';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
 
 /* The share link for the iPhone app: a person goes straight to the App Store (appStoreRedirect), a link preview gets this page and its card. Only where this server names the listing. */
 export const Route = createFileRoute('/ios')({

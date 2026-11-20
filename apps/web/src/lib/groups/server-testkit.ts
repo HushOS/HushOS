@@ -10,7 +10,7 @@ import { digest } from '@hushos/crypto/signatures';
 import type { ContactPin } from '@hushos/crypto';
 import type { RekeyView } from '@hushos/drive/api';
 import { GroupApiError, type GroupsApi } from './api';
-import { createMemoryFamilyGuard } from '@/lib/contact-guard';
+import { createMemoryFamilyGuard } from '@/lib/trust/contact-guard';
 import { familyGuardOf, type GroupContext } from './context';
 import { createRotationSource } from './rotations';
 import { createMemoryGroupStore, type GroupStore } from './store';
@@ -521,7 +521,7 @@ export async function familyServer() {
                 links: [],
                 personal: null,
             })),
-        // The Drive walk itself is lib/spaces.ts's (and Drive's tests'): here it is logged, and done.
+        // The Drive walk itself is lib/families/spaces.ts's (and Drive's tests'): here it is logged, and done.
         walk: async (_groupId, rotation) => {
             log.push({ route: 'walk', body: { ...rotation } });
             walked.push({ workspaceId: rotation.workspaceId, rotationId: rotation.rotationId });

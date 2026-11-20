@@ -1,21 +1,21 @@
-import { Preview } from '@/components/drive/preview';
-import { rememberReturn } from '@/lib/return-to';
-import { ReportDialog } from '@/components/drive/report-dialog';
+import { Preview } from '@/components/drive/viewers/preview';
+import { rememberReturn } from '@/lib/auth/return-to';
+import { ReportDialog } from '@/components/drive/dialogs/report-dialog';
 import { FileMark } from '@/components/drive/file-mark';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
-import { Spinner } from '@/components/motion';
-import { Brand } from '@/components/brand';
-import { Cover } from '@/components/cover';
-import { SiteFooter } from '@/components/site-header';
+import { Spinner } from '@/components/shared/motion';
+import { Brand } from '@/components/marks/brand';
+import { Cover } from '@/components/site/cover';
+import { SiteFooter } from '@/components/site/site-header';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { PasswordInput } from '@/components/password-input';
+import { PasswordInput } from '@/components/auth/password-input';
 import { toast } from '@/components/ui/toast';
-import { UnlockDevice } from '@/components/unlock-device';
-import { authClient } from '@/lib/auth-client';
-import { unlockedNow, useAuthView } from '@/lib/auth-view';
-import { downloadNodes } from '@/lib/downloads';
+import { UnlockDevice } from '@/components/auth/unlock-device';
+import { authClient } from '@/lib/auth/auth-client';
+import { unlockedNow, useAuthView } from '@/lib/auth/auth-view';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
 import {
     driveClient,
     driveError,
@@ -23,15 +23,15 @@ import {
     formatBytes,
     formatWhen,
     sortNodes,
-} from '@/lib/drive';
-import { linkApi, setActiveLink } from '@/lib/drive-api';
-import { saveCopy } from '@/lib/save-copy';
-import { guardUnloadWhileUploading } from '@/lib/transfers';
-import { fetchSessionUser } from '@/lib/session';
+} from '@/lib/drive/drive';
+import { linkApi, setActiveLink } from '@/lib/drive/drive-api';
+import { saveCopy } from '@/lib/drive/save-copy';
+import { guardUnloadWhileUploading } from '@/lib/drive/transfers/transfers';
+import { fetchSessionUser } from '@/lib/auth/session';
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouteContext, useRouter } from '@tanstack/react-router';
-import { cardMeta, publicOrigin } from '@/lib/social';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
 import {
     ChevronRightIcon,
     CopyPlusIcon,

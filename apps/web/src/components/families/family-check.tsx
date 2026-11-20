@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
 import { useState } from 'react';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -12,11 +12,11 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { familyContext, firstName } from '@/lib/families';
-import { familyCheckCode, familyCheckMatch, olderAppCode } from '@/lib/family-trust';
+import { familyContext, firstName } from '@/lib/families/families';
+import { familyCheckCode, familyCheckMatch, olderAppCode } from '@/lib/families/family-trust';
 import { errorCopy } from '@/lib/groups/copy';
-import { afterTrustChanged } from '@/lib/integrity';
-import { cue } from '@/lib/sounds';
+import { afterTrustChanged } from '@/lib/trust/integrity';
+import { cue } from '@/lib/platform/sounds';
 import { WordList } from './word-list';
 
 /*

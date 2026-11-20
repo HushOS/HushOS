@@ -1,9 +1,9 @@
 import { createFileRoute, Link, useRouteContext } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
-import { Cover } from '@/components/cover';
-import { DitherMark } from '@/components/dither-mark';
-import { ReadingPage } from '@/components/legal-layout';
+import { Cover } from '@/components/site/cover';
+import { DitherMark } from '@/components/marks/dither-mark';
+import { ReadingPage } from '@/components/site/legal-layout';
 import {
     sections,
     updated,
@@ -11,9 +11,9 @@ import {
     type RoadmapLink,
     type RoadmapStatus,
 } from '@/content/roadmap';
-import type { CoverTone } from '@/lib/content';
-import { formatDate } from '@/lib/content';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import type { CoverTone } from '@/lib/site/content';
+import { formatDate } from '@/lib/site/content';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 /*
  * The public roadmap: what has shipped, what is being built, and what is

@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { useDrive } from '@/components/drive/drive-shell';
 import { ForkAlert } from '@/components/families/family-alerts';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
@@ -17,11 +17,11 @@ import {
     familyContext,
     familyQueryOptions,
     firstName,
-} from '@/lib/families';
+} from '@/lib/families/families';
 import type { RosterFork } from '@hushos/crypto';
 import { errorCopy } from '@/lib/groups/copy';
 import { joinStatus, type JoinOutcome } from '@/lib/groups/join';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/families/$groupId/join')({
     head: () => ({ meta: [{ title: 'Join a family · HushOS' }] }),

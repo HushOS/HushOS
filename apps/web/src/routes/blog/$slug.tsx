@@ -1,12 +1,12 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { Cover } from '@/components/cover';
-import { ReadingPage } from '@/components/legal-layout';
-import { Mdx, mdxComponents } from '@/components/mdx';
+import { Cover } from '@/components/site/cover';
+import { ReadingPage } from '@/components/site/legal-layout';
+import { Mdx, mdxComponents } from '@/components/site/mdx';
 import type { MDXComponents } from 'mdx/types';
 import type { ComponentProps, ReactNode } from 'react';
-import { formatDate, posts } from '@/lib/content';
-import { postBodies, postHeadings } from '@/lib/post-bodies';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { formatDate, posts } from '@/lib/site/content';
+import { postBodies, postHeadings } from '@/lib/site/post-bodies';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 export const Route = createFileRoute('/blog/$slug')({
     loader: ({ params }) => {

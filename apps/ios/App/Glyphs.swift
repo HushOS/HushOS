@@ -111,7 +111,7 @@ extension PageGlyph {
     }
 }
 
-/* The web's rule (apps/web/src/lib/drive.ts formatBytes): counted in 1024s, labelled KB, MB, GB, TB; whole numbers from 100 up. */
+/* The web's rule (apps/web/src/lib/drive/drive.ts formatBytes): counted in 1024s, labelled KB, MB, GB, TB; whole numbers from 100 up. */
 func formatBytes(_ value: Int64) -> String {
     let units = ["B", "KB", "MB", "GB", "TB"]
     var n = Double(max(value, 0))

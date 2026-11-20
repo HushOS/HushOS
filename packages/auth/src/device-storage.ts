@@ -123,7 +123,7 @@ function openDeviceDatabase(name: string, store: string, version: number): Promi
 
 /*
  * Deletes a device database outright, rather than emptying it: a browser
- * signed out of keeps no trace of one (apps/web lib/device-data.ts). Every
+ * signed out of keeps no trace of one (apps/web lib/account/device-data.ts). Every
  * connection here closes after its step and on `versionchange`, so a `blocked`
  * is waited out, never longer than STORAGE_TIMEOUT_MS.
  */

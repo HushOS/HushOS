@@ -2,8 +2,8 @@ import Foundation
 import HushOSCore
 
 /*
- * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts
- * and lib/text-save.ts): which files the text editor opens, whether it may change them, the bytes a
+ * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/editor/text-edit.ts
+ * and lib/editor/text-save.ts): which files the text editor opens, whether it may change them, the bytes a
  * save writes, and how a save goes through the save path (SaveRuns.swift), never a second one.
  *
  * A file opens for editing only when what the editor saves is the file byte for byte except for the
@@ -82,7 +82,7 @@ public enum TextEditing {
     }
 
     /*
-     * One editing session's saves, as on the web (lib/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
+     * One editing session's saves, as on the web (lib/editor/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
      * format found when the file opened, kept for the whole session (a save that removed every line break still writes CRLF
      * for the next one typed; a text grown past the limit still saves), and the text and bytes last opened or saved, which
      * only answer "nothing changed".

@@ -28,11 +28,11 @@ import {
     MAX_ROTATIONS_PER_CALL,
     MAX_SEALS_PER_CALL,
 } from '@hushos/groups/protocol';
-import { followsGroupWrites, groupWriteMinimums } from '@/lib/group-write-floor';
+import { followsGroupWrites, groupWriteMinimums } from '@/lib/groups/group-write-floor';
 import { storageEnv } from '@hushos/env/storage';
 import { CANCELLATION_REASONS } from '@hushos/billing/protocol';
 import { appEnv } from '@hushos/env/app';
-import { useLogger, useRequestId } from '@/lib/logging.server';
+import { useLogger, useRequestId } from '@/lib/platform/server/logging.server';
 // A non-literal status here would erase every response type Eden Treaty infers.
 export const ERROR_CODES = [400, 401, 403, 404, 409, 422, 429, 500, 503] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -712,7 +712,7 @@ export function groupsGate() {
  * is refused with 426 before the handler reads or stores anything of the group,
  * so a tab still running code from before the family-write rules changed
  * can't change a family. Every other route keeps serving it
- * (lib/group-write-floor.ts).
+ * (lib/groups/group-write-floor.ts).
  */
 export const groupWriteFloor = groupWriteMinimums(
     clientMinimums,

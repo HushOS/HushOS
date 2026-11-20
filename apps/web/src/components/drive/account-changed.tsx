@@ -1,15 +1,20 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDownIcon, RotateCcwIcon } from 'lucide-react';
 import { useState } from 'react';
-import { firstName } from '@/components/drive/add-someone';
-import { Spinner } from '@/components/motion';
+import { firstName } from '@/components/drive/sharing/add-someone';
+import { Spinner } from '@/components/shared/motion';
 import { Button } from '@/components/ui/button';
 import { DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { continueWith, lookupContact, TrustMovedError, type AccountChange } from '@/lib/contacts';
-import { driveClient, driveError, driveKeys } from '@/lib/drive';
-import { afterTrustChanged } from '@/lib/integrity';
-import { cue } from '@/lib/sounds';
+import {
+    continueWith,
+    lookupContact,
+    TrustMovedError,
+    type AccountChange,
+} from '@/lib/trust/contacts';
+import { driveClient, driveError, driveKeys } from '@/lib/drive/drive';
+import { afterTrustChanged } from '@/lib/trust/integrity';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * "Maya's account changed" (docs/optional-verification.md 6.7): the one calm

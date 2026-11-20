@@ -4,7 +4,7 @@ import { Toast as ToastPrimitive } from '@base-ui/react/toast';
 import { cn } from 'cn';
 import type * as React from 'react';
 import { TriangleAlertIcon, XIcon } from 'lucide-react';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 
 /*
  * A toast is a dark notice, bottom right, in front of the transfers panel: it

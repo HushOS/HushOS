@@ -1,6 +1,6 @@
 import type { CreateGroupBody, RosterCallBody, WorkspaceKeyEnvelope } from '@hushos/crypto';
 import type { GroupErrorCode } from '@hushos/groups/protocol';
-import { apiClient } from '@/lib/api-client';
+import { apiClient } from '@/lib/platform/api-client';
 
 /*
  * The group routes (docs/groups-server.md 4, routes 1 to 29), typed from the

@@ -3,12 +3,12 @@ import { CheckIcon, CopyIcon } from 'lucide-react';
 import { AnimatePresence, m, type Transition } from 'motion/react';
 import { useState } from 'react';
 
-import { Collapse, IconSwap, PendingLabel, Spinner, TextSwap } from '@/components/motion';
+import { Collapse, IconSwap, PendingLabel, Spinner, TextSwap } from '@/components/shared/motion';
 import { Button } from '@/components/ui/button';
 import { Demo, Row, Sample } from '@/dev/demo';
 
 /*
- * The app's Motion pieces (components/motion.tsx) beside copies driven by the Motion
+ * The app's Motion pieces (components/shared/motion.tsx) beside copies driven by the Motion
  * panel, so a spring can be tried against the shipped one. The copies use DialKit's
  * spring, which is `visualDuration` and `bounce`; the app's constants use `duration`.
  */

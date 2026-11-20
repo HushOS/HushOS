@@ -18,8 +18,8 @@ import {
 } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { keyLabel } from '@/components/drive/shortcuts';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
 import { useIsMobile } from '@/hooks/use-mobile';
 import {
     AlertDialog,
@@ -53,18 +53,18 @@ import {
     refreshSharing,
     restoreTrashRows,
     trashQueryOptions,
-} from '@/lib/drive';
+} from '@/lib/drive/drive';
 import { MAX_TRASH_BATCH } from '@hushos/drive/protocol';
 import { DriveApiError } from '@hushos/drive/api';
-import { cue } from '@/lib/sounds';
-import { emptyTrashAll } from '@/lib/trash';
+import { cue } from '@/lib/platform/sounds';
+import { emptyTrashAll } from '@/lib/drive/trash';
 
 /*
  * Everything with its own trashed_at, newest first. It reads and selects as Files
  * does: click, Mod-click, Shift-click, a box drawn on empty space, arrows. Restore
  * puts an item back where it was; when that place is itself in the Trash, it goes
  * to My files instead, which is a move and a restore in one request. Deleting
- * forever always asks first. Several go in batch requests (lib/trash-batch.ts),
+ * forever always asks first. Several go in batch requests (lib/drive/trash-batch.ts),
  * and the rows each request settles leave the list as it lands.
  */
 

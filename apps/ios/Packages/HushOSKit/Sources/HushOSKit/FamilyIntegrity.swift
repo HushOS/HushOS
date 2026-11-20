@@ -5,7 +5,7 @@ import HushOSCore
  * A family folder item's mark and Info lines, ported from the web: `recordIssues` and
  * `sortIssues` (packages/drive/src/trust.ts) and `nameSigner`, `issueLines`, `markLabel`,
  * `changedByLabel`/`changedByWords`, `rekeyedLines` and `verifiedByLine`
- * (apps/web/src/lib/integrity-lines.ts), in the family's case only (`names.family` is always
+ * (apps/web/src/lib/trust/integrity-lines.ts), in the family's case only (`names.family` is always
  * set here). Pure, so the words a server could steer by what it serves are tested on their own.
  */
 

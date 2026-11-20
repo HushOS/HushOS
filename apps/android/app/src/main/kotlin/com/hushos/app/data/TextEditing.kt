@@ -13,7 +13,7 @@ import com.hushos.core.textOpen
 import com.hushos.core.textEncode
 
 /*
- * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/text-edit.ts and lib/text-save.ts,
+ * Editing 1a and 1b on the phone (docs/editing-design.md sections 1 and 3, the web's lib/editor/text-edit.ts and lib/editor/text-save.ts,
  * iOS's TextEditing.swift): which files the text editor opens, whether it may change them, the bytes a save writes, and how
  * a save goes through the save path (SaveRuns.kt), never a second one.
  *
@@ -57,7 +57,7 @@ object TextEditing {
     }
 
     /*
-     * One editing session's saves, as on the web (lib/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
+     * One editing session's saves, as on the web (lib/editor/text-edit.ts SaveState) and held to the same fixture (`sessions`): the
      * format found when the file opened, kept for the whole session (a save that removed every line break still writes CRLF
      * for the next one typed; a text grown past the limit still saves), and the text and bytes last opened or saved, which
      * only answer "nothing changed".
@@ -106,7 +106,7 @@ object TextEditing {
 
     /*
      * Whether `text` can be written as it is: a surrogate without its pair (half an emoji, which a Kotlin string can hold)
-     * would reach the core as "?" in its place, a character nobody typed. As on the web (lib/text-edit.ts `writable`).
+     * would reach the core as "?" in its place, a character nobody typed. As on the web (lib/editor/text-edit.ts `writable`).
      */
     fun writable(text: CharSequence): Boolean {
         var at = 0

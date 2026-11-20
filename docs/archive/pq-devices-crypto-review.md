@@ -252,7 +252,7 @@ Identity-pq §2 says that "Comparing words writes a version 3 pin: all four publ
 
 ### M5. The server can wipe the settings document, including the v3 pins and group marks the v2 gate protects
 
-When the server serves a settings row as `settings: null` at the current sequence, the client reads it as an empty document, and its next save replaces everything (`apps/web/src/lib/contacts.ts:223-230`). That path existed for the three version 1 rows that Round 3 retired. None are left, so the path now serves only to let a hostile server erase:
+When the server serves a settings row as `settings: null` at the current sequence, the client reads it as an empty document, and its next save replaces everything (`apps/web/src/lib/trust/contacts.ts:223-230`). That path existed for the three version 1 rows that Round 3 retired. None are left, so the path now serves only to let a hostile server erase:
 
 - pins;
 - the sharing ledger, after which rotations no longer seal shares again;
@@ -267,7 +267,7 @@ The rollback mark does not catch this, because the sequence number does not go d
 
 Identity-pq §2 (line 81) says that a pin from before the release trusts nothing "when the served identity is version 2". It does not say what happens when the server serves the stripped version 1 form: the same X25519 and Ed25519 keys, with no ML-DSA key.
 
-Today `pinVerified` (`packages/crypto/src/pins.ts:14-29`) checks only the v2 fingerprint. `trustGrantee` accepts a KEM key on the strength of an Ed25519 binding by the pinned key (`apps/web/src/lib/contacts.ts:536-558`). So the server can keep every reader who hasn't compared words again on pre-release trust by serving version 1. That includes KEM keys vouched for only by Ed25519, which is the second attack in identity-pq's "Why, and what it fixes".
+Today `pinVerified` (`packages/crypto/src/pins.ts:14-29`) checks only the v2 fingerprint. `trustGrantee` accepts a KEM key on the strength of an Ed25519 binding by the pinned key (`apps/web/src/lib/trust/contacts.ts:536-558`). So the server can keep every reader who hasn't compared words again on pre-release trust by serving version 1. That includes KEM keys vouched for only by Ed25519, which is the second attack in identity-pq's "Why, and what it fixes".
 
 **Fix.**
 
@@ -329,7 +329,7 @@ Envelope-migrations line 130 says that "Uploads made meanwhile are written under
 
 - **L1. The stated reason for not carrying pins forward contradicts identity-pq §7.** A carry-over signed with Ed25519 and verified now is as trustworthy as Ed25519 is now. It becomes forgeable only later, and a cutoff handles that, exactly as §7 argues for file signatures. Not carrying pins forward is a fair decision while production holds test accounts, but replace the reason given ("only Ed25519 could sign that carry-over") with this one.
 - **L2. Identity marks don't see the upgrade.**
-    - The mark for the person's own identity is a `keyVersion` (`apps/web/src/lib/contacts.ts:113-115`), and the upgrade keeps it. A server can serve a device the version 1 form, and a new device will then mint a second ML-DSA key that the server may accept. That splits the account between two keys: denial of service and confusion.
+    - The mark for the person's own identity is a `keyVersion` (`apps/web/src/lib/trust/contacts.ts:113-115`), and the upgrade keeps it. A server can serve a device the version 1 form, and a new device will then mint a second ML-DSA key that the server may accept. That splits the account between two keys: denial of service and confusion.
     - Fix: mark `(keyVersion, identityVersion)` and refuse version 1 once version 2 has been seen. Have an approving device pass its marks (identity, settings, rosters and areas) inside the sealed transfer, so new devices start with marks.
     - The device must compute its own words only from keys it re-derived from all four seeds.
 - **L3. Rotation may still raise the identity's `keyVersion`** (`packages/db/src/auth.ts:878-892`). The keys statement binds `keyVersion`, so the identity would stop verifying. Refuse a changed `keyVersion` for version 2 identities.

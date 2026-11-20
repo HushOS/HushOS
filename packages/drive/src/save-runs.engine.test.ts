@@ -39,7 +39,7 @@ import { harness, node } from './transfers.harness';
  *   whole request can be refused (403) as no longer the person's;
  * - an editor in someone else's share may only Trash; a begin past the free
  *   room is 402;
- * - the app's folder listing is shared for two seconds (lib/transfers.ts lookUp)
+ * - the app's folder listing is shared for two seconds (lib/drive/transfers/transfers.ts lookUp)
  *   unless asked fresh.
  *
  * Each wait (the room check, the lock grant, a listing, a folder's creation, the
@@ -565,7 +565,7 @@ function processOf(srv: Server, disk: ReturnType<typeof createMemoryRunJournal>,
         throw new DriveApiError('You no longer have access to this.', 'forbidden', 403);
     };
 
-    /* The app's folder listing, shared for two seconds unless asked fresh (lib/transfers.ts lookUp). */
+    /* The app's folder listing, shared for two seconds unless asked fresh (lib/drive/transfers/transfers.ts lookUp). */
     const looks = new Map<
         string,
         { at: number; parent: DriveNode; children: Map<string, DriveNode> }

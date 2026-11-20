@@ -66,7 +66,7 @@ extension Auth {
 }
 
 /*
- * What sign-up checks before anything is sent, in the web's words (apps/web/src/lib/form.ts).
+ * What sign-up checks before anything is sent, in the web's words (apps/web/src/lib/platform/form.ts).
  * The password rule matters most: OPAQUE means the server never sees the password, so this is
  * the only check there is. Lengths count UTF-16 units, as JavaScript's `length` does
  * (packages/crypto checkPassword), so a password the web refuses is refused here; Swift's

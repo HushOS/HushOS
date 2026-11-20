@@ -3,7 +3,7 @@ import { Elysia, t } from 'elysia';
 import * as auth from '@hushos/auth/server';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import * as drive from '@hushos/drive/server';
-import { useLogger } from '@/lib/logging.server';
+import { useLogger } from '@/lib/platform/server/logging.server';
 import {
     accountResponse,
     accountsResponse,

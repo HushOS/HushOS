@@ -4,12 +4,12 @@ import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { fromJsx } from 'takumi-js/helpers/jsx';
 import { Renderer } from 'takumi-js/node';
-import { CoverArt } from '../src/components/cover';
-import { Logo } from '../src/components/logo';
-import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/brand';
+import { CoverArt } from '../src/components/site/cover';
+import { Logo } from '../src/components/marks/logo';
+import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/site/brand';
 
 /*
- * The stores' graphics, drawn like the social cards (src/lib/og.server.tsx): Play's 1024x500
+ * The stores' graphics, drawn like the social cards (src/lib/site/og.server.tsx): Play's 1024x500
  * feature graphic (the home card's words beside its dithered panel) and 512x512 icon, and the
  * captioned phone screenshots for both stores. Play wants the graphic and the screenshots
  * without alpha (24-bit PNG) and the icon as a 32-bit PNG, and Apple refuses transparency, so

@@ -1,0 +1,34 @@
+import { createBrowserCryptoTransport } from '@hushos/auth/crypto-transport';
+import {
+    createBrowserDeviceIdentityStore,
+    createBrowserDeviceKeyStore,
+} from '@hushos/auth/device-storage';
+import { createAuthClient } from '@hushos/auth/client';
+import { authApi } from '@/lib/auth/auth-api';
+import { watchSignOutElsewhere } from '@/lib/account/device-data';
+import { afterSignOut } from '@/lib/auth/sign-in-gate';
+import { describeBrowser } from '@/lib/account/device-name';
+import { passkeys } from '@/lib/auth/passkeys';
+
+export const authClient = afterSignOut(
+    createAuthClient(
+        () =>
+            createBrowserCryptoTransport(
+                () => new Worker(new URL('./auth.worker.ts', import.meta.url), { type: 'module' }),
+            ),
+        createBrowserDeviceKeyStore(),
+        authApi,
+        {
+            identities: createBrowserDeviceIdentityStore(),
+            describeDevice: describeBrowser,
+            // Removed from the account: Drive's mirror, stashed uploads and a saved return go too,
+            // and a failure is reported so the wipe is tried again. Loaded on demand; the dynamic
+            // import keeps sign-out.ts out of this module.
+            onRemoved: () => import('@/lib/auth/sign-out').then(({ clearDevice }) => clearDevice()),
+            passkeys,
+        },
+    ),
+);
+
+// A sign-out in another tab: this tab's own sessionStorage of the account goes too.
+watchSignOutElsewhere();

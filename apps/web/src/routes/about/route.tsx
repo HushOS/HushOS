@@ -1,9 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { Cover } from '@/components/cover';
-import { LegalLayout } from '@/components/legal-layout';
+import { Cover } from '@/components/site/cover';
+import { LegalLayout } from '@/components/site/legal-layout';
 import About, { headings } from '@/content/about.mdx';
 import { frontmatter } from '@/content/about.mdx?meta';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 export const Route = createFileRoute('/about')({
     loader: () => ({ origin: publicOrigin() }),

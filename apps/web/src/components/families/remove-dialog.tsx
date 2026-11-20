@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon } from 'lucide-react';
 import { useState } from 'react';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -20,13 +20,22 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { familyBillingQueryOptions, lapsedEndsWords, lapsedPlanShown } from '@/lib/family-billing';
-import { cue } from '@/lib/sounds';
-import { afterMembershipChange, familyContext, firstName, type FamilyMember } from '@/lib/families';
+import {
+    familyBillingQueryOptions,
+    lapsedEndsWords,
+    lapsedPlanShown,
+} from '@/lib/families/family-billing';
+import { cue } from '@/lib/platform/sounds';
+import {
+    afterMembershipChange,
+    familyContext,
+    firstName,
+    type FamilyMember,
+} from '@/lib/families/families';
 import { errorCopy } from '@/lib/groups/copy';
 import { removeMember, type RemovalOutcome, type RemovalStep } from '@/lib/groups/removal';
 // Loads the family folders' clients, which build a removal's rotations and walk them.
-import '@/lib/spaces';
+import '@/lib/families/spaces';
 
 /*
  * "Remove from family" (1c step 7): asked once, then a sheet that shows the

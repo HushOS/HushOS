@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
-import { deleteDatabase } from '@/lib/device-data';
+import { deleteDatabase } from '@/lib/account/device-data';
 
 /*
  * What this device keeps of its families (the 1c plan, 1.3), in IndexedDB

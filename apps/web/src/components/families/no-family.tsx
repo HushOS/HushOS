@@ -6,13 +6,17 @@ import { EmptyState } from '@/components/drive/file-list';
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
 import { DeclineInvitation } from '@/components/families/decline-invitation';
 import { NoticeList } from '@/components/families/family-alerts';
-import { PageHeader } from '@/components/page-header';
-import { Setting, SettingsGroup, SettingsPage } from '@/components/settings';
+import { PageHeader } from '@/components/shared/page-header';
+import { Setting, SettingsGroup, SettingsPage } from '@/components/account/settings';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { myInvitationsQueryOptions } from '@/lib/families-shell';
-import { defaultFamilyName, familyCheckoutCurrency } from '@/lib/family-signup';
-import { personalPlanEnding } from '@/lib/plans';
-import { billingQueryOptions, catalogueQueryOptions, useBillingEnabled } from '@/lib/queries';
+import { myInvitationsQueryOptions } from '@/lib/families/families-shell';
+import { defaultFamilyName, familyCheckoutCurrency } from '@/lib/families/family-signup';
+import { personalPlanEnding } from '@/lib/billing/plans';
+import {
+    billingQueryOptions,
+    catalogueQueryOptions,
+    useBillingEnabled,
+} from '@/lib/billing/queries';
 import type { GroupSummary } from '@/lib/groups/api';
 import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy } from '@/lib/groups/copy';

@@ -1,10 +1,10 @@
 import { mkdir } from 'node:fs/promises';
 import sharp from 'sharp';
-import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/brand';
+import { LOGO_BLACK, LOGO_WHITE, logoSvg } from '../src/lib/site/brand';
 
 /*
  * The phone apps' icons and splash marks from the same mark as the web app
- * (src/lib/brand.ts), written straight into the iOS asset catalog and the
+ * (src/lib/site/brand.ts), written straight into the iOS asset catalog and the
  * Android resources. Run: bun run brand:mobile. Black and white, as on the web: the white mark
  * on a black square for the icons, and the black mark alone (white in the dark) for the splash.
  */

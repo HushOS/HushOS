@@ -28,7 +28,7 @@ vi.mock('@tanstack/react-router', () => ({
     }),
     Link: ({ children }: { children: ReactNode }) => <a href="/">{children}</a>,
 }));
-vi.mock('@/lib/auth-client', () => ({
+vi.mock('@/lib/auth/auth-client', () => ({
     authClient: {
         login: (...args: Parameters<typeof login>) => login(...args),
         session: async () => ({ user: null }),
@@ -37,9 +37,12 @@ vi.mock('@/lib/auth-client', () => ({
         cancelStep: () => {},
     },
 }));
-vi.mock('@/lib/session', () => ({ ensureSessionUser: vi.fn(), sessionQueryOptions: {} }));
-vi.mock('@/lib/social', () => ({ cardMeta: () => [], publicOrigin: () => 'http://localhost' }));
-vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
+vi.mock('@/lib/auth/session', () => ({ ensureSessionUser: vi.fn(), sessionQueryOptions: {} }));
+vi.mock('@/lib/site/social', () => ({
+    cardMeta: () => [],
+    publicOrigin: () => 'http://localhost',
+}));
+vi.mock('@/lib/platform/sounds', () => ({ cue: vi.fn() }));
 const { Route } = await import('@/routes/login/route');
 const LoginPage = (Route as unknown as { component: () => ReactNode }).component;
 

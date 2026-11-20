@@ -2,9 +2,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { Fragment, useId, useState, type ReactNode } from 'react';
-import { CopyValue } from '@/components/copy-value';
-import { PendingLabel, Spinner } from '@/components/motion';
-import { OperatorPage, OperatorTable, td, th } from '@/components/operator';
+import { CopyValue } from '@/components/shared/copy-value';
+import { PendingLabel, Spinner } from '@/components/shared/motion';
+import { OperatorPage, OperatorTable, td, th } from '@/components/app/operator';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -21,9 +21,9 @@ import {
     grantAccountStorage,
     revokeAccountStorage,
     setAccountSuspended,
-} from '@/lib/admin';
-import { formatBytes, formatDay, formatWhen } from '@/lib/drive';
-import { formatQuota } from '@/lib/queries';
+} from '@/lib/admin/admin';
+import { formatBytes, formatDay, formatWhen } from '@/lib/drive/drive';
+import { formatQuota } from '@/lib/billing/queries';
 
 /*
  * One account, as an operator needs it to answer a question or act on a

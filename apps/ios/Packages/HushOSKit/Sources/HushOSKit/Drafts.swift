@@ -2,7 +2,7 @@ import Foundation
 import HushOSCore
 
 /*
- * Drafts on the phone (docs/editing-design.md 3, "Draft"; Editing 1c; the web's lib/drafts.ts): the text editor's
+ * Drafts on the phone (docs/editing-design.md 3, "Draft"; Editing 1c; the web's lib/editor/drafts.ts): the text editor's
  * unsaved text, sealed by the core under a key derived from the account key for this account and file (drafts.rs:
  * HKDF of the root, info ["hushos/drafts/v1",user,workspace,node]; XChaCha20-Poly1305 with the base version, the
  * session's save format and the time bound in), one record per file in `local/drafts`, found by a slot only the
@@ -188,7 +188,7 @@ public struct DraftStore: Sendable {
 
 /*
  * The editor's rules for drafts, apart from the screen so they can be held to tests (DraftsTests) as the web's are
- * (lib/drafts.ts createDraftWriter).
+ * (lib/editor/drafts.ts createDraftWriter).
  */
 public enum DraftRules {
     /* About two seconds after a change, and no more often while typing. */

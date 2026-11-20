@@ -5,18 +5,24 @@ import { useHotkey } from '@tanstack/react-hotkeys';
 import { useState } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
 import { RotateCcwIcon } from 'lucide-react';
-import { AccessCell, useAccessIndex } from '@/components/drive/access';
+import { AccessCell, useAccessIndex } from '@/components/drive/sharing/access';
 import { useDrive } from '@/components/drive/drive-shell';
 import { LIST_COLUMN } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
-import { Highlight } from '@/components/drive/highlight';
-import { useOpenNode } from '@/lib/open-node';
-import { nodeKind } from '@/lib/previews';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { UnverifiedMark } from '@/components/drive/sharing/unverified-mark';
+import { Highlight } from '@/components/drive/viewers/highlight';
+import { useOpenNode } from '@/lib/drive/open-node';
+import { nodeKind } from '@/lib/viewers/previews';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
 import { Button } from '@/components/ui/button';
-import { driveClient, formatBytes, formatWhen, nodeSize, useCatalogueState } from '@/lib/drive';
+import {
+    driveClient,
+    formatBytes,
+    formatWhen,
+    nodeSize,
+    useCatalogueState,
+} from '@/lib/drive/drive';
 
 /*
  * The full list of matches for a query, from the catalogue: every folder and

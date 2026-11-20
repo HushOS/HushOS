@@ -44,7 +44,7 @@ import {
     DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { formatBytes, nodeSize } from '@/lib/drive';
+import { formatBytes, nodeSize } from '@/lib/drive/drive';
 import { pdfable } from '@/lib/images-pdf/limits';
 import { Menu as MenuPrimitive } from '@base-ui/react/menu';
 import { useState, useSyncExternalStore } from 'react';

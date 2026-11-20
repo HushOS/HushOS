@@ -5,7 +5,7 @@ import { entryCommitment, keyCommitment } from '@hushos/crypto/pins';
 import { CHECK_MANAGER_FIRST } from '@hushos/crypto/protocol';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test, vi } from 'vitest';
-import { GUARD_UNSAVED } from '@/lib/contact-guard';
+import { GUARD_UNSAVED } from '@/lib/trust/contact-guard';
 import type { GroupContext } from './context';
 import { createFamily, letIn, resumeOutbox, stageChange, type StageOutcome } from './outbox';
 import { AnotherChangeWaitsError, continueFoldIn, resealFolded, runDue } from './removal';

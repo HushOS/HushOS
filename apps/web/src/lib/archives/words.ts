@@ -1,4 +1,4 @@
-import { formatBytes } from '@/lib/format';
+import { formatBytes } from '@/lib/platform/format';
 import { ZIP_LIMITS } from './zip-format';
 
 /*

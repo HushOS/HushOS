@@ -4,8 +4,8 @@ import cmark_gfm
 import cmark_gfm_extensions
 
 /*
- * A Markdown file as data, for the viewer to draw: the web's rules (apps/web/src/lib/markdown.ts,
- * components/drive/rich-text.tsx) on Apple's parser. CommonMark plus GitHub's tables, task lists
+ * A Markdown file as data, for the viewer to draw: the web's rules (apps/web/src/lib/viewers/markdown/markdown.ts,
+ * components/drive/viewers/rich-text.tsx) on Apple's parser. CommonMark plus GitHub's tables, task lists
  * and strikethrough. Raw HTML in the document is dropped, not shown and never run. A link is a
  * link only to http, https or mailto, and only on a tap; an image is named, never fetched, so
  * opening a file loads nothing from anywhere. Android's MarkdownDocument does the same.
@@ -42,7 +42,7 @@ public enum MarkdownDocument {
 
     /*
      * The blocks with the source line each starts at, for the editor's preview to scroll with its source (the web's
-     * data-source-line, lib/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the
+     * data-source-line, lib/editor/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the
      * file shown as its text spreads over all of its lines.
      */
     public static func parseLined(_ text: String) -> [MarkdownPiece] {

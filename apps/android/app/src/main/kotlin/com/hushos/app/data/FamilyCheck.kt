@@ -10,7 +10,7 @@ import java.time.Instant
 
 /*
  * Who in a family this person checked, and Check it's Sam in a family (docs/optional-verification.md 3.4, 3.8, 6.9,
- * 6.10; iOS's FamilyCheck.swift, the web's lib/family-trust.ts and family-check.tsx). Per viewer, never shared:
+ * 6.10; iOS's FamilyCheck.swift, the web's lib/families/family-trust.ts and family-check.tsx). Per viewer, never shared:
  * everything reads this account's own settings pins and this phone's contact guard beside the member list this phone
  * accepted. Every rule is the core's (`pair_code`, `pair_match`).
  */

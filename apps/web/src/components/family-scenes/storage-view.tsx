@@ -1,10 +1,10 @@
 import { useRouteContext } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { useId, useState } from 'react';
-import { familyStorage } from '@/components/family-storage';
-import { Fill, SizeDots, Slider, useSettled } from '@/components/fit-planner';
+import { familyStorage } from '@/components/site/pricing/family-storage';
+import { Fill, SizeDots, Slider, useSettled } from '@/components/site/pricing/fit-planner';
 import { Checkbox } from '@/components/ui/checkbox';
-import { formatQuota } from '@/lib/format';
+import { formatQuota } from '@/lib/platform/format';
 
 /*
  * The post's one hands-on piece: a family's storage as one plan holding everyone's own files and

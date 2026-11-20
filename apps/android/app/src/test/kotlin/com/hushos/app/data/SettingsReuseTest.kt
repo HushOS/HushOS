@@ -17,7 +17,7 @@ import java.util.UUID
 
 /*
  * One settings read serves the readers that only look (Vault.settingsToLook: a family sync's steps, the contacts list) for
- * a short while, as on the web (lib/contacts.settings-reads.test.ts). Through the real Vault, Auth and marks against
+ * a short while, as on the web (lib/trust/contacts.settings-reads.test.ts). Through the real Vault, Auth and marks against
  * FakeDrive: what must never come of it is a copy kept across a guard write or a save, a save built on a copy, a copy
  * older than the marks another vault of this phone raised, or a rollback a fresh read would refuse.
  */

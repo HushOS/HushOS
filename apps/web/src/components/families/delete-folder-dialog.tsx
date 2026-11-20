@@ -9,13 +9,13 @@ import {
     AlertDialogHeader,
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { afterFamilyChange } from '@/lib/families';
+import { afterFamilyChange } from '@/lib/families/families';
 import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
-import { deleteFamilyFolder } from '@/lib/spaces';
-import { cue } from '@/lib/sounds';
+import { deleteFamilyFolder } from '@/lib/families/spaces';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * "Delete family folder", for those who manage the family (groups design

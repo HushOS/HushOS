@@ -241,7 +241,7 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 
 ### Text editor
 
-Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/text-editor.tsx`): Edit (the pencil) in the viewer's bar, for a text file (`TextEditing.opens`, the core's `text_editable_kind`, or a file of no known kind whose bytes read as text, `TextEditing.readsAsText`) of at most 8 MiB that this person may change (`DriveStore.mayEdit`: their own once the own workspace is known (never assumed before it loads), a family folder this phone may write, or a share through the mount covering it, never the widest role in the workspace and never a file shared on its own). Never on an earlier version.
+Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/text-editor.tsx`): Edit (the pencil) in the viewer's bar, for a text file (`TextEditing.opens`, the core's `text_editable_kind`, or a file of no known kind whose bytes read as text, `TextEditing.readsAsText`) of at most 8 MiB that this person may change (`DriveStore.mayEdit`: their own once the own workspace is known (never assumed before it loads), a family folder this phone may write, or a share through the mount covering it, never the widest role in the workspace and never a file shared on its own). Never on an earlier version.
 
 - `TextEditorScreen` (App/TextEditorView.swift) lists the file's folder afresh (`Vault.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory (`Vault.editBytes`, the tool reader: never `DriveStore.fetch`'s kept copy), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence (`TextEditing.words`), never transcoded.
 - The screen keeps a `TextEditing.SaveState`: the format found at open, kept for the whole session, and the text and bytes last opened or saved. A save writes those bytes while the text is unchanged, otherwise the text in that format (the core's `text_encode`), built at open from what was just decoded (never decoded twice). Save and Save as a copy take the text and the state on the main actor, set saving, encode off it (`encoded`), and ask the session again before anything goes on. The format is never found again from what was saved (a save that removed every line break, or one past 8 MiB, would lose it).
@@ -361,7 +361,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/text-edit
     - A rotation's look can sign in on the account as it was (the password is the same): that session is kept (`Reset.Proved.unconfirmed`), the person stays in the app, and the words are shown with "keep both". A reset's is ended.
     - Nothing after the last request may throw but an answered refusal; what the phone remembers is written best effort (`Auth.rotated`).
 - Rotate account key shows the new words before a sign-in only when no session came of the rotation's own (`RotatedKeys.user` nil). `CheckWordsView(records: false)` checks them without a session, and `AppModel.signIn(holding:)` answers a step that names them. Stopping the app while they are held loses them.
-    - Words shown with no session (after a rotation or a reset) say what the web's panel does (`apps/web/src/components/new-phrase.tsx`), from `StepWords.newPhrase…`. Change the wording there and on the web together.
+    - Words shown with no session (after a rotation or a reset) say what the web's panel does (`apps/web/src/components/account/new-phrase.tsx`), from `StepWords.newPhrase…`. Change the wording there and on the web together.
 - `OwnChange` (`AppModel.ownChange`) is what mutes "You’ve been signed out" for this phone's own rotation: raised before the request (`begin`), dropped on failure, held while the words are up and the sign-in after is out. `signedIn` clears it.
     - `CheckedWords` (account, server, the phrase's own `recoveryVersion`) is what a check made without a session records at the next sign-in, and only for a matching one.
 - After a reset that gave no session, the words are shown all the same and sign-in follows (`AppModel.recoveredSignedOut`): the app leaves the session it showed (another account's is signed out) and opens sign-in with the recovered address filled. A reset nothing could confirm says `resetUncertain`, and then `signInAfterUncertainReset`.
@@ -497,7 +497,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/text-edit
 
 ### One read for the readers that only look
 
-- `loadSettings` always reads now; `settingsToLook` (`Settings.swift`) hands back the last fresh read for up to `settingsReuse` (10 s), as the web's `lib/contacts.ts` does.
+- `loadSettings` always reads now; `settingsToLook` (`Settings.swift`) hands back the last fresh read for up to `settingsReuse` (10 s), as the web's `lib/trust/contacts.ts` does.
     - Look-only readers use it: a family sync's acceptance and settle (`familyPin(_:look: true)`), `familyChecked`, `familyCheckWith`, the contacts list, the sharing ledger, the upgrade pass when nothing is owed.
     - Everything else reads now: every family act before it sends (`familyPin` without `look`), every read in the guard's turn, `updateSettings`'s base, rotation, a push's names, and the upgrade pass when a key replacement's re-seal (`ResealPending`) or a followed pin's (`ResealTo`) is owed, since it clears or acknowledges them.
     - The copy is dropped by any save or guard write from the vault (`forgetSettingsCopy`, from `updateSettings` and `commitGuard`), a sign-out (`GuardGeneration`), a failed read, and the window; a copy older than the marks another process raised is read again.
@@ -543,7 +543,7 @@ Contacts without comparing words: see `docs/optional-verification.md` 2, 6.2 to 
 - Check it's Maya (They match, `Vault.theyMatch`) makes it verified.
 - Continue (`Vault.continueWith`) takes keys that changed with no signed chain as first-seen, keeps the old signing key as previous and queues a re-seal (`ResealTo`, `resealShares`).
 - Every pin rule is the core's: `pin_trust`, `key_commitment`, `compare_pin`, `pin_first_seen_of_legacy`, `guard_agrees`, `guard_entry_next`.
-- `Vault+Trust.swift` (`stand`, the web's lib/contacts.ts) only orders reads and writes.
+- `Vault+Trust.swift` (`stand`, the web's lib/trust/contacts.ts) only orders reads and writes.
 - A legacy pin becomes first-seen on the person's next act over the same classical keys under a holding statement.
 - Pins are version 3: `mlDsaPublicKeyHash` + `kemPublicKeyHash` hex, v3 fingerprint, written by `ContactPin.of`.
 - `verified` is the core's `pin_verified`.
@@ -895,7 +895,7 @@ Plan: `docs/groups-mobile-plan.md` (groups 1d). The web's counterparts are named
 - FamilySync registers itself as the vault's weak `familyJudge` on every sync.
 - Share, links, report, keep, versions and `rotate` still call `refuseFamilyWrite` (`FamilyWriteError.unavailable`, "This isn’t available in family folders.").
 - Any other write that meets a key change says "HushOS is finishing a key change for this folder. Try again in a moment." (`FamilyWords.core`).
-- A move between one's own files and a family folder (either way: `Vault.relocate`, `movesAcross`) is the web's `lib/move-across.ts`.
+- A move between one's own files and a family folder (either way: `Vault.relocate`, `movesAcross`) is the web's `lib/drive/move-across.ts`.
     - Each file is downloaded at the version read and uploaded under the destination's keys with `moveOf` on begin.
     - The server deletes the source in the transaction that completes the upload. Nothing goes to the Trash; a source that changed fails `stale` and stays (`Vault.movedMeanwhile`).
     - A folder is made at the destination, its files moved one by one, and the source folder goes to the Trash once it holds only folders. Never purged.

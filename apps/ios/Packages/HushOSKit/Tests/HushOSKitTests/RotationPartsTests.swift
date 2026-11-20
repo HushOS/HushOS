@@ -43,7 +43,7 @@ import Testing
     @Test func aTypicalPageIsOneRequestAndAnEmptyOneNone() throws {
         let page = (0..<200).map { node($0, 2000) }
         #expect(try rotationParts(workspaceId: ws, nodes: page).count == 1)
-        // A part must fit the server's rotation cap (ROTATION_BODY_BYTES in apps/web/src/lib/body-caps.ts).
+        // A part must fit the server's rotation cap (ROTATION_BODY_BYTES in apps/web/src/lib/platform/server/body-caps.ts).
         #expect(rotationRequestBytes <= 8 * 1024 * 1024)
         #expect(try rotationParts(workspaceId: ws, nodes: []).isEmpty)
     }

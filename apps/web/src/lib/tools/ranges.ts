@@ -6,7 +6,7 @@ import { RANGE_READ_MAX, READS_IN_FLIGHT, type RangeAnswer, type RangeRequest } 
  * from the source and transfers it, keeping nothing. A Drive file is read through the
  * download engine's `FileReader` in its tool mode (sources.ts), which fetches and decrypts
  * the 8 MiB chunks a range covers, as the media player's ranges are (`serveMedia` in
- * lib/previews.ts); a small file the page already holds is read from memory.
+ * lib/viewers/previews.ts); a small file the page already holds is read from memory.
  */
 
 export type RangeReader = Pick<FileReader, 'size' | 'read'> & {

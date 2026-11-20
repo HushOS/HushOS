@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * Where a link opens in the app: the paths the web declares for the apps in
- * /.well-known/apple-app-site-association (apps/web/src/lib/app-links.server.ts), plus the custom
+ * /.well-known/apple-app-site-association (apps/web/src/lib/site/app-links.server.ts), plus the custom
  * scheme with the same paths and the older hushos://node/<id>. The family invitation (/join) is
  * parsed here but goes into the apple-app-site-association only with the first app release that
  * handles it: an older installed build would catch the link and dead-end it.

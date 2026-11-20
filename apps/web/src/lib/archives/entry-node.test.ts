@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { DriveNode } from '@hushos/drive/client';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_DIR } from '../../../../../e2e/fixtures/archives/make';
-import { recallPreview, rememberPreview } from '@/lib/previews';
+import { recallPreview, rememberPreview } from '@/lib/viewers/previews';
 import { entryNode, forgetEntryPreviews } from './open';
 import type { ArchiveEntry } from './session';
 import { ZipArchive } from './zip-archive';

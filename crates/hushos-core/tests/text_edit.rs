@@ -1,5 +1,5 @@
 //! Text editing (`fixtures/text-edit-cases.json`, hand-written outcomes) as this
-//! core gives it; `apps/web/src/lib/text-edit.test.ts` holds the web to the same
+//! core gives it; `apps/web/src/lib/editor/text-edit.test.ts` holds the web to the same
 //! file, and the phones' own tests hold them. A verdict the twins give differently
 //! is a file one client lets the person edit and another doesn't, or one a client
 //! saves with bytes changed that nobody touched.

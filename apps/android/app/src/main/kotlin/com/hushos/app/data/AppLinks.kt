@@ -4,7 +4,7 @@ import java.net.URI
 
 /*
  * Where a link opens in the app: the paths the web declares for the apps in
- * /.well-known/assetlinks.json (apps/web/src/lib/app-links.server.ts), plus the
+ * /.well-known/assetlinks.json (apps/web/src/lib/site/app-links.server.ts), plus the
  * hushos:// scheme with the same paths and hushos://node/<id>. One pure function,
  * the same cases and names as iOS's AppLinks, so the rules that keep a link's
  * secret and refuse another server's links are tested once and used everywhere.

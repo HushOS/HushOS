@@ -1,7 +1,7 @@
-import { comparisons } from '@/lib/compare';
+import { comparisons } from '@/lib/site/compare';
 import { createFileRoute } from '@tanstack/react-router';
-import { posts } from '@/lib/content';
-import { publicOrigin } from '@/lib/social';
+import { posts } from '@/lib/site/content';
+import { publicOrigin } from '@/lib/site/social';
 
 const pages = [
     '/',

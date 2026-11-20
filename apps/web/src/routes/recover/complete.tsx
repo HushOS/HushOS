@@ -3,20 +3,26 @@ import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CircleCheckIcon, FileTextIcon } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
-import { AuthInput, StrengthHint } from '@/components/auth-input';
-import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
-import { NewPhrase } from '@/components/new-phrase';
-import { PhraseGrid } from '@/components/recovery-phrase';
-import { VerifiedEmailStep } from '@/components/verified-email-step';
+import { AuthInput, StrengthHint } from '@/components/auth/auth-input';
+import {
+    AuthActions,
+    AuthFields,
+    AuthLayout,
+    AuthNote,
+    authLink,
+} from '@/components/auth/auth-layout';
+import { NewPhrase } from '@/components/account/new-phrase';
+import { PhraseGrid } from '@/components/account/recovery-phrase';
+import { VerifiedEmailStep } from '@/components/auth/verified-email-step';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { getRecoveryEnrollment } from '@/lib/auth';
-import { authClient } from '@/lib/auth-client';
-import { authError } from '@/lib/form';
-import { whenPageLeaves } from '@/lib/new-phrase';
-import { whenBrowserLocks } from '@/lib/show-new-phrase';
-import { phraseFromKit, WORDS } from '@/lib/recovery-kit';
-import { cue } from '@/lib/sounds';
+import { getRecoveryEnrollment } from '@/lib/auth/auth';
+import { authClient } from '@/lib/auth/auth-client';
+import { authError } from '@/lib/platform/form';
+import { whenPageLeaves } from '@/lib/account/new-phrase';
+import { whenBrowserLocks } from '@/lib/account/show-new-phrase';
+import { phraseFromKit, WORDS } from '@/lib/account/recovery-kit';
+import { cue } from '@/lib/platform/sounds';
 
 export const Route = createFileRoute('/recover/complete')({
     loader: () => getRecoveryEnrollment(),

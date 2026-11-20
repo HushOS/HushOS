@@ -1,11 +1,11 @@
 import { createFileRoute, Link, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { Cover } from '@/components/cover';
-import { container, H1, H2, Lede, SitePage, StartFree } from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { type Answer, type Comparison, comparisons, findComparison } from '@/lib/compare';
-import { formatDate } from '@/lib/content';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { Cover } from '@/components/site/cover';
+import { container, H1, H2, Lede, SitePage, StartFree } from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { type Answer, type Comparison, comparisons, findComparison } from '@/lib/site/compare';
+import { formatDate } from '@/lib/site/content';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 /*
  * One page per service people ask about, from the same data: the questions a

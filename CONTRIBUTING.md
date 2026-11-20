@@ -277,7 +277,7 @@ The workspace turns on:
 ### Where code goes
 
 - Web pages and layouts live in `apps/web/src/routes/` as directory routes (`app/route.tsx`, `app/index.tsx`).
-- Reusable UI lives in `src/components/`; shared helpers in `src/lib/`.
+- Reusable UI lives in `src/components/`; shared helpers in `src/lib/`. Both are split into feature folders (listed in AGENTS.md), with tests and workers beside their code.
 - Elysia handlers live in one Elysia instance per feature in `apps/web/src/lib/api/` (`auth`, `billing`, `drive`, `admin`, `groups`, `system`). Shared context, schemas and helpers are in `api/shared.server.ts`.
 - `apps/web/src/lib/api.server.ts` composes them into one app, and `src/routes/api/$.ts` hands `/api` requests to it. A new route goes in its feature's file, inside that feature's `.guard(...)`.
 - The guards are Elysia macros in `api/shared.server.ts`: `mutation` (a write carries this app's Origin and JSON), `client` (a named client at the minimums), `groupWrite` (the family-change floor), `session` (a signed-in `user`) and `admin` (an `operator`). A handler takes `user` or `operator` from its context, never from a helper it calls.
@@ -308,7 +308,7 @@ The workspace turns on:
 
 ### The browser client
 
-- `apps/web/src/lib/api-client.ts` makes one Eden Treaty client, typed by the Elysia app's exported `Api` type. It runs only in the browser.
+- `apps/web/src/lib/platform/api-client.ts` makes one Eden Treaty client, typed by the Elysia app's exported `Api` type. It runs only in the browser.
 - Adapters wrap it per area: `auth-api.ts`, `billing-api.ts`, `drive-api.ts`, `growth-api.ts` and `groups/api.ts` in `apps/web/src/lib`.
 - Server code reads the database directly, through server functions and `createIsomorphicFn().server(...)` branches. There is no in-process HTTP client.
 
@@ -405,7 +405,7 @@ Drizzle Kit reads `packages/db/drizzle.config.ts`. It uses `MIGRATION_DATABASE_U
 In server code and async helpers:
 
 ```ts
-import { useLogger, useRequestId } from '@/lib/logging.server';
+import { useLogger, useRequestId } from '@/lib/platform/server/logging.server';
 import { createError, parseError } from '@hushos/logging';
 
 useLogger().set({ action: 'example' });
@@ -451,7 +451,7 @@ Rejections still get the outer Nitro request event.
 
 Other entries: `./device-storage`, `./protocol`, `./worker`.
 
-The web app implements `AuthApi` in `apps/web/src/lib/auth-api.ts` with the Eden Treaty client. A route or response change the client does not expect then fails `bun run typecheck` there.
+The web app implements `AuthApi` in `apps/web/src/lib/auth/auth-api.ts` with the Eden Treaty client. A route or response change the client does not expect then fails `bun run typecheck` there.
 
 Error handlers (`onError` in `api/shared.server.ts`) must return literal status codes. A plain `number` erases every inferred response type.
 
@@ -527,7 +527,7 @@ Webhook payloads follow the API version set on the webhook endpoint, not the cli
 - Edit templates with `bun run email:preview`, apart from the app.
 - Use a public HTTPS app origin for images in delivered emails.
 
-The email logo, `hushos-logo-square.png`, is the brand square from `apps/web/src/lib/brand.ts` at three times its displayed size. `bun run images:optimize` writes it to both the preview and `apps/web/public/email`. Keep the two in step when the mark changes.
+The email logo, `hushos-logo-square.png`, is the brand square from `apps/web/src/lib/site/brand.ts` at three times its displayed size. `bun run images:optimize` writes it to both the preview and `apps/web/public/email`. Keep the two in step when the mark changes.
 
 ### Secrets in the browser
 

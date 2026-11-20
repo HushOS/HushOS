@@ -9,9 +9,9 @@ import {
     LOGO_WHITE,
     logoSvg,
     wordmarkSvg,
-} from '../src/lib/brand';
+} from '../src/lib/site/brand';
 
-/* Writes public/brand from the mark in src/lib/brand.ts. Run: bun run brand:assets */
+/* Writes public/brand from the mark in src/lib/site/brand.ts. Run: bun run brand:assets */
 const dir = new URL('../public/brand/', import.meta.url);
 await mkdir(dir, { recursive: true });
 const files = {

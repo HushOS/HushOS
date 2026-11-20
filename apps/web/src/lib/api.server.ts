@@ -8,9 +8,9 @@ import { guardAuthMutation, readSessionToken } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import { authRepository } from '@hushos/db';
 import * as groups from '@hushos/groups/server';
-import { createGroupRequestHandler } from '@/lib/group-requests';
-import { bodyCap, boundBody } from '@/lib/body-caps';
-import { useLogger } from '@/lib/logging.server';
+import { createGroupRequestHandler } from '@/lib/groups/group-requests';
+import { bodyCap, boundBody } from '@/lib/platform/server/body-caps';
+import { useLogger } from '@/lib/platform/server/logging.server';
 import { authApi } from '@/lib/api/auth.server';
 import { billingApi } from '@/lib/api/billing.server';
 import { driveApi } from '@/lib/api/drive.server';
@@ -97,7 +97,7 @@ export async function handleApiRequest(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (pathname === '/api/billing/webhook') return handleBillingWebhook(request);
     if (/^\/api\/(groups|invitations)(\/|$)/.test(pathname)) return handleGroupRequest(request);
-    // Every other write is read under its route's cap before anything parses it (lib/body-caps.ts).
+    // Every other write is read under its route's cap before anything parses it (lib/platform/server/body-caps.ts).
     if (!pathname.startsWith('/api/auth/')) {
         const bounded = await boundBody(request, () => largeBodyAllowed(request));
         if (bounded instanceof Response) return bounded;

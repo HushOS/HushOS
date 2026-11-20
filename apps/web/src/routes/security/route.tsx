@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { SecurityPage } from '@/components/security-page';
+import { SecurityPage } from '@/components/site/security-page';
 import Security from '@/content/security.mdx';
 import { frontmatter } from '@/content/security.mdx?meta';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 export const Route = createFileRoute('/security')({
     loader: () => ({ origin: publicOrigin() }),

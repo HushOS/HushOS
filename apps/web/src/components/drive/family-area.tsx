@@ -64,4 +64,4 @@ export function waitsForKeyChange(
     return folder.keyEpoch < target || (folder.parentId !== null && folder.parentKeyEpoch < target);
 }
 
-export { FINISHING_KEY_CHANGE } from '@/lib/drive';
+export { FINISHING_KEY_CHANGE } from '@/lib/drive/drive';

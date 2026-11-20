@@ -1233,7 +1233,7 @@ struct SavedCheck: View {
 }
 
 /*
- * Check you saved it (apps/web components/recovery-phrase.tsx CheckWords): three words picked
+ * Check you saved it (apps/web components/account/recovery-phrase.tsx CheckWords): three words picked
  * back out of the kit, each among two other words of the same phrase; Finish marks the phrase
  * saved on the server. A wrong pick says which word it isn't.
  */

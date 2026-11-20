@@ -2,11 +2,11 @@ import type { GroupRole, GroupView } from '@hushos/crypto';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckIcon, EllipsisIcon, MailIcon } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
-import { ContactFlowDialog, type FlowStart } from '@/components/drive/contact-flow';
+import { ContactFlowDialog, type FlowStart } from '@/components/drive/sharing/contact-flow';
 import { RowMenuButton } from '@/components/drive/file-list';
-import { PendingLabel } from '@/components/motion';
-import { PersonAvatar } from '@/components/person-avatar';
-import { SettingsGroup } from '@/components/settings';
+import { PendingLabel } from '@/components/shared/motion';
+import { PersonAvatar } from '@/components/shared/person-avatar';
+import { SettingsGroup } from '@/components/account/settings';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -28,8 +28,8 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { guardRevision, settingsQueryOptions } from '@/lib/contacts';
-import { formatDay } from '@/lib/drive';
+import { guardRevision, settingsQueryOptions } from '@/lib/trust/contacts';
+import { formatDay } from '@/lib/drive/drive';
 import {
     afterFamilyChange,
     afterMembershipChange,
@@ -43,22 +43,22 @@ import {
     type FamilyMember,
     type Invitation,
     type PendingPerson,
-} from '@/lib/families';
-import { removeBlocker } from '@/lib/family-leave';
+} from '@/lib/families/families';
+import { removeBlocker } from '@/lib/families/family-leave';
 import {
     clearInvitedRole,
     clearPendingRoles,
     pendingRolesOf,
     savePendingRoles,
     tidiedPendingRoles,
-} from '@/lib/family-pending';
+} from '@/lib/families/family-pending';
 import {
     continueMembers,
     letInWithoutWords,
     memberStandings,
     needsCheckFor,
     type MemberStanding,
-} from '@/lib/family-trust';
+} from '@/lib/families/family-trust';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy, leftDueCopy, namesInWords, outcomeCopy } from '@/lib/groups/copy';
 import {
@@ -68,7 +68,7 @@ import {
     type StageOutcome,
 } from '@/lib/groups/outbox';
 import { syncGroup } from '@/lib/groups/sync';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 import { SeatHelp, SeatNote } from './family-billing';
 import { FamilyCheckDialog, type FamilyMemberRef } from './family-check';
 import { RemoveDialog } from './remove-dialog';

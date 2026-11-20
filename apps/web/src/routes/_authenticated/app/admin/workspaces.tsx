@@ -1,11 +1,11 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { Spinner } from '@/components/motion';
-import { FilterTabs, OperatorPage, OperatorTable, Pager, td, th } from '@/components/operator';
-import { adminWorkspacesQueryOptions } from '@/lib/admin';
-import { formatBytes, formatWhen } from '@/lib/drive';
-import { formatQuota } from '@/lib/queries';
+import { Spinner } from '@/components/shared/motion';
+import { FilterTabs, OperatorPage, OperatorTable, Pager, td, th } from '@/components/app/operator';
+import { adminWorkspacesQueryOptions } from '@/lib/admin/admin';
+import { formatBytes, formatWhen } from '@/lib/drive/drive';
+import { formatQuota } from '@/lib/billing/queries';
 
 /*
  * Every workspace and where the space goes: who it belongs to, how much it

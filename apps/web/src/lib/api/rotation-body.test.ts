@@ -2,7 +2,7 @@
 import { ROTATION_REQUEST_BYTES } from '@hushos/drive/protocol';
 import { Elysia, type AnySchema } from 'elysia';
 import { expect, test } from 'vitest';
-import { ROTATION_BODY_BYTES } from '@/lib/body-caps';
+import { ROTATION_BODY_BYTES } from '@/lib/platform/server/body-caps';
 import { loadApi, type ApiRoute } from '@/test/api-app';
 
 /*

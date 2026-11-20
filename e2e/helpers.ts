@@ -586,7 +586,7 @@ export async function openWaiting(page: Page, text: string | RegExp) {
 
 /*
  * One of the app's modules as the browser fetches it: by its source path from the development
- * server (`/src/components/drive/pdf-viewer.tsx`), or as its chunk from a production build
+ * server (`/src/components/drive/viewers/pdf-viewer.tsx`), or as its chunk from a production build
  * (`/assets/pdf-viewer-<hash>.js`), which is what CI runs the suite against.
  */
 export const appModule = (name: string) =>

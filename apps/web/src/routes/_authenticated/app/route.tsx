@@ -1,43 +1,43 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
-import { authClient } from '@/lib/auth-client';
-import { answerPushes } from '@/lib/web-push';
-import { useAuthView, useSigningOut } from '@/lib/auth-view';
+import { authClient } from '@/lib/auth/auth-client';
+import { answerPushes } from '@/lib/account/web-push';
+import { useAuthView, useSigningOut } from '@/lib/auth/auth-view';
 import { createFileRoute, Outlet, useRouter } from '@tanstack/react-router';
-import { AppSidebar } from '@/components/app-sidebar';
-import { SearchButton } from '@/components/search-button';
-import { DeviceControl, openDeviceDialog } from '@/components/device-control';
-import { AccountDialogs } from '@/components/user-menu';
-import { NavigationBar } from '@/components/navigation-bar';
-import { ApprovalBanner } from '@/components/device-approvals';
-import { NotificationsAsk } from '@/components/notifications-ask';
-import { ReleaseNotice } from '@/components/release-notice';
-import { CollisionDialog } from '@/components/drive/collision-dialog';
+import { AppSidebar } from '@/components/app/app-sidebar';
+import { SearchButton } from '@/components/app/search-button';
+import { DeviceControl, openDeviceDialog } from '@/components/account/device-control';
+import { AccountDialogs } from '@/components/app/user-menu';
+import { NavigationBar } from '@/components/app/navigation-bar';
+import { ApprovalBanner } from '@/components/account/device-approvals';
+import { NotificationsAsk } from '@/components/account/notifications-ask';
+import { ReleaseNotice } from '@/components/app/release-notice';
+import { CollisionDialog } from '@/components/drive/dialogs/collision-dialog';
 import { DriveRuntime } from '@/components/drive/drive-shell';
 import { CommandCenter } from '@/components/drive/command-palette';
-import { StorageFullDialog } from '@/components/drive/storage-full-dialog';
+import { StorageFullDialog } from '@/components/drive/dialogs/storage-full-dialog';
 import { TransfersPanel } from '@/components/drive/transfers-panel';
 import { InterruptedRuns } from '@/components/drive/interrupted-runs';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
-import { billingApi } from '@/lib/billing-api';
-import { usePageRestored } from '@/lib/page-restore';
+import { billingApi } from '@/lib/billing/billing-api';
+import { usePageRestored } from '@/lib/platform/page-restore';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
     localeHintQueryOptions,
     storageQueryOptions,
-} from '@/lib/queries';
-import { capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families-shell';
-import { firstLanding } from '@/lib/family-signup';
-import { sessionQueryOptions } from '@/lib/session';
+} from '@/lib/billing/queries';
+import { capabilitiesQueryOptions, familiesQueryOptions } from '@/lib/families/families-shell';
+import { firstLanding } from '@/lib/families/family-signup';
+import { sessionQueryOptions } from '@/lib/auth/session';
 import { useIsTablet } from '@/hooks/use-mobile';
-import { passesThrough } from '@/lib/own-keys';
-import { getSidebarStateServerFn } from '@/lib/theme';
-import { bindContactsToQueries } from '@/lib/contacts';
-import { bindTransfersToQueries, guardUnloadWhileUploading } from '@/lib/transfers';
+import { passesThrough } from '@/lib/platform/own-keys';
+import { getSidebarStateServerFn } from '@/lib/platform/theme';
+import { bindContactsToQueries } from '@/lib/trust/contacts';
+import { bindTransfersToQueries, guardUnloadWhileUploading } from '@/lib/drive/transfers/transfers';
 
 export const Route = createFileRoute('/_authenticated/app')({
     loader: () => getSidebarStateServerFn(),

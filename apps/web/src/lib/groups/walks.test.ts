@@ -359,7 +359,7 @@ describe('walkRetries.run', () => {
 });
 
 /*
- * The wiring lib/spaces.ts runs: walks of what a sync found, retries through a sync of the
+ * The wiring lib/families/spaces.ts runs: walks of what a sync found, retries through a sync of the
  * family, and the family's pages hearing each walk end. The folder walks, syncs, lock state and
  * network are injected; everything between them is the code the app runs.
  */

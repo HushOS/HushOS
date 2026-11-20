@@ -6,8 +6,8 @@ import { FINISHING_KEY_CHANGE } from '@/components/drive/family-area';
 import { useFamilyPlanGate } from '@/components/families/family-billing';
 import { DeleteFamilyFolderDialog } from '@/components/families/delete-folder-dialog';
 import { NewFamilyFolderDialog } from '@/components/families/new-folder-dialog';
-import { FolderMark } from '@/components/folder-mark';
-import { PageHeader } from '@/components/page-header';
+import { FolderMark } from '@/components/marks/folder-mark';
+import { PageHeader } from '@/components/shared/page-header';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -17,8 +17,8 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import type { AreaState } from '@/lib/groups/sync';
-import { useWaitingOn } from '@/lib/families-shell';
-import { useFamilySpace } from '@/lib/spaces';
+import { useWaitingOn } from '@/lib/families/families-shell';
+import { useFamilySpace } from '@/lib/families/spaces';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/s/$groupId/')({
     component: FamilySpacePage,

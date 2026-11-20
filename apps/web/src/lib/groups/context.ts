@@ -6,8 +6,8 @@ import type {
     GroupWriter,
 } from '@hushos/crypto';
 import type { IdentityEnvelope } from '@hushos/crypto/identity';
-import { askPersistentStorage, type FamilyGuardStore } from '@/lib/contact-guard';
-import type { LoadedSettings } from '@/lib/contacts';
+import { askPersistentStorage, type FamilyGuardStore } from '@/lib/trust/contact-guard';
+import type { LoadedSettings } from '@/lib/trust/contacts';
 import type { GroupsApi } from './api';
 import type { GroupStore } from './store';
 import type { AreaState } from './sync';
@@ -75,7 +75,7 @@ export type GroupNotice =
     /*
      * The family's member list names folders that aren't its own: `owner`'s (another family
      * opened them here), or this account's own files when null. Ignored, never trusted; said
-     * on the family's page (lib/families.ts, foreignListingsQueryOptions), and for good, since a
+     * on the family's page (lib/families/families.ts, foreignListingsQueryOptions), and for good, since a
      * member list keeps everything it names.
      */
     | { kind: 'foreign-listing'; groupId: string; owner: string | null; count: number };
@@ -101,7 +101,7 @@ export type FamilyGuard = {
     read(groupId: string): Promise<GroupPin | null>;
     keep(groupId: string, pin: GroupPin): Promise<GroupPin>;
 };
-/* One account's family guard, from the store that keeps every account's (lib/contact-guard.ts). */
+/* One account's family guard, from the store that keeps every account's (lib/trust/contact-guard.ts). */
 export function familyGuardOf(store: () => FamilyGuardStore, userId: string): FamilyGuard {
     return {
         read: (groupId) => store().family(userId, groupId),
@@ -119,7 +119,7 @@ export type SettingsAccess = {
      * worker learns the settings pins it takes as marks, so every acceptance
      * reads them through here first. A sync's own steps (its acceptance, the
      * pin it settles) may be handed one read for a short while
-     * (lib/contacts.ts); an act (a join, a creation, an admission sent, a
+     * (lib/trust/contacts.ts); an act (a join, a creation, an admission sent, a
      * family check) asks `fresh` and reads them now.
      */
     read(options?: { fresh?: boolean }): Promise<{ settings: GroupSettings; version: number }>;

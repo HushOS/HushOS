@@ -15,15 +15,15 @@ import {
 import { createMiddleware } from '@tanstack/react-start';
 import { useEffect, useRef, type ReactNode } from 'react';
 
-import { NewPhraseGate } from '@/components/new-phrase-gate';
-import { MotionProvider } from '@/components/motion';
+import { NewPhraseGate } from '@/components/account/new-phrase-gate';
+import { MotionProvider } from '@/components/shared/motion';
 import {
     analyticsAllowed,
     analyticsScript,
     getAnalyticsServerFn,
     installAnalyticsFilter,
     leaveAnalytics,
-} from '@/lib/analytics';
+} from '@/lib/site/analytics';
 import {
     checkRelease,
     getReleaseServerFn,
@@ -32,23 +32,23 @@ import {
     setServedRelease,
     startReleaseChecks,
     useReleaseStale,
-} from '@/lib/release';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { ThemeProvider, useTheme } from '@/components/theme-provider';
+} from '@/lib/platform/release';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { ThemeProvider, useTheme } from '@/components/theme/theme-provider';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/toast';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { trackMoved } from '@/lib/moved';
-import { billingHint, freeQuotaHint } from '@/lib/billing';
-import { sessionHint } from '@/lib/session';
-import { appStoreHint, operatorHint, playStoreHint } from '@/lib/social';
-import { initSounds } from '@/lib/sounds';
-import { getContrastServerFn, getThemeServerFn } from '@/lib/theme';
-import { isAppleTouch, viewportContent } from '@/lib/viewport';
-import { forgetReturn } from '@/lib/return-to';
+import { trackMoved } from '@/lib/platform/moved';
+import { billingHint, freeQuotaHint } from '@/lib/billing/billing';
+import { sessionHint } from '@/lib/auth/session';
+import { appStoreHint, operatorHint, playStoreHint } from '@/lib/site/social';
+import { initSounds } from '@/lib/platform/sounds';
+import { getContrastServerFn, getThemeServerFn } from '@/lib/platform/theme';
+import { isAppleTouch, viewportContent } from '@/lib/platform/viewport';
+import { forgetReturn } from '@/lib/auth/return-to';
 import styles from '@/styles.css?url';
-import { ThemeColor } from '@/components/theme-color';
-import { SitePage } from '@/components/site';
+import { ThemeColor } from '@/components/theme/theme-color';
+import { SitePage } from '@/components/site/site';
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
     server: {

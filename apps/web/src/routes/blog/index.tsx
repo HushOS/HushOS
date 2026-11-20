@@ -2,11 +2,11 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Cover } from '@/components/cover';
-import { container, H1, Lede, SitePage } from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { formatDate, posts } from '@/lib/content';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { Cover } from '@/components/site/cover';
+import { container, H1, Lede, SitePage } from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { formatDate, posts } from '@/lib/site/content';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 export const Route = createFileRoute('/blog/')({
     loader: () => ({ origin: publicOrigin() }),

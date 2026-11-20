@@ -1,12 +1,12 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { ArrowRightIcon, PlusIcon } from 'lucide-react';
-import { DitherMark } from '@/components/dither-mark';
-import { SitePage } from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
+import { DitherMark } from '@/components/marks/dither-mark';
+import { SitePage } from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
 import { buttonVariants } from '@/components/ui/button';
-import { formatQuota } from '@/lib/format';
-import { getReferralLandingServerFn } from '@/lib/growth';
-import { cardMeta, publicOrigin } from '@/lib/social';
+import { formatQuota } from '@/lib/platform/format';
+import { getReferralLandingServerFn } from '@/lib/billing/growth';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
 
 /*
  * An invite link. It says who invited you and what you get, and takes you

@@ -1,9 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { getCatalogueServerFn } from '@/lib/billing';
-import { comparisons } from '@/lib/compare';
-import { posts } from '@/lib/content';
-import { formatQuota } from '@/lib/queries';
-import { publicOrigin } from '@/lib/social';
+import { getCatalogueServerFn } from '@/lib/billing/billing';
+import { comparisons } from '@/lib/site/compare';
+import { posts } from '@/lib/site/content';
+import { formatQuota } from '@/lib/billing/queries';
+import { publicOrigin } from '@/lib/site/social';
 
 /*
  * Guidance for AI systems, per the TanStack Start GEO guide and llmstxt.org:

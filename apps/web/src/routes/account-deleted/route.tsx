@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
-import { AuthActions, AuthLayout } from '@/components/auth-layout';
+import { AuthActions, AuthLayout } from '@/components/auth/auth-layout';
 import { buttonVariants } from '@/components/ui/button';
 export const Route = createFileRoute('/account-deleted')({
     head: () => ({

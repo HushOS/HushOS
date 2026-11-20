@@ -1,19 +1,28 @@
-import { publicOrigin, publicSocialMeta, structuredData } from '@/lib/social';
+import { publicOrigin, publicSocialMeta, structuredData } from '@/lib/site/social';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { ArrowRightIcon, CheckIcon, CopyIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { DitherGradient } from '@/components/dither-kit/gradient';
-import { Cover } from '@/components/cover';
-import { LockStory } from '@/components/lock-story';
-import { Scramble } from '@/components/scramble';
-import { PhoneShot, Phones, Shot } from '@/components/screenshot';
-import { container, Faq, H1, H2, Lede, SitePage, StartFree, TextLink } from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { StoreLinks } from '@/components/store-links';
+import { Cover } from '@/components/site/cover';
+import { LockStory } from '@/components/site/lock-story';
+import { Scramble } from '@/components/site/scramble';
+import { PhoneShot, Phones, Shot } from '@/components/site/screenshot';
+import {
+    container,
+    Faq,
+    H1,
+    H2,
+    Lede,
+    SitePage,
+    StartFree,
+    TextLink,
+} from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { StoreLinks } from '@/components/site/store-links';
 import { Button } from '@/components/ui/button';
-import { formatDate, posts } from '@/lib/content';
-import { cue } from '@/lib/sounds';
+import { formatDate, posts } from '@/lib/site/content';
+import { cue } from '@/lib/platform/sounds';
 
 const commands = [
     'git clone https://github.com/HushOS/HushOS',

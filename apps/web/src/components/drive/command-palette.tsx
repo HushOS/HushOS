@@ -32,15 +32,15 @@ import {
     TextQuoteIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { operator, workspace } from '@/components/app-sidebar';
-import { openDeviceDialog } from '@/components/device-control';
-import { Highlight } from '@/components/drive/highlight';
+import { operator, workspace } from '@/components/app/app-sidebar';
+import { openDeviceDialog } from '@/components/account/device-control';
+import { Highlight } from '@/components/drive/viewers/highlight';
 import { Kbd } from '@/components/drive/kbd';
 import { keyLabel, shortcuts } from '@/components/drive/shortcuts';
-import { useTheme } from '@/components/theme-provider';
-import { searchHash } from '@/lib/search';
-import { OwnWordsDialog } from '@/components/own-words-dialog';
-import { account } from '@/components/user-menu';
+import { useTheme } from '@/components/theme/theme-provider';
+import { searchHash } from '@/lib/platform/search';
+import { OwnWordsDialog } from '@/components/account/own-words-dialog';
+import { account } from '@/components/app/user-menu';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -62,16 +62,16 @@ import {
     CommandShortcut,
 } from '@/components/ui/command';
 import { toast } from '@/components/ui/toast';
-import { useAuthView } from '@/lib/auth-view';
-import { driveClient, driveError, useCatalogueState } from '@/lib/drive';
-import { downloadNodes } from '@/lib/downloads';
-import { useOpenNode } from '@/lib/open-node';
-import { setPaletteOpen, setPaletteQuery, usePaletteState } from '@/lib/palette';
-import { nodeKind } from '@/lib/previews';
-import { useBillingEnabled } from '@/lib/queries';
-import { cue } from '@/lib/sounds';
-import { emptyTrashAll } from '@/lib/trash';
-import { leaveApp } from '@/lib/sign-out';
+import { useAuthView } from '@/lib/auth/auth-view';
+import { driveClient, driveError, useCatalogueState } from '@/lib/drive/drive';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
+import { useOpenNode } from '@/lib/drive/open-node';
+import { setPaletteOpen, setPaletteQuery, usePaletteState } from '@/lib/drive/palette';
+import { nodeKind } from '@/lib/viewers/previews';
+import { useBillingEnabled } from '@/lib/billing/queries';
+import { cue } from '@/lib/platform/sounds';
+import { emptyTrashAll } from '@/lib/drive/trash';
+import { leaveApp } from '@/lib/auth/sign-out';
 
 function Keys({ id }: { id: string }) {
     const shortcut = shortcuts.find((entry) => entry.id === id);

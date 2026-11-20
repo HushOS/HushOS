@@ -1,4 +1,4 @@
-import { PREVIEW_LIMITS } from '@/lib/preview-limits';
+import { PREVIEW_LIMITS } from '@/lib/viewers/preview-limits';
 import { imageSize } from './dimensions';
 import { ImageRefused, isHeic } from './pdf';
 import { MAX_PIXELS } from './protocol';

@@ -18,17 +18,17 @@ import {
 } from 'lucide-react';
 import { cn } from 'cn';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useContactFlow } from '@/components/drive/contact-flow';
+import { useContactFlow } from '@/components/drive/sharing/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
-import { describeLink } from '@/components/drive/link-row';
-import { Preview } from '@/components/drive/preview';
-import { ReportDialog } from '@/components/drive/report-dialog';
-import { ShareDialog } from '@/components/drive/share-dialog';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
-import { PageHeader } from '@/components/page-header';
-import { PersonAvatar } from '@/components/person-avatar';
+import { describeLink } from '@/components/drive/sharing/link-row';
+import { Preview } from '@/components/drive/viewers/preview';
+import { ReportDialog } from '@/components/drive/dialogs/report-dialog';
+import { ShareDialog } from '@/components/drive/sharing/share-dialog';
+import { UnverifiedMark } from '@/components/drive/sharing/unverified-mark';
+import { PageHeader } from '@/components/shared/page-header';
+import { PersonAvatar } from '@/components/shared/person-avatar';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -48,7 +48,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { accountChangeOf, GUARD_UNREADABLE, useAccountChanges } from '@/lib/contacts';
+import { accountChangeOf, GUARD_UNREADABLE, useAccountChanges } from '@/lib/trust/contacts';
 import {
     driveClient,
     driveError,
@@ -60,13 +60,13 @@ import {
     mySharingQueryOptions,
     nodeSize,
     sharedQueryOptions,
-} from '@/lib/drive';
-import { downloadNodes } from '@/lib/downloads';
-import { afterTrustChanged } from '@/lib/integrity';
-import { rotateAfterRevoke } from '@/lib/rotation';
-import { saveCopy } from '@/lib/save-copy';
-import { cue } from '@/lib/sounds';
-import { copySecret } from '@/lib/clipboard';
+} from '@/lib/drive/drive';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
+import { afterTrustChanged } from '@/lib/trust/integrity';
+import { rotateAfterRevoke } from '@/lib/drive/rotation';
+import { saveCopy } from '@/lib/drive/save-copy';
+import { cue } from '@/lib/platform/sounds';
+import { copySecret } from '@/lib/platform/clipboard';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/shared')({

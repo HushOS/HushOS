@@ -15,9 +15,9 @@ import {
     MemberList,
     PendingList,
 } from '@/components/families/members';
-import { PendingLabel } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
-import { Setting, SettingsDisclosure, SettingsPage } from '@/components/settings';
+import { PendingLabel } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
+import { Setting, SettingsDisclosure, SettingsPage } from '@/components/account/settings';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -44,9 +44,9 @@ import {
     pendingQueryOptions,
     useFamilySync,
     waitingOn,
-} from '@/lib/families';
+} from '@/lib/families/families';
 import { GroupApiError, groupsApi, lapsedPlansIn } from '@/lib/groups/api';
-import { familySynced } from '@/lib/families-keys';
+import { familySynced } from '@/lib/families/families-keys';
 import type { GroupNotice } from '@/lib/groups/context';
 import { errorCopy, leftDueCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
@@ -56,13 +56,13 @@ import {
     lapsedPlanShown,
     paymentNeedsYou,
     placesOf,
-} from '@/lib/family-billing';
-import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/queries';
-import { leaveBlocker } from '@/lib/family-leave';
-import { clearPendingRoles, pendingFamiliesGone } from '@/lib/family-pending';
-import { settingsQueryOptions } from '@/lib/contacts';
-import { useFamilyWork } from '@/lib/family-work';
-import { cue } from '@/lib/sounds';
+} from '@/lib/families/family-billing';
+import { formatQuota, formatSpace, storageQueryOptions } from '@/lib/billing/queries';
+import { leaveBlocker } from '@/lib/families/family-leave';
+import { clearPendingRoles, pendingFamiliesGone } from '@/lib/families/family-pending';
+import { settingsQueryOptions } from '@/lib/trust/contacts';
+import { useFamilyWork } from '@/lib/families/family-work';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * The app-wide pass's notices with this page's own. Each reports separate events (whichever

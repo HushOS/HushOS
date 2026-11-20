@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
-import type { FamilyBilling } from '@/lib/family-billing';
+import type { FamilyBilling } from '@/lib/families/family-billing';
 
 /*
  * After a declined charge the payer is offered Card and invoices beside the retry. Closed while
@@ -34,7 +34,7 @@ const portal = vi.fn(
             requests.push({ resolve, reject });
         }),
 );
-vi.mock('@/lib/billing-api', () => ({
+vi.mock('@/lib/billing/billing-api', () => ({
     groupBillingApi: {
         setUnits: (...args: unknown[]) => setUnits(...args),
         changePlan: (...args: unknown[]) => changePlan(...args),
@@ -45,18 +45,18 @@ vi.mock('@/lib/billing-api', () => ({
 // The other summaries the section reads (the person's own plan and storage, the family): never
 // fetched here, as the client's queries never run.
 const idle = (...key: unknown[]) => ({ queryKey: key, queryFn: () => new Promise(() => {}) });
-vi.mock('@/lib/billing', () => ({
+vi.mock('@/lib/billing/billing', () => ({
     billingQueryOptions: idle('billing'),
     localeHintQueryOptions: idle('locale-hint'),
 }));
-vi.mock('@/lib/queries', () => ({ storageQueryOptions: idle('storage') }));
-vi.mock('@/lib/families', () => ({
+vi.mock('@/lib/billing/queries', () => ({ storageQueryOptions: idle('storage') }));
+vi.mock('@/lib/families/families', () => ({
     familyQueryOptions: (userId: string, groupId: string) => idle('family', userId, groupId),
 }));
 vi.mock('@/components/ui/toast', () => ({ toast: { add: vi.fn() } }));
-vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
+vi.mock('@/lib/platform/sounds', () => ({ cue: vi.fn() }));
 const { FamilyPlan } = await import('./family-billing');
-const { familyBillingQueryOptions } = await import('@/lib/family-billing');
+const { familyBillingQueryOptions } = await import('@/lib/families/family-billing');
 
 const GB = 1024 ** 3;
 const DAY = 24 * 60 * 60 * 1000;

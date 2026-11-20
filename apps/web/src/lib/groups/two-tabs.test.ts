@@ -3,7 +3,7 @@ import type { CreateGroupBody, RosterCallBody } from '@hushos/crypto';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
 import { GroupApiError, type GroupsApi } from './api';
-import { createMemoryFamilyGuard } from '@/lib/contact-guard';
+import { createMemoryFamilyGuard } from '@/lib/trust/contact-guard';
 import { familyGuardOf, type GroupContext } from './context';
 import { createFamily, resumeOutbox, stageChange } from './outbox';
 import { createMemoryGroupStore } from './store';

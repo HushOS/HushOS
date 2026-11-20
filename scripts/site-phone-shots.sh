@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The phone pictures on the site (home page, the 1.0 post, About): Home and the Lisbon 2026
 # folder from the iPhone and Android debug apps, light and dark, at the three scales the site
-# serves (apps/web/src/components/screenshot.tsx, `Phones`).
+# serves (apps/web/src/components/site/screenshot.tsx, `Phones`).
 #
 #   SCREENSHOTS=1 bunx playwright test e2e/screenshots.spec.ts --project=chromium   # the demo account
 #   bun dev                                   # the debug apps talk to http://localhost:5173

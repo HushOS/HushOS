@@ -6,7 +6,7 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 
 /*
- * The archive's list as folders (the web's rowsOf in components/drive/archive-view.tsx), from the
+ * The archive's list as folders (the web's rowsOf in components/drive/viewers/archive-view.tsx), from the
  * core's ArchiveFolders: each folder's parent and name in one array and one string, never an
  * object a folder, so a listing of millions of folders costs a few bytes each. A folder's rows
  * (its folders first, then its files, each by name, numbers in order: "2" before "10") are made

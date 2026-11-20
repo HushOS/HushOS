@@ -2,7 +2,7 @@ import Foundation
 import HushOSCore
 
 /*
- * Rollback marks (docs/integrity-design.md, "Rollback marks"; the web's lib/rollback-marks.ts):
+ * Rollback marks (docs/integrity-design.md, "Rollback marks"; the web's lib/trust/rollback-marks.ts):
  * the highest settings sequence and own identity key version this phone has seen for the
  * account, and the highest identity version it has opened. The server keeps the settings and
  * the identity and could hand back an older copy of either; a phone that has seen more refuses

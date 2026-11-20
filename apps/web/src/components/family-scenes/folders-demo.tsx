@@ -1,8 +1,8 @@
 import { fileTypeHue } from '@hushos/drive/client';
 import { ChevronRightIcon, FolderPlusIcon } from 'lucide-react';
 import { useEffect, useId, useReducer, useRef, type ReactNode } from 'react';
-import { FolderMark } from '@/components/folder-mark';
-import { SheetMark } from '@/components/sheet-mark';
+import { FolderMark } from '@/components/marks/folder-mark';
+import { SheetMark } from '@/components/marks/sheet-mark';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { AppWindow, Checked, FAMILY, JONAS, MAYA, PersonRow, SAM, Section, Sidebar } from './faux';

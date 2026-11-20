@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { socialImage } from '@/lib/og.server';
+import { socialImage } from '@/lib/site/og.server';
 
 /*
  * The social card for one public page: /og/about.jpg, /og/blog-<slug>.jpg,

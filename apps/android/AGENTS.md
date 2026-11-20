@@ -210,7 +210,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - Change password, Rotate account key and Delete account hold a `StepUpHolder` and show `StepUpFields`. No `keepSession` is sent.
 - New recovery words with no session to read them back with are `DriveViewModel.heldWords`, drawn by `HushOSApp` in place of everything (`FreshWordsScreen`), tabs included. Nothing leaves them but saving and checking them; stopping the app loses them.
     - A rotation or a phrase reset holds them when no session came of the sign-in after it: it didn't happen, its step did not pass, or nothing confirmed the change.
-    - The panel says what the web's does (`apps/web/src/components/new-phrase.tsx`), from `StepWords.NEW_PHRASE_…` and `HeldWords.lead`. Change the wording there and on the web together.
+    - The panel says what the web's does (`apps/web/src/components/account/new-phrase.tsx`), from `StepWords.NEW_PHRASE_…` and `HeldWords.lead`. Change the wording there and on the web together.
     - Once a rotation's or a reset's last request has gone out, nothing that fails may cost the new phrase. Keep it that way.
 - A rotation and a phrase reset end the same way (`Reset`, `data/TwoStep.kt`; `Auth.rotateKeysKit`, `Auth.recover`): what the last request answered, what the sign-in with the new password showed, and what to show.
     - That sign-in (`Auth.proved`, tried twice) answers its second step with the phrase just made, so nobody is sent to a step they need unseen words for.
@@ -365,7 +365,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
 ### Text editor
 
-Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/text-editor.tsx`, iOS's `TextEditorScreen`): Edit in the item sheet for a text file (`TextEditing.opens`, the core's `text_editable_kind`) of at most 8 MiB that this person may change (`mayEditText`: their own only once the own root is loaded, else an editor's folder mount covering it, never a file shared on its own; a family folder only while this phone may write it). Files of no known kind aren't sniffed: they open in other apps, so Edit isn't offered for them.
+Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/text-editor.tsx`, iOS's `TextEditorScreen`): Edit in the item sheet for a text file (`TextEditing.opens`, the core's `text_editable_kind`) of at most 8 MiB that this person may change (`mayEditText`: their own only once the own root is loaded, else an editor's folder mount covering it, never a file shared on its own; a family folder only while this phone may write it). Files of no known kind aren't sniffed: they open in other apps, so Edit isn't offered for them.
 
 - `TextEdit` (ui/TextEditor.kt), held by the view model so a rotation keeps it: lists the file's folder afresh (`VaultSaveWriter.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory with the tool reader (`TextEditing.bytesOf`; no decrypted copy on disk), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence, never transcoded.
 - `TextEdit` keeps a `TextEditing.SaveState`: the format found at open, kept for the whole session, and the text and bytes last opened or saved. A save writes those bytes while the text is unchanged, otherwise the text in that format (the core's `text_encode`), converted inside the save job, never on the main thread, and built at open from what the load already decoded off it (`SaveState.opening(opened, bytes)`), never decoded twice. The format is never found again from what was saved (a save that removed every line break, or one past 8 MiB, would lose it).
@@ -511,7 +511,7 @@ Design: `docs/identity-pq-design.md`.
     - Tests: `TrustLoadsTest`, `SharedLoadTest`.
 - A followed pin always keeps its own signing key among the previous ones (`previousKeysAfter`).
 - One settings read for the readers that only look:
-    - `loadSettings`/`settingsServed` always read now; `Vault.settingsToLook` hands back the last fresh read for up to `SETTINGS_REUSE_MS` (10 s), as the web's `lib/contacts.ts` does.
+    - `loadSettings`/`settingsServed` always read now; `Vault.settingsToLook` hands back the last fresh read for up to `SETTINGS_REUSE_MS` (10 s), as the web's `lib/trust/contacts.ts` does.
     - Look-only readers use it: a family sync's acceptance and settle (`familyPin(groupId, look = true)`), `vouched`, `checkedFamilyWith`, `contacts()`.
     - Everything else reads now: every family act before it sends, every read in the `GuardTurn`, `updateSettings`'s base, rotation, the re-seal pass, a push's names.
     - The copy is dropped when `TrustMemory.generation` moves (every guard commit; every save, before its PUT and again after it), on any failed read (no answer, the identity or marks unreadable, a rollback), and after the window; a copy older than the marks another vault raised is read again.
@@ -1022,7 +1022,7 @@ Plan: `docs/groups-mobile-plan.md` ("Android 1 to 6"). The Android code is the t
 ### Writes in family folders
 
 - Family folders allow a new folder, an upload, a rename, a move within the folder, a move to or from one's own files, Move to Trash and its Undo (back in place only), and a new version (an upload's Replace).
-- A move between one's own files and a family folder, either way, is `Vault.moveAcross` (the web's `lib/move-across.ts`):
+- A move between one's own files and a family folder, either way, is `Vault.moveAcross` (the web's `lib/drive/move-across.ts`):
     - each file is downloaded at the version read and uploaded under the destination's keys with `moveOf` on begin (`MoveOf`, signed as a copy by `movePrior`);
     - the server deletes the source in the transaction that completes the upload. Nothing goes to the Trash; a source that changed fails `stale` and stays (`movedMeanwhile`);
     - a folder is made at the destination (`createFolder(moving = true)`), its files moved one by one, and the source folder goes to the Trash once the server lists only folders in it. Never purged.

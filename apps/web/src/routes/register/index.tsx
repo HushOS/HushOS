@@ -1,5 +1,5 @@
 import { createFileRoute, getRouteApi } from '@tanstack/react-router';
-import { EmailStep } from '@/components/email-step';
+import { EmailStep } from '@/components/auth/email-step';
 
 const layout = getRouteApi('/register');
 

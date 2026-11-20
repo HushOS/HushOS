@@ -594,7 +594,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * One settings read serves the readers that only look, for a short while, as on the web (lib/contacts.ts): a family
+     * One settings read serves the readers that only look, for a short while, as on the web (lib/trust/contacts.ts): a family
      * sync's steps (the pin it accepts against, the pin it settles over, whether this person vouched), whether a family
      * was checked, and the contacts list. What is reused is only ever what a fresh read above checked against the marks,
      * handed out as a copy of its own. Never reused: a read under the guard turn (trust, an act on a contact, a family's
@@ -921,7 +921,7 @@ class Vault(internal val context: Context, val api: DriveApi) {
     }
 
     /*
-     * A move between this person's own files and their family's folders, either way (the web's lib/move-across.ts). Each is
+     * A move between this person's own files and their family's folders, either way (the web's lib/drive/move-across.ts). Each is
      * a workspace with keys of its own, so the server can't re-parent across them: each file is read here at its current
      * version and uploaded under the destination's keys naming its source (`moveOf`), and the server deletes the source in
      * the transaction that completes the upload, or fails it `stale` and keeps it. Never both, never neither, and nothing

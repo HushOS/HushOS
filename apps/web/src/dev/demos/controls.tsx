@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useId, useState, type CSSProperties } from 'react';
 
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';

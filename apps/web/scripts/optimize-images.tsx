@@ -2,8 +2,8 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import sharp from 'sharp';
-import { Logo } from '../src/components/logo';
-import { BADGE_SIDE, badgeSvg, LOGO_BLACK, LOGO_WHITE } from '../src/lib/brand';
+import { Logo } from '../src/components/marks/logo';
+import { BADGE_SIDE, badgeSvg, LOGO_BLACK, LOGO_WHITE } from '../src/lib/site/brand';
 
 const publicDirectory = resolve(import.meta.dirname, '../public');
 const emailDirectory = resolve(
@@ -13,7 +13,7 @@ const emailDirectory = resolve(
 await mkdir(emailDirectory, { recursive: true });
 await mkdir(resolve(publicDirectory, 'email'), { recursive: true });
 /*
- * The emails' logo: the brand square (lib/brand.ts) as one image, at three
+ * The emails' logo: the brand square (lib/site/brand.ts) as one image, at three
  * physical pixels per CSS pixel of its 26px. Mail apps that recolour dark mode
  * themselves (Gmail on iOS) flip CSS backgrounds but never images, so a square
  * painted in CSS behind a transparent mark turns white under a white mark; an

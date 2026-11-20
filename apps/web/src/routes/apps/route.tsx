@@ -1,6 +1,6 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
-import { AppLinksPage } from '@/components/app-links-page';
-import { cardMeta, publicOrigin } from '@/lib/social';
+import { AppLinksPage } from '@/components/site/app-links-page';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
 
 /* The share link for both phone apps (AppLinksPage): the page and both badges, for the visitor to tap; it never redirects. Only where this server names a listing. */
 export const Route = createFileRoute('/apps')({

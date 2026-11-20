@@ -18,7 +18,7 @@ import { fetchIdentities, syncGroup, type AreaState, type SyncResult } from './s
  * running in a folder is finished; only then is the roster marking them left
  * staged, with every folder rotated, the succession when they managed the
  * family, and the grants, in one call (route 19). The walk of each folder
- * that follows runs in the background (lib/spaces.ts), from the server's
+ * that follows runs in the background (lib/families/spaces.ts), from the server's
  * state, so it resumes after a reload.
  */
 

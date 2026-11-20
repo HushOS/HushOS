@@ -1,9 +1,9 @@
 import { fileTypeHue, folderColour, type DriveNode } from '@hushos/drive/client';
 import { cn } from 'cn';
-import { FolderMark } from '@/components/folder-mark';
-import { hueProps, SheetMark } from '@/components/sheet-mark';
-import { extensionOf, previewKind } from '@/lib/previews';
-import { useThumbnail } from '@/lib/thumbnails';
+import { FolderMark } from '@/components/marks/folder-mark';
+import { hueProps, SheetMark } from '@/components/marks/sheet-mark';
+import { extensionOf, previewKind } from '@/lib/viewers/previews';
+import { useThumbnail } from '@/lib/viewers/thumbnails';
 
 /*
  * How an item is drawn wherever items are listed. A folder is two solid sheets,

@@ -1,7 +1,7 @@
 package com.hushos.app.data
 
 /*
- * What sign-up checks before anything is sent, in the web's words (apps/web/src/lib/form.ts and
+ * What sign-up checks before anything is sent, in the web's words (apps/web/src/lib/platform/form.ts and
  * the register page). The password rule matters most: OPAQUE means the server never sees the
  * password, so this check is the only one there is. Lengths count UTF-16 units, as JavaScript's
  * `length` does (packages/crypto checkPassword), so a password the web refuses is refused here.

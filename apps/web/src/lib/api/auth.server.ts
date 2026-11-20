@@ -5,8 +5,8 @@ import { authCookie, guardAuthMutation } from '@hushos/auth/http';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
 import { authRepository, growthRepository } from '@hushos/db';
-import { intentSchema } from '@/lib/signup-intent';
-import { useLogger } from '@/lib/logging.server';
+import { intentSchema } from '@/lib/auth/signup-intent';
+import { useLogger } from '@/lib/platform/server/logging.server';
 import {
     bytes32Schema,
     clientMethodsSchema,

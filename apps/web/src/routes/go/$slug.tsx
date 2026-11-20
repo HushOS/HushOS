@@ -2,28 +2,28 @@ import type { Plan } from '@hushos/billing/api';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { ArrowRightIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Cover } from '@/components/cover';
-import { PendingLabel } from '@/components/motion';
-import { SitePage } from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
+import { Cover } from '@/components/site/cover';
+import { PendingLabel } from '@/components/shared/motion';
+import { SitePage } from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { localeHintQueryOptions } from '@/lib/billing';
-import { billingApi } from '@/lib/billing-api';
-import { pickCurrency } from '@/lib/currency';
-import { moneyFontLinks } from '@/lib/fonts';
-import { authError } from '@/lib/form';
-import { formatQuota, formatMoney } from '@/lib/format';
-import { usePageRestored } from '@/lib/page-restore';
+import { localeHintQueryOptions } from '@/lib/billing/billing';
+import { billingApi } from '@/lib/billing/billing-api';
+import { pickCurrency } from '@/lib/billing/currency';
+import { moneyFontLinks } from '@/lib/platform/fonts';
+import { authError } from '@/lib/platform/form';
+import { formatQuota, formatMoney } from '@/lib/platform/format';
+import { usePageRestored } from '@/lib/platform/page-restore';
 import {
     describeDiscount,
     discountAmount,
     discounted,
     getOfferLandingServerFn,
     ticketWord,
-} from '@/lib/growth';
-import { growthApi } from '@/lib/growth-api';
-import { currenciesOf, priceOf, tiersOf } from '@/lib/plans';
-import { cardMeta, publicOrigin } from '@/lib/social';
+} from '@/lib/billing/growth';
+import { growthApi } from '@/lib/billing/growth-api';
+import { currenciesOf, priceOf, tiersOf } from '@/lib/billing/plans';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
 
 /* Yearly first and named as the pricing page names them, in the prices and the buttons alike. */
 const periods = ['year', 'month'] as const;

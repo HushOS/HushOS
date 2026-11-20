@@ -113,7 +113,7 @@ test('a viewer gets no Edit; an editor of the share edits', async ({ browser }) 
     await guest.context().close();
 
     await openFolder(page, 'Editing');
-    // The owner learns of the editor's save from the change feed (every 8 s, lib/feed.ts), as a
+    // The owner learns of the editor's save from the change feed (every 8 s, lib/drive/feed.ts), as a
     // person would: Download fetches the version the listing shows, so wait for the new one's size.
     await expect(row(page, 'Editing.txt')).toContainText('20 B', { timeout: 30_000 });
     expect((await downloaded(page, 'Editing.txt')).toString()).toBe('edited by the editor');

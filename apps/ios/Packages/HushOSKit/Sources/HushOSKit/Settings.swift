@@ -489,7 +489,7 @@ extension Vault {
     }
 
     /*
-     * One settings read serves the readers that only look, for a short while, as on the web (lib/contacts.ts): a family
+     * One settings read serves the readers that only look, for a short while, as on the web (lib/trust/contacts.ts): a family
      * sync's steps (the pin it accepts against, the pin it settles over, whether this person vouched), whether a family
      * was checked, the sharing ledger the upgrade pass reads and the contacts list. What is reused is only ever what a
      * fresh read (loadSettings) checked against the marks, and Settings is a value, so each reader has its own. Never

@@ -1,5 +1,5 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { downloads } from '@/lib/downloads';
+import { downloads } from '@/lib/drive/transfers/downloads';
 import type { RangeReader } from './ranges';
 
 /*

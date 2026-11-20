@@ -15,7 +15,7 @@ let drained: () => void = () => {};
 let draining = false;
 let size = 12 << 20;
 
-vi.mock('@/lib/previews', () => ({
+vi.mock('@/lib/viewers/previews', () => ({
     PREVIEW_LIMITS: { document: 16 * 1024 * 1024 },
     recallPreview: () => null,
     rememberPreview: vi.fn(),
@@ -35,7 +35,7 @@ vi.mock('@/lib/previews', () => ({
 }));
 // The download engine's tool reader: a close ends a read waiting on its chunk; its padding is fetched
 // to the end as ciphertext whether or not it is closed, and a drain is let go of at the close.
-vi.mock('@/lib/downloads', () => ({
+vi.mock('@/lib/drive/transfers/downloads', () => ({
     downloads: {
         openReader: () => {
             let isClosed = false;
@@ -74,7 +74,7 @@ vi.mock('@/lib/downloads', () => ({
 describe('reading a small archive whole', () => {
     it('stops when the viewer closes: the reader closed, no further chunk read, nothing remembered', async () => {
         const { archiveReader } = await import('./open');
-        const { rememberPreview } = await import('@/lib/previews');
+        const { rememberPreview } = await import('@/lib/viewers/previews');
         const node = {
             id: 'n',
             kind: 'file',

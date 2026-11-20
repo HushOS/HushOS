@@ -35,8 +35,8 @@ import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 
 /*
- * A Markdown file as data, for the viewer to draw: the web's rules (apps/web/src/lib/markdown.ts,
- * components/drive/rich-text.tsx) on commonmark-java. CommonMark plus GitHub's tables, task lists,
+ * A Markdown file as data, for the viewer to draw: the web's rules (apps/web/src/lib/viewers/markdown/markdown.ts,
+ * components/drive/viewers/rich-text.tsx) on commonmark-java. CommonMark plus GitHub's tables, task lists,
  * strikethrough and autolinks. Raw HTML in the document is dropped, not shown and never run. A
  * link is a link only to http, https or mailto, and only on a tap; an image is named, never
  * fetched, so opening a file loads nothing from anywhere. iOS's MarkdownDocument does the same.
@@ -108,7 +108,7 @@ object MarkdownDocument {
 
     /*
      * The blocks with the source line each starts at, for the editor's preview to scroll with its source (the web's
-     * data-source-line, lib/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the file
+     * data-source-line, lib/editor/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the file
      * shown as its text spreads over all of its lines.
      */
     fun parseLined(text: String): List<MdPiece> = parseWhole(text.removePrefix("\uFEFF"))

@@ -1,6 +1,6 @@
 import type { DriveNode } from '@hushos/drive/client';
-import { nodeSize } from '@/lib/drive';
-import { downloads } from '@/lib/downloads';
+import { nodeSize } from '@/lib/drive/drive';
+import { downloads } from '@/lib/drive/transfers/downloads';
 import {
     PREVIEW_LIMITS,
     readAll,
@@ -8,7 +8,7 @@ import {
     recallPreview,
     rememberPreview,
     type PreviewKind,
-} from '@/lib/previews';
+} from '@/lib/viewers/previews';
 import { memoryReader, type RangeReader } from '@/lib/tools/ranges';
 import type { ArchiveEntry } from './session';
 
@@ -26,7 +26,7 @@ export function archiveWorker() {
 }
 
 /*
- * Fetches the worker's script after unlock (lib/preload.ts), so opening a zip fetches no code
+ * Fetches the worker's script after unlock (lib/viewers/preload.ts), so opening a zip fetches no code
  * that would say a zip was opened: a worker is started, which loads the script, and let go.
  */
 export function preloadArchiveWorker() {

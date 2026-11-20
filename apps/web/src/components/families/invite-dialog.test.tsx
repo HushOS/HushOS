@@ -19,14 +19,14 @@ vi.mock('@/lib/groups/api', () => ({
     GroupApiError: class extends Error {},
     groupsApi: { invite: (...args: unknown[]) => invite(...args) },
 }));
-vi.mock('@/lib/family-pending', () => ({
+vi.mock('@/lib/families/family-pending', () => ({
     keepInvitedRole: (...args: unknown[]) => keepInvitedRole(...args),
 }));
-vi.mock('@/lib/families', () => ({
+vi.mock('@/lib/families/families', () => ({
     familyKeys: { invitations: (userId: string, groupId: string) => ['inv', userId, groupId] },
 }));
 vi.mock('@/components/ui/toast', () => ({ toast: { add: vi.fn() } }));
-vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
+vi.mock('@/lib/platform/sounds', () => ({ cue: vi.fn() }));
 const { InviteDialog } = await import('./invite-dialog');
 
 async function send(manage: boolean) {

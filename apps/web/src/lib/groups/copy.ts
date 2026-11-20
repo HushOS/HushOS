@@ -1,4 +1,4 @@
-import { keyChangeWords } from '@/lib/key-change-words';
+import { keyChangeWords } from '@/lib/families/key-change-words';
 import { GroupApiError, NO_ANSWER } from './api';
 import type { GroupNotice } from './context';
 import type { SendOutcome } from './outbox';
@@ -238,7 +238,7 @@ export function errorCopy(error: unknown, ctx: CopyContext = {}) {
         if (error.status === 501) return 'Families aren’t available on this server.';
         return 'HushOS couldn’t do that just now. Try again in a moment.';
     }
-    // A request the client gave up on (lib/api-client.ts, 30 s), in each browser's words:
+    // A request the client gave up on (lib/platform/api-client.ts, 30 s), in each browser's words:
     // "signal timed out" (Chromium), "The operation timed out." (Safari, Firefox). A DOMException,
     // which some runtimes don't count as an Error.
     const { name, message } = (error ?? {}) as { name?: unknown; message?: unknown };
@@ -250,7 +250,7 @@ export function errorCopy(error: unknown, ctx: CopyContext = {}) {
         return 'HushOS’s server took too long to answer.';
     if (!(error instanceof Error) || !error.message) return 'Something went wrong. Try again.';
     // A request outside the groups client (the worker's, a sync's) that never reached the server
-    // fails with the browser's own words, as isNetworkFailure in lib/drive.ts reads them.
+    // fails with the browser's own words, as isNetworkFailure in lib/drive/drive.ts reads them.
     if (/^(failed to fetch|load failed|networkerror\b)/i.test(error.message)) return NO_ANSWER;
     return keyChangeWords(error.message);
 }

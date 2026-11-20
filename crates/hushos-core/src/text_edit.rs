@@ -1,5 +1,5 @@
 //! Which files the phones' text editor opens, whether it may change them, and the
-//! bytes a save writes: the twin of `apps/web/src/lib/text-edit.ts`
+//! bytes a save writes: the twin of `apps/web/src/lib/editor/text-edit.ts`
 //! (docs/editing-design.md section 1, Editing 1a and 1b). An edit is saved byte
 //! for byte except for what the person changed, so a file opens for editing only
 //! when the editor can write it back in its own encoding, byte order mark and line
