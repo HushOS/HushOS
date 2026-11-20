@@ -38,4 +38,5 @@ CI runs each spec on a two-worker shard of a slow runner, against the production
 
 - CI splits each suite into shards by measured time: `scripts/e2e-shard.ts` reads `durations.json`.
 - A new spec file is counted at 60 seconds until its time is measured.
+- Two heavy files on one WebKit shard (several people, sign-ups and key changes at once) starve each other on the three-core macOS runner: `integrity.spec.ts` beside `editing-preview.spec.ts` ran two and a half times as long as either alone. The times measured beside each other keep them apart; if a refresh puts two such files together, look at that shard first.
 - After adding or splitting a spec, refresh `durations.json` with `scripts/e2e-durations.ts`, from the logs of a CI run of the new tree. Its header says how.
