@@ -28,4 +28,5 @@ Before editing files for a substantial task:
 - HushOS is an open-source, self-hostable E2EE productivity suite, beginning with Drive. Encryption and key management live in `packages/crypto`, `packages/drive`, `packages/groups` and `crates/hushos-core`; product claims must match what that code does, and hushos.com/security is where they are stated.
 - A PR that reaches hushos.com (merged and switched on), starts, drops or changes something on the public roadmap updates `apps/web/src/content/roadmap.ts` (and its `updated` date) in the same PR.
 - Keep secrets and database access in server-only code. Use `import type` for API contracts and `createIsomorphicFn` for distinct server/client implementations; server runtime imports must be eliminated from browser builds.
+- Before writing or changing a browser test, read `e2e/README.md` ("Writing e2e for CI"): WebKit's quirks, timing on slow runners, shared data, and how the shards are balanced.
 - Read `README.md` and `CONTRIBUTING.md` for local setup; read `docs/self-hosting.md` before changing Docker, environment variables, or database deployment.
