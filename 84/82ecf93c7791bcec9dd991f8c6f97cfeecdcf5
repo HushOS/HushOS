@@ -1,0 +1,179 @@
+apps/web/src/lib/account/web-push.ts
+  s_c60e24772e04af::t_3cff98d3d619f1 199
+apps/web/src/lib/archives/zip-archive.test.ts
+  s_c60e24772e04af::t_2e3e9de716c216 23
+apps/web/src/lib/archives/zip-format.ts
+  s_c60e24772e04af::t_ba7f782c601746 4,747
+apps/web/src/lib/auth/approvals.ts
+  s_c60e24772e04af::t_d9696a949549ae 9
+apps/web/src/lib/editor/text-edit.ts
+  s_c60e24772e04af::t_cb4400497dbc53 20
+apps/web/src/lib/images-pdf/core-made.test.ts
+  s_c60e24772e04af::t_74960c75a8bcf3 6
+apps/web/src/lib/images-pdf/geometry.ts
+  s_c60e24772e04af::t_cbdc7d9ff8393c 9
+apps/web/src/lib/images-pdf/jpeg.test.ts
+  s_c60e24772e04af::t_9bf5d0a021b749 10
+apps/web/src/lib/images-pdf/jpeg.ts
+  s_c60e24772e04af::t_e521b6cb8b716b 17
+apps/web/src/lib/images-pdf/pdf.ts
+  s_c60e24772e04af::t_e7ebd9dd1b635d 25
+crates/hushos-core/fixtures/outbox-steps.json
+  s_c60e24772e04af::t_8ec46aadf23808 2
+crates/hushos-core/fixtures/save-estimate-cases.json
+  s_c60e24772e04af::t_f2d9db2f67e405 2
+crates/hushos-core/src/account.rs
+  s_c60e24772e04af::t_61684f3a4035ea 1-16
+crates/hushos-core/src/account/account.rs
+  s_c60e24772e04af::t_50e08092ec0abc 1-375
+crates/hushos-core/src/account/consent.rs
+  s_c60e24772e04af::t_958e03e98996f3 24-25,28-32,285-287,362-363,420,442,494-495
+crates/hushos-core/src/account/device_approval.rs
+  s_c60e24772e04af::t_d59e299e55447b 33-37,568-569
+crates/hushos-core/src/account/device_record.rs
+  s_c60e24772e04af::t_3d80dbefd4a065 40,44,49-53,1277-1279,1282-1284,1354,1443,1497,1781,1915,1933-1934,1950,1996,2067
+crates/hushos-core/src/account/devices.rs
+  s_c60e24772e04af::t_ba2c976ef8aae6 15-18,232
+crates/hushos-core/src/account/drafts.rs
+  s_c60e24772e04af::t_a118580e5d5b52 32-37
+crates/hushos-core/src/account/identity.rs
+  s_c60e24772e04af::t_88f3019d256a26 15-19,176,205,873-875,879,884,902-904,914,918,948-950,1023-1025,1061-1064,1207,1244-1246,1530,1533-1534
+crates/hushos-core/src/account/notifications.rs
+  s_c60e24772e04af::t_d3399391e786b9 12-14
+crates/hushos-core/src/account/opaque.rs
+  s_c60e24772e04af::t_0a3bbd525f44e3 7-8,256,333
+crates/hushos-core/src/account/recovery.rs
+  s_c60e24772e04af::t_344bc3e356f706 7-11,19,423
+crates/hushos-core/src/account/signup.rs
+  s_c60e24772e04af::t_3b287edc2d2ef9 7-12,73-76
+crates/hushos-core/src/account/two_step.rs
+  s_c60e24772e04af::t_2dd5d15356d74f 29-33
+crates/hushos-core/src/drive.rs
+  s_c60e24772e04af::t_9b5017d62e7196 1-9
+crates/hushos-core/src/drive/colour.rs
+  s_c60e24772e04af::t_ca064b7d60de36 10,344
+crates/hushos-core/src/drive/drive.rs
+  s_c60e24772e04af::t_f9694318a7e78e 1-2679
+crates/hushos-core/src/drive/links.rs
+  s_c60e24772e04af::t_98d618b80575a6 10,13-14,364,447
+crates/hushos-core/src/drive/reports.rs
+  s_c60e24772e04af::t_ded90420fc160d 10,13-15,182-183,252-253,330-331,333-334,345-346,359-362
+crates/hushos-core/src/drive/shares.rs
+  s_c60e24772e04af::t_05c03483b312e4 13,17-21,239,337-339
+crates/hushos-core/src/groups.rs
+  s_c60e24772e04af::t_68ea6311a5ab12 1-14
+crates/hushos-core/src/groups/area_ledger.rs
+  s_c60e24772e04af::t_48201e9e49c662 50-53,56-62,197,203,207,372,1416,1470,1473,1479,1485-1486,1492-1493,1496,1498,2033-2037,2054,2066,2206,2219,2228,2268,2303,2327,2334,2374,2377,2393,2400,2407,2411,2600-2602,2606,2644,2991,3086,3090,3193,3260,3264-3266,3300,3368,3962
+crates/hushos-core/src/groups/area_open.rs
+  s_c60e24772e04af::t_aeac1e865c40a6 26-29,32,35-39
+crates/hushos-core/src/groups/area_open/tests.rs
+  s_c60e24772e04af::t_eb1431c29d9223 2-5,8-10
+crates/hushos-core/src/groups/group_trust.rs
+  s_c60e24772e04af::t_b08d57eab94865 20-21,23,27-32,36-39,292,446-448,490,702,729,2339,2345-2346,2384,2409,3068-3069,3073,3077-3078,3252,3785,4846,4957,5292,5554-5555,6194,6198,6200-6205,6208-6209,6276-6278,6462,6477,6479,6654-6659,6687,6690,6701,6710,6741-6744,6761,6764
+crates/hushos-core/src/groups/group_verdicts.rs
+  s_c60e24772e04af::t_2b2dc78cf5fbdf 16-17,22-24
+crates/hushos-core/src/groups/groups.rs
+  s_c60e24772e04af::t_4db569807ad877 1-3773
+crates/hushos-core/src/groups/join.rs
+  s_c60e24772e04af::t_483385d3bff33a 42,46-47,51-56,715,723-724,739,787-789,1344-1348,1595,1629-1633,1636-1638,2271,2279-2280,2325,2339,2411,2434,2525-2526,2740-2741,2790-2791
+crates/hushos-core/src/groups/ledger_settings.rs
+  s_c60e24772e04af::t_fa813672469cad 24-30,96,104,538-539,758,771
+crates/hushos-core/src/groups/roster_calls.rs
+  s_c60e24772e04af::t_29b260ac4b4dce 32-35,38,41,46-52,458,464,480-483,490,539,908
+crates/hushos-core/src/groups/roster_calls/removal.rs
+  s_c60e24772e04af::t_ef603bd56d7f8e 24,28-30,363,695
+crates/hushos-core/src/groups/roster_calls/tests.rs
+  s_c60e24772e04af::t_4cc6b673eaca00 2-4,7,11-17,308,974-981,1213,1272-1279,1339-1346,1433,1440-1441,1447,1462,1476-1480,1484,1538,1546-1547,1549,1555-1556,1573,1578-1582,1849,1857,1884-1889
+crates/hushos-core/src/groups/rotation_records.rs
+  s_c60e24772e04af::t_62f21ac5a0ef1b 27,31-32
+crates/hushos-core/src/groups/succession_path.rs
+  s_c60e24772e04af::t_c51232f5fabad9 6,9-11
+crates/hushos-core/src/lib.rs
+  s_c60e24772e04af::t_e60eb29e0ed2cd 17,19,21-51,55,60,64-68,81,88,101,106,117,126,131,136,141,146
+crates/hushos-core/src/primitives.rs
+  s_c60e24772e04af::t_c801a2e3501ee2 1-9
+crates/hushos-core/src/primitives/bytes.rs
+  s_c60e24772e04af::t_b1341929f39aed 3
+crates/hushos-core/src/primitives/canonical.rs
+  s_c60e24772e04af::t_06ff058a5ed349 24-26,46,179
+crates/hushos-core/src/primitives/envelope.rs
+  s_c60e24772e04af::t_279f20c0c7cdb4 5-6,177-178
+crates/hushos-core/src/primitives/ids.rs
+  s_c60e24772e04af::t_a4938f8cc89ef9 18-20
+crates/hushos-core/src/primitives/pq.rs
+  s_c60e24772e04af::t_ae00fd63320ca4 12-13,57,84,96
+crates/hushos-core/src/primitives/signatures.rs
+  s_c60e24772e04af::t_59accf57db1910 24-25,29-32,1344,1649,2034-2037
+crates/hushos-core/src/tools.rs
+  s_c60e24772e04af::t_a2d4bba165cc39 1-8
+crates/hushos-core/src/tools/archive.rs
+  s_c60e24772e04af::t_7b0dc796b72cbd 25
+crates/hushos-core/src/tools/archive/tests.rs
+  s_c60e24772e04af::t_82507d4537c535 1010,1080
+crates/hushos-core/src/tools/tools.rs
+  s_c60e24772e04af::t_abdb30918ed20a 1-1623
+crates/hushos-core/src/trust.rs
+  s_c60e24772e04af::t_6a3689ad5c5dd6 1-6
+crates/hushos-core/src/trust/contact_guard.rs
+  s_c60e24772e04af::t_7de7db039e755b 25-29
+crates/hushos-core/src/trust/contacts.rs
+  s_c60e24772e04af::t_11d972fee4eb59 9-13,290,509
+crates/hushos-core/src/trust/first_seen.rs
+  s_c60e24772e04af::t_63c3a10758dbc2 9,13-16
+crates/hushos-core/src/trust/first_seen/tests.rs
+  s_c60e24772e04af::t_16173bf0a142a1 10-15,19
+crates/hushos-core/src/trust/rollback_marks.rs
+  s_c60e24772e04af::t_22b465a16c6ab9 20-24
+e2e/fixtures/archives/expected.json
+  s_c60e24772e04af::t_40d62fea287bba 2
+e2e/fixtures/images/make.py
+  s_c60e24772e04af::t_2ba6fa19f43bfc 5
+packages/crypto/src/account/consent-due.ts
+  s_c60e24772e04af::t_6e55f75f2f84ea 47
+packages/crypto/src/account/device-approval.ts
+  s_c60e24772e04af::t_43c147e5a0dc4a 46
+packages/crypto/src/account/device-identity.ts
+  s_c60e24772e04af::t_0463a49fc9c7ac 15
+packages/crypto/src/account/drafts.ts
+  s_c60e24772e04af::t_aa381e0066b436 9
+packages/crypto/src/groups/area-ledger.ts
+  s_c60e24772e04af::t_e17a14220b902a 23
+packages/crypto/src/groups/group-verdicts.ts
+  s_c60e24772e04af::t_bbc7329b3899dc 24
+packages/crypto/src/groups/join-check.ts
+  s_c60e24772e04af::t_ca032870044ef0 7
+packages/crypto/src/groups/join-session.ts
+  s_c60e24772e04af::t_20f0d5289a0e80 9
+packages/crypto/src/groups/outbox.ts
+  s_c60e24772e04af::t_2849333c1ccdb7 4
+packages/crypto/src/groups/rotation-records.ts
+  s_c60e24772e04af::t_7d03521d9969f3 48
+packages/crypto/src/groups/session-groups.interleave.test.ts
+  s_c60e24772e04af::t_7abf4793ea79f0 25
+packages/crypto/src/primitives/ml-dsa-acvp.test.ts
+  s_c60e24772e04af::t_7b05cbeeb678ce 9
+packages/crypto/src/trust/settings-marks.test.ts
+  s_c60e24772e04af::t_5754f7ebdfe6cd 6
+packages/crypto/src/trust/settings-marks.ts
+  s_c60e24772e04af::t_f29a24199408cf 11
+packages/db/src/signatures.ts
+  s_c60e24772e04af::t_41fbbf329709ac 287
+packages/drive/src/colour.ts
+  s_c60e24772e04af::t_46e867559d706f 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8482ecf93c7791bcec9dd991f8c6f97cfeecdcf5",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
