@@ -17,7 +17,7 @@ export default defineConfig({
     fullyParallel: false,
     retries: process.env.CI ? 1 : 0,
     workers: process.env.CI ? 2 : 6,
-    reporter: process.env.CI ? [['github'], ['list']] : 'list',
+    reporter: process.env.CI ? [['github'], ['list'], ['./e2e/timing-reporter.ts']] : 'list',
     outputDir: 'test-results',
     use: {
         baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:5173',

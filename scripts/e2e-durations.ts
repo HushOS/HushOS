@@ -9,9 +9,10 @@
  *   gh run view <webkit run> -R HushOS/HushOS --log > webkit.log
  *   bun scripts/e2e-durations.ts ci.log webkit.log
  *
- * A file's time is the sum of its tests' times as the list reporter prints them, its beforeAll
- * included (a hook's time counts toward the first test after it). A test retried is counted
- * once, at its first attempt's time. A skipped test counts nothing, but its file is listed (at the
+ * A file's time is the sum of its tests' wall times as e2e/timing-reporter.ts prints them, hooks
+ * and fixtures included (the list reporter's times leave the hooks out, so a file whose
+ * beforeAll uploads 300 files would weigh almost nothing). Only first attempts are printed, so a
+ * retried test counts once. A skipped test counts nothing, but its file is listed (at the
  * least, one second), so the shards know it costs nothing rather than guessing; so is a spec file
  * the chromium or webkit logs never name (mobile.spec.ts has no WebKit tests). Read a run of the
  * tree as it is now: a spec file added since would be listed at one second.
@@ -31,10 +32,8 @@ const suiteOf = (job: string) =>
             ? 'chromium'
             : null;
 
-const seconds = { ms: 0.001, s: 1, m: 60 } as const;
-// `  ✓  12 [chromium] › e2e/drive.spec.ts:40:1 › a block › a test (3.4s)`, or `-` and no time if skipped.
-const line =
-    /(?:✓|✘|-)\s+\d+ \[[\w-]+\] › e2e\/([\w.-]+\.spec\.ts):\d+:\d+ › (.*?)( \(retry #\d+\))?(?: \(([\d.]+)(ms|s|m)\))?\s*$/;
+// `e2e-time<TAB>e2e/drive.spec.ts<TAB>a block › a test<TAB>3.41`, after the job's log prefix.
+const line = /\se2e-time\te2e\/([\w.-]+\.spec\.ts)\t(.*)\t([\d.]+)\s*$/;
 
 const suites: Record<string, Record<string, number>> = {};
 const seen = new Set<string>();
@@ -43,16 +42,14 @@ for (const path of process.argv.slice(2)) {
         const suite = suiteOf(entry.split('\t')[0] ?? '');
         const match = suite && line.exec(entry);
         if (!suite || !match) continue;
-        const [, file, title, retry, value, unit] = match;
+        const [, file, title, value] = match;
         const key = `${suite} ${file} ${title}`;
-        if (retry || seen.has(key)) continue;
+        if (seen.has(key)) continue;
         seen.add(key);
         const block = title!.includes(' › ') ? title!.split(' › ')[0] : null;
         const unitName = BLOCKS.has(file!) && block ? `${file} › ${block}` : file!;
         const times = (suites[suite] ??= {});
-        times[unitName] =
-            (times[unitName] ?? 0) +
-            (value ? Number(value) * seconds[unit as keyof typeof seconds] : 0);
+        times[unitName] = (times[unitName] ?? 0) + Number(value);
     }
 }
 const specs = readdirSync(join(import.meta.dir, '..', 'e2e')).filter((file) =>
