@@ -154,20 +154,49 @@ test('a Mermaid fence is drawn as an image in the viewer and the preview, fetchi
     await close(page);
 });
 
-test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async () => {
-    // The preload held at its first step (the PDF viewer), so no grammar has come yet.
+test('a fenced block typed in the Markdown preview before the preload finishes fetches no grammar', async ({
+    browser,
+}) => {
+    test.setTimeout(300_000);
+    // The preload held at its first step (the PDF viewer), so no grammar has come yet. On a page of
+    // its own whose browser has never kept that module: WebKit answers an immutable module it holds
+    // from its memory cache after a reload, with no request for page.route to hold (a CI trace
+    // showed the viewer's chunk served from cache, the preload let through, and the Rust grammar
+    // fetched by it). Until the hold is armed the module is served with no-store, so no cache keeps
+    // a copy to answer the reload from.
     const held: Route[] = [];
+    let holding = false;
     const pdfViewer = appModule('pdf-viewer');
-    await page.route(pdfViewer, (route) => {
-        held.push(route);
+    const { page } = await editingAccount(browser, ['config.json', 'preview.md'], {
+        before: (p) =>
+            p.route(pdfViewer, async (route) => {
+                if (holding) {
+                    held.push(route);
+                    return;
+                }
+                const response = await route.fetch().catch(() => null);
+                if (!response) {
+                    await route.abort().catch(() => {});
+                    return;
+                }
+                await route
+                    .fulfill({
+                        response,
+                        headers: { ...response.headers(), 'cache-control': 'no-store' },
+                    })
+                    .catch(() => {});
+            }),
     });
+    holding = true;
     const grammars: string[] = [];
     const listen = (request: Request) => {
         if (RUST_GRAMMAR.test(request.url())) grammars.push(request.url());
     };
     page.on('request', listen);
     await page.reload();
-    await expect(page.locator('[data-node-id]')).toHaveCount(FILES, { timeout: 60_000 });
+    await expect(page.locator('[data-node-id]')).toHaveCount(2, { timeout: 60_000 });
+    // The hold has the reload's request for the viewer: the preload is stopped at its first step.
+    await expect.poll(() => held.length).toBeGreaterThan(0);
     // Every editor fetches the preview's renderer with its other assets, a JSON file's too: an Edit
     // before the preload never fetches it for Markdown only.
     const previewModule = page.waitForRequest(appModule('editor-preview'));
@@ -198,6 +227,7 @@ test('a fenced block typed in the Markdown preview before the preload finishes f
     await dialog(page).getByRole('button', { name: 'Close preview' }).click();
     await page.getByRole('alertdialog').getByRole('button', { name: 'Discard changes' }).click();
     await expect(page.locator('[data-slot=dialog-content]')).toHaveCount(0);
+    await page.context().close();
 });
 
 test('Markdown shows the viewer’s rendering beside the source, live, and fetches nothing it names', async () => {
