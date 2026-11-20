@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, type Browser, type Page } from '@playwright/test';
-import { grip, newContext, registerAccount } from './helpers';
+import { grip, landedOnHome, newContext, registerAccount } from './helpers';
 
 /*
  * What the editing specs share (editing-files, editing-preview, editing-conflicts and
@@ -140,6 +140,8 @@ const FIXTURES: Record<string, (origin: string) => string | Uint8Array> = {
  * A new person, signed up through the real flow, with `names` from the fixtures above uploaded
  * into their Drive root as a person would; the page is left on that folder with every row drawn.
  * `before` runs on the new page before anything loads (a route that must see the first request).
+ * A page given one never waits for the network to go quiet, which a request held there never lets
+ * it do.
  */
 export async function editingAccount(
     browser: Browser,
@@ -148,7 +150,14 @@ export async function editingAccount(
 ) {
     const page = await (await newContext(browser)).newPage();
     await options.before?.(page);
-    const { email } = await registerAccount(page, options.person ?? 'Maya Lindqvist');
+    const person = options.person ?? 'Maya Lindqvist';
+    let email: string;
+    if (options.before) {
+        ({ email } = await registerAccount(page, person, undefined, { landsOn: /\/app\/?$/ }));
+        await landedOnHome(page);
+        await page.goto('/app/drive');
+        await expect(page.getByText('Nothing here yet')).toBeVisible({ timeout: 60_000 });
+    } else ({ email } = await registerAccount(page, person));
     const origin = new URL(page.url()).origin;
     await page
         .locator('input[type=file]')
