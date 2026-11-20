@@ -1,0 +1,345 @@
+apps/android/app/src/main/kotlin/com/hushos/app/data/Names.kt
+  s_c60e24772e04af::t_f247cecfd70cff 14
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/FingerprintWords.swift
+  s_c60e24772e04af::t_ad576bce170ab5 5
+apps/web/src/lib/groups/join-only.test.ts
+  s_c60e24772e04af::t_9a0abc86169a9c 25,61,64,70-72,77
+crates/hushos-core/examples/area_ledger_fixtures.rs
+  s_c60e24772e04af::t_2c778724ecd03d 4
+crates/hushos-core/examples/device_approval_fixtures.rs
+  s_c60e24772e04af::t_9dd8c27b83becd 2
+crates/hushos-core/examples/join_fixtures.rs
+  s_c60e24772e04af::t_200d52b4d8f5db 2
+crates/hushos-core/examples/roster_call_fixtures.rs
+  s_c60e24772e04af::t_eed556dc88e884 2
+crates/hushos-core/fixtures/area-ledger-scenarios.json
+  s_c60e24772e04af::t_c93eee514ecf90 2
+crates/hushos-core/fixtures/join-check-cases.json
+  s_c60e24772e04af::t_4ac282bf6f2945 2
+crates/hushos-core/fixtures/join-session-scenarios.json
+  s_c60e24772e04af::t_c196cd604b108d 2
+crates/hushos-core/fixtures/merge-pin-cases.json
+  s_c60e24772e04af::t_12a64bf5a9ce41 2
+crates/hushos-core/fixtures/ml-dsa-65-acvp.json
+  s_c60e24772e04af::t_61096d02e69edf 22
+crates/hushos-core/fixtures/outbox-steps.json
+  s_c60e24772e04af::t_f9974d625cfc48 2
+crates/hushos-core/fixtures/roster-call-sessions.json
+  s_c60e24772e04af::t_b181fb62634f3e 2
+crates/hushos-core/src/area_ledger.rs
+  s_c60e24772e04af::t_6eda434977499b 3
+crates/hushos-core/src/area_open.rs
+  s_c60e24772e04af::t_7c5aff794d200c 5
+crates/hushos-core/src/consent.rs
+  s_c60e24772e04af::t_64c00902a7d2f3 3,5
+crates/hushos-core/src/contact_guard.rs
+  s_c60e24772e04af::t_16b946aa33ff5e 4,8
+crates/hushos-core/src/device_approval.rs
+  s_c60e24772e04af::t_5d53d0ec222012 3
+crates/hushos-core/src/device_record.rs
+  s_c60e24772e04af::t_2f337d3179c51a 3,5-6
+crates/hushos-core/src/drafts.rs
+  s_c60e24772e04af::t_8daff1dd6bc984 2
+crates/hushos-core/src/group_verdicts.rs
+  s_c60e24772e04af::t_b24c9dde421b89 3
+crates/hushos-core/src/join.rs
+  s_c60e24772e04af::t_784133b46cafa4 2,4,89
+crates/hushos-core/src/ledger_settings.rs
+  s_c60e24772e04af::t_b489523a0a91eb 4
+crates/hushos-core/src/rollback_marks.rs
+  s_c60e24772e04af::t_2fbac878097265 2
+crates/hushos-core/src/roster_calls.rs
+  s_c60e24772e04af::t_9a572b066a9ba4 4-5,290
+crates/hushos-core/src/roster_calls/removal.rs
+  s_c60e24772e04af::t_b7fef57282577f 4
+crates/hushos-core/src/rotation_records.rs
+  s_c60e24772e04af::t_e05782f9a5e5f7 3
+crates/hushos-core/src/succession_path.rs
+  s_c60e24772e04af::t_fa39efa4a66301 19
+crates/hushos-core/src/two_step.rs
+  s_c60e24772e04af::t_c1c529219cff15 2
+crates/hushos-core/tests/area_ledger_fixtures.rs
+  s_c60e24772e04af::t_88c636e66d025b 7
+crates/hushos-core/tests/common/area_ledger.rs
+  s_c60e24772e04af::t_afb4550500249d 2
+crates/hushos-core/tests/common/device_records.rs
+  s_c60e24772e04af::t_53d584073a95b1 2
+crates/hushos-core/tests/common/groups.rs
+  s_c60e24772e04af::t_2a6b05e9c8d992 4
+crates/hushos-core/tests/common/join.rs
+  s_c60e24772e04af::t_1616d22dd8da2c 2
+crates/hushos-core/tests/common/rekeyed.rs
+  s_c60e24772e04af::t_eabb2d1f9b56f6 4
+crates/hushos-core/tests/common/removal_calls.rs
+  s_c60e24772e04af::t_856cc48e490c03 2
+crates/hushos-core/tests/common/roster_calls.rs
+  s_c60e24772e04af::t_b9d936cf0d2378 2
+crates/hushos-core/tests/common/rotations.rs
+  s_c60e24772e04af::t_c5862d8969b308 2
+crates/hushos-core/tests/common/settings_areas.rs
+  s_c60e24772e04af::t_75c116c45ec134 3
+crates/hushos-core/tests/join_fixtures.rs
+  s_c60e24772e04af::t_32c5f755a1c1cd 8
+crates/hushos-core/tests/planted_join.rs
+  s_c60e24772e04af::t_8d9a8ea34038de 9
+crates/hushos-core/tests/web_group_fixtures.rs
+  s_c60e24772e04af::t_352f76cabe124c 4
+e2e/fixtures/start-over.ts
+  s_c60e24772e04af::t_d3bbbcf2eccc68 15
+e2e/images-pdf.spec.ts
+  s_c60e24772e04af::t_0d451ff06e7140 6
+packages/crypto/fuzz/fixtures.ts
+  s_c60e24772e04af::t_3eb5f70a069228 3-5,10-12
+packages/crypto/fuzz/jazzer.ts
+  s_c60e24772e04af::t_d328bed7554ea6 2
+packages/crypto/fuzz/seeds.ts
+  s_c60e24772e04af::t_bcffed7148c2ce 4-5
+packages/crypto/fuzz/verdicts.ts
+  s_c60e24772e04af::t_f75ba195dc7564 2-4,11,19-20,39,51-54,69,76-77,82,89-92,101-112,124,130
+packages/crypto/package.json
+  s_c60e24772e04af::t_810867ff008bf2 11-39
+packages/crypto/scripts/area-ledger-fixtures.ts
+  s_c60e24772e04af::t_bfa30437a4f341 3-4,12-13,16,22,24
+packages/crypto/scripts/core-fixtures.ts
+  s_c60e24772e04af::t_c77ddc8865109b 2-4,23,31-36,43-44,50-51,56,68-69,76-82,658
+packages/crypto/scripts/device-approval-fixtures.ts
+  s_c60e24772e04af::t_c65a85f718b9a3 10-12
+packages/crypto/scripts/draft-fixtures.ts
+  s_c60e24772e04af::t_21026bc29771b3 10-11,17
+packages/crypto/scripts/group-fixtures.ts
+  s_c60e24772e04af::t_ded08900e5ca07 2,12,39-43
+packages/crypto/scripts/join-fixtures.ts
+  s_c60e24772e04af::t_7d6c1785b46c65 15,26
+packages/crypto/scripts/pin-cases.ts
+  s_c60e24772e04af::t_a873ca97bb0c3d 2
+packages/crypto/scripts/roster-call-fixtures.ts
+  s_c60e24772e04af::t_020ebb28aebe47 2-4,13
+packages/crypto/src/account/device-approval.test.ts
+  s_c60e24772e04af::t_f464c88dc239f5 4,21
+packages/crypto/src/account/device-approval.ts
+  s_c60e24772e04af::t_3ee9bb486f11af 2-3
+packages/crypto/src/account/device-identity.ts
+  s_c60e24772e04af::t_9833515143235e 1-2
+packages/crypto/src/account/device-record-testkit.ts
+  s_c60e24772e04af::t_98c00be7d77bf5 1-2,14-19,29
+packages/crypto/src/account/device-store.ts
+  s_c60e24772e04af::t_b12cf5bd18f060 1-2
+packages/crypto/src/account/device.test.ts
+  s_c60e24772e04af::t_7679f48d8b2eea 3
+packages/crypto/src/account/device.ts
+  s_c60e24772e04af::t_c3e2f592ef44da 1-2
+packages/crypto/src/account/drafts.test.ts
+  s_c60e24772e04af::t_13dc2baa7ece74 19,35
+packages/crypto/src/account/drafts.ts
+  s_c60e24772e04af::t_10ca37f9d7d437 1-2,4-5
+packages/crypto/src/account/identity-reopen.test.ts
+  s_c60e24772e04af::t_19e357e9fd1b96 2,13
+packages/crypto/src/account/identity.ts
+  s_c60e24772e04af::t_fc3a50b5dfdb2f 1,3-5,12,22
+packages/crypto/src/account/recovery.ts
+  s_c60e24772e04af::t_9050b661020646 1,5-7
+packages/crypto/src/account/stash.ts
+  s_c60e24772e04af::t_0b318cef91cd30 1
+packages/crypto/src/account/two-step-server.ts
+  s_c60e24772e04af::t_ac9ba19d017621 3-4
+packages/crypto/src/account/two-step.test.ts
+  s_c60e24772e04af::t_1411504d9e42f7 2
+packages/crypto/src/account/two-step.ts
+  s_c60e24772e04af::t_d58c3f2ae62ba1 4-5
+packages/crypto/src/core-fixtures.test.ts
+  s_c60e24772e04af::t_ae38dc119ce010 2-3,22-27,39-41,58-62,64,67
+packages/crypto/src/drive/drive.test.ts
+  s_c60e24772e04af::t_9602909b6c30ed 2,54
+packages/crypto/src/drive/drive.ts
+  s_c60e24772e04af::t_9a835359dbd684 2-5
+packages/crypto/src/drive/links.ts
+  s_c60e24772e04af::t_3fa22dd83e728b 3-5
+packages/crypto/src/drive/metadata.property.test.ts
+  s_c60e24772e04af::t_6dee80259b086a 4
+packages/crypto/src/drive/reports.test.ts
+  s_c60e24772e04af::t_3c2b965ebaf6d0 9-10
+packages/crypto/src/drive/reports.ts
+  s_c60e24772e04af::t_ded22f15d5b40b 2-3,10
+packages/crypto/src/drive/shares.property.test.ts
+  s_c60e24772e04af::t_4e3734c4335359 3-9,11-12
+packages/crypto/src/drive/shares.test.ts
+  s_c60e24772e04af::t_fe993d7e28c1ac 2,9,11-13,21,23-24
+packages/crypto/src/drive/shares.ts
+  s_c60e24772e04af::t_0b2857d65bcde2 1-2,8,15
+packages/crypto/src/drive/workspace.test.ts
+  s_c60e24772e04af::t_08ff277c1fc016 2-4
+packages/crypto/src/drive/workspace.ts
+  s_c60e24772e04af::t_e5345b000625eb 1-3
+packages/crypto/src/groups/area-keys.ts
+  s_c60e24772e04af::t_5545e200661385 1-2,4
+packages/crypto/src/groups/area-ledger-fixtures.test.ts
+  s_c60e24772e04af::t_556df49eeb9b77 11,21,32,53,173
+packages/crypto/src/groups/area-ledger-testkit.ts
+  s_c60e24772e04af::t_fdc03c98696c05 13-14,33-34
+packages/crypto/src/groups/area-ledger.test.ts
+  s_c60e24772e04af::t_a090f61815d8f5 5,7,25
+packages/crypto/src/groups/area-ledger.ts
+  s_c60e24772e04af::t_d082c058bf3c85 2,5-8,15
+packages/crypto/src/groups/group-case-names.test.ts
+  s_c60e24772e04af::t_34a21f24bf302b 2,4,17
+packages/crypto/src/groups/group-fixtures.test.ts
+  s_c60e24772e04af::t_9306e812e07e2a 58-64
+packages/crypto/src/groups/group-testkit.ts
+  s_c60e24772e04af::t_556b9ef9a89431 3-4,54-58,68
+packages/crypto/src/groups/group-trust-server.test.ts
+  s_c60e24772e04af::t_2135c542d1d594 2,6
+packages/crypto/src/groups/group-trust-server.ts
+  s_c60e24772e04af::t_92c6e1357ab598 1
+packages/crypto/src/groups/group-trust.property.test.ts
+  s_c60e24772e04af::t_7923b61b8969eb 3,13-16
+packages/crypto/src/groups/group-trust.test.ts
+  s_c60e24772e04af::t_acb706025ee31e 78-79,81-82,93,100
+packages/crypto/src/groups/group-trust.ts
+  s_c60e24772e04af::t_b53123373a3b93 8,10-11,19,48-50,52-53,63
+packages/crypto/src/groups/group-verdicts.ts
+  s_c60e24772e04af::t_0616243e95318f 9,18
+packages/crypto/src/groups/groups.property.test.ts
+  s_c60e24772e04af::t_eff572564056d5 3-4,16-18
+packages/crypto/src/groups/groups.test.ts
+  s_c60e24772e04af::t_8002e68fb54379 3-4,76-85,93
+packages/crypto/src/groups/groups.ts
+  s_c60e24772e04af::t_6893fb51d31bd0 12-16,25,35,43,45,47
+packages/crypto/src/groups/join-check.ts
+  s_c60e24772e04af::t_62e62a5cfb90ac 1
+packages/crypto/src/groups/join-fixtures.test.ts
+  s_c60e24772e04af::t_00c181772a0d6a 3-4,20,39-40,72,112-115
+packages/crypto/src/groups/join-session.ts
+  s_c60e24772e04af::t_ee90fe3cdc6047 1
+packages/crypto/src/groups/join-testkit.ts
+  s_c60e24772e04af::t_8cdf66f86d78b4 2-6,40,42-44
+packages/crypto/src/groups/outbox.test.ts
+  s_c60e24772e04af::t_e9ae9ff67a11ca 13
+packages/crypto/src/groups/pair-check.test.ts
+  s_c60e24772e04af::t_9b68348a082459 2,6-7
+packages/crypto/src/groups/planted-join.test.ts
+  s_c60e24772e04af::t_c7bdcf071eaf00 5-6,8,25-28
+packages/crypto/src/groups/rekeyed-testkit.ts
+  s_c60e24772e04af::t_15e38e4f63455f 13,15-16,28
+packages/crypto/src/groups/removal-calls-testkit.ts
+  s_c60e24772e04af::t_2f1f7df1c12c4e 2,12,15-16,35-36
+packages/crypto/src/groups/roster-call-fixtures.test.ts
+  s_c60e24772e04af::t_c26d1ac0074cd9 3,6-9,21-22,26,52-55
+packages/crypto/src/groups/roster-calls-testkit.ts
+  s_c60e24772e04af::t_ff15dc90f3f16f 3-4,40-41,44-46
+packages/crypto/src/groups/roster-format.test.ts
+  s_c60e24772e04af::t_516cd3eef71296 36-37
+packages/crypto/src/groups/rotation-records.ts
+  s_c60e24772e04af::t_19f1879e40f7ab 1,16-20,23-24,41
+packages/crypto/src/groups/rotation-testkit.ts
+  s_c60e24772e04af::t_4989683bb24a87 12-13,29-30,45
+packages/crypto/src/groups/session-groups.accept.test.ts
+  s_c60e24772e04af::t_23fe76c6beca94 3,5
+packages/crypto/src/groups/session-groups.interleave.test.ts
+  s_c60e24772e04af::t_7b84e825bd804f 2-3,7-10,29-30,58
+packages/crypto/src/groups/session-groups.join.test.ts
+  s_c60e24772e04af::t_579b39675d95e2 5
+packages/crypto/src/groups/session-groups.ts
+  s_c60e24772e04af::t_e7322abe3d6345 10,12,18-19,27,38-40,54-56,118-120,131-134,143,160-161
+packages/crypto/src/groups/succession-path.ts
+  s_c60e24772e04af::t_7356c48a285c83 1,8-10
+packages/crypto/src/groups/succession.test.ts
+  s_c60e24772e04af::t_e25f7f169bdb19 2-3,17-21,28,644
+packages/crypto/src/index.ts
+  s_c60e24772e04af::t_e5a6d1fdb88d2b 2,47-48,54-61,70,81,93-94
+packages/crypto/src/primitives/fingerprint.property.test.ts
+  s_c60e24772e04af::t_b894e890203cc9 5
+packages/crypto/src/primitives/keys.ts
+  s_c60e24772e04af::t_0ee73fbf08cb6b 2
+packages/crypto/src/primitives/ml-dsa-acvp.test.ts
+  s_c60e24772e04af::t_0bbad1204bb5cb 4
+packages/crypto/src/primitives/password.ts
+  s_c60e24772e04af::t_d96ca02c67b19f 2
+packages/crypto/src/primitives/signatures.property.test.ts
+  s_c60e24772e04af::t_34c27e6a268d7e 3,11,19
+packages/crypto/src/primitives/signatures.test.ts
+  s_c60e24772e04af::t_613a51b71687b6 16
+packages/crypto/src/primitives/signatures.ts
+  s_c60e24772e04af::t_3a5bfbb3c41ad2 14
+packages/crypto/src/session.drafts.test.ts
+  s_c60e24772e04af::t_5a5754edbdce13 2-3
+packages/crypto/src/session.drive.test.ts
+  s_c60e24772e04af::t_e6ac9d18daf64e 2,4-5,18-19,29-30,391,561,630,1161,1163
+packages/crypto/src/session.groups.test.ts
+  s_c60e24772e04af::t_e8d243f3c9a851 2-5,13,20-23,26-28,37,50,57
+packages/crypto/src/session.reauth.test.ts
+  s_c60e24772e04af::t_9005cb6271eabf 3-4,7
+packages/crypto/src/session.rotation.test.ts
+  s_c60e24772e04af::t_f4253905c2d94f 2-5,7-8,16,114-115
+packages/crypto/src/session.source.test.ts
+  s_c60e24772e04af::t_0d50f9e69a7604 2-4,6
+packages/crypto/src/session.stash.test.ts
+  s_c60e24772e04af::t_c84852cceae298 2
+packages/crypto/src/session.ts
+  s_c60e24772e04af::t_64a8fdacf51dce 1-4,10,26,35-36,44-46,66-68,75-77,86,93-99,126,128-130,137-138,800
+packages/crypto/src/session.two-step.test.ts
+  s_c60e24772e04af::t_c023485a510664 3-5,13-14,21
+packages/crypto/src/trust/accepted.ts
+  s_c60e24772e04af::t_d4e16fcd781133 1
+packages/crypto/src/trust/contact-guard.test.ts
+  s_c60e24772e04af::t_91726de7907242 3
+packages/crypto/src/trust/contact-guard.ts
+  s_c60e24772e04af::t_1c972fd32d701a 1-3
+packages/crypto/src/trust/contacts.test.ts
+  s_c60e24772e04af::t_032d1abf6608a6 10-11,29-30,178,207,501-502,524-525
+packages/crypto/src/trust/contacts.ts
+  s_c60e24772e04af::t_b5368652e51f31 1-3,33
+packages/crypto/src/trust/first-seen.test.ts
+  s_c60e24772e04af::t_4012cb72eb0926 12,14-15
+packages/crypto/src/trust/first-seen.ts
+  s_c60e24772e04af::t_dc663d866f38ff 6
+packages/crypto/src/trust/pins.test.ts
+  s_c60e24772e04af::t_fc59c1b7163e95 2-3
+packages/crypto/src/trust/pins.ts
+  s_c60e24772e04af::t_62e90454bb67a7 1-9
+packages/crypto/src/trust/record-acceptance.test.ts
+  s_c60e24772e04af::t_a22d2ff16ff8c1 2,9
+packages/crypto/src/trust/record-acceptance.ts
+  s_c60e24772e04af::t_0c0069660096ed 8
+packages/crypto/src/trust/rollback-marks.test.ts
+  s_c60e24772e04af::t_30be9e4e22b327 3-4,12
+packages/crypto/src/trust/rollback-marks.ts
+  s_c60e24772e04af::t_7c09316c102b24 1-4
+packages/crypto/src/trust/security.test.ts
+  s_c60e24772e04af::t_d884258caf87b6 11,18
+packages/crypto/src/trust/security.ts
+  s_c60e24772e04af::t_4e053e8ff91b8d 1-2,4-5,11-12,14-19
+packages/crypto/src/trust/settings-areas-testkit.ts
+  s_c60e24772e04af::t_2a1cf0932db196 2-3,5-9,20,26,28,61
+packages/crypto/src/trust/settings-marks.ts
+  s_c60e24772e04af::t_3f3fa489e0c95a 1,3
+packages/crypto/src/twin-parity.test.ts
+  s_c60e24772e04af::t_14e1b7cff1169f 2-6
+packages/db/src/auth.consent.test.ts
+  s_c60e24772e04af::t_f52e6227a18eb3 6-7
+packages/db/src/signatures.ts
+  s_c60e24772e04af::t_a4e3975866c316 286
+packages/drive/src/client.rotation.test.ts
+  s_c60e24772e04af::t_2572c2fe520b34 5
+packages/groups/src/server.billing.test.ts
+  s_c60e24772e04af::t_003dfda7e7e04a 248-249
+packages/groups/src/server.test.ts
+  s_c60e24772e04af::t_6a692b5785659c 19,27
+packages/groups/test/kit.ts
+  s_c60e24772e04af::t_79554b52cbd8c9 21,28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c12fb0c13743ef02555b2ef3f371c0a42ec14f40",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
