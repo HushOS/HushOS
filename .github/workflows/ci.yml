@@ -88,7 +88,7 @@ jobs:
                   echo "browser suites: $browser, Rust core tests: $rust"
 
     check:
-        name: Check, migrate, and test
+        name: Check and migrate
         if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
         runs-on: ubuntu-latest
         services:
@@ -142,14 +142,63 @@ jobs:
                     echo "Rendered emails are stale: run bun run email:render and commit." >&2
                     exit 1
                   fi
-            # Not cached through Turborepo across runs: a package's test hash leaves out the
-            # workspace packages it imports, so a cached pass would survive a change to them.
+
+    # The Vitest suites, in four jobs beside each other rather than one after the checks above: on
+    # one runner they took nine and a half minutes, seven packages contending for four cores.
+    # Grouped by measured time; `rest` names what the others leave out, so a new package's tests
+    # run there without being listed. Each job has its own Postgres, and each package its own
+    # test database within it, as before.
+    test:
+        name: Unit tests (${{ matrix.name }})
+        if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - name: web
+                      filter: --filter=@hushos/web
+                    - name: crypto
+                      filter: --filter=@hushos/crypto
+                    - name: db and drive
+                      filter: --filter=@hushos/db --filter=@hushos/drive
+                    - name: rest
+                      filter: --filter=!@hushos/web --filter=!@hushos/crypto --filter=!@hushos/db --filter=!@hushos/drive
+        services:
+            postgres:
+                image: postgres:18-alpine
+                env:
+                    POSTGRES_USER: hushos
+                    POSTGRES_PASSWORD: ci
+                    POSTGRES_DB: hushos
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U hushos -d hushos"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+        env:
+            DATABASE_URL: postgresql://hushos:ci@127.0.0.1:5432/hushos
+        steps:
+            - uses: actions/checkout@v7
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: 1.4.4
+            - run: bun install --frozen-lockfile
+              timeout-minutes: 5
             # bsdtar is one of the independent readers the archive fixtures are checked with
             # (apps/web/src/lib/archives/fixtures.test.ts): it opens WinZip AES, which zipfile can't.
             - name: bsdtar for the archive fixtures
+              if: matrix.name == 'web'
               run: command -v bsdtar || (sudo apt-get update -qq && sudo apt-get install -y -qq libarchive-tools)
+            # Not cached through Turborepo across runs: a package's test hash leaves out the
+            # workspace packages it imports, so a cached pass would survive a change to them.
             - name: Test
-              run: bun run test
+              env:
+                  FILTER: ${{ matrix.filter }}
+              # Word splitting is wanted: FILTER holds one or more --filter arguments.
+              run: bun run test -- $FILTER
 
     # The production build every browser job tests, built once. Its own job rather than a step
     # of the one above, so the browser jobs wait for a minute of build, not four of unit tests.
@@ -540,11 +589,12 @@ jobs:
     # here, names a commit all three images have reached.
     latest:
         name: Move latest to this commit
-        needs: [changes, check, build, rust, e2e, e2e-families, images]
+        needs: [changes, check, test, build, rust, e2e, e2e-families, images]
         if: >-
             !cancelled() &&
             github.event_name == 'push' && github.ref == 'refs/heads/main' &&
             needs.changes.result == 'success' && needs.check.result == 'success' &&
+            needs.test.result == 'success' &&
             needs.build.result == 'success' && needs.images.result == 'success' &&
             (needs.rust.result == 'success' || needs.rust.result == 'skipped') &&
             (needs.e2e.result == 'success' || needs.e2e.result == 'skipped') &&
@@ -726,7 +776,7 @@ jobs:
     ci-ok:
         name: CI ok
         if: always()
-        needs: [changes, check, build, rust, push-image, e2e, e2e-families, images]
+        needs: [changes, check, test, build, rust, push-image, e2e, e2e-families, images]
         runs-on: ubuntu-latest
         steps:
             - name: Every job that ran passed
