@@ -10,7 +10,7 @@ import {
     GuardConflictError,
     type GuardSealer,
 } from './contact-guard';
-import { account } from '../groups/worker-testkit';
+import { account } from '@/lib/groups/worker-testkit';
 
 /*
  * The family guard as this browser keeps it (docs/optional-verification.md

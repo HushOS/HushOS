@@ -1,6 +1,6 @@
 import type { BillingSubscription } from '@hushos/billing/api';
 import { describe, expect, test } from 'vitest';
-import { unwrap } from '../platform/api-client';
+import { unwrap } from '@/lib/platform/api-client';
 import {
     CHECKOUT_SYNC_TRIES,
     checkoutNotice,

@@ -2,9 +2,9 @@ import { checkClient, parseMinimums } from '@hushos/drive/protocol';
 import { GROUP_WRITE_HEADER, GROUP_WRITE_PROTOCOL } from '@hushos/groups/protocol';
 import { describe, expect, test } from 'vitest';
 // The source, not the module: importing the handlers needs a whole server environment.
-import clientSource from '../platform/api-client.ts?raw';
+import clientSource from '@/lib/platform/api-client.ts?raw';
 import { followsGroupWrites, groupWriteMinimums } from './group-write-floor';
-import { HUSHOS_VERSION } from '../platform/version';
+import { HUSHOS_VERSION } from '@/lib/platform/version';
 
 /*
  * The client floor on family-changing routes (docs/optional-verification.md

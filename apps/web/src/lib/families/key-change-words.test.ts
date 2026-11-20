@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { KEY_CHANGE_PENDING } from '@hushos/crypto/protocol';
-import { driveError } from '../drive/drive';
-import { errorCopy } from '../groups/copy';
+import { driveError } from '@/lib/drive/drive';
+import { errorCopy } from '@/lib/groups/copy';
 import { KEY_CHANGE_WAIT } from './key-change-words';
 
 // The worker's other "keys changed" sentence: a different next step (reload), never the wait.
