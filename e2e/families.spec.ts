@@ -4059,7 +4059,12 @@ test.describe
 });
 
 test.describe.serial('families off', () => {
-    test.skip(familiesOn, 'Families are on (GROUPS_ENABLED).');
+    // Decided as the test runs, not as the file loads: Playwright's runner reads the file without
+    // .env, so there GROUPS_ENABLED=false from .env was unset, read as on, and this block was
+    // skipped in every run of the off path, while the workers, which do read .env, skipped the rest.
+    test.beforeEach(() => {
+        test.skip(familiesOn, 'Families are on (GROUPS_ENABLED).');
+    });
 
     test('families stay out of sight on a server that does not serve them', async ({ browser }) => {
         test.setTimeout(180_000);

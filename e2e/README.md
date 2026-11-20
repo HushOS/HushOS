@@ -25,6 +25,10 @@ CI runs each spec on a two-worker shard of a slow runner, against the production
 - **Order steps so timing can't matter.** CI runners are several times slower than a laptop. A window that is seconds long locally can close on CI before the next step runs: an editor's draft is kept two seconds after typing, so a second tab opened after the first one typed was offered that draft on CI. Open both before either types, wait for what the app shows rather than for a duration, and never rely on a step being fast.
 - **Let closing UI finish.** A menu or dialog that is animating out can still take the next key. Wait until it is gone (`toHaveCount(0)`) before a step that presses Escape or types.
 
+### Switches
+
+- **Skip on a server switch at run time.** Playwright's runner loads spec files without `.env`, and its workers with it. A describe-level `test.skip(process.env.X ...)` is decided by both, so a switch set only in `.env` (as CI sets `GROUPS_ENABLED`) reads differently in each, and a block can be skipped everywhere. Decide in a `beforeEach` or `beforeAll` (`two-step.spec.ts`, the `families off` block).
+
 ### Shared state
 
 - **Every test owns its data.** Specs run in parallel against one database and one bucket. Make your own account (`registerAccount()`), and scope every database query to that account's own rows. Never count or delete across all users.
