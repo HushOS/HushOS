@@ -1,0 +1,77 @@
+apps/web/src/lib/draft-flush.ts
+  s_c60e24772e04af::t_11b56d6f0e4976 3-7,10-52,57,63-95,97
+apps/android/AGENTS.md
+  s_c60e24772e04af::t_8cc12c6b505d04 378
+apps/android/app/src/main/kotlin/com/hushos/app/data/Drafts.kt
+  s_c60e24772e04af::t_c573f0968113bc 12,40-41,43-54,58-62,68,70-80,82-83,85-93,99-101,104,111-116,120,150-154,156,192-202
+apps/android/app/src/main/kotlin/com/hushos/app/data/SaveRuns.kt
+  s_c60e24772e04af::t_e2d9e67eb8f51e 1572-1579
+apps/android/app/src/main/kotlin/com/hushos/app/ui/DriveViewModel.kt
+  s_c60e24772e04af::t_e27245ed4ae2ce 3,2569-2576,2696-2698
+apps/android/app/src/main/kotlin/com/hushos/app/ui/TextEditor.kt
+  s_c60e24772e04af::t_ff1226226a77f5 279-300,502,507-510,609,622-623,674,684-685,688,691,702-706,708-712,728-732,749,753-755,757,759
+apps/android/app/src/test/kotlin/com/hushos/app/data/DraftsTest.kt
+  s_c60e24772e04af::t_5567b517688278 47,51-52,58,60-61,81-83,117-160,183-190
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_528a20df94c56c 258
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_8c9b1ac22c566b 212-213
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_b5741564c202ba 118-127,167,552-553,570,585,617-618,699-702,705,712,826,835-836,904,917-918,922,925,930-934,936-939,956-960,975,979-984,1023-1024
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Drafts.swift
+  s_c60e24772e04af::t_afcda2d6af9b35 31-32,55-66,68-71,74-77,80-84,87-88,90-92,97-99,103-108,114-126,129-132,134-136,153,180-184,186-187,248-274,282
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/TextEditing.swift
+  s_c60e24772e04af::t_f4f600c9c15c22 427-431,439
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Unbacked.swift
+  s_c60e24772e04af::t_3e204f85ac69dd 75-76,78-86
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/DraftsTests.swift
+  s_c60e24772e04af::t_989f41756ea82f 27,43,45,66-67,73-103,130,133-134,150-179,183,185-186,188-190,196-197
+apps/web/src/components/drive/text-editor.tsx
+  s_c60e24772e04af::t_311ddbcf7600b3 77-78,81,226-227,599-612,653,694-696,698-719,721,723-748,802,825,1326-1327,1345-1347,1447-1455,1478-1479,1632-1637
+apps/web/src/content/security.mdx
+  s_c60e24772e04af::t_15253d9f594c55 223
+apps/web/src/lib/device-data.test.ts
+  s_c60e24772e04af::t_e2e4317d6c8914 321-322
+apps/web/src/lib/draft-flush.test.ts
+  s_c60e24772e04af::t_35aa505dbf9285 1-47
+apps/web/src/lib/drafts.test.ts
+  s_c60e24772e04af::t_ec3c7b4bcb3d74 22,38-39,52,107,111,119-121,126-130,142-144,151-153,155,157-159,165-204,230,290,300-332,359,382,393-424
+apps/web/src/lib/drafts.ts
+  s_c60e24772e04af::t_5918655187d6f7 1,11,14-20,26,28-32,35,46-48,51-53,55-68,72,83-84,86,101,108-111,113,117-129,140-141,146-151,154,156,158-172,190-193,204,206,208-209,214-216,221-224,233,237-240,249-257,267,274,278,281,303-306,315-351
+apps/web/src/lib/text-save.test.ts
+  s_c60e24772e04af::t_ecd29ee7e1a105 327-351
+apps/web/src/lib/text-save.ts
+  s_c60e24772e04af::t_7f7f6292035c74 153-165,184-199
+crates/hushos-core/fixtures/drafts.json
+  s_c60e24772e04af::t_c980f969ff87b5 9,22-23,25,27,46-47,50-51,55,59,63
+crates/hushos-core/src/drafts.rs
+  s_c60e24772e04af::t_4a9bc6556b8f49 17-23,25-30,33,43,109-111,185-186,193,227-247,249-264,271-298,304-305,312-313,316-317,335,338,356,366-369,372,375-376,380,384-394,398-399,410-411,417,420-423,426-458,568,598,622,625-628,638-645,658,671,675-683
+docs/editing-design.md
+  s_c60e24772e04af::t_6afd46c99398bd 169,171-177
+e2e/drafts.spec.ts
+  s_c60e24772e04af::t_04801fc0949aab 241,246-253
+packages/crypto/scripts/draft-fixtures.ts
+  s_c60e24772e04af::t_29d1fe6d5846c7 8,40,62,64,73
+packages/crypto/src/drafts.test.ts
+  s_c60e24772e04af::t_31241f374c23fd 15,46,87-89,104,114-115,130,132-138,140-148
+packages/crypto/src/drafts.ts
+  s_c60e24772e04af::t_54b3f47fdf65fe 2,24-28,31-35,43,81-87,162-163,165-166,175-195,197,200-204,208,217-218,237-238,240-246,248,250-254,257,261,263,268-269,286-303,305-318,322,331,339-358
+packages/crypto/src/session.drafts.test.ts
+  s_c60e24772e04af::t_f5576d3869985b 27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "991bc93a78eecb1381e1a0891a30343be846365f",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
