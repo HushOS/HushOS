@@ -60,10 +60,10 @@ Definitions (https://developer.apple.com/app-store/app-privacy-details/, checked
 
 Since 1 May 2024 Apple refuses uploads that use a "required reason" API without declaring it (https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api, checked 2026-10-05). Each bundle with its own executable needs its own file. The code uses:
 
-- **UserDefaults**: the app (`AppModel.lastEmail`, `@AppStorage` sort and recent searches, `BackgroundAccess`) and `HushOSKit/Offline.swift` (`UserDefaults(suiteName: group)`), which every extension links. Reasons `CA92.1` (app only) and `1C8F.1` (app group).
-- **File timestamps**: `HushOSKit/Vault+Writes.swift` reads `.modificationDate` of the file being uploaded; `ShareHandoff.swift` reads `contentModificationDateKey` in the app group; the File Provider handles `creationDate`/`contentModificationDate`. Reasons `C617.1` (files in the app or app group container) and `3B52.1` (files the person chose).
+- **UserDefaults**: the app (`AppModel.lastEmail`, `@AppStorage` sort and recent searches, `BackgroundAccess`) and `HushOSKit/Drive/Offline.swift` (`UserDefaults(suiteName: group)`), which every extension links. Reasons `CA92.1` (app only) and `1C8F.1` (app group).
+- **File timestamps**: `HushOSKit/Vault/Vault+Writes.swift` reads `.modificationDate` of the file being uploaded; `ShareHandoff.swift` reads `contentModificationDateKey` in the app group; the File Provider handles `creationDate`/`contentModificationDate`. Reasons `C617.1` (files in the app or app group container) and `3B52.1` (files the person chose).
 - No disk-space, boot-time or keyboard APIs were found.
-- `uname` (`HushOSKit/DeviceModel.swift`, the hardware model identifier for the device's name) is not a required-reason API.
+- `uname` (`HushOSKit/Account/DeviceModel.swift`, the hardware model identifier for the device's name) is not a required-reason API.
 
 It is `apps/ios/Privacy/PrivacyInfo.xcprivacy`, in the resources of all five targets (`App`, `Files`, `FilesUI`, `Share`, `Widgets`, all linking HushOSKit). Check the archive (`Products/Applications/HushOS.app/PrivacyInfo.xcprivacy` and each `PlugIns/*.appex/PrivacyInfo.xcprivacy`). Its contents:
 
