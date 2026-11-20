@@ -90,11 +90,13 @@ struct EditorPreviewPane: View {
     /* Bumped by every edit: the line starts are counted again when next asked. */
     var revision = 0
 
+    /* Typed edits (revision) and whole-text replacements (the box's changes: Open theirs) both make the index stale. */
     private func textLines(_ view: UITextView) -> TextLines {
-        if let lines, linesOf == revision { return lines }
+        let now = revision &* 1_000_003 &+ (box?.changes ?? 0)
+        if let lines, linesOf == now { return lines }
         let counted = TextLines(view.text)
         lines = counted
-        linesOf = revision
+        linesOf = now
         return counted
     }
 

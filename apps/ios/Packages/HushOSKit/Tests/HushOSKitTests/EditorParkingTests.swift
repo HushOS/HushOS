@@ -102,8 +102,10 @@ import Testing
         let work = Work("family plaintext")
         parking.hold(work, key: family.ref, owner: session)
         // The store hears of the removal: files in that workspace may no longer be edited.
+        parking.park(key: family.ref)
         let gone = parking.check { key, _ in key.workspaceId != "family-area" }
-        #expect(gone === work)
+        #expect(gone?.value === work)
+        #expect(gone?.presented == false)
         #expect(parking.waiting(owner: session) == nil)
         // A check that still allows the file keeps it.
         let kept = Work("own")
@@ -140,5 +142,42 @@ import Testing
         parked.remember("baseline of their version")
         guard case .adopt(let next) = parked.restore else { Issue.record("expected the state"); return }
         #expect(next == "baseline of their version")
+    }
+
+    /*
+     * The family of the file being edited goes while its editor is on screen, over a viewer showing another page: the
+     * check follows the work's own file, drops it, and says the editor on screen must end.
+     */
+    @Test func accessLostWhileTheEditorIsOnScreenEndsIt() {
+        let parking = EditorParking<Session, Work>()
+        let session = Session()
+        let family = file("notes", workspace: "family-area")
+        let work = Work("family plaintext")
+        parking.hold(work, key: family.ref, owner: session)
+        // Whatever page a viewer shows, the check is asked of the work's file.
+        let gone = parking.check { key, _ in key.workspaceId != "family-area" }
+        #expect(gone?.value === work)
+        #expect(gone?.presented == true)
+        #expect(parking.isEmpty)
+        #expect(!parking.presented)
+    }
+
+    /*
+     * Save as a copy, Open theirs on the copy, their text opened: the work the store holds is the copy's text and state,
+     * and a rebuild adopts it as it is. It never reads again (which would put the copy's saved text over what was typed).
+     */
+    @Test func aRestoredCopyIsAdoptedNotReadAgain() {
+        let original = file("notes")
+        let copy = file("notes-copy")
+        let parked = ParkedEdit<Work, String>(file: original, box: Work("typed after Open theirs"))
+        parked.remember("editing the copy")
+        parked.reload(from: copy)
+        guard case .read(let reading) = parked.restore else { Issue.record("expected their read"); return }
+        #expect(reading.ref == copy.ref)
+        // Their version opened, and typed into since.
+        parked.remember("editing their copy, typed")
+        guard case .adopt(let state) = parked.restore else { Issue.record("expected the state, not another read"); return }
+        #expect(state == "editing their copy, typed")
+        #expect(parked.reloadFrom == nil)
     }
 }

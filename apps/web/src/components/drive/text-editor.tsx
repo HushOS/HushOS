@@ -787,7 +787,6 @@ export function TextEditor({
     // Scrolling together (lib/scroll-sync.ts): beside each other, either pane moves the other; on a
     // narrow screen, switching between them keeps the line that was at the top.
     const previewScroller = useRef<HTMLElement>(null);
-    const previewBody = useRef<HTMLDivElement>(null);
     /* The preview's blocks as last measured; null once it renders again or changes size. */
     const previewBlocks = useRef<Block[] | null>(null);
     /* A narrow switch's line, until the pane switched to can be put there. */
@@ -831,13 +830,20 @@ export function TextEditor({
     useLayoutEffect(() => {
         if (preview) previewMoved();
     }, [preview, previewMoved]);
+    /*
+     * The preview's body, watched for its own size from when it mounts until it unmounts (a callback ref):
+     * Open theirs or a narrow switch mounts a new body, and the observer follows it, never the old one.
+     */
+    const latestPreviewMoved = useRef(previewMoved);
     useEffect(() => {
-        const body = previewBody.current;
-        if (!body || !previewShown) return;
-        const observer = new ResizeObserver(() => previewMoved());
+        latestPreviewMoved.current = previewMoved;
+    });
+    const previewBody = useCallback((body: HTMLDivElement | null) => {
+        if (!body) return;
+        const observer = new ResizeObserver(() => latestPreviewMoved.current());
         observer.observe(body);
         return () => observer.disconnect();
-    }, [previewShown, previewMoved]);
+    }, []);
     /* Source or Preview on a narrow screen, keeping the line at the top of the one left. */
     const switchPane = (next: 'source' | 'preview') => {
         if (next === pane) return;

@@ -19,12 +19,20 @@ import Foundation
     }
 
     private var current: Held?
+    /* Whether the held work's editor is on screen now, or parked while the screens are rebuilt. */
+    public private(set) var presented = false
 
     public init() {}
 
-    /* The editor of `key` is open under `owner`: its work is held here, replacing any other. */
+    /* The editor of `key` is open (on screen) under `owner`: its work is held here, replacing any other. */
     public func hold(_ value: Value, key: NodeRef, owner: Owner) {
         current = Held(owner: ObjectIdentifier(owner), key: key, value: value)
+        presented = true
+    }
+
+    /* The editor's screen was torn down without a close (an unfold): its work waits, parked. */
+    public func park(key: NodeRef) {
+        if current?.key == key { presented = false }
     }
 
     /*
@@ -44,23 +52,30 @@ import Foundation
         guard let current else { return nil }
         guard current.owner == ObjectIdentifier(owner), allowed(current.key, current.value) else {
             self.current = nil
+            presented = false
             dropped(current.value)
             return nil
         }
         return (current.key, current.value)
     }
 
-    /* Access changed (a family's removal, a share revoked): work for a file `allowed` refuses goes now, presented or not. */
-    @discardableResult public func check(allowed: (NodeRef, Value) -> Bool) -> Value? {
+    /*
+     * Access changed (a family's removal, a share revoked): work for a file `allowed` refuses goes now, on
+     * screen or parked. Returns it and whether its editor was on screen (which must then end too).
+     */
+    @discardableResult public func check(allowed: (NodeRef, Value) -> Bool) -> (value: Value, presented: Bool)? {
         guard let current, !allowed(current.key, current.value) else { return nil }
         self.current = nil
-        return current.value
+        let wasPresented = presented
+        presented = false
+        return (current.value, wasPresented)
     }
 
     /* The editor of `key` ended on purpose (Close, Discard, Done): its work goes. */
     @discardableResult public func release(key: NodeRef) -> Value? {
         guard let current, current.key == key else { return nil }
         self.current = nil
+        presented = false
         return current.value
     }
 
@@ -68,6 +83,7 @@ import Foundation
     @discardableResult public func drop() -> Value? {
         let value = current?.value
         current = nil
+        presented = false
         return value
     }
 

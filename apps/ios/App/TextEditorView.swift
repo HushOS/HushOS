@@ -137,7 +137,21 @@ struct TextEditorScreen: View {
 
         // Changes are never dropped by a swipe: Close asks first.
         .interactiveDismissDisabled(edited || saving)
-        .task(id: "\((loadFrom ?? item).id)-\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
+        .task(id: "\(attempt)-\(ObjectIdentifier(store.vault).hashValue)") { await load() }
+        // Reads start only when asked (the first open, Try again, Open theirs: `attempt`), never because restored state
+        // names another file: adopting parked work changes nothing this task is keyed on.
+        // The file was taken out of reach while on screen (DriveStore.checkEditorWork): the editor ends, its text gone.
+        .onChange(of: store.editorAccessEnded) { _, _ in
+            ending = true
+            session.close()
+            work?.cancel()
+            editor.forget()
+            savedText = ""
+            saveState = nil
+            pieces = nil
+            edited = false
+            dismiss()
+        }
         // Another session (a sign-out and in, another account): this text was the last one's.
         .onChange(of: ObjectIdentifier(store.vault)) { _, _ in
             ending = true
@@ -186,9 +200,15 @@ struct TextEditorScreen: View {
             // A save still on its way belongs to this screen's session: it stops with it.
             session.close()
             work?.cancel()
-            // The text stays only while the store holds it for this editor presented again (a rebuild, not a close).
-            if ending || store.editorWork.held(key: item.ref, owner: store.vault)?.box !== editor { editor.forget() }
             scroll.movePreview = { _ in }
+            // Torn down without a close (an unfold): the work waits for this editor presented again, and nothing it held
+            // goes on. A link waiting on its Discard or Keep editing is still waiting; the restored editor decides it.
+            if !ending, heldWork() != nil {
+                remember()
+                store.editorWork.park(key: item.ref)
+                return
+            }
+            editor.forget()
             savedText = ""
             saveState = nil
             pieces = nil
@@ -353,12 +373,20 @@ struct TextEditorScreen: View {
         scroll.rendering = true
         let revision = previewRevision
         Task {
-            let lines = text.utf8.lazy.filter { $0 == 0x0A }.count + 1
-            let parsed = await Task.detached(priority: .userInitiated) { MarkdownDocument.parseLined(text) }.value
+            // Parsed and its lines counted off the main actor.
+            let (parsed, lines) = await Task.detached(priority: .userInitiated) {
+                (MarkdownDocument.parseLined(text), text.utf8.lazy.filter { $0 == 0x0A }.count + 1)
+            }.value
             scroll.rendering = false
-            // Another text since (Open theirs, a close): this rendering is the last one's.
-            // Past the limit since it began: what it parsed is not shown.
-            guard revision == previewRevision, phase != .loading, !previewTooLong else { return }
+            // Another text since (Open theirs, a close), or past the limit since it began: this rendering is not shown,
+            // and one asked for meanwhile (the new text's) runs now rather than waiting for the next edit.
+            guard revision == previewRevision, phase != .loading, !previewTooLong else {
+                if scroll.again {
+                    scroll.again = false
+                    if phase != .loading { render() }
+                }
+                return
+            }
             pieces = parsed
             scroll.rendered(parsed, lines: lines)
             if scroll.again {
@@ -465,7 +493,7 @@ struct TextEditorScreen: View {
 
     /* What changes the state the store keeps for this editor (EditorWork.state). */
     private var remembered: String {
-        "\(phase)|\(edited)|\(pane)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)"
+        "\(phase)|\(edited)|\(pane)|\(confirmLeave)|\(status ?? "")|\(startedFrom ?? "")|\(target?.id ?? "")|\(target?.node.currentVersion?.id ?? "")|\(marked?.node.currentVersion?.id ?? "")|\(loadFrom?.id ?? "")|\(format?.mixed ?? false)"
     }
 
     /* The editor's state, held by the store with its text view (DriveStore.editorWork), for the editor presented again. */
@@ -479,7 +507,8 @@ struct TextEditorScreen: View {
         }
         let state = EditorState(held: held, loadFrom: loadFrom, target: target, startedFrom: startedFrom, source: source,
                                 destination: destination, marked: marked, savedText: savedText, saveState: saveState,
-                                format: format, edited: edited, status: status, previewing: pane == .preview)
+                                format: format, edited: edited, status: status, previewing: pane == .preview,
+                                askingLeave: confirmLeave)
         let work = heldWork() ?? EditorWork(file: item, box: editor)
         work.remember(state)
         store.editorWork.hold(work, key: item.ref, owner: store.vault)
@@ -506,6 +535,9 @@ struct TextEditorScreen: View {
         status = state.status
         pane = state.previewing ? .preview : .source
         scroll.revision += 1
+        // "Discard your changes?" was open when the screens went, or a link still waits on it: asked again, and the link
+        // goes on only once it is answered.
+        if state.askingLeave || store.editorHoldsSomething { confirmLeave = true }
         switch state.held {
         case .editing: phase = .editing
         case .readOnly(let reason, let text): phase = .readOnly(reason, text)
@@ -768,6 +800,8 @@ struct EditorState {
     let edited: Bool
     let status: String?
     let previewing: Bool
+    /* "Discard your changes?" was open. */
+    let askingLeave: Bool
 }
 
 /* The editor's words, the web's (text-editor.tsx editorWords). */
@@ -831,9 +865,13 @@ private extension View {
 
     var text: String { view?.text ?? opening }
 
+    /* Moved on by every replacement of the whole text (open, Open theirs, a drop): line indexes of the old text are stale. */
+    private(set) var changes = 0
+
     func open(_ text: String) {
         opening = text
         view?.text = text
+        changes += 1
     }
 
     /* Emptied, the view kept (Open theirs puts their text in it). */
@@ -841,6 +879,7 @@ private extension View {
         opening = ""
         view?.text = ""
         view?.undoManager?.removeAllActions()
+        changes += 1
     }
 
     /* Emptied and let go: the editor ended, or its held work did. */

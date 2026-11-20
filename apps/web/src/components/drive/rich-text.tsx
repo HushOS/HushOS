@@ -31,7 +31,7 @@ import {
 } from '@/lib/highlight';
 import { largeFileStage } from '@/lib/previews';
 import { markdownToHast } from '@/lib/markdown';
-import { diagramsSettled, diagramsState, drawDiagram } from '@/lib/mermaid';
+import { diagramsSettled, diagramsState, drawDiagram, startDiagramsForView } from '@/lib/mermaid';
 import {
     DIAGRAMS_PER_DOCUMENT,
     type DiagramFailure,
@@ -244,7 +244,8 @@ function MermaidFence({
         if (!ready || tooMany || !colours) return;
         let active = true;
         let url: string | null = null;
-        void drawDiagram(source).then((outcome) => {
+        const drawing = drawDiagram(source);
+        void drawing.result.then((outcome) => {
             if (!active) return;
             if ('failure' in outcome) return setShown({ key, failure: outcome.failure });
             url = URL.createObjectURL(
@@ -254,6 +255,8 @@ function MermaidFence({
         });
         return () => {
             active = false;
+            // A new text, new colours or the view gone: this diagram leaves the queue if it hasn't been drawn yet.
+            drawing.cancel();
             if (url) URL.revokeObjectURL(url);
         };
     }, [ready, tooMany, colours, source, key]);
@@ -927,6 +930,8 @@ export function MarkdownView({
     fences?: 'highlight' | 'after-preload';
 }) {
     const tree = useMemo(() => markdownToHast(text), [text]);
+    // Off the drive (a public link's page), the diagram bundle starts for every Markdown file shown.
+    useEffect(() => startDiagramsForView(), []);
     return (
         <article className="rt-markdown">
             <HastView

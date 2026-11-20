@@ -1,3 +1,4 @@
+import { preloadOwnsDiagrams } from '@/lib/diagram-owner';
 import type { DiagramOutcome } from '@/lib/mermaid-render';
 
 /*
@@ -25,10 +26,16 @@ const settled = new Promise<void>((resolve) => {
     announce = resolve;
 });
 let started = false;
-let worker: Worker | null = null;
+/* The diagram worker, and whether it has said it loaded: one that fails before then is not started again. */
+let worker: { worker: Worker; loaded: boolean } | null = null;
 let next = 0;
 
-type Job = { id: number; source: string; settle: (outcome: DiagramOutcome) => void };
+type Job = {
+    id: number;
+    source: string;
+    settle: (outcome: DiagramOutcome) => void;
+    cancelled: boolean;
+};
 const queue: Job[] = [];
 let running: { job: Job; timer: ReturnType<typeof setTimeout> } | null = null;
 
@@ -38,16 +45,27 @@ function settle(now: DiagramsState) {
     announce();
 }
 
+function failAll() {
+    for (const job of queue.splice(0)) job.settle({ failure: 'failed' });
+}
+
 function startWorker() {
     const made = new Worker(new URL('./mermaid.worker.ts', import.meta.url), {
         type: 'module',
         name: 'mermaid',
     });
+    const entry = { worker: made, loaded: false };
     made.onmessage = (
         event: MessageEvent<{ kind: 'ready' } | { id: number; outcome: DiagramOutcome }>,
     ) => {
+        if (worker !== entry) return;
         const message = event.data;
-        if ('kind' in message) return settle('ready');
+        if ('kind' in message) {
+            entry.loaded = true;
+            settle('ready');
+            pump();
+            return;
+        }
         if (running?.job.id !== message.id) return;
         clearTimeout(running.timer);
         const { job } = running;
@@ -55,22 +73,36 @@ function startWorker() {
         job.settle(message.outcome);
         pump();
     };
-    // The worker's script didn't load, or it died: before the preload settled, diagrams are off;
-    // during a diagram, that one fails and the rest go on in a new worker.
+    // A worker that fails before it said it loaded can't start: diagrams are off from here, and nothing
+    // starts another (the script is unavailable; retrying would only fail again). One that fails while
+    // drawing takes that diagram with it, and a new one takes the rest.
     made.onerror = () => {
-        if (state === 'waiting') {
-            settle('failed');
-            for (const job of queue.splice(0)) job.settle({ failure: 'failed' });
-            return;
-        }
+        if (worker !== entry) return;
+        if (!entry.loaded) return giveUp();
         restart();
     };
-    return made;
+    made.postMessage({ kind: 'preload' });
+    return entry;
 }
 
-/* The running diagram fails; a new worker takes the rest. */
+/* The worker can't start: diagrams say they couldn't be drawn, now and from here on. */
+function giveUp() {
+    worker?.worker.terminate();
+    worker = null;
+    if (running) {
+        clearTimeout(running.timer);
+        running.job.settle({ failure: 'failed' });
+        running = null;
+    }
+    if (state === 'waiting') settle('failed');
+    else state = 'failed';
+    failAll();
+}
+
+/* The running diagram fails; a new worker takes the rest once it has loaded. */
 function restart() {
-    worker?.terminate();
+    worker?.worker.terminate();
+    worker = null;
     if (running) {
         clearTimeout(running.timer);
         running.job.settle({ failure: 'failed' });
@@ -79,21 +111,18 @@ function restart() {
     try {
         worker = startWorker();
     } catch {
-        worker = null;
-        state = 'failed';
-        for (const job of queue.splice(0)) job.settle({ failure: 'failed' });
-        return;
+        giveUp();
     }
-    pump();
 }
 
-/* The next diagram, if none is being drawn; its time starts now. */
+/* The next diagram still wanted, once the worker has loaded and none is being drawn; its time starts now. */
 function pump() {
-    if (running || !worker) return;
-    const job = queue.shift();
+    if (running || !worker?.loaded) return;
+    let job = queue.shift();
+    while (job?.cancelled) job = queue.shift();
     if (!job) return;
     running = { job, timer: setTimeout(restart, DIAGRAM_TIMEOUT) };
-    worker.postMessage({ id: job.id, source: job.source });
+    worker.worker.postMessage({ id: job.id, source: job.source });
 }
 
 /*
@@ -108,9 +137,8 @@ export function preloadMermaid() {
         else
             try {
                 worker = startWorker();
-                worker.postMessage({ kind: 'preload' });
             } catch {
-                settle('failed');
+                giveUp();
             }
     }
     return Promise.race([
@@ -123,11 +151,36 @@ export const diagramsState = () => state;
 /* Settles when the preload has: the worker loaded, or couldn't. */
 export const diagramsSettled = settled;
 
-/* A diagram drawn in the worker, in turn; only once the preload has fetched it. */
-export function drawDiagram(source: string): Promise<DiagramOutcome> {
-    if (state !== 'ready' || !worker) return Promise.resolve({ failure: 'failed' });
-    return new Promise((resolve) => {
-        queue.push({ id: ++next, source, settle: resolve });
+/*
+ * A diagram drawn in the worker, in turn; only once the preload has fetched it. `cancel` takes a diagram
+ * no longer wanted (its text changed, its view went) out of the queue before it is drawn; one already
+ * being drawn finishes, and its result is ignored.
+ */
+export function drawDiagram(source: string): {
+    result: Promise<DiagramOutcome>;
+    cancel: () => void;
+} {
+    if (state !== 'ready')
+        return { result: Promise.resolve({ failure: 'failed' }), cancel: () => {} };
+    let job: Job | null = null;
+    const result = new Promise<DiagramOutcome>((resolve) => {
+        job = { id: ++next, source, settle: resolve, cancelled: false };
+        queue.push(job);
         pump();
     });
+    return {
+        result,
+        cancel: () => {
+            if (job) job.cancelled = true;
+        },
+    };
+}
+
+/*
+ * A Markdown view on a page without the drive's preload (a public link's page): the fixed bundle is
+ * started for every Markdown file shown, with a diagram or without, so its fetch never says which.
+ * Inside the drive it waits for the preload, whose order never says what was opened.
+ */
+export function startDiagramsForView() {
+    if (!preloadOwnsDiagrams()) void preloadMermaid();
 }

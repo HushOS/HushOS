@@ -234,11 +234,17 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     /* The text changed while a rendering was on its way: one more follows it. */
     private var again = false
     /*
-     * Where the person was: the source line at the top of the text and the cursor. Kept here, in the view model, so a fold,
-     * an unfold or a resize (which recreate the screen and its EditText) finds both as they were.
+     * Where the person was: the text offset at the top of the view (cheap: the layout's own line start) and the cursor.
+     * Kept here, in the view model, so a fold, an unfold or a resize (which recreate the screen and its EditText) finds
+     * both as they were.
      */
-    var sourceLine = 1.0
+    var topOffset = 0
     var selection: Pair<Int, Int>? = null
+    /*
+     * The text's line starts, built in the background with each rendering of the preview (never in a scroll callback,
+     * and never for plain text or a text past the preview's limit): what maps the source to the preview's blocks.
+     */
+    var textLines: TextLines? = null; private set
     /* A narrow switch's line, until the pane switched to can be put there. */
     var keptLine: Double? = null
 
@@ -283,6 +289,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             again = false
             preview = null
             lineMap = null
+            textLines = null
             return
         }
         if (parsing?.isActive == true) {
@@ -307,13 +314,15 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         parsing?.cancel()
         again = false
         parsing = scope.launch {
-            // Parsed and its lines counted off the main thread.
-            val (pieces, map) = withContext(Dispatchers.Default) {
+            // Parsed, and the source's line starts indexed, off the main thread.
+            val (pieces, map, lines) = withContext(Dispatchers.Default) {
                 val parsed = MarkdownDocument.parseLined(text)
-                parsed to LineMap(parsed.map { it.start }, text.count { it == '\n' } + 1)
+                val starts = TextLines(text)
+                Triple(parsed, LineMap(parsed.map { it.start }, starts.count), starts)
             }
             if (!previewing && !sideBySide || previewTooLong) return@launch
             lineMap = map
+            textLines = lines
             preview = pieces
             if (again) {
                 again = false
@@ -436,8 +445,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     format = null
                 }
             }
-            sourceLine = 1.0
+            topOffset = 0
             selection = null
+            textLines = null
             follow()
         }
     }
@@ -562,6 +572,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         previewing = false
         previewTooLong = false
         preview = null
+        textLines = null
         load(target)
     }
 
@@ -578,6 +589,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saveState = null
         previewTooLong = false
         preview = null
+        textLines = null
         previewing = false
         phase = Phase.Loading
     }
@@ -813,20 +825,8 @@ private class EditorScroll(val edit: TextEdit) {
     var listState: LazyListState? = null
     var scope: CoroutineScope? = null
     var linked = false
-    /* Bumped by every edit: the line starts are counted again when next asked. */
-    var revision = 0
     private var ours = false
     private var expected: Pair<Int, Int>? = null
-    private var lines: TextLines? = null
-    private var linesOf = -1
-
-    private fun textLines(view: EditText): TextLines {
-        lines?.takeIf { linesOf == revision }?.let { return it }
-        return TextLines(view.text).also {
-            lines = it
-            linesOf = revision
-        }
-    }
 
     /* The top of a line and of the next, in the text's layout. */
     private fun bounds(view: EditText, layout: android.text.Layout, lines: TextLines, line: Int): Pair<Int, Int> {
@@ -841,7 +841,8 @@ private class EditorScroll(val edit: TextEdit) {
         val layout = view.layout ?: return null
         if (view.scrollY <= 0) return 1.0
         val y = view.scrollY - view.totalPaddingTop
-        val lines = textLines(view)
+        // The index the last rendering built; none (plain text, past the limit, not rendered yet): no line to give.
+        val lines = edit.textLines ?: return null
         val line = lines.lineAt(layout.getLineStart(layout.getLineForVertical(maxOf(y, 0))))
         val (top, next) = bounds(view, layout, lines, line)
         val fraction = if (next > top) (y - top).toDouble() / (next - top) else 0.0
@@ -852,38 +853,59 @@ private class EditorScroll(val edit: TextEdit) {
     fun showSource(line: Double) {
         val view = editText ?: return
         val layout = view.layout ?: return
-        val lines = textLines(view)
+        val lines = edit.textLines ?: return
         val whole = line.toInt().coerceIn(1, lines.count)
         val (top, next) = bounds(view, layout, lines, whole)
         val most = maxOf(0, layout.height + view.totalPaddingTop + view.totalPaddingBottom - view.height)
         val y = (top + (line - whole).coerceIn(0.0, 1.0) * (next - top)).toInt() + view.totalPaddingTop
+        scrollSource(view, y.coerceIn(0, most))
+    }
+
+    /* Puts text offset `offset` at the top of the text: a fold's restore, with no line index needed. */
+    fun showOffset(offset: Int) {
+        val view = editText ?: return
+        val layout = view.layout ?: return
+        val most = maxOf(0, layout.height + view.totalPaddingTop + view.totalPaddingBottom - view.height)
+        val y = layout.getLineTop(layout.getLineForOffset(offset.coerceIn(0, view.length()))) + view.totalPaddingTop
+        scrollSource(view, y.coerceIn(0, most))
+    }
+
+    private fun scrollSource(view: EditText, y: Int) {
         ours = true
         try {
-            view.scrollTo(0, y.coerceIn(0, most))
+            view.scrollTo(0, y)
         } finally {
             ours = false
         }
-        edit.sourceLine = line
+        recordTop(view)
+    }
+
+    /* The offset at the top of the text, for a fold: the layout's own line start, no scan. */
+    private fun recordTop(view: EditText) {
+        val layout = view.layout ?: return
+        edit.topOffset = layout.getLineStart(layout.getLineForVertical(maxOf(view.scrollY - view.totalPaddingTop, 0)))
     }
 
     /* The text scrolled: kept for a fold, and side by side the preview follows, unless the link scrolled it. */
     fun sourceScrolled() {
         if (ours) return
-        val line = sourceLine() ?: return
-        edit.sourceLine = line
-        if (linked) movePreview(line)
+        editText?.let(::recordTop)
+        if (!linked) return
+        movePreview(sourceLine() ?: return)
     }
 
     /* Side by side, after a rendering: the preview goes where the source is. */
     fun followSource() {
-        movePreview(sourceLine() ?: edit.sourceLine)
+        movePreview(sourceLine() ?: return)
     }
 
     /* The fractional source line at the top of the preview. */
     fun previewLine(): Double? {
         val state = listState ?: return null
         val map = edit.lineMap ?: return null
-        val first = state.layoutInfo.visibleItemsInfo.firstOrNull() ?: return null
+        // The item firstVisibleItemScrollOffset belongs to: one still showing in the content padding above is not it.
+        val index = state.firstVisibleItemIndex
+        val first = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return null
         val fraction = if (first.size > 0) state.firstVisibleItemScrollOffset.toDouble() / first.size else 0.0
         return map.line(first.index, fraction)
     }
@@ -935,7 +957,7 @@ private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: ()
             // own first selection and scroll replace them.
             val edit = scroll.edit
             val keptSelection = edit.selection
-            val keptLine = edit.sourceLine
+            val keptOffset = edit.topOffset
             var ready = false
             object : EditText(context) {
                 override fun onSelectionChanged(selStart: Int, selEnd: Int) {
@@ -972,7 +994,6 @@ private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: ()
                         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
                         override fun afterTextChanged(s: Editable?) {
-                            scroll.revision++
                             onEdit()
                         }
                     })
@@ -987,7 +1008,7 @@ private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: ()
                 keptSelection?.let { (start, end) -> setSelection(start.coerceIn(0, length()), end.coerceIn(0, length())) }
                 // Laid out first, then put back where it was.
                 post {
-                    scroll.showSource(keptLine)
+                    scroll.showOffset(keptOffset)
                     ready = true
                 }
             }

@@ -1,3 +1,5 @@
+import { claimDiagramsForPreload } from '@/lib/diagram-owner';
+
 /*
  * Every viewer, syntax grammar and thumbnailer the app loads on first use,
  * fetched once after unlock when the browser is idle. Otherwise which chunks
@@ -20,6 +22,8 @@ function whenIdle(work: () => void) {
 export function preloadViewers() {
     if (started || typeof window === 'undefined') return;
     started = true;
+    // Diagrams are the preload's from now on: a view opened before it gets there never fetches them first.
+    claimDiagramsForPreload();
     whenIdle(() => {
         // One after another, so the fetches never crowd out what the person is doing.
         void (async () => {

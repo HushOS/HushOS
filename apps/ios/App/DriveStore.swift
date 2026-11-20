@@ -134,15 +134,29 @@ final class DriveStore {
      */
     @ObservationIgnored let editorWork = EditorParking<Vault, EditorWork>()
 
-    /* Whether the editor's held work may be shown again: the file is still this person's to edit, its family still theirs. */
+    /*
+     * Whether the editor's held work may stay: its own file's family not removed, and, for a file in another's
+     * workspace, a share still letting this person edit it. Asked of the work's file, never of a viewer's page.
+     * Only a known loss counts: before the own workspace is known nothing is taken for lost.
+     */
     func mayRestoreEditor(_ work: EditorWork) -> Bool {
-        !familyRemoved(work.file) && mayEdit(work.file)
+        let file = work.file
+        if familyRemoved(file) { return false }
+        guard !isFamily(file), let own = myWorkspace, own.lowercased() != file.node.workspaceId.lowercased() else { return true }
+        return mayEdit(file)
     }
 
-    /* A family's removal, or a share revoked, while no editor is on screen: its held text goes now, not at the next rebuild. */
+    /* The open editor's file was taken out of reach while it was on screen: it ends, its text gone (TextEditorScreen). */
+    var editorAccessEnded = 0
+
+    /*
+     * A family's removal or a share revoked: the held work goes now, on screen or parked, and an editor on screen ends.
+     * Checked against the editing target itself, whichever page a viewer shows.
+     */
     private func checkEditorWork() {
-        guard !editorOpen else { return }
-        editorWork.check { [unowned self] _, work in mayRestoreEditor(work) }?.box.forget()
+        guard let (work, presented) = editorWork.check(allowed: { [unowned self] _, work in mayRestoreEditor(work) }) else { return }
+        work.box.forget()
+        if presented { editorAccessEnded += 1 }
     }
 
     /* Its family removed, forked or refused (FileViewer's familyGone, for a file no viewer shows). */
@@ -166,6 +180,9 @@ final class DriveStore {
         intentDropped = dropped
         editorLeaveAsked += 1
     }
+
+    /* A link or an intent waits for the open editor's answer (Discard or Keep editing). */
+    var editorHoldsSomething: Bool { heldRoute != nil || heldIntent != nil }
 
     /* The editor's screen has gone (Discard, saved, nothing to lose, or its session ended): what was held goes on, once. */
     func editorClosed() {
