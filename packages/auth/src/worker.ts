@@ -12,7 +12,13 @@ export type WorkerRequests = CryptoRequests;
 export type WorkerResults = CryptoResults;
 const session = createCryptoSession();
 type Message = Parameters<typeof session.handle>[0];
+/* Sent by the transport as a lock begins: handled at once, never queued (session.lockBegins). */
+const LOCK_BEGINS = 'lockBegins';
 self.onmessage = async (event: MessageEvent<Message>) => {
+    if ((event.data as { operation: string }).operation === LOCK_BEGINS) {
+        session.lockBegins();
+        return;
+    }
     const { id } = event.data;
     try {
         const result = await session.handle(event.data, {

@@ -76,6 +76,7 @@ import {
     drafts,
     draftWhen,
     lookUpDraft,
+    savesSettled,
     type DraftOwner,
     type DraftSnapshot,
     type DraftWriter,
@@ -527,7 +528,7 @@ export function TextEditor({
      * The version the text now is: read (with the row it was read from), or published by a save or a
      * copy. The viewer's marks speak for it (lib/editor-marks.ts).
      */
-    onRead: (versionId: string | null, row?: DriveNode) => void;
+    onRead: (versionId: string | null, row?: DriveNode, contentUnknown?: boolean) => void;
 }) {
     const queryClient = useQueryClient();
     const leaving = useRef(onLeave);
@@ -744,7 +745,11 @@ export function TextEditor({
                     // or a copy may have come meanwhile), and offered only while this very file is
                     // still the one being written, opened as it was (not Open theirs since).
                     void waiting.then(
-                        (stored) => {
+                        async (stored) => {
+                            // A save or a copy on its way settles first: what it changes (the version
+                            // the text is from, the file being written) is what the answer is weighed
+                            // against.
+                            await savesSettled(() => pending.current?.done ?? null);
                             if (!mounted.current || deviceSession.generation() !== account0) return;
                             const { file: writing, startedFrom } = target.current;
                             const sameFile =
@@ -1259,6 +1264,8 @@ export function TextEditor({
         async (onTopOf?: string) => {
             const current = view.current;
             if (!current || saving || savingNow.current || !editable || ended || reloading) return;
+            // A restore offer unanswered: the text it would replace is not saved over it.
+            if (offerNow.current) return;
             // Asked whether to discard (or discarded): a save started now could publish what is thrown away.
             if (askedToLeave()) return;
             const taken = token();
@@ -1329,7 +1336,8 @@ export function TextEditor({
 
     const copy = useCallback(async () => {
         const current = view.current;
-        if (!current || reloading || savingNow.current || askedToLeave()) return;
+        if (!current || reloading || savingNow.current || askedToLeave() || offerNow.current)
+            return;
         const taken = token();
         const doc = current.state.doc;
         const { file, source } = target.current;
@@ -1485,6 +1493,8 @@ export function TextEditor({
                 draft.sourceVersionId !== null &&
                 draft.sourceVersionId === textSource.current.versionId,
         };
+        // The header's marks say so too: the version just read no longer speaks for this text.
+        if (!textSource.current.known) onRead(shown.openedVersionId, undefined, true);
         closeOffer();
         const end = draft.text.length;
         const at = (offset: number) => Math.min(offset, end);
@@ -1497,7 +1507,7 @@ export function TextEditor({
             userEvent: 'input.restore',
         });
         if (shown.kind === 'stale') setStale({ currentVersionId: shown.openedVersionId });
-    }, [closeOffer]);
+    }, [closeOffer, onRead]);
     /* The offer takes the keyboard when it shows, as the editor would have: Restore is one key away. */
     const restoreButton = useRef<HTMLButtonElement>(null);
     useEffect(() => {
@@ -1533,7 +1543,7 @@ export function TextEditor({
     );
 
     const format = useFormatForDisplay();
-    const savable = editable && dirty && !saving && !ended && !reloading;
+    const savable = editable && dirty && !saving && !ended && !reloading && !offer;
     const header = actions
         ? createPortal(
               <div className="flex min-w-0 items-center gap-3">

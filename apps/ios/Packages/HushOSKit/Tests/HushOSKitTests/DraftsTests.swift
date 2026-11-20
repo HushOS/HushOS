@@ -187,6 +187,29 @@ import Testing
         #expect(store().read(at: node(9), key: key).isAbsent)
     }
 
+    @Test func textRestoredFromAnotherVersionNeverWearsTheReadVersionsCleanMark() {
+        // Verified (no mark) as read: Couldn't check once the text is another version's.
+        #expect(TextEditing.headerProvenance(nil, contentKnown: false) == .unchecked)
+        // A mark the row already has stands.
+        #expect(TextEditing.headerProvenance(.resealed(.you), contentKnown: false) == .resealed(.you))
+        #expect(TextEditing.headerProvenance(.unknownSigner(signerId: nil), contentKnown: false) == .unknownSigner(signerId: nil))
+        #expect(TextEditing.headerProvenance(nil, contentKnown: true) == nil)
+    }
+
+    @Test @MainActor func aWipeBetweenAnEditorsOpenAndItsFlushKeepsNothingItWrites() {
+        let session = DraftSession()
+        session.opened(store())
+        // Another account signed in from the Files sheet while the app was away: the account's drafts wiped.
+        DraftStore(folder: folder).wipe()
+        // The editor's next turn (a flush as the app comes back) asks under the generation it opened with.
+        #expect(!store().write(draft("the last account's text"), at: place, key: key, asked: session.asked(store())))
+        #expect(store().count == 0)
+        // A new editor, opened after the wipe, writes.
+        let next = DraftSession()
+        next.opened(store())
+        #expect(store().write(draft("this account's"), at: place, key: key, asked: next.asked(store())))
+    }
+
     @Test func aWipeThatNeverGetsTheLockStillVoidsAWriteAlreadyUnderWay() {
         var writing = store()
         let folder = folder

@@ -125,6 +125,8 @@ struct TextEditorScreen: View {
      * now: a draft restored from another version can't be checked, and its copy is re-sealed rather than vouched for.
      */
     @State private var textSource = TextSource(versionId: nil, known: true)
+    /* The header's row no longer speaks for the text (restored from another version) until a save or copy publishes it. */
+    @State private var contentUnknown = false
 
     private struct StaleVersion: Identifiable, Equatable {
         let currentVersionId: String?
@@ -302,7 +304,7 @@ struct TextEditorScreen: View {
         let row = marked ?? shown
         return VStack(spacing: 1) {
             Text(row.name).font(Theme.Text.callout.weight(.semibold)).foregroundStyle(Alpine.ink).lineLimit(1)
-            if let provenance = store.provenance(of: row) {
+            if let provenance = TextEditing.headerProvenance(store.provenance(of: row), contentKnown: !contentUnknown) {
                 UnverifiedMark(provenance: provenance).frame(minHeight: 16)
             } else if let saved = store.savedCopy(of: row) {
                 Text(saved.line).font(.caption).foregroundStyle(Alpine.inkMuted).multilineTextAlignment(.center)
@@ -696,6 +698,7 @@ struct TextEditorScreen: View {
                 var found: PendingDraft?
                 if loadFrom == nil, !draftAsked {
                     draftAsked = true
+                    draftSession.opened()
                     let looked = await vault.readDraft(of: file)
                     // Closed, or another session, while it was read: nothing reaches the screen either way.
                     guard session.live(token, current: store.vault) else { return }
@@ -788,6 +791,8 @@ struct TextEditorScreen: View {
                     onSaved(landed)
                 }
                 if TextEditing.speaksFor(landed, versionId: versionId, at: destination) { marked = landed }
+                // The person's own version now: its own verdict speaks.
+                contentUnknown = false
                 savedText = text
                 settle(text, as: bytes)
                 // Typed while it saved: still changed (by bytes: "é" and "e" with an accent are different text here).
@@ -831,6 +836,7 @@ struct TextEditorScreen: View {
             target = made.file
             startedFrom = destination?.holds(made.file) == true ? made.versionId : nil
             if TextEditing.speaksFor(made.file, versionId: made.versionId, at: destination) { marked = made.file }
+            contentUnknown = false
             savedText = text
             settle(text, as: bytes)
             edited = !TextEditing.same(editor.text, text)
@@ -913,8 +919,9 @@ extension TextEditorScreen {
                              },
                              sourceVersionId: textSource.versionId)
             let vault = store.vault
-            // Asked now: a sign-out's wipe before it lands keeps nothing of it.
-            let asked = DraftStore.shared.generation
+            // Asked under the generation this editor opened with: a wipe since (a sign-out, another account) keeps
+            // nothing it writes.
+            let asked = draftSession.asked()
             draftSession.write({ await vault.writeDraft(kept, of: file, asked: asked) }, kept: { draftNotKept = !$0 })
         }
     }
@@ -987,6 +994,7 @@ extension TextEditorScreen {
         // Its text is this session's from here, and the draft too; read from another version than the one just opened,
         // its source can't be checked now.
         draftSession.adopt()
+        contentUnknown = !(found.sourceVersionId != nil && found.sourceVersionId == textSource.versionId)
         textSource = TextSource(versionId: found.sourceVersionId,
                                 known: found.sourceVersionId != nil && found.sourceVersionId == textSource.versionId)
         editor.replaceAll(found.text, selection: found.selection)

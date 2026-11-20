@@ -226,10 +226,10 @@ export function Preview({
             },
             onTarget: (target: DriveNode) =>
                 setEditing((now) => (now && now.session === session ? { ...now, target } : now)),
-            onRead: (versionId: string | null, row?: DriveNode) =>
+            onRead: (versionId: string | null, row?: DriveNode, contentUnknown?: boolean) =>
                 setEditing((now) =>
                     now && now.session === session
-                        ? { ...now, read: nextRead(now.read, versionId, row) }
+                        ? { ...now, read: nextRead(now.read, versionId, row, contentUnknown) }
                         : now,
                 ),
             onFinishing: (wait: () => Promise<boolean> | null) => {

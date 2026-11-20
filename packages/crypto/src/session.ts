@@ -3419,6 +3419,20 @@ export function createCryptoSession() {
         }
     }
 
+    /*
+     * A lock has begun (the page's transport says so before it ends this worker): every
+     * operation waiting on the queue is refused when its turn comes, and uploads under way stop
+     * now (their requests aborted), except an editor's last draft seal, asked for just before
+     * the lock, which the lock lets finish. The worker is ended soon after; nothing here
+     * outlives that.
+     */
+    let locking = false;
+    function lockBegins() {
+        locking = true;
+        for (const upload of uploads.values())
+            for (const request of upload.requests.values()) request.abort();
+    }
+
     function handle(
         message: Message,
         hooks: SessionHooks = {},
@@ -3431,6 +3445,8 @@ export function createCryptoSession() {
             queue = queue.then(async () => {
                 try {
                     checkGeneration(expected);
+                    if (locking && message.operation !== 'driveDraftSeal')
+                        throw new CryptoError('Your account was locked. Please try again.');
                     const result = await execute(message, expected, hooks);
                     checkGeneration(expected);
                     resolve(result);
@@ -3444,5 +3460,5 @@ export function createCryptoSession() {
         });
     }
 
-    return { handle, reset };
+    return { handle, reset, lockBegins };
 }

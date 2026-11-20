@@ -20,6 +20,7 @@ import {
     DRAFT_WRITE_DELAY_MS,
     draftWhen,
     lookUpDraft,
+    savesSettled,
     type DraftSealer,
     type DraftSnapshot,
 } from './drafts';
@@ -485,6 +486,30 @@ describe('looking a draft up', () => {
         expect(
             await lookUpDraft({ read: () => Promise.reject(new Error('busy')) }, place(), 50),
         ).toEqual({ status: 'failed' });
+    });
+});
+
+describe('a late lookup and the saves on their way', () => {
+    test('waits for the save in flight and for one started meanwhile, then goes on', async () => {
+        const order: string[] = [];
+        let inFlight: Promise<unknown> | null = null;
+        let finishFirst!: () => void;
+        let finishSecond!: () => void;
+        inFlight = new Promise<void>((resolve) => (finishFirst = resolve)).then(() => {
+            order.push('first saved');
+            // A copy started while the first settled.
+            inFlight = new Promise<void>((resolve) => (finishSecond = resolve)).then(() => {
+                order.push('second saved');
+                inFlight = null;
+            });
+        });
+        const weighed = savesSettled(() => inFlight).then(() => order.push('weighed'));
+        finishFirst();
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(order).toEqual(['first saved']);
+        finishSecond();
+        await weighed;
+        expect(order).toEqual(['first saved', 'second saved', 'weighed']);
     });
 });
 

@@ -81,7 +81,16 @@ export function createBrowserCryptoTransport(createWorker: () => Worker): Crypto
                 pending.delete(id);
             }
         if (pending.size === 0) terminate();
-        else setTimeout(terminate, LOCK_DRAIN_MS);
+        else {
+            // The worker stops its own ordinary work too (queued operations refused, uploads
+            // aborted), so only the draft seal runs while it drains.
+            try {
+                worker.postMessage({ id: 0, operation: 'lockBegins' });
+            } catch {
+                terminate();
+            }
+            setTimeout(terminate, LOCK_DRAIN_MS);
+        }
         for (const listener of listeners) listener();
         listeners.clear();
     }

@@ -375,6 +375,14 @@ export async function lookUpDraft(
     }
 }
 
+/*
+ * Waits until no save or copy is on its way (`inFlight`, the editor's), one started while waiting
+ * included: a late lookup is weighed only against the file and version a settled editor holds.
+ */
+export async function savesSettled(inFlight: () => Promise<unknown> | null) {
+    for (let running = inFlight(); running; running = inFlight()) await running.catch(() => {});
+}
+
 /* About two seconds after a change, and no more often while typing. */
 export const DRAFT_WRITE_DELAY_MS = 2_000;
 

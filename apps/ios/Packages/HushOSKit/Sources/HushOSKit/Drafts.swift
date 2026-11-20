@@ -292,6 +292,15 @@ public enum DraftRules {
 
 /* Where a copy's version verdict can't be told: the text came from a version not read now (a restored draft's). */
 extension TextEditing {
+    /*
+     * The header's mark over text restored from another version than the one read: never the read version's clean verdict,
+     * at least Couldn't check (a worse one stands).
+     */
+    public static func headerProvenance(_ read: Provenance?, contentKnown: Bool) -> Provenance? {
+        // A row with a mark keeps it (it already warns); a clean one (no mark) shows Couldn't check.
+        contentKnown ? read : (read ?? .unchecked)
+    }
+
     public static func contentUnknown(_ source: SaveSource) -> SaveSource {
         guard case let .file(metadata, _, fromLink) = source else { return source }
         return .file(metadata: metadata, version: .unchecked, fromLink: fromLink)
@@ -307,8 +316,24 @@ extension TextEditing {
 @MainActor public final class DraftSession {
     public private(set) var owns = false
     public var unread = false
+    /*
+     * The store's wipe generation when this editor opened (`opened`), carried through a rebuild with the session: every
+     * write it asks for carries it, so once a wipe moves it (a sign-out, another account signed in from the Files sheet
+     * while the app was away) nothing this editor writes is kept, whatever the store's generation is by then.
+     */
+    public private(set) var generation: UInt64?
 
     public init() {}
+
+    /* The editor opened its file: the generation it writes under, from now on. */
+    public func opened(_ store: DraftStore = .shared) {
+        if generation == nil { generation = store.generation }
+    }
+
+    /* What a write asks under: the generation at the open, never a later one. */
+    public func asked(_ store: DraftStore = .shared) -> UInt64 {
+        generation ?? store.generation
+    }
 
     /* The person restored the stored draft: this session's to remove from here. */
     public func adopt() { owns = true }

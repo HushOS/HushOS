@@ -159,6 +159,14 @@ class DraftsTest {
     }
 
     @Test
+    fun textRestoredFromAnotherVersionNeverWearsTheReadVersionsCleanMark() {
+        assertEquals(com.hushos.core.Integrity.UNCHECKED, Unverified.overRestored(null, contentUnknown = true)?.integrity)
+        val marked = Unverified(com.hushos.core.Integrity.UNKNOWN_SIGNER, null, Writer.Unknown(null))
+        assertEquals(marked, Unverified.overRestored(marked, contentUnknown = true))
+        assertNull(Unverified.overRestored(null, contentUnknown = false))
+    }
+
+    @Test
     fun aWriteAskedForBeforeASignOutsWipeKeepsNothing() {
         store().write(draft("before"), place, key)
         val asked = store().generation

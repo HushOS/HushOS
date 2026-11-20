@@ -292,6 +292,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     private var sourceKnown = true
     /* The lookup couldn't answer: nothing is written over the draft it may have missed until one does. */
     private var draftUnread = false
+    /* The header's row no longer speaks for the text (restored from another version) until a save or copy publishes it. */
+    var contentUnknown by mutableStateOf(false); private set
 
     /* Runs `work` on the main thread after everything asked before it. */
     private fun inOrder(work: suspend () -> Unit) {
@@ -570,6 +572,8 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                             startedFrom = done.versionId
                         }
                         markWith(done.item, done.versionId)
+                        // The person's own version now: its own verdict speaks.
+                        contentUnknown = false
                         // Typed while it saved: still changed.
                         savedText = text
                         settle(text, bytes)
@@ -621,6 +625,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 target = made.file
                 startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
                 markWith(made.file, made.versionId)
+                contentUnknown = false
                 savedText = text
                 settle(text, bytes)
                 edited = !TextEditing.same(buffer, text)
@@ -762,6 +767,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         // source can't be checked now.
         ownsDraft = true
         sourceKnown = draft.sourceVersionId != null && draft.sourceVersionId == sourceVersionId
+        contentUnknown = !sourceKnown
         sourceVersionId = draft.sourceVersionId
         buffer.replace(0, buffer.length, draft.text)
         draft.selection?.let {
@@ -983,7 +989,7 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
  * viewer's rows mark it, a family's mark by its member list, and "Saved from a link" in plain words.
  */
 @Composable
-fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
+fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened, contentUnknown: Boolean = false) {
     val alpine = Alpine.colors
     val family = model.families.familyOf(row) != null
     // This exact row's verdict, kept apart from the listing's (another device's newer version judged meanwhile never takes
@@ -995,9 +1001,9 @@ fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
     val unjudged = family && model.families.verdict(row) == null
     LaunchedEffect(row.node, unjudged) { if (unjudged) model.families.judge(listOf(row)) }
     val saved = remember(row.node, state.trust) { com.hushos.app.data.savedLineOf(row.node, state.trust) }
-    if (!model.marked(row, state) && saved == null) return
+    if (!model.marked(row, state) && saved == null && !contentUnknown) return
     Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S2)) {
-        UnverifiedMark(model, state, row)
+        UnverifiedMark(model, state, row, contentUnknown)
         saved?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted) }
     }
 }

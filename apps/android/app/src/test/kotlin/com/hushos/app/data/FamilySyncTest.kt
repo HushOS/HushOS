@@ -172,6 +172,34 @@ class FamilySyncTest {
     }
 
     /*
+     * Not-member, on a phone with the editor's drafts kept: every draft of the family's files goes with the wipe itself
+     * (no screen, no view model), and a draft of the account's own files stays. Fails if family drafts survive the wipe.
+     */
+    @Test
+    fun aNotMemberWipeDeletesTheFamilysDraftsAndKeepsTheAccountsOwn() {
+        family.storePin(family.pin(listOf(family.r1, family.r2)))
+        val phone = family.phone()
+        accepted(phone)
+        phone.vault.listChildren(family.rootId)
+        val store = DraftStore.of(phone.vault.context)
+        val key = phone.vault.unlockAccount()
+        val user = family.member.id
+        val draft = com.hushos.core.Draft(
+            com.hushos.core.DraftFrame("9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+                com.hushos.core.TextFormat(com.hushos.core.TextEncoding.UTF8, com.hushos.core.LineEnding.LF, false),
+                System.currentTimeMillis().toULong()),
+            "family text", null, null)
+        val inFamily = DraftPlace(user, family.workspaceId, family.fileId)
+        val own = DraftPlace(user, "0e0e0e0e-0000-4000-8000-00000000000e", "0f0f0f0f-0000-4000-8000-00000000000f")
+        assertTrue(store.write(draft, inFamily, key))
+        assertTrue(store.write(draft.copy(text = "own text"), own, key))
+        family.notMember = true
+        assertEquals(FamilyState.Wiped, phone.sync.sync(family.summary))
+        assertNull(store.read(inFamily, key).draft)
+        assertEquals("own text", store.read(own, key).draft?.text)
+    }
+
+    /*
      * Another member renames Sam's file and uploads a new version: a refresh of the folder shows the new name and opens the
      * new content, through the ledger. Fails if a family row this process opened is kept whatever the server serves now.
      */
