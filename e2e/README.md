@@ -15,7 +15,7 @@ CI runs each spec on a two-worker shard of a slow runner, against the production
 ### WebKit
 
 - **Backspace goes back.** Playwright's WebKit goes back a page on a Backspace the page doesn't handle. Safari doesn't. Press it only where an editable element has the focus, or leave the step out on WebKit (`images-pdf.spec.ts`).
-- **Reloads bypass `page.route` for cached modules.** After a reload, WebKit serves an immutable module it already holds from its memory cache, with no request for `page.route` to see. A route meant to hold or fail a module must be in place before the page first loads it, or the module must reach the browser with `Cache-Control: no-store` until the route is armed (`editing-preview.spec.ts`, the grammar test).
+- **Reloads bypass `page.route` for cached modules.** After a reload, WebKit serves an immutable module it already holds from its memory cache, with no request for `page.route` to see. `Cache-Control: no-store` doesn't stop it. A route meant to hold or fail a module must be in place, in a fresh context, before the page first requests it (`editing-preview.spec.ts`, the grammar test).
 - **Workers can start with no request.** WebKit can start a worker from its cache without a request event, and labels worker scripts `xhr`, not `script`. To record what a page loads, use `scriptsDuring()` from `helpers.ts`, which listens to `page.on('worker')` as well as requests.
 - **A slow press reads as a held one.** Playwright releases a click only once the page has handled the press. When the page takes more than 500 ms over a right-click, WebKit runs Base UI's long-press timer first and the context menu closes as it opens. Right-click with `rightClick()` from `helpers.ts`, which presses again when the page saw a hold.
 
