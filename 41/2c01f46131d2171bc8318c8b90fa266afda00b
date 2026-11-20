@@ -1,0 +1,21 @@
+e2e/README.md
+  s_c60e24772e04af::t_1c563c142ce134 28-31
+e2e/families.spec.ts
+  s_c60e24772e04af::t_f98e802bb275e4 4062-4067
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "412c01f46131d2171bc8318c8b90fa266afda00b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
