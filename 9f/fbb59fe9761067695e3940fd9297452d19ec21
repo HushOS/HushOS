@@ -1,0 +1,87 @@
+apps/web/src/lib/pdf-tools/page-thumbnails.ts
+  s_c60e24772e04af::t_888b4fbd7afcbd 13-16,31-33,36,47-83,85,87,89-92,95,103-106,109,111,114,119-139,147,157
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/Transfers/PdfPages.swift
+  s_c60e24772e04af::t_0c46fca9db5250 193,208-247,264,266,451,458,463
+  s_c60e24772e04af::t_51194f51c51d5b 192,194-197,248-263,265,267-275,374-375,377,381-388,399-401,424,429-433,439,448-450,464-472,475-478,480-485,488-503,511-516
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/Transfers/PdfPagesTests.swift
+  s_c60e24772e04af::t_91fb30af9c921e 124-130
+  s_c60e24772e04af::t_9444158c5039d1 157-214
+apps/web/src/components/drive/dialogs/pdf-pages-dialog.test.tsx
+  s_c60e24772e04af::t_896ecf5fa6fc4e 1-174,180,183
+  s_c60e24772e04af::t_33bceebeb51681 175-179,181-182,184-191
+apps/web/src/lib/pdf-tools/page-thumbnails.test.ts
+  s_c60e24772e04af::t_77cf9fe4dd1c99 1-55
+apps/web/src/lib/pdf-tools/outputs.test.ts
+  s_c60e24772e04af::t_b0097d5a45d4e9 1-87
+  s_c60e24772e04af::t_b8c08caf0a97e8 88-93
+apps/android/app/src/main/kotlin/com/hushos/app/data/transfers/PdfPages.kt
+  s_c60e24772e04af::t_a8afd0fe18e413 166-192,318-319,325-327,329,338,340-341,363,370,377-382,389,398-401,409,415-423,425-449,451-453,456-457
+apps/android/app/src/main/kotlin/com/hushos/app/ui/viewers/PdfPagesSheet.kt
+  s_c60e24772e04af::t_e85ea0c4d9f405 124-141,187,248,272
+apps/android/app/src/test/kotlin/com/hushos/app/data/transfers/PdfPagesTest.kt
+  s_c60e24772e04af::t_58598e9985e508 142-168
+apps/android/app/src/test/kotlin/com/hushos/app/foreign/PdfPagesBuildTest.kt
+  s_c60e24772e04af::t_539eb5a29f7a25 1-33
+apps/web/src/components/drive/dialogs/pdf-pages-dialog.tsx
+  s_c60e24772e04af::t_012741c5c29430 33-35,146-153,168-215,217-228,339-343,347,367,674-678,691-704,707
+apps/web/src/lib/pdf-tools/inspect.ts
+  s_c60e24772e04af::t_89b7da64d09d49 1-37
+apps/web/src/lib/pdf-tools/make.ts
+  s_c60e24772e04af::t_42fe094968a3b1 34,83,114-115,193,232-233,255-256,258,260-261,272-273,298-301,303-304,315-316,326,343,359-363,365-366,369,409,434,483-484
+apps/web/src/lib/pdf-tools/outputs.ts
+  s_c60e24772e04af::t_5f9766b900dd3f 1-71
+apps/web/src/lib/pdf-tools/pdf-reader.testkit.ts
+  s_c60e24772e04af::t_c1acfb7bc8cc97 5,17-18,23-28,35-50
+apps/web/src/lib/pdf-tools/pdf-render.worker.ts
+  s_c60e24772e04af::t_b859486312ddb7 5,53-78,116-117,132-133,135-140
+apps/web/src/lib/pdf-tools/pdf-tools.tool-worker.ts
+  s_c60e24772e04af::t_8da9b63fad6601 2,4,39,45,52-58
+apps/web/src/lib/pdf-tools/structure.test.ts
+  s_c60e24772e04af::t_cdb5d8a772dc34 10,41-44,91-94,126-129
+apps/web/src/lib/pdf-tools/structure.ts
+  s_c60e24772e04af::t_ecd33f283645f6 91-92,95-96,153-200,238-240,246-248,333-335,352-374,384-388
+crates/hushos-core/src/tools/pdf_tools.rs
+  s_c60e24772e04af::t_4484c7a40fac40 224-225,229-236,242,314,318,337,342-344,356-359,361,370-374,457-496,593,634-639,642,651-653,664-692,708-823,899-911
+crates/hushos-core/src/tools/pdf_tools/tests.rs
+  s_c60e24772e04af::t_397a8687e52ee1 75-116,135-142,188-196,322,328,358-415
+docs/file-tools-design.md
+  s_c60e24772e04af::t_1fa559503363fc 620-630
+e2e/durations.json
+  s_c60e24772e04af::t_48b8e7be95cc10 44
+e2e/fixtures/pdfs/annotated.pdf
+  s_c60e24772e04af::t_7d61fcb6e45539 1-74
+e2e/fixtures/pdfs/empty-wide.pdf
+  s_c60e24772e04af::t_39e1deadb39154 1-9330
+e2e/fixtures/pdfs/expected.json
+  s_c60e24772e04af::t_8c4dbc7107f2d6 29-31,52-54,80-82,104-106,122-124,145-147,179-181,207-209,235-237,259-261,274-387,428-430,471-473,504-506,537-539,555-557,578-580,596-598,629-631,722-724,795-797,818-820,861-863,894-1031
+e2e/fixtures/pdfs/layered-base-off.pdf
+  s_c60e24772e04af::t_e907019b413c8d 1-72
+e2e/fixtures/pdfs/layered.pdf
+  s_c60e24772e04af::t_93eb73a16bfebb 1-72
+e2e/fixtures/pdfs/make.py
+  s_c60e24772e04af::t_4c734cee68ede7 457-547,564-570,585-591,638-642,647-658,679
+e2e/fixtures/pdfs/null-inherited.pdf
+  s_c60e24772e04af::t_14a1e376245602 1-45
+e2e/fixtures/pdfs/transparency.pdf
+  s_c60e24772e04af::t_a6775af5212571 1-71
+e2e/fixtures/pdfs/user-unit.pdf
+  s_c60e24772e04af::t_e40e277d259b87 1-45
+e2e/pdf-tools.spec.ts
+  s_c60e24772e04af::t_a767144deefde6 22-30,266-283,443-444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9ffbb59fe9761067695e3940fd9297452d19ec21",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
