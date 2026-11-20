@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_c60e24772e04af::t_5b0645f44425ac 146,148-152,162-164,204-205
+CONTRIBUTING.md
+  s_c60e24772e04af::t_9baf8510c18eb6 650
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3e83207a4424dc0e8a78e3620f7d1081a8553938",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
