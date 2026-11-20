@@ -15,6 +15,10 @@ SwiftUI app for iOS 26 and later, on the App Store (Android is on Google Play). 
 
 - Everything the targets share is the Swift package `Packages/HushOSKit`: keychain, Drive API, the vault that opens keys, OPAQUE sign-in.
 - HushOSKit sits over `Packages/HushOSCore`, the UniFFI bindings of `crates/hushos-core`.
+- Feature folders:
+    - HushOSKit's `Sources/HushOSKit` and `Tests/HushOSKitTests`: `Account`, `Vault`, `Trust`, `Families`, `Drive`, `Transfers`, `Editor`, `Platform`. Each suite sits in its code's folder. `Resources/` holds the BIP-39 list.
+    - `App/`: `Account`, `Drive`, `Sharing`, `Viewers`, `Transfers`, `Families`. The shell (`HushOSApp`, `AppModel`, `MainView`, `TabSidebar`, `Theme`, notices, the privacy cover, quick actions, push) stays at the root, beside the plist, entitlements and xcconfig.
+    - Suites that read the checkout's fixtures go through `Checkout.file(_:)` (`Tests/HushOSKitTests/Platform/Checkout.swift`), never a walk up from `#filePath`.
 
 ## Build and run
 
@@ -110,7 +114,7 @@ bun run ios:run         # install and launch on the iPhone 18 Pro simulator (SIM
 
 ### Out of backups
 
-`HushOSKit/Unbacked.swift` keeps the account's data on this phone and out of iCloud and computer backups.
+`HushOSKit/Drive/Unbacked.swift` keeps the account's data on this phone and out of iCloud and computer backups.
 
 - Covered: decrypted files (`offline`, the queue's `transfers`, Save to HushOS's `share-staging`).
 - Covered: anything naming what is in the drive.
@@ -171,7 +175,7 @@ bun run ios:run         # install and launch on the iPhone 18 Pro simulator (SIM
 - The eye shows a password in place by switching the field's secure entry (`ShowablePasswordField`: no autocorrection, predictions or Writing Tools). This is safe only because the app refuses third-party keyboards.
 - In the Files sign-in sheet (an extension that can't refuse them) it stays a secure field with the characters drawn over it (`revealed`).
 - The recovery phrase goes into `PhraseEntry` (no autocorrection, predictions or Writing Tools).
-- An approval's code goes into `CodeEntry` (`ApprovalCodeField`, App/DeviceApproval.swift), a UIKit field for the same reason: no autocorrection, spell checking, capitals, predictions (bar or inline), smart punctuation or Writing Tools. SwiftUI's `TextField` can only say the first three.
+- An approval's code goes into `CodeEntry` (`ApprovalCodeField`, App/Account/DeviceApproval.swift), a UIKit field for the same reason: no autocorrection, spell checking, capitals, predictions (bar or inline), smart punctuation or Writing Tools. SwiftUI's `TextField` can only say the first three.
     - While the screen is recorded, mirrored or AirPlayed (`ScreenCapture`), the field and the words offered under it are blurred, as `StepField` is. A code a screen shows (`ShownCode`: the asking panel's, and the one drawn on Approve) is not drawn then, as the authenticator key and the backup codes are not. No unit test: `ScreenCapture` is the app target's, which has none.
 
 ## Screens
@@ -243,10 +247,10 @@ Markdown files (`text/markdown`, or `.md`, `.markdown`, `.mdx`) up to 2 MB open 
 
 Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/text-editor.tsx`): Edit (the pencil) in the viewer's bar, for a text file (`TextEditing.opens`, the core's `text_editable_kind`, or a file of no known kind whose bytes read as text, `TextEditing.readsAsText`) of at most 8 MiB that this person may change (`DriveStore.mayEdit`: their own once the own workspace is known (never assumed before it loads), a family folder this phone may write, or a share through the mount covering it, never the widest role in the workspace and never a file shared on its own). Never on an earlier version.
 
-- `TextEditorScreen` (App/TextEditorView.swift) lists the file's folder afresh (`Vault.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory (`Vault.editBytes`, the tool reader: never `DriveStore.fetch`'s kept copy), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence (`TextEditing.words`), never transcoded.
+- `TextEditorScreen` (App/Viewers/TextEditorView.swift) lists the file's folder afresh (`Vault.editTarget`, held to the file's own folder and workspace by `TextEditing.target`) and reads that row's version into memory (`Vault.editBytes`, the tool reader: never `DriveStore.fetch`'s kept copy), then opens it with the core's `text_open`: UTF-8 with or without a byte order mark or UTF-16 with one, LF or CRLF (a mixed file says which a save writes, `TextEditing.mixedNote`), not binary. Anything else opens read-only with the web's sentence (`TextEditing.words`), never transcoded.
 - The screen keeps a `TextEditing.SaveState`: the format found at open, kept for the whole session, and the text and bytes last opened or saved. A save writes those bytes while the text is unchanged, otherwise the text in that format (the core's `text_encode`), built at open from what was just decoded (never decoded twice). Save and Save as a copy take the text and the state on the main actor, set saving, encode off it (`encoded`), and ask the session again before anything goes on. The format is never found again from what was saved (a save that removed every line break, or one past 8 MiB, would lose it).
 - Markdown (`MarkdownDocument.handles`) gets a segmented Source/Preview `Picker`; the preview is the viewer's `MarkdownView` over the text as it was when Preview was chosen, with selection off (`selectable: false`: the system's Copy would skip `EditorTextView`'s local-only, expiring copy) and not past `MarkdownDocument.limit` in UTF-8 bytes (it stays on Source with a note, gone at the next edit; the size is asked again at the next Preview). Whether Preview is offered follows `source`, the row the text was read from, never `target`, which saves move on. Open theirs goes back to Source. The text view stays underneath, hidden, so it keeps its text and undo.
-- Side by side when wide (`SideBySide.shows`, HushOSKit: regular horizontal size class and at least 600 points of the editor's own width, so the iPhone Duo's inner display either way up and a Pro Max on its side; never the screen or the device): the source and `EditorPreviewPane` (App/EditorPreview.swift, the viewer's `MarkdownBlockView`s) in one `AnyLayout` that switches between an `HStackLayout` and a `ZStackLayout`, so a fold, an unfold or a resize keeps the same `UITextView`, its text, cursor and scroll. The preview follows typing: one parse at a time off the main actor (`MarkdownDocument.parseLined`), and one more if the text changed meanwhile, never a debounce. `EditorScroll` scrolls the two together by source line: `parseLined` gives each block its first source line (a block cut in pieces shares its lines out), `LineMap` puts a line in a block and back (a block covers the lines up to the next one's), `TextLines` maps the text view's UTF-16 offsets to lines, and a block's place in the preview is its laid-out frame (a block not yet laid out is scrolled to by its id, at its top). Only a person's scroll leads (dragging or decelerating; the preview's scroll phase), and after each rendering the preview follows the source, which keeps the cursor in view. Narrow, the Source/Preview switch keeps the line that was at the top. Tests: `SideBySideTests`.
+- Side by side when wide (`SideBySide.shows`, HushOSKit: regular horizontal size class and at least 600 points of the editor's own width, so the iPhone Duo's inner display either way up and a Pro Max on its side; never the screen or the device): the source and `EditorPreviewPane` (App/Viewers/EditorPreview.swift, the viewer's `MarkdownBlockView`s) in one `AnyLayout` that switches between an `HStackLayout` and a `ZStackLayout`, so a fold, an unfold or a resize keeps the same `UITextView`, its text, cursor and scroll. The preview follows typing: one parse at a time off the main actor (`MarkdownDocument.parseLined`), and one more if the text changed meanwhile, never a debounce. `EditorScroll` scrolls the two together by source line: `parseLined` gives each block its first source line (a block cut in pieces shares its lines out), `LineMap` puts a line in a block and back (a block covers the lines up to the next one's), `TextLines` maps the text view's UTF-16 offsets to lines, and a block's place in the preview is its laid-out frame (a block not yet laid out is scrolled to by its id, at its top). Only a person's scroll leads (dragging or decelerating; the preview's scroll phase), and after each rendering the preview follows the source, which keeps the cursor in view. Narrow, the Source/Preview switch keeps the line that was at the top. Tests: `SideBySideTests`.
 - An unfold (or any change that turns the tabs into a sidebar, `defaultTabBarPlacement` in MainView) replaces the tabs' controllers and tears down what they presented, the viewer and the editor over it, without a close. So the open editor's work lives in the store, not the screen: `DriveStore.editorWork` (`EditorParking`, HushOSKit) holds an `EditorWork`, the `TextBox` with its text view (text, cursor, scroll and undo) and the `EditorState` (file, version it started from, baseline, save state, format, edited). The viewer presented again sees the held work (`ParkedEdit`: the file Edit was pressed on, the box, and its state) for whichever file it was (it pages there if it lists it; a rebuilt viewer starts on the file it was first opened on) and presents the editor, which takes the same text view back (`makeUIView` reuses it) and the state, with no fresh read; the keyboard comes back if it was up. Edit with work still waiting presents that work first: a new editor never opens over it. Open theirs parks a reload (`ParkedEdit.reload`): a rebuild during their read reads their version again, never the old baseline over the emptied box. Adopting parked work never starts a read: the editor's read task is keyed only on explicit read requests (the first open, Try again, Open theirs: `attempt`), never on which file the restored state names. A teardown without a close parks the work (`EditorParking.park`) and is not a close: `editorClosed` is not called, so a link held for a Discard or Keep editing question keeps waiting, and the restored editor asks again. Work is held only for the vault it was opened under and until access to the file is confirmed lost: `DriveStore.editAccess` (`EditAccess`, HushOSKit) is asked of the work's own file at the restore and at once on every family state or share listing (`checkEditorWork`), on screen or parked. A confirmed loss is the family removed (forked, refused, wiped) or the share that authorised the edit (`ParkedEdit.grant`, recorded from `editGrant` when the work is first held) gone from a listing that answered, or made a viewer's. An inconclusive refresh (the grant listed but its folder not opened, the guard unreadable, a failed listing or family check, a family folder not writable here right now, the same verdict that offers Edit) is `uncertain`: the text stays, and Save, Save on top and Save as a copy are off, with a line and Try again (`recheckEditorAccess`), until access is confirmed again. An editor on screen whose access is lost ends (`editorAccessEnded`); parked work that is lost, at a check or at the restore, finishes its close (`parkedEditorDropped`: emptied, `editorClosed`), so held links and notification intents go on. It is released by Close, Discard, Done, a family's removal and a save-and-close, and dropped with the session (`AppModel.sessionClosed`, `DriveStore.adopt`); a dropped box is emptied (`TextBox.forget`). A save on its way when the screens are torn down is cancelled; the text stays unsaved. Over the preview's limit, the side-by-side pane says so in place of the preview (no spinner, no old blocks, no sync) and comes back once the text fits. Tests: `EditorParkingTests`.
 - The editor's bar keeps Close and Save on screen while either pane scrolls: iOS 27 minimizes a navigation bar on scroll by default (`toolbarMinimizationBehavior`), and on the inner display the preview's scrolling took the bar away; the preview sets `.never` for the navigation bar (`barStaysOnScroll`).
 - The system's `UITextView`, monospaced at the reader's size, no autocorrection, capitals, smart punctuation, predictions or Writing Tools; a CR typed or pasted goes in as LF (`TextEditing.lineFeeds`), and a save writes it as the file's line break. No colouring on the phone. The text is read from the view only at Save (`TextBox`), never mirrored into SwiftUI state.
@@ -341,7 +345,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 ### Two-step sign-in
 
-`docs/two-step-design.md` 3 to 6 and 12. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/TwoStep.swift` the screens. Passkeys and security keys: `Passkeys.swift` in HushOSKit, `App/PasskeySheet.swift`, and their own list below.
+`docs/two-step-design.md` 3 to 6 and 12. `TwoStep.swift` in HushOSKit holds the requests and the rules; `App/Account/TwoStep.swift` the screens. Passkeys and security keys: `Passkeys.swift` in HushOSKit, `App/Account/PasskeySheet.swift`, and their own list below.
 
 - `Auth.startSignIn` sends `twoStep: 1` (`Auth.finishBody`) and returns `.signedIn` or `.step(PendingSignIn)`. What the password opened waits in `PendingSignIn`, in memory, for `Auth.answerStep`.
     - It is dropped six minutes after it arrived (`PendingSignIn.dropIn`, `AppModel.awaitStep`), counted on `ContinuousClock`, never against the step's `expiresAt`: a phone with a wrong date must still be able to sign in.
@@ -404,7 +408,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 #### Approve on another device
 
-`docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check, and what holds the answer sheet (`ApprovalAnswer`); `App/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
+`docs/two-step-design.md` 12 ("What was built (item 2)"). `DeviceApproval.swift` in HushOSKit holds the order of the requests and every check, and what holds the answer sheet (`ApprovalAnswer`); `App/Account/DeviceApproval.swift` the panel, the list and the sheet. The cryptography and every reply's reading are the core's.
 
 - Asking (`DeviceAsk`): the commitment goes first; the key and nonce are revealed only on `opened`, once; the step is answered only with an approved request (`answered`). `step-pending` keeps waiting and is never an error or a wrong answer.
     - At a sign-in whose default is another device, it is asked as the step opens. Otherwise only from a press: the step's button (Use another device) or choosing it under Use another way. Opening a form never sends a prompt. The form's own button then sends the change with the approved request (`StepDraft.approved`, good for its own token only).
@@ -450,7 +454,7 @@ Editing 1a and 1b (docs/editing-design.md, the web's `components/drive/viewers/t
 
 ### Sign-up
 
-- "Create an account" on the sign-in screen opens `SignupView` (`App/SignupView.swift`, a full-screen cover like `RecoveryView`). Steps:
+- "Create an account" on the sign-in screen opens `SignupView` (`App/Account/SignupView.swift`, a full-screen cover like `RecoveryView`). Steps:
     1. Email and the terms.
     2. The emailed link (`AppLink.register`, `/register/complete#verify=`, in the web's apple-app-site-association).
     3. Name and password (HushOSKit `SignupRules`: lengths in UTF-16 units as the web counts them, not Swift's `count`).
@@ -647,13 +651,13 @@ See `docs/identity-pq-design.md`.
 
 ## Sharing, links, reports and rotation
 
-| File                     | Role                                                                                                   |
-| ------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `HushOSKit/Shares.swift` | Mounts what others shared (identity opened once, `shareOpen`, the previous envelope during a rotation) |
-| `Links.swift`            | The owner's link routes, `PublicAPI` (no cookie) and `LinkVault` for a visitor                         |
-| `Reports.swift`          | Seals the node key to every operator                                                                   |
-| `Contacts.swift`         | Pins in the settings document; seals shares to a pinned contact                                        |
-| `Account.swift`          | Rotates the master key, reads the recovery key                                                         |
+| File                           | Role                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `HushOSKit/Drive/Shares.swift` | Mounts what others shared (identity opened once, `shareOpen`, the previous envelope during a rotation) |
+| `Links.swift`                  | The owner's link routes, `PublicAPI` (no cookie) and `LinkVault` for a visitor                         |
+| `Reports.swift`                | Seals the node key to every operator                                                                   |
+| `Contacts.swift`               | Pins in the settings document; seals shares to a pinned contact                                        |
+| `Account.swift`                | Rotates the master key, reads the recovery key                                                         |
 
 - Shares are suite 4 (4565 bytes). `ShareOpener` opens with `HybridPublicKey`: pinned Ed25519, served ML-DSA only if its digest is the pin's.
 - Shares are sealed only hybrid, to a verified or first-seen pin that agrees with the guard, with the KEM key whose digest the pin holds (`Vault.trustGrantee`).
@@ -687,7 +691,7 @@ See `docs/identity-pq-design.md`.
 
 ### Save to HushOS
 
-- Files: `HushOSKit/SaveTargets.swift`, `Share/SaveModel.swift`/`SaveView.swift` (Android's SaveTargets).
+- Files: `HushOSKit/Transfers/SaveTargets.swift`, `Share/SaveModel.swift`/`SaveView.swift` (Android's SaveTargets).
 - The picker lists Files' own folders, then each family this account is an accepted member of, under its name, with the folders this phone may write in.
 - Every family call goes through the session's own `FamilySync.shared(for:)` (none once the session ended). Only while the sheet's session is still the keychain's (`SaveTargets.stands`, `SessionEnded`).
 - Before sealing into a family folder, the family is checked again (`SaveTargets.open`).
@@ -714,7 +718,7 @@ See `docs/identity-pq-design.md`.
 
 ### File tools harness
 
-- `HushOSKit/ToolRuns.swift`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
+- `HushOSKit/Transfers/ToolRuns.swift`: what file tools run on (docs/file-tools-design.md, section 6). One PDF is its first user (below).
 - `ToolRuns.run` takes one run at a time (a second waits, told `waiting(behind:)`), runs the work on a `Thread` of its own with an 8 MiB stack under the core's `RunControl`, polls the watchdog each second and cancels the control when the calling task is cancelled.
 - A thread can't be killed: cancel and the watchdog end the run for the caller at once, a request in flight is cancelled (`StoreSource` waits in slices), and the work stops at its next core call (read, produce, progress, check). The next run starts only when that thread has returned.
 - Padding a cancelled run still owed comes back through `StoreSource`'s `drainLater` and is fetched in the background by `PaddingDrains.shared`: one drain at a time, at most 4 waiting, each giving up after 1 GiB (64 MiB on a metered network) or 10 minutes, the deadline cutting a request in flight; ciphertext only, no key. The run's slot is free at the cancel. `AccountStore.wipe` calls `PaddingDrains.shared.cancelAll()`. A reader takes `PaddingDrains.generation` when it is made and passes it to `enqueue`: padding handed over after a sign-out moved it is dropped.
@@ -730,17 +734,17 @@ See `docs/identity-pq-design.md`.
 
 ### One PDF (images to PDF)
 
-- Convert, then One PDF: `NodeMenu` (a `Convert` submenu on an image, for anyone but a viewer) and the selection bar's More (`Convert` submenu, enabled only when every item is an image a PDF takes). Both set `NodeAction.onePdf`, which opens `App/ImagesPdfSheet.swift`. Offered only where `store.mayEdit` allows (never on an image shared on its own); the sheet pins the destination folder when it opens, from the selection, and refuses images from more than one folder (`ImagesPdf.mixedFolders`).
+- Convert, then One PDF: `NodeMenu` (a `Convert` submenu on an image, for anyone but a viewer) and the selection bar's More (`Convert` submenu, enabled only when every item is an image a PDF takes). Both set `NodeAction.onePdf`, which opens `App/Viewers/ImagesPdfSheet.swift`. Offered only where `store.mayEdit` allows (never on an image shared on its own); the sheet pins the destination folder when it opens, from the selection, and refuses images from more than one folder (`ImagesPdf.mixedFolders`).
 - The sheet: a `Form` whose Order section is always in edit mode (drag handles), each row with VoiceOver actions Move earlier and Move later; Page size and Margins pickers; the name (the first image's with `.pdf` until typed); "Location, camera and other photo details are left out." Making it keeps the sheet up with its progress and Stop (asks first); the sheet can't be swiped away while it runs.
-- `HushOSKit/ImagesPdf.swift`: `ImagesPdf.make` starts a `SaveRun` (room first), reads each image in a `ToolRuns` run (the reader's address is awaited on the run's own thread, `blocking`; each image read in 8 MiB pieces by `readWhole`, since the core refuses one read past 64 MiB; a 401 under a read is thrown as itself through `SessionRefusals` and reaches `store.report`), builds the PDF with the core's `ImagesPdfWriter`, charges it to `ToolRuns.budget` as a `Lease` given back however the run ends, and saves it as a new file. Any failure or Stop cancels the save run, which removes what it made. `ToolRuns` turns a work's errors into `ToolFailed`, so a refusal is kept beside it (`Refusal`) and thrown as `ImagesPdfRefused` with the image's name.
+- `HushOSKit/Transfers/ImagesPdf.swift`: `ImagesPdf.make` starts a `SaveRun` (room first), reads each image in a `ToolRuns` run (the reader's address is awaited on the run's own thread, `blocking`; each image read in 8 MiB pieces by `readWhole`, since the core refuses one read past 64 MiB; a 401 under a read is thrown as itself through `SessionRefusals` and reaches `store.report`), builds the PDF with the core's `ImagesPdfWriter`, charges it to `ToolRuns.budget` as a `Lease` given back however the run ends, and saves it as a new file. Any failure or Stop cancels the save run, which removes what it made. `ToolRuns` turns a work's errors into `ToolFailed`, so a refusal is kept beside it (`Refusal`) and thrown as `ImagesPdfRefused` with the image's name.
 - Decoding (`ImagesPdfImages`): a JPEG is never decoded (the core cuts its metadata); anything else through ImageIO, upright (`kCGImageSourceCreateThumbnailWithTransform`), refused past `ImagesPdf.maxPixels` (the core's `imagesPdfMaxPixels(physical memory)`) from its header. A PNG or an image with a transparent pixel goes in as premultiplied RGBA; the rest as JPEG at 0.92. HEIC reads here.
 - Not yet: a row in the transfers list, and the interrupted-run prompt (`SaveRuns.interrupted` has no screen).
 - Tests: `ImagesPdfTests` (PDFKit reads the PDF back; an ImageIO-made HEIC with orientation 6; the shared fixtures in `e2e/fixtures/images`).
 
 ### Archives
 
-- A zip (by name, or `application/zip` / `application/x-zip-compressed`) opens in the viewer as its list (`App/ArchiveView.swift`, `ArchiveScreen`), never fetched whole: `Opener.open` skips the download for it and `FileViewer` shows `ArchiveScreen` in QuickLook's place. An earlier version of a zip still goes to QuickLook.
-- `HushOSKit/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and decodes only the entries asked for, by range, from its own listing.
+- A zip (by name, or `application/zip` / `application/x-zip-compressed`) opens in the viewer as its list (`App/Viewers/ArchiveView.swift`, `ArchiveScreen`), never fetched whole: `Opener.open` skips the download for it and `FileViewer` shows `ArchiveScreen` in QuickLook's place. An earlier version of a zip still goes to QuickLook.
+- `HushOSKit/Transfers/ArchiveSessions.swift`: `OpenArchive` over the core's `ZipArchiveSession` (crates/hushos-core/src/archive.rs), which lists from the central directory and decodes only the entries asked for, by range, from its own listing.
     - A zip kept on this phone (`Offline.localCopy`) opens from that copy (`ZipArchiveSession.openLocal` over `KeptCopy`, read by range into memory): it opens offline, and no other copy of its plaintext is made. Anything else reads the store.
     - On this phone: a kept zip whose row the session knows opens through `Opener` as any zip does (and then from its copy); one with only its offline record (kept from a share this session hasn't opened) opens in `KeptArchiveViewer` (`RecentsView.swift`, `ArchiveScreen(kept:name:)`, `OpenArchive.openKept`), never QuickLook.
     - A family's zip opens as it is now (`OpenArchive.currentRow`): its folder listed again first (no change feed), then the vault's row of that workspace unless it is older than the one tapped; that row names the version read and the crumb's name (`OpenArchive.row`).
@@ -941,7 +945,7 @@ Plan: `docs/groups-mobile-plan.md` (groups 1d). The web's counterparts are named
 
 ### Family screens
 
-- `App/Families.swift`.
+- `App/Families/Families.swift`.
 - Account's Families section (route 2): hidden on a server without families or with none. A pass within a minute is reused; pull to refresh always checks.
 - The family page shows:
     - the hard warning with Technical details;
@@ -986,7 +990,7 @@ See `docs/optional-verification.md` 3.2, 3.3, 6.8.
 - A relaunch finishes from the joins record.
 - A join committed in the core but not kept here is let go of (`forgetInCore`) before it runs again.
 - `/join` is parsed (`AppLinks`) and listed in the web's apple-app-site-association. Every release handles it; a build that didn't would dead-end the invitation, so none may ship.
-- Screens: `App/Join.swift`.
+- Screens: `App/Families/Join.swift`.
     - `InvitationSheet`: the web's words, Join and Not now.
     - `JoinSections`: "Waiting for Maya", which the family page shows for `waiting` and `unchecked`.
 - While a join screen is open, `DriveStore.familyJoining` keeps background checks off the family. `DriveStore.joined` adopts the joined state.
@@ -1044,7 +1048,7 @@ Counterparts: the web's `walks.ts` and runRotation's family case.
 - Only ok/already commit; the rest drop.
 - `FamilySync.releases` publishes every family let go of from any path (sync, reconcile, leave, join, background pass). `DriveStore.attachFamilies` shows them.
 - `FamilySync.familyWork` says whether the background check is wanted. A join wants it with nothing due.
-- The background check is a BGProcessingTask (`App/FamilyWalkTasks.swift`, `com.hushos.app.families.walks`) running `FamilySync.backgroundPass`:
+- The background check is a BGProcessingTask (`App/Families/FamilyWalkTasks.swift`, `com.hushos.app.families.walks`) running `FamilySync.backgroundPass`:
     - bound to the session's tag;
     - `current` asked before every step;
     - `checkStop` (expiry) only between batches;
@@ -1055,7 +1059,7 @@ Counterparts: the web's `walks.ts` and runRotation's family case.
 
 Counterparts: Android's #265, the web's outbox.ts and stageLocked. Needs #265's core change (a first-seen pin admits).
 
-- On the family page for route 2's `members` holders (`App/FamilyManaging.swift`; every decision is in `FamilyManage.swift`):
+- On the family page for route 2's `members` holders (`App/Families/FamilyManaging.swift`; every decision is in `FamilyManage.swift`):
     - Invite someone (route 11);
     - Waiting to join, with Not now (26) and Let them in;
     - Invitations, with Cancel invitation (13).
@@ -1106,7 +1110,7 @@ One staging gate for every roster call (`stageCall`, Android #281's).
 
 ### Managers: roles
 
-Counterparts: Android's #276. Files: `HushOSKit/FamilyRoles.swift`, `App/FamilyManaging.swift`.
+Counterparts: Android's #276. Files: `HushOSKit/Families/FamilyRoles.swift`, `App/Families/FamilyManaging.swift`.
 
 - A member's menu offers:
     - Let them manage the family / Stop them managing the family (`changeRole`, route 18, `roles_body`);
@@ -1300,7 +1304,7 @@ Files: `FamilyFiles.swift`, `Files/FamilyFileProvider.swift`. The PR (#282) list
 
 Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 
-- `HushOSKit/PushNotifications.swift`:
+- `HushOSKit/Platform/PushNotifications.swift`:
     - `PushRegistrar`: register, turn off, settle (a server whose relay changed) and forget, one at a time (`PushTurns`). `forget()` is synchronous (the wipe calls it) and moves a generation; a registration is written or put back only while its session is still signed in and the generation hasn't moved. Tests: `PushRegistrarTests`.
     - The registration (handle and `deleteSecret`) is the keychain's `push-registration`. Retired handles wait in `push-pending-deletions` (not account data) until their relay answers 204 or 404, retried at every start (`PushNotifications.retryDeletions`).
     - `catchUp()` lists `GET /api/notifications` when the app opens or comes back, signed in with notifications on; event ids shown go in `state/push-seen.json`.
@@ -1308,7 +1312,7 @@ Design: `docs/devices-design.md` 5; as built: `docs/push-relay-plan.md`, PR 4.
 - The words, the tag and which relay may be used are the core's (`notifications.rs`). Only `https://push.hushos.com`, or in a debug build `localhost`/`127.0.0.1`.
 - `apns-sandbox` on the simulator and when the profile's `aps-environment` is development; `apns` otherwise. A profile without `aps-environment` (a sideloaded build) hides the section (`PushNotifications.available`).
 - Every request refuses redirects (`RefuseRedirects`).
-- `HushOSKit/PushContent.swift`: a notice into notification content, the same for the extension and the catch-up.
+- `HushOSKit/Platform/PushContent.swift`: a notice into notification content, the same for the extension and the catch-up.
 - `App/PhonePush.swift`: the token (from `AppDelegate`, 30-second timeout), permission asked from the switch and once per account by itself (`askOnce` over HushOSKit's `PushAsk`: on the drive's screen once it settles after a sign-in, a sign-up's words, or the first start of a build that asks; never while a sheet, dialog or alert is presented, checked again after the server's settings are read; where iOS allows HushOS already the app asks in its own words instead (MainView's "Turn on notifications?" alert, `PhonePush.offer`), and only Turn on registers; the record in `state/push-asked.json`, wiped with the account, marks `asked`, `retry` (a yes whose registration failed, made at the next start) and `decided` (the switch, either way), changed only by compare-and-set; tests: `PushAskTests`), a renewal at every signed-in start, the catch-up, taps (`opening`), and Account's section (`NotificationSettings`, loaded by Account: a section that draws nothing never runs its own task).
 - `Notifications/NotificationService.swift`: writes the fallback first, then the notice; quiet fallback, written notices sound. The `push` category's hidden-preview placeholder is the fallback text (`TransferNotices.start`, which is also the delegate that routes taps and shows pushes in the foreground).
 - Testing: the simulator gets a real sandbox APNs token. `xcrun simctl push` delivers a payload but does not run the service extension (seen 2026-11-09 on iOS 27), so the extension's own path is only proven on a device.

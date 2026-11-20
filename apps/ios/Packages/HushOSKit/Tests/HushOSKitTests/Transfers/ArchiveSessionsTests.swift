@@ -9,11 +9,7 @@ import Testing
  * held only until close or sign-out, and the list's folders as the web builds them.
  */
 @Suite(.serialized) struct ArchiveSessionsTests {
-    /* This file sits seven folders down from the checkout's root. */
-    static let fixtures = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("e2e/fixtures/archives")
+    static let fixtures = Checkout.file("e2e/fixtures/archives")
 
     /* A fixture sealed as an upload stores it, served by `fetch`. */
     final class Sealed: ObjectSource, @unchecked Sendable {

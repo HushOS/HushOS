@@ -167,8 +167,8 @@ targets:
         sources:
             - path: FilesUI
             # The revealed password's overlay and caret, the same as the app's.
-            - path: App/RevealedPassword.swift
-              group: App
+            - path: App/Account/RevealedPassword.swift
+              group: App/Account
             # Apple's required-reason declarations (docs/release/privacy-answers.md): one manifest for every bundle.
             - path: Privacy/PrivacyInfo.xcprivacy
               buildPhase: resources
@@ -241,8 +241,8 @@ targets:
             # Each in the group the app files it under: Xcode 27.2 refuses a file reference in two groups.
             - path: App/Theme.swift
               group: App
-            - path: App/Glyphs.swift
-              group: App
+            - path: App/Drive/Glyphs.swift
+              group: App/Drive
             - path: ../../packages/tokens/generated/Alpine.swift
               group: App/Theme
         dependencies:

@@ -77,7 +77,7 @@ import kotlinx.coroutines.withContext
  *   screen, and nobody who only asked can work the code out. An approval alone turns nothing on.
  *
  * The screens are `ui/DeviceApprovalUi.kt`; nothing here draws anything, so all of it is tested
- * without one (`DeviceApprovalTest`). The twin of the iPhone app's `HushOSKit/DeviceApproval.swift`.
+ * without one (`DeviceApprovalTest`). The twin of the iPhone app's `HushOSKit/Account/DeviceApproval.swift`.
  */
 
 /* MARK: The requests */

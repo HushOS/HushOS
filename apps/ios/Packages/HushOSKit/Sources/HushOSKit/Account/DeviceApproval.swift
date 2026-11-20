@@ -22,7 +22,7 @@ import Observation
  *   sends it. So whoever turns the method on has read the approving device's screen, whatever
  *   either device called itself, and someone who only asked cannot work the code out.
  *
- * The screens are the app's (`App/DeviceApproval.swift`); nothing here draws anything, so all of
+ * The screens are the app's (`App/Account/DeviceApproval.swift`); nothing here draws anything, so all of
  * it is tested without one (`DeviceApprovalTests`).
  */
 

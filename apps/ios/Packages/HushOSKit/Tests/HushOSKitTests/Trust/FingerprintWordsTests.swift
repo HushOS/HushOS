@@ -23,8 +23,7 @@ struct FingerprintWordsTests {
 
     @Test func theListIsTheCoresList() throws {
         // A drifted copy would draw different words from the same key.
-        let here = URL(fileURLWithPath: #filePath)
-        let crate = here.deletingLastPathComponent().appendingPathComponent("../../../../../../crates/hushos-core/src/bip39-english.txt").standardized
+        let crate = Checkout.file("crates/hushos-core/src/bip39-english.txt")
         let core = try String(contentsOf: crate, encoding: .utf8).split(whereSeparator: \.isNewline).map(String.init)
         #expect(FingerprintWords.wordlist == core)
     }
