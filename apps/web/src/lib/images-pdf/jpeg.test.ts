@@ -7,7 +7,7 @@ import { contains, expected, fixture, leaks } from './pdf-reader.testkit';
 /*
  * The cutter against e2e/fixtures/images/expected.json, whose outputs make.py works out on its
  * own from the parts it labels kept or dropped. The core's cutter is held to the same file
- * (crates/hushos-core/src/images_pdf/tests.rs), so the two cut every fixture to the same bytes.
+ * (crates/hushos-core/src/tools/images_pdf/tests.rs), so the two cut every fixture to the same bytes.
  */
 
 const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');

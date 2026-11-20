@@ -20,7 +20,7 @@ import {
  * and node key the session opened, which of them a write may use, and, for a
  * group area, the version it is written under. Moved out of session.ts and
  * session-groups.ts unchanged so the Rust core has a twin to be held to
- * (crates/hushos-core/src/area_ledger.rs): the shared fixtures run the same
+ * (crates/hushos-core/src/groups/area_ledger.rs): the shared fixtures run the same
  * scenarios through both (scripts/area-ledger-fixtures.ts,
  * examples/area_ledger_fixtures.rs), and the fuzz target `area_ledger`
  * compares them on any sequence of steps.

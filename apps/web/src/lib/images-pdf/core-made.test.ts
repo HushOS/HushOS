@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { fixture, imageBox, leaks, looksUpright, readPdf } from './pdf-reader.testkit';
 
 /*
- * The phones' PDF, as the core's writer makes it (crates/hushos-core/src/images_pdf.rs; a core
+ * The phones' PDF, as the core's writer makes it (crates/hushos-core/src/tools/images_pdf.rs; a core
  * test holds e2e/fixtures/images/core-made.pdf to what the writer makes now), opened by pdf.js.
  */
 

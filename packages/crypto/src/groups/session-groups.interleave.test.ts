@@ -22,7 +22,7 @@ import type { SignedGroupStatement } from './groups';
  * verified and before it commits, a wipe paused while it works out the floor's
  * guard, with another acceptance or a wipe run whole in between. Serial
  * scenarios never reach these orders; the core's twins are the
- * `interleaved_*` tests in crates/hushos-core/src/device_record.rs.
+ * `interleaved_*` tests in crates/hushos-core/src/account/device_record.rs.
  */
 
 // Each signature verified once, for real (see pq-memo-testkit.ts).

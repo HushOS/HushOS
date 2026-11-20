@@ -8,7 +8,7 @@ import type { GroupPin } from './pins';
  * pins acceptance takes as marks and the contact pins an admission, the
  * admin's join code and an admission's resend read, as the worker keeps them
  * from the document it opened itself (session.ts's settingsOpen). The twin of
- * crates/hushos-core/src/ledger_settings.rs, which opens the served envelopes
+ * crates/hushos-core/src/groups/ledger_settings.rs, which opens the served envelopes
  * in the core's AreaLedger; the shared fixtures run both
  * (settings-areas-testkit.ts, tests/common/settings_areas.rs).
  */

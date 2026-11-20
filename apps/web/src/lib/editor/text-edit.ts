@@ -17,7 +17,7 @@ import { extensionOf, previewKindOf } from '@/lib/viewers/previews';
  * writes it back in the file's encoding and line breaks, and a text still as it opened is its
  * original bytes again.
  *
- * The phones ask the same of the core (crates/hushos-core/src/text_edit.rs), and all are held to
+ * The phones ask the same of the core (crates/hushos-core/src/tools/text_edit.rs), and all are held to
  * fixtures/text-edit-cases.json.
  */
 

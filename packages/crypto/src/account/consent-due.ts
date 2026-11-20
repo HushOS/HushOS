@@ -44,7 +44,7 @@ export function namesSide(envelope: IdentityEnvelope, link: SuccessionLink, side
  * no ML-DSA key to consent with (the server answers it `not-upgraded`). Nor is
  * a link whose keys are not the account's own envelopes. Nothing is verified
  * here: the worker's identityConsent checks what it signs. The twin is the
- * Rust core's links_needing_consent (crates/hushos-core/src/consent.rs);
+ * Rust core's links_needing_consent (crates/hushos-core/src/account/consent.rs);
  * apps/web/src/lib/trust/consent-backfill.ts calls this one. Types only from
  * identity.ts, so the web's main thread imports it without libsodium.
  */

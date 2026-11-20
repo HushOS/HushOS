@@ -196,7 +196,7 @@ type Notice = { title: string; body: string; url: string };
 /*
  * Two-step sign-in's notices (docs/two-step-design.md 7): each says what its email's subject
  * says, and never names a device or a method anyone named. The phones write the same words
- * (crates/hushos-core/src/notifications.rs, `push_notice`).
+ * (crates/hushos-core/src/account/notifications.rs, `push_notice`).
  */
 const TWO_STEP_NOTICES = {
     'two-step-on': ['Two-step sign-in', 'Two-step sign-in is on.'],

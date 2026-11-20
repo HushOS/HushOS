@@ -6,7 +6,7 @@ import { joinCheck } from './join-check';
  * The join's escalation (docs/groups-design.md 3.2), held by the crypto
  * worker per family (session-groups.ts: groupJoinPreview, groupJoinCheck)
  * and twin of the Rust core's join book
- * (crates/hushos-core/src/join.rs), which the phones run:
+ * (crates/hushos-core/src/groups/join.rs), which the phones run:
  *
  * - a code hides two positions drawn from the crypto RNG when it is first
  *   shown, and keeps them until a match (a family keeps at most 64 codes,

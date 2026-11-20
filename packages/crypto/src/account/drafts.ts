@@ -6,7 +6,7 @@ import { decode, encode } from '../primitives/keys';
 
 /*
  * An editor's unsaved text, sealed on the device it was typed on (docs/editing-design.md 3,
- * "Draft"; the twin of crates/hushos-core/src/drafts.rs, held to it by
+ * "Draft"; the twin of crates/hushos-core/src/account/drafts.rs, held to it by
  * crates/hushos-core/fixtures/drafts.json).
  *
  * Key: HKDF-SHA-256 of the account root, salt 32 zero bytes, info the compact JSON

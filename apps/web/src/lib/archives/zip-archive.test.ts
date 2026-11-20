@@ -20,7 +20,7 @@ import {
 
 /*
  * Every fixture of e2e/fixtures/archives against the outcomes in its expected.json, the table
- * the Rust core is held to as well (crates/hushos-core/src/archive.rs): what lists, what each
+ * the Rust core is held to as well (crates/hushos-core/src/tools/archive.rs): what lists, what each
  * entry is, and what reading it meets, with zip.js doing the inflating as it does in the worker.
  */
 

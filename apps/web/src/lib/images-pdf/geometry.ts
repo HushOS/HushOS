@@ -6,7 +6,7 @@
  *
  * The matrix draws the image as stored, so an EXIF orientation other than upright is applied
  * by rotating or flipping on the page, never by re-encoding. Twin of `page_layout` in
- * crates/hushos-core/src/images_pdf.rs; both are held to e2e/fixtures/images/geometry.json.
+ * crates/hushos-core/src/tools/images_pdf.rs; both are held to e2e/fixtures/images/geometry.json.
  */
 
 export type PageSize = 'fit' | 'a4' | 'letter';

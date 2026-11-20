@@ -21,7 +21,7 @@ import {
  * A record's verdict in a family folder, and how a copy out of one signs it:
  * the glue between the group session's chain and the readers in group-trust.ts
  * (design 2.8). Moved out of session-groups.ts unchanged so the Rust core has
- * a twin to be held to (crates/hushos-core/src/group_verdicts.rs, which
+ * a twin to be held to (crates/hushos-core/src/groups/group_verdicts.rs, which
  * AreaLedger::record_verdict and AreaLedger::copy_form run): the shared
  * fixtures read the nodes each twin rotated with the other's verdicts
  * (area-ledger fixtures, `rotations`).

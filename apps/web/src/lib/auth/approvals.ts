@@ -6,7 +6,7 @@ import { authClient } from '@/lib/auth/auth-client';
 /*
  * Approving on another device, in the web app (docs/two-step-design.md 12): the requests this
  * browser may answer, and the words its prompt says. The phones say the same words
- * (`approval_asks` in crates/hushos-core/src/two_step.rs).
+ * (`approval_asks` in crates/hushos-core/src/account/two_step.rs).
  */
 
 /*

@@ -43,7 +43,7 @@ import { decode, encode } from '../primitives/keys';
  * Encodings: the labels and the purpose are ASCII; ids are lowercase UUIDs, 36 characters; the
  * token digest is the SHA-256 of the step token's UTF-8 bytes; keys, nonce and digest are 32
  * bytes each. Every field but the purpose has a fixed length, so plain concatenation reads one
- * way only. `packages/db/src/signatures.ts` and `crates/hushos-core/src/device_approval.rs`
+ * way only. `packages/db/src/signatures.ts` and `crates/hushos-core/src/account/device_approval.rs`
  * build the same bytes; the fixtures hold the three to each other.
  */
 
