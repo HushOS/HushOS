@@ -1,0 +1,25 @@
+apps/web/src/lib/billing/checkout-return.test.ts
+  s_c60e24772e04af::t_788502a62bb4b0 3
+apps/web/src/lib/families/key-change-words.test.ts
+  s_c60e24772e04af::t_8530ef4553789c 3-4
+apps/web/src/lib/groups/group-write-floor.test.ts
+  s_c60e24772e04af::t_2041448c51fc48 5,7
+apps/web/src/lib/trust/family-guard.test.ts
+  s_c60e24772e04af::t_594bb895e43eb0 13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e0b32ecc38a4ab402d55afcd801550fb8b14619c",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
