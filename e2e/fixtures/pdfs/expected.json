@@ -385,6 +385,34 @@
             "form": false,
             "layers": 0,
             "hiddenLayers": 0
+        },
+        {
+            "file": "scans.pdf",
+            "note": "Three scans sharing one /Resources: a page copied alone brings only its own image.",
+            "sha256": "76b1a392704af364e45ef09d7f29d234fdbc85e7cb467194350866fcb7d3cd55",
+            "outcome": "ok",
+            "pages": [
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                },
+                {
+                    "width": 612,
+                    "height": 792,
+                    "rotate": 0
+                }
+            ],
+            "signed": false,
+            "outline": false,
+            "form": false,
+            "layers": 0,
+            "hiddenLayers": 0
         }
     ],
     "operations": [
@@ -427,7 +455,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -470,7 +500,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -503,7 +535,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -536,7 +570,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 },
                 {
                     "pages": [
@@ -554,7 +590,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -577,7 +615,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 },
                 {
                     "pages": [
@@ -595,7 +635,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -628,7 +670,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -721,7 +765,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -794,7 +840,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -817,7 +865,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -860,7 +910,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -893,7 +945,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -916,7 +970,9 @@
                         }
                     ],
                     "layers": 2,
-                    "hiddenLayers": 1
+                    "hiddenLayers": 1,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -949,7 +1005,9 @@
                         }
                     ],
                     "layers": 4,
-                    "hiddenLayers": 2
+                    "hiddenLayers": 2,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -972,7 +1030,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -995,7 +1055,9 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
                 }
             ]
         },
@@ -1028,7 +1090,109 @@
                         }
                     ],
                     "layers": 0,
-                    "hiddenLayers": 0
+                    "hiddenLayers": 0,
+                    "present": [],
+                    "absent": []
+                }
+            ]
+        },
+        {
+            "name": "split the scans per page",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-ONE-81fa"],
+                    "absent": ["HUSHOS-SCAN-TWO-29cd", "HUSHOS-SCAN-THREE-c04e"]
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 1,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-TWO-29cd"],
+                    "absent": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-THREE-c04e"]
+                },
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-THREE-c04e"],
+                    "absent": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-TWO-29cd"]
+                }
+            ]
+        },
+        {
+            "name": "remove the second scan",
+            "outputs": [
+                {
+                    "pages": [
+                        {
+                            "file": "scans.pdf",
+                            "page": 0,
+                            "rotate": 0
+                        },
+                        {
+                            "file": "scans.pdf",
+                            "page": 2,
+                            "rotate": 0
+                        }
+                    ],
+                    "expected": [
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        },
+                        {
+                            "width": 612,
+                            "height": 792,
+                            "rotate": 0
+                        }
+                    ],
+                    "layers": 0,
+                    "hiddenLayers": 0,
+                    "present": ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-THREE-c04e"],
+                    "absent": ["HUSHOS-SCAN-TWO-29cd"]
                 }
             ]
         }

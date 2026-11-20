@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PDFArray, PDFDict, PDFName } from '@cantoo/pdf-lib';
-import { describe, expect, test } from 'vitest';
+import { PDFArray, PDFDict, PDFDocument, PDFName } from '@cantoo/pdf-lib';
+import { usedNames, type Category } from './content';
+import { describe, expect, test, vi } from 'vitest';
 import expected from '../../../../../e2e/fixtures/pdfs/expected.json';
 import { buildPdf, PdfRefused, readPdf, rotationOf, type SourcePdf } from './structure';
 import { pdfLayers, pdfPages } from './pdf-reader.testkit';
@@ -123,6 +124,11 @@ describe('building every operation in expected.json', () => {
                 const flags = (await readPdf(made)).flags;
                 expect(flags).toEqual({ signed: false, outline: false, form: false });
                 expect(contains(made, text('/ObjStm'))).toBe(false);
+                // The image bytes of the pages kept are there; those of the pages left out are not.
+                for (const canary of output.present)
+                    expect(contains(made, text(canary)), `${canary} missing`).toBe(true);
+                for (const canary of output.absent)
+                    expect(contains(made, text(canary)), `${canary} carried`).toBe(false);
                 // Layers come along, those off still off: by this engine and by pdf.js.
                 const layers = { layers: output.layers, hiddenLayers: output.hiddenLayers };
                 expect(layerCount(await readPdf(made))).toEqual(layers);
@@ -173,11 +179,57 @@ test('the walk refuses before it parses past the page cap, and too-many-pages is
     await expect(readPdf(fixture('plain.pdf'), { maxPages: 3 })).resolves.toBeTruthy();
 });
 
-test('an output past the size limit is refused, never handed back', async () => {
-    const source = await readPdf(fixture('plain.pdf'));
+test('an output past the size limit is refused as it is copied, before it is ever saved whole', async () => {
+    const source = await readPdf(fixture('scans.pdf'));
+    const save = vi.spyOn(PDFDocument.prototype, 'save');
+    // The first scan's image alone is 20 bytes: a limit below it stops the copy.
     await expect(
         buildPdf([source], [{ source: 0, page: 0, rotate: 0 }], { maxBytes: 100 }),
     ).rejects.toEqual(new PdfRefused('too-large'));
+    expect(save).not.toHaveBeenCalled();
+    save.mockRestore();
+});
+
+test('a page whose content can’t be decoded is refused, never copied with every shared resource', async () => {
+    const pdf = new TextEncoder().encode(
+        [
+            '%PDF-1.7',
+            '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj',
+            '2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R /Im2 6 0 R >> >> >> endobj',
+            '3 0 obj << /Type /Page /Parent 2 0 R /Contents 7 0 R >> endobj',
+            '4 0 obj << /Type /Page /Parent 2 0 R /Contents 8 0 R >> endobj',
+            '5 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\nONE!\nendstream endobj',
+            '6 0 obj << /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\nTWO!\nendstream endobj',
+            '7 0 obj << /Filter /JBIG2Decode /Length 7 >>\nstream\n/Im1 Do\nendstream endobj',
+            '8 0 obj << /Length 7 >>\nstream\n/Im2 Do\nendstream endobj',
+            'trailer << /Root 1 0 R >>',
+            '%%EOF',
+        ].join('\n'),
+    );
+    const source = await readPdf(pdf);
+    await expect(buildPdf([source], [{ source: 0, page: 0, rotate: 0 }])).rejects.toEqual(
+        new PdfRefused('damaged'),
+    );
+    const made = await buildPdf([source], [{ source: 0, page: 1, rotate: 0 }]);
+    expect(contains(made, text('TWO!'))).toBe(true);
+    expect(contains(made, text('ONE!'))).toBe(false);
+});
+
+test('a content stream names only what it draws, never a name inside a string, array, dictionary or image', () => {
+    const used = usedNames(
+        text(
+            '/F1 12 Tf (not /Im9 Do) Tj [/Im8] TJ /OC << /Im7 1 >> BDC /P1 scn /Sh1 sh /GS1 gs /CS1 cs /DeviceRGB CS ' +
+                'q /Im1 Do Q BI /W 1 /H 1 /CS /CS2 /BPC 8 ID \u0000/Im6 Do EI /MC0 BDC EMC',
+        ),
+    );
+    const names = (category: Category) => [...(used.get(category) ?? [])].sort();
+    expect(names('XObject')).toEqual(['Im1']);
+    expect(names('Font')).toEqual(['F1']);
+    expect(names('Pattern')).toEqual(['P1']);
+    expect(names('Shading')).toEqual(['Sh1']);
+    expect(names('ExtGState')).toEqual(['GS1']);
+    expect(names('ColorSpace')).toEqual(['CS1', 'CS2']);
+    expect(names('Properties')).toEqual([]);
 });
 
 test('a rotation that is not a whole quarter turn reads as none; negative turns count round', () => {

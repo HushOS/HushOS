@@ -185,6 +185,13 @@ fn every_operation_builds_what_expected_json_says() {
                 assert!(!contains(&made, key), "{name}: {}", String::from_utf8_lossy(key));
             }
             assert!(made.starts_with(b"%PDF-1.7"), "{name}");
+            // The image bytes of the pages kept are there; those of the pages left out are not.
+            for canary in output["present"].as_array().unwrap() {
+                assert!(contains(&made, canary.as_str().unwrap().as_bytes()), "{name}: {canary} missing");
+            }
+            for canary in output["absent"].as_array().unwrap() {
+                assert!(!contains(&made, canary.as_str().unwrap().as_bytes()), "{name}: {canary} carried");
+            }
             // Layers come along, those off still off.
             let again =
                 super::read(&made, PDF_TOOLS_MAX_PAGES as usize, PDF_TOOLS_MAX_OUTPUT_BYTES, &control())
@@ -239,11 +246,13 @@ fn a_reference_cycle_and_deep_nesting_end_and_are_bounded() {
     let made = writer.build(vec![PdfPagePlan { source: 0, page: 0, rotate: 90 }], control()).unwrap();
     let doc = Document::load_mem(&made).unwrap();
     let page = doc.get_dictionary(doc.get_pages()[&1]).unwrap();
-    let resources = page.get(b"Resources").unwrap().as_reference().unwrap();
-    let hush = doc.get_dictionary(resources).unwrap().get(b"Hush").unwrap().as_reference().unwrap();
+    // The page's resources are its own, cut to what it draws; what they reach comes as the cycle it was.
+    let resources = page.get(b"Resources").unwrap().as_dict().unwrap();
+    let hush = resources.get(b"Hush").unwrap().as_reference().unwrap();
     let back = doc.get_dictionary(hush).unwrap();
-    assert_eq!(back.get(b"Back").unwrap().as_reference().unwrap(), resources);
     assert_eq!(back.get(b"Self").unwrap().as_reference().unwrap(), hush);
+    let original = back.get(b"Back").unwrap().as_reference().unwrap();
+    assert_eq!(doc.get_dictionary(original).unwrap().get(b"Hush").unwrap().as_reference().unwrap(), hush);
     // The tree's cycle, 300 levels and 50,000 brackets: refused, never walked forever or recursed into.
     for name in ["tree-cycle.pdf", "deep-tree.pdf", "deep-array.pdf"] {
         assert_eq!(
@@ -412,4 +421,117 @@ fn a_hidden_annotation_is_not_drawn_and_a_scaled_one_fits_its_rect() {
         drawn.get_dictionary(drawn.get_pages()[&1]).unwrap().get(b"Rotate").unwrap().as_i64().unwrap(),
         90
     );
+}
+
+#[test]
+fn a_content_stream_names_only_what_it_draws() {
+    let mut used = Used::default();
+    // Names inside strings, arrays, dictionaries and inline image data are not operands.
+    let content = b"/F1 12 Tf (not /Im9 Do) Tj [/Im8] TJ /OC << /Im7 1 >> BDC /P1 scn /Sh1 sh /GS1 gs /CS1 cs /DeviceRGB CS \
+        q /Im1 Do Q BI /W 1 /H 1 /CS /CS2 /BPC 8 ID \x00/Im6 Do EI /MC0 BDC EMC";
+    scan_content(content, &mut used);
+    let names = |category: &[u8]| {
+        let mut names: Vec<String> = used
+            .names
+            .get(category)
+            .map(|set| set.iter().map(|n| String::from_utf8_lossy(n).into_owned()).collect())
+            .unwrap_or_default();
+        names.sort();
+        names
+    };
+    assert_eq!(names(b"XObject"), vec!["Im1"]);
+    assert_eq!(names(b"Font"), vec!["F1"]);
+    assert_eq!(names(b"Pattern"), vec!["P1"]);
+    assert_eq!(names(b"Shading"), vec!["Sh1"]);
+    assert_eq!(names(b"ExtGState"), vec!["GS1"]);
+    assert_eq!(names(b"ColorSpace"), vec!["CS1", "CS2"]);
+    assert_eq!(names(b"Properties"), Vec::<String>::new());
+}
+
+#[test]
+fn a_page_whose_content_cannot_be_decoded_is_refused_not_copied_with_everything() {
+    // Its shared resources hold another page's image; its content claims a filter nothing decodes.
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 100 100] /Resources << /XObject << /Im1 5 0 R /Im2 6 0 R >> >> >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R >>",
+        "<< /Type /Page /Parent 2 0 R /Contents 8 0 R >>",
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\nONE!\nendstream",
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\nTWO!\nendstream",
+        "<< /Filter /JBIG2Decode /Length 7 >>\nstream\n/Im1 Do\nendstream",
+        "<< /Length 7 >>\nstream\n/Im2 Do\nendstream",
+    ]);
+    let writer = PdfPagesWriter::new();
+    writer.add(bytes, control()).unwrap();
+    assert_eq!(
+        writer.build(vec![PdfPagePlan { source: 0, page: 0, rotate: 0 }], control()),
+        Err(PdfToolsError::Refused { code: "damaged".into() })
+    );
+    // The other page decodes, and carries only its own image.
+    let made = writer.build(vec![PdfPagePlan { source: 0, page: 1, rotate: 0 }], control()).unwrap();
+    assert!(contains(&made, b"TWO!") && !contains(&made, b"ONE!"));
+}
+
+#[test]
+fn an_output_past_its_limit_is_refused_while_it_is_written() {
+    let mut sink = CappedSink { bytes: Vec::new(), max: 10, over: false };
+    use std::io::Write as _;
+    sink.write_all(b"12345").unwrap();
+    assert!(sink.write_all(b"678901").is_err());
+    // Refused at the write that would pass it: nothing past the limit held, and the rest let go.
+    assert!(sink.over && sink.bytes.is_empty());
+}
+
+#[test]
+fn an_annotation_on_a_layer_that_is_off_is_not_drawn() {
+    // Groups 7 (on) and 8 (off). Annotations: on 7; on 8; on an OCMD AllOn over both; on an OCMD AnyOn over both;
+    // on an OCMD with a visibility expression.
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [7 0 R 8 0 R] /D << /OFF [8 0 R] >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] /Annots [4 0 R 5 0 R 9 0 R 10 0 R 11 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /OC 7 0 R /Rect [0 0 10 10] /AP << /N 6 0 R >> >>",
+        "<< /Type /Annot /Subtype /Square /OC 8 0 R /Rect [20 0 30 10] /AP << /N 6 0 R >> >>",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 3 >>\nstream\n0 g\nendstream",
+        "<< /Type /OCG /Name (On) >>",
+        "<< /Type /OCG /Name (Off) >>",
+        "<< /Type /Annot /Subtype /Square /OC 12 0 R /Rect [40 0 50 10] /AP << /N 6 0 R >> >>",
+        "<< /Type /Annot /Subtype /Square /OC 13 0 R /Rect [60 0 70 10] /AP << /N 6 0 R >> >>",
+        "<< /Type /Annot /Subtype /Square /OC 14 0 R /Rect [80 0 90 10] /AP << /N 6 0 R >> >>",
+        "<< /Type /OCMD /OCGs [7 0 R 8 0 R] /P /AllOn >>",
+        "<< /Type /OCMD /OCGs [7 0 R 8 0 R] >>",
+        "<< /Type /OCMD /OCGs [7 0 R] /VE [/Not 7 0 R] >>",
+    ]);
+    let writer = PdfPagesWriter::new();
+    writer.add(bytes, control()).unwrap();
+    let drawn = Document::load_mem(
+        &writer.drawable(PdfPagePlan { source: 0, page: 0, rotate: 0 }, control()).unwrap(),
+    )
+    .unwrap();
+    let content = String::from_utf8(drawn.get_page_content(drawn.get_pages()[&1])).unwrap();
+    // Only the one on the visible group, and the AnyOn one: at x 0 and x 60.
+    assert_eq!(content.matches(" Do Q").count(), 2, "{content}");
+    assert!(content.contains("0.0000 0.0000 cm /HushAnnot0 Do Q"), "{content}");
+    assert!(content.contains("60.0000 0.0000 cm /HushAnnot1 Do Q"), "{content}");
+}
+
+#[test]
+fn a_flattened_annotation_never_takes_a_name_the_page_uses() {
+    let bytes = pdf_of(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 600] /Resources << /XObject << /HushAnnot0 5 0 R >> >> /Contents 6 0 R /Annots [4 0 R] >>",
+        "<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /AP << /N 7 0 R >> >>",
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\nMINE\nendstream",
+        "<< /Length 14 >>\nstream\n/HushAnnot0 Do\nendstream",
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 10 10] /Length 3 >>\nstream\n0 g\nendstream",
+    ]);
+    let writer = PdfPagesWriter::new();
+    writer.add(bytes, control()).unwrap();
+    let made = writer.drawable(PdfPagePlan { source: 0, page: 0, rotate: 0 }, control()).unwrap();
+    let drawn = Document::load_mem(&made).unwrap();
+    let content = String::from_utf8(drawn.get_page_content(drawn.get_pages()[&1])).unwrap();
+    assert!(content.contains("/HushAnnot1 Do Q"), "{content}");
+    // The page's own image keeps its name.
+    assert!(contains(&made, b"MINE"));
 }

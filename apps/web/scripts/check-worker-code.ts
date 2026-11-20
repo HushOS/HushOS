@@ -27,7 +27,7 @@ const KNOWN = [
     /\/archive\.tool-worker-/,
     /\/images-pdf\.tool-worker-/,
     /\/pdf-tools\.tool-worker-/,
-    /\/pdf-render\.worker-/,
+    /\/pdf-render\.tool-worker-/,
     /\/pdf\.worker\.min-/,
     /^\/download-sw\.js$/,
     /^\/push-sw\.js$/,

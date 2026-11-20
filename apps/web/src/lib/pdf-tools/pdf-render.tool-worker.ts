@@ -1,22 +1,42 @@
-import type * as Pdfjs from 'pdfjs-dist';
-import { pdfAssetOptions } from '@/lib/viewers/pdf-assets';
+import './pdf-window-shim';
+import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?tool-worker';
+import './pdf-window-shim-end';
+import * as pdfjs from 'pdfjs-dist/build/pdf.mjs?tool-worker';
 import { serveTool, ToolError, type RangeSource } from '@/lib/tools/worker';
 import { THUMBNAIL } from '@/lib/images-pdf/protocol';
 import { IMAGES_MAX_PIXELS, type RenderInput, type RenderSummary } from './protocol';
 
 /*
  * Save as images (docs/file-tools-design.md, feature (c)): each planned page rendered by pdf.js and
- * encoded as PNG or JPEG, handed back one at a time under the tool harness (the watchdog, the
- * budget, cancel by terminate). pdf.js keeps its own worker, which this one starts as the thumbnail
- * worker does, so this is a module worker under the app's policy rather than a tools worker: pdf.js
- * fetches its decoders, fonts and CMaps from this origin (lib/viewers/pdf-assets.ts), never anything
- * a PDF names. It holds no keys and reads its sources only through the page.
+ * encoded as PNG or JPEG, handed back one at a time under the tool harness (the watchdog, the budget,
+ * cancel by terminate). A tools worker: its file is `*.tool-worker.ts`, so it runs under the policy that
+ * names no source (no fetch, no import, no worker of its own), bundled as one file, holding no keys and
+ * reading its sources only through the page. So pdf.js runs here whole, on this thread: its worker code
+ * is handed to it as `globalThis.pdfjsWorker` (it starts no worker), its decoders, fonts and CMaps come
+ * from the page in the start message (`files`, read by AssetFiles), and the canvases it makes for itself
+ * are OffscreenCanvases.
  *
  * One page bitmap at a time (section 3, "Memory"). A page past IMAGES_MAX_PIXELS at the chosen
  * resolution is refused as `too-many-pixels:<index>` before it is drawn. The canvas's encoder hands
  * back a Blob, read at once into the result; it is no larger than the image, the exposure One PDF's
  * decoder already has (decode.ts).
  */
+
+(globalThis as { pdfjsWorker?: unknown }).pdfjsWorker = pdfjsWorker;
+
+/* What the page sent: pdf.js's assets by their path under its folder ("standard_fonts/FoxitSans.pfb"). */
+let assets: Record<string, ArrayBuffer> = {};
+
+/* pdf.js's decoders, fonts and CMaps, from the files the page sent; this worker may fetch nothing. */
+class AssetFiles {
+    constructor(private readonly folders: Record<string, string | null>) {}
+    async fetch({ kind, filename }: { kind: string; filename: string }) {
+        const folder = this.folders[kind];
+        const file = folder ? assets[`${folder}${filename}`] : undefined;
+        if (!file) throw new Error(`No ${kind} file ${filename} was sent.`);
+        return new Uint8Array(file.slice(0));
+    }
+}
 
 const PIECE = 8 * 1024 * 1024;
 
@@ -76,42 +96,38 @@ class OffscreenCanvasFactory {
     }
 }
 
-let pdfjsModule: Promise<typeof Pdfjs> | null = null;
-function loadPdfjs() {
-    pdfjsModule ??= Promise.all([
-        import('pdfjs-dist'),
-        import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
-    ]).then(([pdfjs, worker]) => {
-        /*
-         * pdf.js's own worker, started here and handed to it as its port. Left to start one itself,
-         * pdf.js looks for `window`, finds none in a worker, and falls back to running its worker
-         * code on this thread, which then answers this worker's own messages: the run's protocol
-         * would hear pdf.js and fail. Terminating this worker ends that one with it.
-         */
-        pdfjs.GlobalWorkerOptions.workerPort = new Worker(worker.default, {
-            type: 'module',
-            name: 'pdf.js',
-        });
-        return pdfjs;
-    });
-    return pdfjsModule;
-}
-
 serveTool<RenderInput, RenderSummary>(async (input, context) => {
-    const pdfjs = await loadPdfjs();
+    assets = context.files;
     const total = input.pages.length + context.sources.length;
     let done = 0;
-    const documents: Pdfjs.PDFDocumentProxy[] = [];
-    const tasks: Pdfjs.PDFDocumentLoadingTask[] = [];
+    const documents: pdfjs.PDFDocumentProxy[] = [];
+    const tasks: pdfjs.PDFDocumentLoadingTask[] = [];
     try {
         for (const source of context.sources) {
             const bytes = await readWhole(source, () => context.progress(done, total));
             source.close?.();
             const task = pdfjs.getDocument({
-                // pdf.js moves the buffer to its own worker.
                 data: bytes,
-                ...pdfAssetOptions(self.location.origin),
-                useWorkerFetch: true,
+                // Fetched by AssetFiles from what the page sent, under these folder names.
+                BinaryDataFactory: class extends AssetFiles {
+                    constructor() {
+                        super({
+                            cMapUrl: 'cmaps/',
+                            standardFontDataUrl: 'standard_fonts/',
+                            wasmUrl: 'wasm/',
+                        });
+                    }
+                },
+                cMapUrl: 'cmaps/',
+                cMapPacked: true,
+                standardFontDataUrl: 'standard_fonts/',
+                wasmUrl: 'wasm/',
+                useWorkerFetch: false,
+                // Glyphs drawn as paths: no FontFace, nothing loaded by name.
+                disableFontFace: true,
+                useSystemFonts: false,
+                // No rendering worker of pdf.js's own: none may be started here.
+                disableWorkerRendering: true,
                 stopAtErrors: false,
                 // Canvases pdf.js makes for itself (a transparency group, a mask): this worker has no document.
                 CanvasFactory: OffscreenCanvasFactory,

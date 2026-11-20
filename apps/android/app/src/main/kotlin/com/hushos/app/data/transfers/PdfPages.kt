@@ -311,7 +311,9 @@ object PdfPages {
         val stillOn = { job?.isActive != false }
         val total = files.sumOf { it.size ?: 0L }
         val sources = files.map { (writer.copySources(it) as SaveSources.From).sources }
-        val signing = { pages: List<PdfPagePlan> -> SaveSources.From(pages.map { it.source.toInt() }.toSortedSet().flatMap { sources[it] }) }
+        // Every result signed as the weakest of all the PDFs read for it, as the web signs them: never as
+        // stronger than the weakest PDF the work held, whichever pages it was asked for.
+        val signing = { _: List<PdfPagePlan> -> SaveSources.From(sources.flatten()) }
         val names = files.map { it.name }
         when (choice) {
             is Choice.Images -> {

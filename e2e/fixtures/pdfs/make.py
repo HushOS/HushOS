@@ -545,6 +545,42 @@ def transparency():
     return pdf.write("/Root 1 0 R /Info 4 0 R"), [page_entry(LETTER)]
 
 
+SCAN_CANARIES = ["HUSHOS-SCAN-ONE-81fa", "HUSHOS-SCAN-TWO-29cd", "HUSHOS-SCAN-THREE-c04e"]
+
+
+def scans():
+    """Three scanned pages sharing one /Resources from their tree, each image's bytes a canary of its own.
+    Pages 1 and 2 draw their image; page 3 draws a form that draws the third. A page copied alone must
+    bring its own image and nothing of the others'."""
+    pdf = Pdf()
+    pdf.add(1, "<< /Type /Catalog /Pages 2 0 R >>")
+    pdf.add(
+        2,
+        f"<< /Type /Pages /Kids [10 0 R 12 0 R 14 0 R] /Count 3 /MediaBox [0 0 {LETTER[0]} {LETTER[1]}] "
+        "/Resources << /Font << /F1 3 0 R >> /XObject << /Im1 20 0 R /Im2 21 0 R /Im3 22 0 R /Fm1 23 0 R >> >> >>",
+    )
+    pdf.add(3, FONT)
+    for index, canary in enumerate(SCAN_CANARIES):
+        data = canary.encode()
+        pdf.add(
+            20 + index,
+            stream(
+                f"/Type /XObject /Subtype /Image /Width {len(data)} /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8".encode(),
+                data,
+            ),
+        )
+    pdf.add(23, stream(b"/Type /XObject /Subtype /Form /BBox [0 0 1 1]", b"/Im3 Do"))
+    draws = ["/Im1 Do", "/Im2 Do", "/Fm1 Do"]
+    for index, draw in enumerate(draws):
+        page = 10 + index * 2
+        pdf.add(page, f"<< /Type /Page /Parent 2 0 R /Contents {page + 1} 0 R >>")
+        pdf.add(
+            page + 1,
+            stream(b"", content(index + 1, LETTER) + f"q 200 0 0 20 72 300 cm {draw} Q\n".encode()),
+        )
+    return pdf.write("/Root 1 0 R"), [page_entry(LETTER)] * 3
+
+
 FILES = {
     "plain.pdf": (plain, "A plain three-page PDF: Letter, A4 and a small page."),
     "rotated.pdf": (rotated, "Already rotated: one page inherits 180 from its tree, one sets 90."),
@@ -568,6 +604,7 @@ FILES = {
     "empty-wide.pdf": (empty_wide, "2,300 empty page tree nodes: more work than 2,000 pages allow."),
     "annotated.pdf": (annotated, "A square annotation with its own appearance: drawn in images."),
     "transparency.pdf": (transparency, "A transparency group: drawn on a canvas of its own."),
+    "scans.pdf": (scans, "Three scans sharing one /Resources: a page copied alone brings only its own image."),
 }
 
 FLAGS = {
@@ -640,6 +677,8 @@ def operations(files):
         "copy the null-inherited page": [[page("null-inherited.pdf", 0)]],
         "copy the user-unit page": [[page("user-unit.pdf", 0, 270)]],
         "copy the transparency and the annotated": [[page("transparency.pdf", 0), page("annotated.pdf", 0)]],
+        "split the scans per page": [[page("scans.pdf", 0)], [page("scans.pdf", 1)], [page("scans.pdf", 2)]],
+        "remove the second scan": [[page("scans.pdf", 0), page("scans.pdf", 2)]],
     }
     return [
         {
@@ -653,6 +692,14 @@ def operations(files):
                     "hiddenLayers": sum(
                         LAYERS[f]["hiddenLayers"] for f in sorted({p["file"] for p in pages}) if f in LAYERS
                     ),
+                    # The scans' image bytes: those of the pages kept, and none of the others'.
+                    "present": [SCAN_CANARIES[p["page"]] for p in pages if p["file"] == "scans.pdf"],
+                    "absent": [
+                        canary
+                        for i, canary in enumerate(SCAN_CANARIES)
+                        if any(p["file"] == "scans.pdf" for p in pages)
+                        and i not in {p["page"] for p in pages if p["file"] == "scans.pdf"}
+                    ],
                 }
                 for pages in outputs
             ],

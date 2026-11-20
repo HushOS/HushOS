@@ -31,6 +31,7 @@ import {
 } from './protocol';
 import { THUMBNAIL } from '@/lib/images-pdf/protocol';
 import { MIXED_FOLDERS } from './names';
+import { pdfAssetFiles } from '@/lib/viewers/pdf-assets';
 import { imagesPlan, OutputLedger, OutputMismatch, sourcesFor } from './outputs';
 
 /*
@@ -57,7 +58,7 @@ export function pdfToolsWorker() {
 }
 
 export function pdfRenderWorker() {
-    return new Worker(new URL('./pdf-render.worker.ts', import.meta.url), {
+    return new Worker(new URL('./pdf-render.tool-worker.ts', import.meta.url), {
         type: 'module',
         name: 'pdf-render',
     });
@@ -188,9 +189,16 @@ export const STALE = (name: string) =>
 
 const lower = (label: string) => label.charAt(0).toLowerCase() + label.slice(1);
 
-/* The PDFs a set of pages came from, as the save path signs them (the weakest of them). */
-function sourcesOf(job: PdfPagesJob, pages: readonly PagePlan[]) {
-    return sourcesFor(job.sources, pages);
+/*
+ * What every result of a run is signed with: the weakest of all the PDFs its worker was given. The page
+ * can't tell which of them a worker's bytes came from (a worker taken over could hand back an unverified
+ * PDF's content as a verified one's), so no result is signed as stronger than the weakest it could hold.
+ */
+function sourcesOf(job: PdfPagesJob) {
+    return sourcesFor(
+        job.sources,
+        job.sources.map((_, source) => ({ source, page: 0, rotate: 0 as const })),
+    );
 }
 
 function titleOf(job: PdfPagesJob) {
@@ -264,13 +272,16 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
             const run = save;
             const into = await run.folder(job.imagesFolder, {
                 into: job.folder,
-                sources: sourcesOf(job, job.pages),
+                sources: sourcesOf(job),
             });
             if (cancelled) throw new ToolCancelled();
             let thumbnail: Uint8Array | null = null;
             const count = job.pages.length;
             const mime = job.format === 'png' ? 'image/png' : 'image/jpeg';
             const ledger = new OutputLedger(job.names, mime);
+            // pdf.js's decoders, fonts and CMaps: the renderer, a tools worker, may fetch nothing itself.
+            const assets = await pdfAssetFiles(window.location.origin);
+            if (cancelled) throw new ToolCancelled();
             const render = startToolRun<RenderInput, RenderSummary>({
                 label: titleOf(job),
                 worker: pdfRenderWorker,
@@ -282,6 +293,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                     thumbnail: { edge: 512, maxBytes: THUMBNAIL_MAX_BYTES },
                 },
                 sources: job.sources.map(driveSource),
+                files: assets,
                 maxOutputs: count * 2,
                 maxTotalBytes: count * (PDF_MAX_BYTES + THUMBNAIL_MAX_BYTES),
                 refusals: renderRefusals(
@@ -295,9 +307,8 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                         output.release();
                         return;
                     }
-                    let index: number;
                     try {
-                        index = ledger.take(output.name, output.mime);
+                        ledger.take(output.name, output.mime);
                     } catch {
                         output.release();
                         mismatch = true;
@@ -312,8 +323,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                                 name: output.name,
                                 bytes: new Uint8Array(output.bytes),
                                 mime,
-                                // Signed by its own PDF, never the weakest of every PDF in the run.
-                                sources: sourcesOf(job, [job.pages[index]!]),
+                                sources: sourcesOf(job),
                                 thumbnail: own,
                                 into,
                             })
@@ -377,7 +387,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                                     folder: job.folder,
                                     startedFrom: job.startedFrom,
                                     bytes,
-                                    sources: sourcesOf(job, planned.pages),
+                                    sources: sourcesOf(job),
                                     mime: 'application/pdf',
                                     thumbnail: planned.thumbnail,
                                 })
@@ -394,7 +404,7 @@ export async function savePdfPages(queryClient: QueryClient, job: PdfPagesJob) {
                                 name: planned.name,
                                 bytes,
                                 mime: 'application/pdf',
-                                sources: sourcesOf(job, planned.pages),
+                                sources: sourcesOf(job),
                                 thumbnail: planned.thumbnail,
                                 into: job.folder,
                                 onQueued: (uploadId) =>

@@ -17,6 +17,7 @@ import {
     type PDFContext,
     type PDFObject,
 } from '@cantoo/pdf-lib';
+import { prunedResources, Unreadable } from './content';
 import {
     PDF_MAX_BYTES,
     PDF_TOOLS_MAX_PAGES,
@@ -311,6 +312,8 @@ export async function buildPdf(
         throw new Error('A PDF needs between one and the most pages.');
     const doc = await PDFDocument.create({ updateMetadata: false });
     const dest = doc.context;
+    // Stream bytes copied so far, across sources: past the limit, refused before anything is saved.
+    const written = { bytes: 0 };
     // Each output page's reference, made first, so a link from one copied page to another lands.
     const targets = planned.map(() => dest.nextRef());
     const copiers = sources.map((source, index) => {
@@ -320,7 +323,7 @@ export async function buildPdf(
             const ref = source.pages[page.page]?.ref;
             if (ref) pageRefs.set(tag(ref), targets[at]!);
         });
-        return new Copier(source, dest, pageRefs);
+        return new Copier(source, dest, pageRefs, written, maxBytes);
     });
     for (const [at, page] of planned.entries()) {
         const source = sources[page.source];
@@ -329,7 +332,8 @@ export async function buildPdf(
         const copier = copiers[page.source]!;
         const map = new Map<PDFName, PDFObject>();
         for (const [key, value] of node.leaf.entries()) {
-            if (key === name('Parent')) continue;
+            // The parent is the new tree; the resources are cut to what the page draws, below.
+            if (key === name('Parent') || key === name('Resources')) continue;
             // A null inherited entry is absent: the tree's value, found by the walk, is copied below.
             if (INHERITED.some((inherited) => key === name(inherited)) && isNull(source, value))
                 continue;
@@ -337,8 +341,26 @@ export async function buildPdf(
         }
         for (const key of INHERITED) {
             const value = node.inherited[key];
-            if (value !== undefined && !map.has(name(key)))
+            if (key !== 'Resources' && value !== undefined && !map.has(name(key)))
                 map.set(name(key), copier.value(value, 0));
+        }
+        // Only the resources this page's drawing names: never a shared dictionary's whole contents.
+        const own = node.leaf.get(name('Resources'));
+        const resources =
+            own !== undefined && !isNull(source, own) ? own : node.inherited.Resources;
+        if (resources !== undefined) {
+            let pruned: PDFObject;
+            try {
+                pruned = prunedResources(
+                    source.context,
+                    resources,
+                    node.leaf.get(name('Contents')),
+                );
+            } catch (error) {
+                if (error instanceof Unreadable) throw new PdfRefused('damaged');
+                throw error;
+            }
+            map.set(name('Resources'), copier.value(pruned, 0));
         }
         map.set(name('Type'), name('Page'));
         map.set(name('Rotate'), PDFNumber.of(page.rotate));
@@ -396,6 +418,9 @@ class Copier {
         private readonly dest: PDFContext,
         /* Pages of this source in the output, by reference: links to them land on their copies. */
         private readonly pageRefs: Map<string, PDFRef>,
+        /* Stream bytes copied into the output so far, across every source's copier, and the most allowed. */
+        private readonly written: { bytes: number },
+        private readonly maxBytes: number,
     ) {}
 
     value(object: PDFObject, depth: number): PDFObject {
@@ -416,6 +441,9 @@ class Copier {
             const dict = this.value(object.dict, depth + 1) as PDFDict;
             const contents =
                 object instanceof PDFRawStream ? object.contents : object.getContents();
+            // Counted as copied: an output bound to pass its limit stops here, never in save().
+            this.written.bytes += contents.byteLength;
+            if (this.written.bytes > this.maxBytes) throw new PdfRefused('too-large');
             return PDFRawStream.of(dict, contents);
         }
         if (

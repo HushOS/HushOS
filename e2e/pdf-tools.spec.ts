@@ -248,8 +248,14 @@ test('Save as images gives one PNG a page, at 150 dpi, turned with the page', as
         'aria-pressed',
         'true',
     );
-    // An image has no signature or form to lose: no warning about them.
+    // The renderer holds the decrypted PDFs: it is a tools worker, served the policy that names no source.
+    const script = page.waitForResponse((response) =>
+        /\/assets\/pdf-render\.tool-worker-[\w-]+\.js$/.test(new URL(response.url()).pathname),
+    );
     await form.getByRole('button', { name: 'Save', exact: true }).click();
+    expect((await script).headers()['content-security-policy']).toBe(
+        "default-src 'none'; script-src 'wasm-unsafe-eval'; worker-src 'none'; base-uri 'none'; form-action 'none'",
+    );
     await expect(transfers(page)).toContainText('Saving rotated.pdf as images');
     await expect(transfers(page)).toContainText('Saved in My files', { timeout: 90_000 });
     await row(page, 'rotated (images)').getByRole('link', { name: 'rotated (images)' }).click();

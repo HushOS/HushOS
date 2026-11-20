@@ -366,9 +366,9 @@ extension PdfPages {
         for file in files {
             if case let .from(each) = try await vault.copySources(of: file) { sources.append(each) } else { sources.append([]) }
         }
-        let signing = { (pages: [PdfPagePlan]) -> SaveSources in
-            .from(Set(pages.map { Int($0.source) }).sorted().flatMap { sources[$0] })
-        }
+        // Every result signed as the weakest of all the PDFs read for it, as the web signs them: never as
+        // stronger than the weakest PDF the work held, whichever pages it was asked for.
+        let signing = { (_: [PdfPagePlan]) -> SaveSources in .from(sources.flatMap { $0 }) }
         switch choice {
         case let .images(pages, png, dpi, folderName):
             // Every page's size first: one too large to draw is refused before anything is reserved or made.

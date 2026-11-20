@@ -509,6 +509,377 @@ pub fn pdf_inspect(bytes: Vec<u8>, control: Arc<RunControl>) -> Result<PdfInspec
     Ok(inspection(&source))
 }
 
+/* Resource categories a content stream names, and the operators that name them. */
+const CATEGORIES: [&[u8]; 7] =
+    [b"Font", b"XObject", b"ExtGState", b"ColorSpace", b"Pattern", b"Shading", b"Properties"];
+/* Content streams scanned for one page, forms and glyphs included, before it is damage. */
+const SCANNED_STREAMS_MAX: usize = 4_096;
+/* Decoded content scanned for one page, in all. */
+const SCANNED_BYTES_MAX: usize = 64 << 20;
+
+/* The resource names a page's drawing uses, by category. */
+#[derive(Default)]
+struct Used {
+    names: HashMap<&'static [u8], HashSet<Vec<u8>>>,
+}
+
+impl Used {
+    fn add(&mut self, category: &'static [u8], name: Vec<u8>) {
+        self.names.entry(category).or_default().insert(name);
+    }
+    fn has(&self, category: &[u8], name: &[u8]) -> bool {
+        self.names.get(category).is_some_and(|names| names.contains(name))
+    }
+}
+
+fn is_space(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'\x0c' | 0)
+}
+
+fn is_delimiter(byte: u8) -> bool {
+    matches!(byte, b'(' | b')' | b'<' | b'>' | b'[' | b']' | b'{' | b'}' | b'/' | b'%')
+}
+
+/* A name's bytes, its #xx escapes decoded; `at` is just past the slash. Returns the name and where it ends. */
+fn read_name(data: &[u8], mut at: usize) -> (Vec<u8>, usize) {
+    let mut name = Vec::new();
+    while at < data.len() && !is_space(data[at]) && !is_delimiter(data[at]) {
+        if data[at] == b'#' && at + 2 < data.len() {
+            if let Ok(value) =
+                u8::from_str_radix(std::str::from_utf8(&data[at + 1..at + 3]).unwrap_or("zz"), 16)
+            {
+                name.push(value);
+                at += 3;
+                continue;
+            }
+        }
+        name.push(data[at]);
+        at += 1;
+    }
+    (name, at)
+}
+
+/*
+ * Every resource name a content stream uses: Do (XObject), Tf (Font), gs (ExtGState), sh (Shading),
+ * cs/CS (ColorSpace), scn/SCN with a name (Pattern), BDC/DP with a name (Properties), and an inline
+ * image's /CS. Strings, arrays, dictionaries and inline image data are skipped whole, so a name inside
+ * them is never taken for an operand. The web's twin is `usedNames` in lib/pdf-tools/content.ts.
+ */
+fn scan_content(data: &[u8], used: &mut Used) {
+    #[derive(Clone)]
+    enum Operand {
+        Name(Vec<u8>),
+        Other,
+    }
+    let mut operands: Vec<Operand> = Vec::new();
+    let mut depth = 0usize;
+    let mut at = 0usize;
+    let last_name = |operands: &[Operand], back: usize| -> Option<Vec<u8>> {
+        match operands.len().checked_sub(back).and_then(|i| operands.get(i)) {
+            Some(Operand::Name(name)) => Some(name.clone()),
+            _ => None,
+        }
+    };
+    let device = |name: &[u8]| {
+        matches!(
+            name,
+            b"DeviceGray"
+                | b"DeviceRGB"
+                | b"DeviceCMYK"
+                | b"Pattern"
+                | b"G"
+                | b"RGB"
+                | b"CMYK"
+                | b"I"
+                | b"Indexed"
+        )
+    };
+    while at < data.len() {
+        let byte = data[at];
+        if is_space(byte) {
+            at += 1;
+            continue;
+        }
+        match byte {
+            b'%' => {
+                while at < data.len() && data[at] != b'\n' && data[at] != b'\r' {
+                    at += 1;
+                }
+            }
+            b'/' => {
+                let (name, end) = read_name(data, at + 1);
+                at = end;
+                if depth == 0 {
+                    operands.push(Operand::Name(name));
+                }
+            }
+            b'(' => {
+                let mut nesting = 0usize;
+                while at < data.len() {
+                    match data[at] {
+                        b'\\' => at += 1,
+                        b'(' => nesting += 1,
+                        b')' => {
+                            nesting -= 1;
+                            if nesting == 0 {
+                                at += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    at += 1;
+                }
+                if depth == 0 {
+                    operands.push(Operand::Other);
+                }
+            }
+            b'<' if data.get(at + 1) == Some(&b'<') => {
+                depth += 1;
+                at += 2;
+            }
+            b'>' if data.get(at + 1) == Some(&b'>') => {
+                depth = depth.saturating_sub(1);
+                at += 2;
+                if depth == 0 {
+                    operands.push(Operand::Other);
+                }
+            }
+            b'<' => {
+                while at < data.len() && data[at] != b'>' {
+                    at += 1;
+                }
+                at += 1;
+                if depth == 0 {
+                    operands.push(Operand::Other);
+                }
+            }
+            b'[' => {
+                depth += 1;
+                at += 1;
+            }
+            b']' => {
+                depth = depth.saturating_sub(1);
+                at += 1;
+                if depth == 0 {
+                    operands.push(Operand::Other);
+                }
+            }
+            b'{' | b'}' | b'>' | b')' => at += 1,
+            _ => {
+                let start = at;
+                while at < data.len() && !is_space(data[at]) && !is_delimiter(data[at]) {
+                    at += 1;
+                }
+                let word = &data[start..at];
+                if depth > 0 {
+                    continue;
+                }
+                if word.first().is_some_and(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'.'))
+                    || word == b"true"
+                    || word == b"false"
+                    || word == b"null"
+                {
+                    operands.push(Operand::Other);
+                    continue;
+                }
+                match word {
+                    b"Do" => last_name(&operands, 1).into_iter().for_each(|name| used.add(b"XObject", name)),
+                    b"Tf" => last_name(&operands, 2).into_iter().for_each(|name| used.add(b"Font", name)),
+                    b"gs" => {
+                        last_name(&operands, 1).into_iter().for_each(|name| used.add(b"ExtGState", name))
+                    }
+                    b"sh" => last_name(&operands, 1).into_iter().for_each(|name| used.add(b"Shading", name)),
+                    b"cs" | b"CS" => last_name(&operands, 1)
+                        .filter(|name| !device(name))
+                        .into_iter()
+                        .for_each(|name| used.add(b"ColorSpace", name)),
+                    b"scn" | b"SCN" => {
+                        last_name(&operands, 1).into_iter().for_each(|name| used.add(b"Pattern", name))
+                    }
+                    // A tag, then a property list: named when it is a resource.
+                    b"BDC" | b"DP" if operands.len() >= 2 => {
+                        last_name(&operands, 1).into_iter().for_each(|name| used.add(b"Properties", name))
+                    }
+                    b"BI" => {
+                        // The inline image's dictionary up to ID: its colour space may be a resource name.
+                        let mut key: Option<Vec<u8>> = None;
+                        loop {
+                            while at < data.len() && is_space(data[at]) {
+                                at += 1;
+                            }
+                            if at >= data.len() {
+                                break;
+                            }
+                            if data[at] == b'/' {
+                                let (name, end) = read_name(data, at + 1);
+                                at = end;
+                                match key.take() {
+                                    Some(k) if (k == b"CS" || k == b"ColorSpace") && !device(&name) => {
+                                        used.add(b"ColorSpace", name)
+                                    }
+                                    Some(_) => {}
+                                    None => key = Some(name),
+                                }
+                                continue;
+                            }
+                            let start = at;
+                            while at < data.len() && !is_space(data[at]) && !is_delimiter(data[at]) {
+                                at += 1;
+                            }
+                            if at == start {
+                                at += 1;
+                            }
+                            if &data[start..at] == b"ID" {
+                                break;
+                            }
+                            key = None;
+                        }
+                        // The data: up to EI between whitespace.
+                        at += 1;
+                        while at + 2 <= data.len() {
+                            if &data[at..at + 2] == b"EI"
+                                && at > 0
+                                && is_space(data[at - 1])
+                                && data.get(at + 2).is_none_or(|c| is_space(*c))
+                            {
+                                at += 2;
+                                break;
+                            }
+                            at += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                operands.clear();
+            }
+        }
+    }
+}
+
+/* A stream's decoded content, bounded; None when it can't be decoded. */
+fn decoded(stream: &Stream, left: usize) -> Option<Vec<u8>> {
+    stream.get_plain_content_with_limit(left).ok()
+}
+
+/*
+ * The page's own resources (or its tree's) cut down to what its drawing names: its content streams, the
+ * forms they draw that have no resources of their own (theirs come with them whole), the glyphs of Type 3
+ * fonts without their own, and tiling patterns without their own. A page that shares one /Resources with
+ * pages left out so brings none of theirs (a split that shares one page never carries the others' scans).
+ * A content stream that can't be decoded is damage: copying everything would carry pages the person left
+ * out, so the safe answer is a refusal.
+ */
+fn pruned_resources(
+    doc: &Document,
+    resources: &Object,
+    contents: Option<&Object>,
+) -> Result<Object, PdfRefusal> {
+    let Some(Object::Dictionary(resources)) = resolve(doc, resources) else { return Ok(resources.clone()) };
+    let mut used = Used::default();
+    let mut streams: Vec<ObjectId> = Vec::new();
+    let mut direct: Vec<&Stream> = Vec::new();
+    match contents.and_then(|value| match value {
+        Object::Reference(id) => doc.objects.get(id).map(|object| (Some(*id), object)),
+        other => Some((None, other)),
+    }) {
+        Some((Some(id), Object::Stream(_))) => streams.push(id),
+        Some((_, Object::Array(items))) => {
+            for item in items {
+                match item {
+                    Object::Reference(id) => streams.push(*id),
+                    Object::Stream(stream) => direct.push(stream),
+                    _ => {}
+                }
+            }
+        }
+        Some((_, Object::Stream(stream))) => direct.push(stream),
+        _ => {}
+    }
+    let mut left = SCANNED_BYTES_MAX;
+    let mut scanned = 0usize;
+    let mut seen: HashSet<ObjectId> = HashSet::new();
+    let scan = |stream: &Stream, used: &mut Used, left: &mut usize| -> Result<(), PdfRefusal> {
+        let data = decoded(stream, *left).ok_or(PdfRefusal::Damaged)?;
+        *left = left.saturating_sub(data.len());
+        scan_content(&data, used);
+        Ok(())
+    };
+    for stream in direct {
+        scan(stream, &mut used, &mut left)?;
+    }
+    let dict_of = |category: &[u8]| match resources.get(category).ok().and_then(|value| resolve(doc, value)) {
+        Some(Object::Dictionary(dict)) => Some(dict),
+        _ => None,
+    };
+    // Streams drawn against these resources, a work list: the page's content, then what it reaches.
+    loop {
+        while let Some(id) = streams.pop() {
+            if !seen.insert(id) {
+                continue;
+            }
+            scanned += 1;
+            if scanned > SCANNED_STREAMS_MAX {
+                return Err(PdfRefusal::Damaged);
+            }
+            match doc.objects.get(&id) {
+                Some(Object::Stream(stream)) => scan(stream, &mut used, &mut left)?,
+                _ => return Err(PdfRefusal::Damaged),
+            }
+        }
+        let mut more = Vec::new();
+        let reach = |category: &[u8], name: &Vec<u8>, more: &mut Vec<ObjectId>| {
+            let Some(dict) = dict_of(category) else { return };
+            let Ok(Object::Reference(id)) = dict.get(name) else { return };
+            match doc.objects.get(id) {
+                // A form or a tiling pattern with no resources of its own draws with these.
+                Some(Object::Stream(stream)) if !stream.dict.has(b"Resources") => more.push(*id),
+                // A Type 3 font with no resources of its own: its glyphs draw with these.
+                Some(Object::Dictionary(font))
+                    if is_name(font.get(b"Subtype").ok(), b"Type3") && !font.has(b"Resources") =>
+                {
+                    if let Some(Object::Dictionary(procs)) =
+                        font.get(b"CharProcs").ok().and_then(|value| resolve(doc, value))
+                    {
+                        more.extend(procs.iter().filter_map(|(_, glyph)| glyph.as_reference().ok()));
+                    }
+                }
+                _ => {}
+            }
+        };
+        for (category, names) in &used.names {
+            if matches!(*category, b"XObject" | b"Pattern" | b"Font") {
+                for name in names {
+                    reach(category, name, &mut more);
+                }
+            }
+        }
+        more.retain(|id| !seen.contains(id));
+        if more.is_empty() {
+            break;
+        }
+        streams.extend(more);
+    }
+    let mut kept = Dictionary::new();
+    for (key, value) in resources.iter() {
+        let Some(category) = CATEGORIES.iter().find(|category| **category == key.as_slice()) else {
+            kept.set(key.clone(), value.clone());
+            continue;
+        };
+        let Some(Object::Dictionary(dict)) = resolve(doc, value) else { continue };
+        let mut only = Dictionary::new();
+        for (name, entry) in dict.iter() {
+            if used.has(category, name) {
+                only.set(name.clone(), entry.clone());
+            }
+        }
+        if !only.is_empty() {
+            kept.set(key.clone(), Object::Dictionary(only));
+        }
+    }
+    Ok(Object::Dictionary(kept))
+}
+
 /* Copies objects of one source into the new document: each reference once, without recursing into references. */
 struct Copier<'a> {
     source: &'a Source,
@@ -628,7 +999,8 @@ fn build(
         }
         let mut leaf = Dictionary::new();
         for (key, value) in node.leaf.iter() {
-            if key.as_slice() == b"Parent" {
+            // The parent is the new tree; the resources are cut to what the page draws, below.
+            if key.as_slice() == b"Parent" || key.as_slice() == b"Resources" {
                 continue;
             }
             // A null inherited entry is absent: the tree's value, found by the walk, is copied below.
@@ -640,16 +1012,36 @@ fn build(
             leaf.set(key.clone(), copier.value(value, &mut out, 0)?);
         }
         for (key, value) in node.inherited.iter() {
-            if !leaf.has(key) {
+            if *key != b"Resources" && !leaf.has(key) {
                 leaf.set(key.to_vec(), copier.value(value, &mut out, 0)?);
             }
+        }
+        // Only the resources this page's drawing names: never a shared dictionary's whole contents.
+        let resources = node
+            .leaf
+            .get(b"Resources")
+            .ok()
+            .filter(|value| !matches!(resolve(&copier.source.doc, value), None | Some(Object::Null)))
+            .or_else(|| node.inherited.iter().find(|(key, _)| *key == b"Resources").map(|(_, value)| value));
+        if let Some(resources) = resources {
+            let pruned = pruned_resources(&copier.source.doc, resources, node.leaf.get(b"Contents").ok())?;
+            leaf.set("Resources", copier.value(&pruned, &mut out, 0)?);
         }
         leaf.set("Type", Object::Name(b"Page".to_vec()));
         leaf.set("Rotate", Object::Integer(page.rotate as i64));
         leaf.set("Parent", Object::Reference(tree_id));
         copier.drain(&mut out, control)?;
         if flatten {
-            flatten_annotations(&mut out, &mut leaf);
+            // The source's layers that are off, as they are numbered in the output.
+            let hidden: HashSet<ObjectId> = copier
+                .source
+                .layers
+                .as_ref()
+                .map(|layers| {
+                    layers.off.iter().filter_map(|group| copier.copied.get(group).copied()).collect()
+                })
+                .unwrap_or_default();
+            flatten_annotations(&mut out, &mut leaf, &hidden);
         }
         out.objects.insert(*target, Object::Dictionary(leaf));
     }
@@ -695,14 +1087,52 @@ fn build(
     out.trailer = Dictionary::new();
     out.trailer.set("Root", Object::Reference(catalog_id));
     control.progress()?;
-    let mut bytes = Vec::new();
-    out.save_to(&mut bytes).map_err(|error| PdfToolsError::Failed { reason: error.to_string() })?;
-    drop(out);
-    if bytes.len() as u64 > max_output {
-        return Err(PdfRefusal::TooLarge.into());
+    // Written into a sink that refuses past the limit as it grows: the output is never held whole past it.
+    let mut sink = CappedSink { bytes: Vec::new(), max: max_output as usize, over: false };
+    if let Err(error) = out.save_to(&mut sink) {
+        if sink.over {
+            return Err(PdfRefusal::TooLarge.into());
+        }
+        return Err(PdfToolsError::Failed { reason: error.to_string() });
     }
+    drop(out);
+    let bytes = std::mem::take(&mut sink.bytes);
     control.progress()?;
     Ok(bytes)
+}
+
+/*
+ * Whether optional content shows by default: an /OCG unless it is off, an /OCMD by its /P over its /OCGs
+ * (AnyOn by default). A visibility expression (/VE) isn't evaluated: what it hides is taken as hidden, so
+ * a note on a layer that is off is never drawn into an image.
+ */
+fn layer_visible(out: &Document, condition: &Object, hidden: &HashSet<ObjectId>) -> bool {
+    let Object::Reference(id) = condition else { return true };
+    let Some(Object::Dictionary(dict)) = out.objects.get(id) else { return true };
+    if is_name(dict.get(b"Type").ok(), b"OCG") {
+        return !hidden.contains(id);
+    }
+    if !is_name(dict.get(b"Type").ok(), b"OCMD") {
+        return true;
+    }
+    if dict.has(b"VE") {
+        return false;
+    }
+    let groups: Vec<ObjectId> = match dict.get(b"OCGs") {
+        Ok(Object::Reference(group)) => vec![*group],
+        Ok(Object::Array(items)) => items.iter().filter_map(|item| item.as_reference().ok()).collect(),
+        _ => Vec::new(),
+    };
+    if groups.is_empty() {
+        return true;
+    }
+    let on = groups.iter().filter(|group| !hidden.contains(group)).count();
+    match dict.get(b"P").ok() {
+        Some(Object::Name(policy)) if policy == b"AllOn" => on == groups.len(),
+        Some(Object::Name(policy)) if policy == b"AnyOff" => on < groups.len(),
+        Some(Object::Name(policy)) if policy == b"AllOff" => on == 0,
+        _ => on > 0,
+    }
 }
 
 /* An annotation's flags that keep it off the screen: Hidden (2) and NoView (32). Invisible (1) is for unknown types. */
@@ -722,7 +1152,7 @@ fn numbers(out: &Document, value: Option<&Object>, count: usize) -> Option<Vec<f
  * after the page's own content, wrapped so that content's graphics state can't leak into it; then the
  * page's /Annots removed. Annotations without an appearance draw nothing, as most readers draw them.
  */
-fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary) {
+fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary, hidden: &HashSet<ObjectId>) {
     let annots: Vec<Object> = match leaf.get(b"Annots").ok().and_then(|value| resolve(out, value)) {
         Some(Object::Array(items)) => items.clone(),
         _ => return,
@@ -733,6 +1163,12 @@ fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary) {
         let flags = number(out, annot.get(b"F").ok()).unwrap_or(0.0) as i64;
         if flags & ANNOTATION_UNSEEN != 0 {
             continue;
+        }
+        // On a layer that is off by default (its /OC group, or a membership dictionary over groups): not drawn.
+        if let Ok(condition) = annot.get(b"OC") {
+            if !layer_visible(out, condition, hidden) {
+                continue;
+            }
         }
         let Some(Object::Dictionary(appearances)) =
             annot.get(b"AP").ok().and_then(|value| resolve(out, value))
@@ -798,8 +1234,16 @@ fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary) {
         _ => Dictionary::new(),
     };
     let mut drawing = String::from("Q\n");
-    for (index, (stream_id, cm)) in drawn.iter().enumerate() {
-        let name = format!("HushAnnot{index}");
+    let mut next = 0usize;
+    for (stream_id, cm) in &drawn {
+        // A name the page doesn't already use: its own drawing must keep what it names.
+        let name = loop {
+            let candidate = format!("HushAnnot{next}");
+            next += 1;
+            if !xobjects.has(candidate.as_bytes()) {
+                break candidate;
+            }
+        };
         xobjects.set(name.clone(), Object::Reference(*stream_id));
         let cm: Vec<String> = cm.iter().map(|value| format!("{value:.4}")).collect();
         drawing.push_str(&format!("q {} cm /{name} Do Q\n", cm.join(" ")));
@@ -819,6 +1263,28 @@ fn flatten_annotations(out: &mut Document, leaf: &mut Dictionary) {
     }
     contents.push(Object::Reference(after));
     leaf.set("Contents", Object::Array(contents));
+}
+
+/* An output being written, refused the moment it would pass `max` bytes. */
+struct CappedSink {
+    bytes: Vec<u8>,
+    max: usize,
+    over: bool,
+}
+
+impl std::io::Write for CappedSink {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if self.bytes.len().saturating_add(data.len()) > self.max {
+            self.over = true;
+            self.bytes = Vec::new();
+            return Err(std::io::Error::other("The PDF would pass its limit."));
+        }
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Edit pages' writer: the PDFs are added in order, each read and checked as it comes (its
