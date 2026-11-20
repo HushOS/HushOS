@@ -1,0 +1,45 @@
+apps/ios/AGENTS.md
+  s_c60e24772e04af::t_fe09e5bc770ccf 250
+apps/ios/App/DriveStore.swift
+  s_c60e24772e04af::t_28d17b8cb072ae 138-142,144,146-175,183,186-200,202-203,372-375,377-378
+apps/ios/App/TextEditorView.swift
+  s_c60e24772e04af::t_67130005b567d5 289,321,453-480,541-542,588-590,592-596,609-613,686,742,876
+apps/ios/App/Viewer.swift
+  s_c60e24772e04af::t_4d05c64a1ab25b 225-226,230-231
+apps/ios/Packages/HushOSKit/Tests/HushOSKitTests/EditorParkingTests.swift
+  s_c60e24772e04af::t_3f86ce327656b3 106,113,124,158,183-233
+apps/web/src/lib/mermaid-svg.test.ts
+  s_c60e24772e04af::t_e5640a984b3d10 76-100
+apps/web/src/lib/mermaid-svg.ts
+  s_c60e24772e04af::t_78a914db91b698 203-219,223-224
+apps/web/src/lib/mermaid.test.ts
+  s_c60e24772e04af::t_5e4a9338eae92a 6-7,18-20,33,48,71-72,147-197
+apps/web/src/lib/mermaid.ts
+  s_c60e24772e04af::t_de04bcc04a0c38 17-21,32-37,64-70,77,102-109,112,125,150-151,164
+apps/ios/Packages/HushOSKit/Sources/HushOSKit/EditorParking.swift
+  s_6b1516ba2f07bc::t_70df08c79cc4e1 9,40-41,43,45,49-50,53,63-66,68-69,103-104,108,111,141-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "86f798bf34415737a8903b08859538aea96c7b8a",
+  "prompts": {},
+  "sessions": {
+    "s_6b1516ba2f07bc": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a9476fc0d21ae5c41",
+        "model": "unknown"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    },
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
