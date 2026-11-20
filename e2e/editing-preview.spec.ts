@@ -284,17 +284,49 @@ test('the preview follows typing as it goes, without waiting for a pause', async
 const sourceScroller = (p: Page) => dialog(p).locator('[data-text-editor] .cm-scroller');
 const previewScroller = (p: Page) => dialog(p).locator('[data-markdown-preview]');
 
-/* The line number at the top of the source's view, from its gutter. */
-const sourceTopLine = (p: Page) =>
+/*
+ * The line drawn at the top of the source's view: its number, and how far the view's top is into it
+ * and from its end, in px. The line is found by where the text is drawn, never by where the gutter is:
+ * after a jump CodeMirror moves its numbers a moment after the text, and a Linux CI trace had them
+ * 41 px apart. The number is the gutter's for the same line, matched by order and height: the
+ * gutter numbers the lines in view, in document order, and the text also keeps the cursor's line
+ * drawn outside the view (before or after them), which the gutter leaves out. Null while no
+ * matching holds.
+ */
+const sourceTop = (p: Page) =>
     sourceScroller(p).evaluate((scroller) => {
-        const top = scroller.getBoundingClientRect().top + 1;
-        for (const element of scroller.querySelectorAll('.cm-lineNumbers .cm-gutterElement')) {
-            const box = element.getBoundingClientRect();
-            if (box.height && box.bottom > top && /^\d+$/.test(element.textContent ?? ''))
-                return Number(element.textContent);
-        }
-        return null;
+        const top = scroller.getBoundingClientRect().top;
+        const lines = [...scroller.querySelectorAll('.cm-content > .cm-line')];
+        const numbers = [...scroller.querySelectorAll('.cm-lineNumbers .cm-gutterElement')].filter(
+            (element) =>
+                element.getBoundingClientRect().height > 0 &&
+                /^\d+$/.test(element.textContent ?? ''),
+        );
+        const extra = lines.length - numbers.length;
+        const height = (element: Element) => element.getBoundingClientRect().height;
+        // The extra lines the text draws (none, or the cursor's) come before the numbered ones or after.
+        const offset = [extra, 0].find(
+            (start) =>
+                extra >= 0 &&
+                numbers.length > 0 &&
+                numbers.every(
+                    (number, index) => Math.abs(height(number) - height(lines[start + index]!)) < 1,
+                ),
+        );
+        if (offset === undefined) return null;
+        const numbered = lines.slice(offset, offset + numbers.length);
+        const index = numbered.findIndex((line) => line.getBoundingClientRect().bottom > top + 1);
+        if (index < 0) return null;
+        const box = numbered[index]!.getBoundingClientRect();
+        return {
+            line: Number(numbers[index]!.textContent),
+            into: top - box.top,
+            left: box.bottom - top,
+        };
     });
+
+/* The line number at the top of the source's view (see sourceTop). */
+const sourceTopLine = async (p: Page) => (await sourceTop(p))?.line ?? null;
 
 /*
  * The preview's blocks with their source lines, and where the preview's view begins, in the
@@ -357,33 +389,15 @@ const scrollTo = (scroller: ReturnType<Page['locator']>, top: number) =>
     }, top);
 
 /*
- * Whether the source has settled: its scroll has stopped and its line numbers sit beside the lines
- * drawn. After a jump CodeMirror draws the lines where it estimated them, measures them and moves
- * both; in between its numbers can sit a line or two off the text (a Linux CI trace had the gutter
- * 41 px above it), and the gutter, which the top line is read from, says another line than the one
- * on screen, which the preview follows. The last lines are compared: the editor also keeps the
- * cursor's line drawn, wherever it is.
+ * Whether the source has settled: two reads a moment apart find the same scroll position and the
+ * same line drawn at its top.
  */
 async function sourceSettled(p: Page) {
-    const read = () =>
-        sourceScroller(p).evaluate((scroller) => {
-            const numbers = [
-                ...scroller.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
-            ].filter((element) => element.getBoundingClientRect().height > 0);
-            const lines = [...scroller.querySelectorAll('.cm-content > .cm-line')];
-            const count = Math.min(8, numbers.length, lines.length);
-            if (!count) return null;
-            const pairs = numbers
-                .slice(-count)
-                .map((number, index) => [number, lines.slice(-count)[index]!]);
-            const aligned = pairs.every(
-                ([number, line]) =>
-                    Math.abs(
-                        number!.getBoundingClientRect().top - line!.getBoundingClientRect().top,
-                    ) < 1,
-            );
-            return aligned ? scroller.scrollTop : null;
-        });
+    const read = async () => {
+        const top = await sourceTop(p);
+        const scrollTop = await sourceScroller(p).evaluate((element) => element.scrollTop);
+        return top === null ? null : `${scrollTop} ${top.line} ${Math.round(top.into)}`;
+    };
     const first = await read();
     await p.waitForTimeout(200);
     return first !== null && first === (await read());
@@ -391,24 +405,20 @@ async function sourceSettled(p: Page) {
 
 /*
  * Moves the source's view a few pixels into the line its top is on, when that top is within 2px of
- * the line's edge. On an edge the gutter can read one line and the editor the one beside it (a
- * pixel either way is the same place), and which one depends on the fonts: Linux CI's put 6,000 px
+ * the line's edge. On an edge one reading can take the line and another the one beside it (a pixel
+ * either way is the same place), and which one depends on the fonts: Linux CI's put 6,000 px
  * exactly on a heading's top edge, the editor took the blank line above it, and the preview
  * showed the gap before the heading.
  */
-const offLineEdge = (scroller: ReturnType<Page['locator']>) =>
-    scroller.evaluate((element) => {
-        const top = element.getBoundingClientRect().top;
-        for (const gutter of element.querySelectorAll('.cm-lineNumbers .cm-gutterElement')) {
-            const box = gutter.getBoundingClientRect();
-            if (!box.height || box.bottom <= top || !/^\d+$/.test(gutter.textContent ?? ''))
-                continue;
-            if (top - box.top < 2) element.scrollTop += 3;
-            else if (box.bottom - top < 2) element.scrollTop -= 3;
-            break;
-        }
-        return element.scrollTop;
-    });
+async function offLineEdge(p: Page) {
+    const top = await sourceTop(p);
+    if (!top) return;
+    const nudge = top.into < 2 ? 3 : top.left < 2 ? -3 : 0;
+    if (nudge)
+        await sourceScroller(p).evaluate((element, by) => {
+            element.scrollTop += by;
+        }, nudge);
+}
 
 test('the source and the preview scroll together, both ways', async () => {
     await openEditor(page, 'scroll.md');
@@ -420,7 +430,7 @@ test('the source and the preview scroll together, both ways', async () => {
     // The source scrolled: the block holding its top line comes to the top of the preview.
     await scrollTo(source, 5_000);
     await expect.poll(() => sourceSettled(page)).toBe(true);
-    await offLineEdge(source);
+    await offLineEdge(page);
     await expect.poll(async () => previewAtLine(page, await sourceTopLine(page))).toBe(true);
     expect(await shown.evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
 
@@ -494,7 +504,7 @@ test('on a narrow screen, switching between Source and Preview keeps the place',
     await expect(dialog(page).getByRole('button', { name: 'Preview', exact: true })).toBeVisible();
     await scrollTo(source, 6_000);
     await expect.poll(() => sourceSettled(page)).toBe(true);
-    await offLineEdge(source);
+    await offLineEdge(page);
     await expect.poll(() => sourceSettled(page)).toBe(true);
     const line = (await sourceTopLine(page))!;
     await dialog(page).getByRole('button', { name: 'Preview', exact: true }).click();
