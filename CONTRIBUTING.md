@@ -647,7 +647,7 @@ bun run e2e -- --project=webkit
 ### On every pull request and push to `main`
 
 - `bun run check` (lint, format and typecheck) and `bun run build`, each in its own job.
-- `bun run test` in four jobs side by side (web, crypto, db and drive, the rest), each with its own Postgres.
+- `bun run test` in five jobs side by side (web, the web app's database tests, crypto, db and drive, the rest), each with its own Postgres.
 - The Chromium suite (projects `chromium` and `mobile`) and the families-on suite, both against that one production build (`bun run start`, web and jobs worker).
 - Both suites are split into three shards each by measured time: `scripts/e2e-shard.ts` reads `e2e/durations.json` (see [e2e/README.md](e2e/README.md#shards)).
 - A pull request that touches only Markdown or `docs/` skips the browser suites. MDX pages and `DESIGN.md` render in the app, so they do not count. A push to `main` always runs them.

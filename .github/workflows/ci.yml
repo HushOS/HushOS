@@ -143,11 +143,13 @@ jobs:
                     exit 1
                   fi
 
-    # The Vitest suites, in four jobs beside each other rather than one after the checks above: on
+    # The Vitest suites, in five jobs beside each other rather than one after the checks above: on
     # one runner they took nine and a half minutes, seven packages contending for four cores.
-    # Grouped by measured time; `rest` names what the others leave out, so a new package's tests
-    # run there without being listed. Each job has its own Postgres, and each package its own
-    # test database within it, as before.
+    # Grouped by measured time. The web app's database project runs its files one after another
+    # (they share one database), about four and a half minutes, so it has a job of its own.
+    # `rest`, and the web job's `!db`, name what the others leave out, so a new package's or
+    # project's tests run without being listed. Each job has its own Postgres, and each package
+    # its own test database within it, as before.
     test:
         name: Unit tests (${{ matrix.name }})
         if: github.event_name != 'pull_request' || github.event.pull_request.state == 'open'
@@ -157,7 +159,9 @@ jobs:
             matrix:
                 include:
                     - name: web
-                      filter: --filter=@hushos/web
+                      filter: --filter=@hushos/web -- --project=!db
+                    - name: web database
+                      filter: --filter=@hushos/web -- --project=db
                     - name: crypto
                       filter: --filter=@hushos/crypto
                     - name: db and drive
@@ -197,7 +201,8 @@ jobs:
             - name: Test
               env:
                   FILTER: ${{ matrix.filter }}
-              # Word splitting is wanted: FILTER holds one or more --filter arguments.
+              # Word splitting is wanted: FILTER holds turbo's --filter arguments, and after `--`
+              # Vitest's.
               run: bun run test -- $FILTER
 
     # The production build every browser job tests, built once. Its own job rather than a step
