@@ -72,7 +72,7 @@ private extension View {
     }
 }
 
-private struct MarkdownBlockView: View {
+struct MarkdownBlockView: View {
     let block: MarkdownBlock
     /* A quote's words are muted, all the way down. */
     var muted = false

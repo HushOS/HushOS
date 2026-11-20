@@ -37,15 +37,39 @@ public enum MarkdownDocument {
     static let marks = 200_000
 
     public static func parse(_ text: String) -> [MarkdownBlock] {
+        parseLined(text).map(\.block)
+    }
+
+    /*
+     * The blocks with the source line each starts at, for the editor's preview to scroll with its source (the web's
+     * data-source-line, lib/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the
+     * file shown as its text spreads over all of its lines.
+     */
+    public static func parseLined(_ text: String) -> [MarkdownPiece] {
         // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
         let text = text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
+        let lines = Double(text.utf8.lazy.filter { $0 == 0x0A }.count + 1)
         // Past this many emphasis and link marks, the text: 2 MB of "*a* " is a million nodes (Android's parser ran out of
         // memory on it). Prose, notes and tables come nowhere near it.
         if text.utf8.lazy.filter({ $0 == 0x2A || $0 == 0x5F || $0 == 0x7E || $0 == 0x5B }).count > marks {
-            return cut(.code(language: nil, text: flat(text)))
+            return spread(cut(.code(language: nil, text: flat(text))), from: 1, to: lines + 1)
         }
-        if depth(of: text) > maxDepth { return cut(.code(language: nil, text: flat(text))) }
-        return blocks(of: Document(parsing: text).children, depth: 0)
+        if depth(of: text) > maxDepth { return spread(cut(.code(language: nil, text: flat(text))), from: 1, to: lines + 1) }
+        var pieces: [MarkdownPiece] = []
+        for child in Document(parsing: text).children {
+            guard let made = block(child, depth: 0) else { continue }
+            let after = pieces.last?.start ?? 1
+            let start = child.range.map { Double($0.lowerBound.line) } ?? after
+            let end = child.range.map { Double($0.upperBound.line + 1) } ?? start + 1
+            pieces += spread(cut(made), from: max(start, after), to: max(end, start + 1))
+        }
+        return pieces
+    }
+
+    /* `blocks` sharing the lines from `start` up to `end` in equal parts, in order. */
+    private static func spread(_ blocks: [MarkdownBlock], from start: Double, to end: Double) -> [MarkdownPiece] {
+        let share = (end - start) / Double(max(blocks.count, 1))
+        return blocks.enumerated().map { index, block in MarkdownPiece(block: block, start: start + share * Double(index)) }
     }
 
     /*
@@ -444,6 +468,17 @@ public enum MarkdownDocument {
         guard let url = URL(string: destination.trimmingCharacters(in: .whitespaces)),
               let scheme = url.scheme?.lowercased(), ["http", "https", "mailto"].contains(scheme) else { return nil }
         return url
+    }
+}
+
+/* A block and the source line it starts at (1-based; fractional for a piece of a block cut in several). */
+public struct MarkdownPiece: Sendable, Equatable {
+    public let block: MarkdownBlock
+    public let start: Double
+
+    public init(block: MarkdownBlock, start: Double) {
+        self.block = block
+        self.start = start
     }
 }
 

@@ -15,6 +15,7 @@ import {
     useMemo,
     useRef,
     useState,
+    useSyncExternalStore,
 } from 'react';
 import { Fragment as JsxFragment, jsx, jsxs } from 'react/jsx-runtime';
 import { LargeFileBar } from '@/components/drive/viewer-parts';
@@ -30,6 +31,14 @@ import {
 } from '@/lib/highlight';
 import { largeFileStage } from '@/lib/previews';
 import { markdownToHast } from '@/lib/markdown';
+import { diagramsSettled, diagramsState, drawDiagram, startDiagramsForView } from '@/lib/mermaid';
+import {
+    DIAGRAMS_PER_DOCUMENT,
+    type DiagramFailure,
+    type DiagramPalette,
+    diagramWords,
+    themedSvg,
+} from '@/lib/mermaid-svg';
 import '@/components/drive/rich-text.css';
 
 /*
@@ -103,16 +112,174 @@ function textOf(node: Element): string {
     return out;
 }
 
-/* A fenced block inside Markdown: highlighted once its grammar has loaded, plain until then. */
+/* The source lines a block came from (lib/markdown.ts), kept on what a fence turns into. */
+function sourceLinesOf(node: Element | undefined): Record<string, string> {
+    const start = node?.properties?.dataSourceLine;
+    const end = node?.properties?.dataSourceEnd;
+    return start === undefined
+        ? {}
+        : { 'data-source-line': String(start), 'data-source-end': String(end) };
+}
+
+/* A fenced block inside Markdown: a Mermaid diagram drawn, other code highlighted once its grammar has loaded, plain until then. */
 function FencedCode({ node, children }: { node?: Element; children?: ReactNode }) {
     const code = node?.children.find(
         (child): child is Element => child.type === 'element' && child.tagName === 'code',
     );
     const language = normaliseLanguage(languageOf(code));
     const text = code ? textOf(code) : '';
-    const tree = useHighlighted(text, language);
-    if (tree) return <HastView tree={tree} components={codeComponents} />;
-    return <pre className="rt-plain">{children}</pre>;
+    // Never Shiki's Mermaid grammar: a diagram is drawn, and fetching that grammar would say there was one.
+    const tree = useHighlighted(text, language === 'mermaid' ? null : language);
+    const lines = sourceLinesOf(node);
+    if (language === 'mermaid')
+        return (
+            <MermaidFence
+                source={text}
+                index={Number(node?.properties?.dataDiagram ?? 0)}
+                lines={lines}
+            >
+                {children}
+            </MermaidFence>
+        );
+    if (tree)
+        return (
+            <div {...lines}>
+                <HastView tree={tree} components={codeComponents} />
+            </div>
+        );
+    return (
+        <pre className="rt-plain" {...lines}>
+            {children}
+        </pre>
+    );
+}
+
+/*
+ * The app's colours for diagrams, read from its tokens and read again whenever light, dark or high
+ * contrast changes: an image never sees the page's CSS, so they are written into each diagram.
+ */
+function readPalette(): DiagramPalette {
+    const style = getComputedStyle(document.documentElement);
+    const token = (name: string) => style.getPropertyValue(name).trim();
+    return {
+        background: token('--background'),
+        foreground: token('--foreground'),
+        muted: token('--muted-foreground'),
+        surface: token('--card'),
+        surfaceAlt: token('--muted'),
+        border: token('--rule'),
+        accent: token('--primary'),
+    };
+}
+let palette: { key: string; value: DiagramPalette } | null = null;
+function paletteNow() {
+    const value = readPalette();
+    const key = JSON.stringify(value);
+    if (palette?.key !== key) palette = { key, value };
+    return palette;
+}
+function onThemeChange(changed: () => void) {
+    const observer = new MutationObserver(changed);
+    observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style'],
+    });
+    const queries =
+        typeof window.matchMedia === 'function'
+            ? ['(prefers-color-scheme: dark)', '(prefers-contrast: more)'].map((query) =>
+                  window.matchMedia(query),
+              )
+            : [];
+    for (const query of queries) query.addEventListener('change', changed);
+    return () => {
+        observer.disconnect();
+        for (const query of queries) query.removeEventListener('change', changed);
+    };
+}
+function useDiagramPalette() {
+    return useSyncExternalStore(onThemeChange, paletteNow, () => null);
+}
+
+/* Whether the viewers' preload has fetched the diagram worker (or found it can't start); nothing draws a diagram before it. */
+function useDiagramsState() {
+    const [now, setNow] = useState(diagramsState);
+    useEffect(() => {
+        if (now !== 'waiting') return;
+        let active = true;
+        void diagramsSettled.then(() => active && setNow(diagramsState()));
+        return () => {
+            active = false;
+        };
+    }, [now]);
+    return now;
+}
+
+/*
+ * A Mermaid fence as a picture: drawn by pele in its worker (lib/mermaid.ts), checked against the
+ * allowlist, coloured with the app's tokens and shown as an <img> from a blob URL, so nothing in it runs
+ * or fetches. Its code until the worker has come, and its code with a sentence when it can't be drawn.
+ */
+function MermaidFence({
+    source,
+    index,
+    lines,
+    children,
+}: {
+    source: string;
+    index: number;
+    lines: Record<string, string>;
+    children?: ReactNode;
+}) {
+    const diagrams = useDiagramsState();
+    const ready = diagrams === 'ready';
+    const colours = useDiagramPalette();
+    const tooMany = index >= DIAGRAMS_PER_DOCUMENT;
+    const key = `${colours?.key ?? ''}\u0000${source}`;
+    const [shown, setShown] = useState<{
+        key: string;
+        image?: { url: string; width: number; height: number };
+        failure?: DiagramFailure;
+    } | null>(null);
+    useEffect(() => {
+        if (!ready || tooMany || !colours) return;
+        let active = true;
+        let url: string | null = null;
+        const drawing = drawDiagram(source);
+        void drawing.result.then((outcome) => {
+            if (!active) return;
+            if ('failure' in outcome) return setShown({ key, failure: outcome.failure });
+            url = URL.createObjectURL(
+                new Blob([themedSvg(outcome.svg, colours.value)], { type: 'image/svg+xml' }),
+            );
+            setShown({ key, image: { url, width: outcome.width, height: outcome.height } });
+        });
+        return () => {
+            active = false;
+            // A new text, new colours or the view gone: this diagram leaves the queue if it hasn't been drawn yet.
+            drawing.cancel();
+            if (url) URL.revokeObjectURL(url);
+        };
+    }, [ready, tooMany, colours, source, key]);
+    const current = shown?.key === key ? shown : null;
+    // Past the bound now (a fence added above it), whatever was drawn before: the code, and why.
+    if (current?.image && !tooMany)
+        return (
+            <figure className="rt-diagram" {...lines}>
+                <img
+                    src={current.image.url}
+                    alt={diagramWords.alt}
+                    width={current.image.width}
+                    height={current.image.height}
+                />
+            </figure>
+        );
+    const failure = tooMany ? 'too-many' : diagrams === 'failed' ? 'failed' : current?.failure;
+    return (
+        <div {...lines}>
+            <pre className="rt-plain">{children}</pre>
+            {failure && <p className="rt-diagram-note">{diagramWords[failure]}</p>}
+        </div>
+    );
 }
 
 /*
@@ -121,6 +288,10 @@ function FencedCode({ node, children }: { node?: Element; children?: ReactNode }
  * grammar it fetched would say which language was typed.
  */
 function FencedCodeAfterPreload(props: { node?: Element; children?: ReactNode }) {
+    const code = props.node?.children.find(
+        (child): child is Element => child.type === 'element' && child.tagName === 'code',
+    );
+    const diagram = normaliseLanguage(languageOf(code)) === 'mermaid';
     const [ready, setReady] = useState(grammarsReady);
     useEffect(() => {
         if (ready) return;
@@ -130,7 +301,13 @@ function FencedCodeAfterPreload(props: { node?: Element; children?: ReactNode })
             active = false;
         };
     }, [ready]);
-    if (!ready) return <pre className="rt-plain">{props.children}</pre>;
+    // A diagram waits for the diagram worker itself (MermaidFence), never for the grammars.
+    if (!ready && !diagram)
+        return (
+            <pre className="rt-plain" {...sourceLinesOf(props.node)}>
+                {props.children}
+            </pre>
+        );
     return <FencedCode {...props} />;
 }
 
@@ -753,6 +930,8 @@ export function MarkdownView({
     fences?: 'highlight' | 'after-preload';
 }) {
     const tree = useMemo(() => markdownToHast(text), [text]);
+    // Off the drive (a public link's page), the diagram bundle starts for every Markdown file shown.
+    useEffect(() => startDiagramsForView(), []);
     return (
         <article className="rt-markdown">
             <HastView

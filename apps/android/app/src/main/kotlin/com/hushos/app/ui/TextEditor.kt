@@ -25,7 +25,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.History
@@ -41,13 +43,20 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -55,7 +64,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
 import com.hushos.app.data.EditSession
 import com.hushos.app.data.MarkdownDocument
-import com.hushos.app.data.MdBlock
+import com.hushos.app.data.LineMap
+import com.hushos.app.data.MdPiece
 import com.hushos.app.data.NotAuthenticated
 import com.hushos.app.data.Opened
 import com.hushos.app.data.SaveRunJournal
@@ -63,6 +73,7 @@ import com.hushos.app.data.SaveRunStopped
 import com.hushos.app.data.SaveRuns
 import com.hushos.app.data.TextEditing
 import com.hushos.app.data.TextSave
+import com.hushos.app.data.TextLines
 import com.hushos.app.data.TextSaved
 import com.hushos.app.data.Vault
 import com.hushos.app.data.VaultSaveWriter
@@ -206,15 +217,36 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var format by mutableStateOf<TextFormat?>(null); private set
 
     /*
-     * Markdown shows Source or Preview; the preview renders the text as it was when Preview was chosen. Decided by the row the
-     * text was read from (load, Open theirs included), never the item sheet's, which may be a version or a rename behind.
+     * Markdown shows Source or Preview when the window is narrow (the preview renders the text as it was when Preview was
+     * chosen), and both side by side when it is wide, the preview following typing. Decided by the row the text was read
+     * from (load, Open theirs included), never the item sheet's, which may be a version or a rename behind.
      */
     var markdown by mutableStateOf(false); private set
     var previewing by mutableStateOf(false); private set
     /* The text was past what the preview renders when Preview was chosen: it stayed on Source and says so. */
     var previewTooLong by mutableStateOf(false); private set
-    var preview by mutableStateOf<List<MdBlock>?>(null); private set
+    var preview by mutableStateOf<List<MdPiece>?>(null); private set
+    /* The preview's blocks by source line, from its last rendering (TextEditorScreen scrolls the two together). */
+    var lineMap: LineMap? = null; private set
     private var parsing: Job? = null
+    /* Side by side (the window is wide): every edit renders the preview again. */
+    var sideBySide = false; private set
+    /* The text changed while a rendering was on its way: one more follows it. */
+    private var again = false
+    /*
+     * Where the person was: the text offset at the top of the view (cheap: the layout's own line start) and the cursor.
+     * Kept here, in the view model, so a fold, an unfold or a resize (which recreate the screen and its EditText) finds
+     * both as they were.
+     */
+    var topOffset = 0
+    var selection: Pair<Int, Int>? = null
+    /*
+     * The text's line starts, built in the background with each rendering of the preview (never in a scroll callback,
+     * and never for plain text or a text past the preview's limit): what maps the source to the preview's blocks.
+     */
+    var textLines: TextLines? = null; private set
+    /* A narrow switch's line, until the pane switched to can be put there. */
+    var keptLine: Double? = null
 
     fun showSource() {
         previewing = false
@@ -231,11 +263,72 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         previewTooLong = false
         previewing = true
         preview = null
+        render(text)
+    }
+
+    /* The window became wide or narrow: wide, the preview renders the text now and follows it from here. */
+    fun sideBySide(wide: Boolean) {
+        if (sideBySide == wide) return
+        sideBySide = wide
+        if (wide && markdown) follow()
+    }
+
+    /* Side by side, the text changed (or just opened): render it again, at once or right after the one on its way. */
+    private fun follow() {
+        if (!sideBySide || !markdown) return
+        val text = when (val now = phase) {
+            Phase.Editing -> buffer
+            is Phase.ReadOnly -> now.text ?: return
+            else -> return
+        }
+        // Past what the viewer renders: no preview at all (no spinner, no old blocks, nothing scrolled by it) until it
+        // fits again. The length alone settles most texts; only one that could go either way is counted in bytes.
+        if (tooLong(text)) {
+            previewTooLong = true
+            parsing?.cancel()
+            again = false
+            preview = null
+            lineMap = null
+            textLines = null
+            return
+        }
+        if (parsing?.isActive == true) {
+            again = true
+            return
+        }
+        render(text.toString())
+    }
+
+    /* Over MarkdownDocument.LIMIT in UTF-8 bytes: a UTF-16 unit is one to three bytes, so most lengths need no count. */
+    private fun tooLong(text: CharSequence): Boolean = when {
+        text.length > MarkdownDocument.LIMIT -> true
+        text.length * 3L <= MarkdownDocument.LIMIT -> false
+        else -> utf8Length(text) > MarkdownDocument.LIMIT
+    }
+
+    /*
+     * Parsed off the main thread: one rendering at a time, and one more once it lands if the text changed meanwhile, never
+     * a wait for typing to stop.
+     */
+    private fun render(text: String) {
         parsing?.cancel()
-        // Parsed off the main thread: a long file shouldn't hold up the switch.
+        again = false
         parsing = scope.launch {
-            val blocks = withContext(Dispatchers.Default) { MarkdownDocument.parse(text) }
-            if (previewing) preview = blocks
+            // Parsed, and the source's line starts indexed, off the main thread.
+            val (pieces, map, lines) = withContext(Dispatchers.Default) {
+                val parsed = MarkdownDocument.parseLined(text)
+                val starts = TextLines(text)
+                Triple(parsed, LineMap(parsed.map { it.start }, starts.count), starts)
+            }
+            if (!previewing && !sideBySide || previewTooLong) return@launch
+            lineMap = map
+            textLines = lines
+            preview = pieces
+            if (again) {
+                again = false
+                parsing = null
+                follow()
+            }
         }
     }
 
@@ -297,6 +390,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         status = null
         // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
         previewTooLong = false
+        follow()
     }
 
     /* The file as the server lists it now, read afresh: what a save writes is these bytes, edited. */
@@ -351,6 +445,10 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     format = null
                 }
             }
+            topOffset = 0
+            selection = null
+            textLines = null
+            follow()
         }
     }
 
@@ -474,6 +572,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         previewing = false
         previewTooLong = false
         preview = null
+        textLines = null
         load(target)
     }
 
@@ -490,6 +589,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         saveState = null
         previewTooLong = false
         preview = null
+        textLines = null
         previewing = false
         phase = Phase.Loading
     }
@@ -503,6 +603,33 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 @Composable
 fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Opened) -> Unit = {}) {
     val alpine = Alpine.colors
+    // Source and preview side by side when the window is wide (Adaptive.kt editorSideBySide), the switch when narrow.
+    val (widthDp, heightDp) = windowDp()
+    val side = edit.markdown && editorSideBySide(widthDp, heightDp)
+    LaunchedEffect(side) { edit.sideBySide(side) }
+    val listState = rememberLazyListState()
+    val coroutines = rememberCoroutineScope()
+    val scroll = remember(edit) { EditorScroll(edit) }
+    scroll.listState = listState
+    scroll.scope = coroutines
+    scroll.linked = side
+    // The preview scrolled: a person's scroll (a drag or its fling) moves the source; the link's own never comes back.
+    LaunchedEffect(listState, scroll) {
+        snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { (index, offset) -> scroll.previewMoved(index, offset, listState.isScrollInProgress) }
+    }
+    // A new rendering: beside the source it follows the source (typing keeps the cursor in view there); after a narrow
+    // switch it opens at the line the source had at its top.
+    LaunchedEffect(edit.preview) {
+        if (edit.preview == null) return@LaunchedEffect
+        val kept = edit.keptLine
+        if (!side && kept != null) {
+            edit.keptLine = null
+            scroll.movePreview(kept)
+        } else if (side) {
+            scroll.followSource()
+        }
+    }
     var leaving by remember { mutableStateOf(false) }
     var confirmTheirs by remember { mutableStateOf(false) }
     // While a save is on its way it may still publish: Close never offers Discard then, it waits (TextEdit.closing).
@@ -532,10 +659,17 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                     }
                     marks(edit.marked)
                     val phase = edit.phase
-                    if (edit.markdown && (phase == TextEdit.Phase.Editing || (phase is TextEdit.Phase.ReadOnly && phase.text != null))) {
+                    if (!side && edit.markdown && (phase == TextEdit.Phase.Editing || (phase is TextEdit.Phase.ReadOnly && phase.text != null))) {
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2)) {
-                            SegmentedButton(selected = !edit.previewing, onClick = edit::showSource, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text(EditorWords.SOURCE) }
-                            SegmentedButton(selected = edit.previewing, onClick = edit::showPreview, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text(EditorWords.PREVIEW) }
+                            // Each keeps the line the other had at its top.
+                            SegmentedButton(selected = !edit.previewing, onClick = {
+                                if (edit.previewing) scroll.previewLine()?.let(scroll::showSource)
+                                edit.showSource()
+                            }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text(EditorWords.SOURCE) }
+                            SegmentedButton(selected = edit.previewing, onClick = {
+                                if (!edit.previewing) edit.keptLine = scroll.sourceLine()
+                                edit.showPreview()
+                            }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text(EditorWords.PREVIEW) }
                         }
                     }
                 }
@@ -550,24 +684,24 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                         androidx.compose.material3.Button(onClick = { edit.load() }) { Text(EditorWords.TRY_AGAIN) }
                     }
                     is TextEdit.Phase.ReadOnly -> {
-                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
+                        if (edit.previewTooLong && !side) Note(EditorWords.PREVIEW_TOO_LONG)
                         Note(TextEditing.words(phase.reason))
                         phase.text?.let { text ->
-                            Box(Modifier.fillMaxSize()) {
-                                PlainText(text = text, buffer = null, onEdit = {}, hidden = edit.previewing)
-                                if (edit.previewing) MarkdownPreview(edit.preview)
+                            SourceAndPreview(side) {
+                                PlainText(text = text, buffer = null, onEdit = {}, scroll = scroll, hidden = edit.previewing && !side)
+                                if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side, unavailable = edit.previewTooLong)
                             }
                         } ?: Spacer(Modifier.height(0.dp))
                     }
                     TextEdit.Phase.Editing -> {
                         val line = if (edit.closing) EditorWords.FINISHING else edit.failure ?: edit.status.takeIf { !edit.edited }
                         line?.let { Note(it, failed = !edit.closing && edit.failure != null) }
-                        if (edit.previewTooLong) Note(EditorWords.PREVIEW_TOO_LONG)
+                        if (edit.previewTooLong && !side) Note(EditorWords.PREVIEW_TOO_LONG)
                         edit.format?.let(TextEditing::mixedNote)?.let { Note(it) }
                         // The EditText stays while the preview shows (out of sight, focus and TalkBack): it holds the text.
-                        Box(Modifier.fillMaxSize()) {
-                            PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited, hidden = edit.previewing)
-                            if (edit.previewing) MarkdownPreview(edit.preview)
+                        SourceAndPreview(side) {
+                            PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited, scroll = scroll, hidden = edit.previewing && !side)
+                            if (side || edit.previewing) MarkdownPreview(edit.preview, listState, divided = side, unavailable = edit.previewTooLong)
                         }
                     }
                 }
@@ -637,33 +771,200 @@ private fun Note(text: String, failed: Boolean = false) {
         modifier = Modifier.fillMaxWidth().background(alpine.surface).padding(horizontal = AlpineSpace.S4, vertical = AlpineSpace.S2))
 }
 
+/*
+ * The text and the preview: side by side when wide, else one over the other (the EditText kept underneath). One layout
+ * that only changes how it places them, so a change of width within the window keeps the same EditText.
+ */
+@Composable
+private fun SourceAndPreview(side: Boolean, content: @Composable () -> Unit) {
+    Layout(content, Modifier.fillMaxSize()) { measurables, constraints ->
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        val half = if (side) width / 2 else width
+        val placeables = measurables.mapIndexed { index, measurable ->
+            measurable.measure(Constraints.fixed(if (side && index == 1) width - half else half, height))
+        }
+        layout(width, height) {
+            placeables.forEachIndexed { index, placeable -> placeable.place(if (side && index == 1) half else 0, 0) }
+        }
+    }
+}
+
 /* The viewer's Markdown blocks (MarkdownViewer.kt): raw HTML dropped, links only on a tap, images named and never fetched. */
 @Composable
-private fun MarkdownPreview(blocks: List<MdBlock>?) {
+private fun MarkdownPreview(pieces: List<MdPiece>?, state: LazyListState, divided: Boolean, unavailable: Boolean = false) {
     val alpine = Alpine.colors
-    Box(Modifier.fillMaxSize().background(alpine.ground)) {
-        if (blocks == null) CircularProgressIndicator(color = alpine.primary, modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp))
+    val rule = alpine.rule
+    Box(Modifier.fillMaxSize().background(alpine.ground).drawBehind {
+        if (divided) drawLine(rule, Offset(0f, 0f), Offset(0f, size.height), 1.dp.toPx())
+    }) {
+        // Past the limit: said here, never a spinner for a rendering that won't start.
+        if (unavailable) Text(EditorWords.PREVIEW_TOO_LONG, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted,
+            modifier = Modifier.align(Alignment.TopCenter).padding(24.dp))
+        else if (pieces == null) CircularProgressIndicator(color = alpine.primary, modifier = Modifier.align(Alignment.TopCenter).padding(top = 48.dp))
         else LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = state,
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             // Not selectable: a copy from here would go to the clipboard without the editor's protections.
-            itemsIndexed(blocks) { _, block -> MarkdownBlockView(block) }
+            itemsIndexed(pieces) { _, piece -> MarkdownBlockView(piece.block) }
         }
+    }
+}
+
+/*
+ * The source (the EditText) and the preview (a LazyColumn) scrolled together, by source line (TextLines, LineMap): the
+ * line at the top of the text, and the block at the top of the preview and how far down it. Only a person's scroll
+ * leads. The link's own scroll of the text is set and seen in one call (`ours`), and its own move of the preview is
+ * recognised when it lands (`expected`), so neither comes back to move the pane that led.
+ */
+private class EditorScroll(val edit: TextEdit) {
+    var editText: EditText? = null
+    var listState: LazyListState? = null
+    var scope: CoroutineScope? = null
+    var linked = false
+    private var ours = false
+    private var expected: Pair<Int, Int>? = null
+
+    /* The top of a line and of the next, in the text's layout. */
+    private fun bounds(view: EditText, layout: android.text.Layout, lines: TextLines, line: Int): Pair<Int, Int> {
+        val top = layout.getLineTop(layout.getLineForOffset(lines.startOf(line)))
+        val next = if (line < lines.count) layout.getLineTop(layout.getLineForOffset(lines.startOf(line + 1))) else layout.height
+        return top to maxOf(next, top)
+    }
+
+    /* The fractional source line at the top of the text. */
+    fun sourceLine(): Double? {
+        val view = editText ?: return null
+        val layout = view.layout ?: return null
+        if (view.scrollY <= 0) return 1.0
+        val y = view.scrollY - view.totalPaddingTop
+        // The index the last rendering built; none (plain text, past the limit, not rendered yet): no line to give.
+        val lines = edit.textLines ?: return null
+        val line = lines.lineAt(layout.getLineStart(layout.getLineForVertical(maxOf(y, 0))))
+        val (top, next) = bounds(view, layout, lines, line)
+        val fraction = if (next > top) (y - top).toDouble() / (next - top) else 0.0
+        return line + fraction.coerceIn(0.0, 0.999)
+    }
+
+    /* Puts `line` at the top of the text. */
+    fun showSource(line: Double) {
+        val view = editText ?: return
+        val layout = view.layout ?: return
+        val lines = edit.textLines ?: return
+        val whole = line.toInt().coerceIn(1, lines.count)
+        val (top, next) = bounds(view, layout, lines, whole)
+        val most = maxOf(0, layout.height + view.totalPaddingTop + view.totalPaddingBottom - view.height)
+        val y = (top + (line - whole).coerceIn(0.0, 1.0) * (next - top)).toInt() + view.totalPaddingTop
+        scrollSource(view, y.coerceIn(0, most))
+    }
+
+    /* Puts text offset `offset` at the top of the text: a fold's restore, with no line index needed. */
+    fun showOffset(offset: Int) {
+        val view = editText ?: return
+        val layout = view.layout ?: return
+        val most = maxOf(0, layout.height + view.totalPaddingTop + view.totalPaddingBottom - view.height)
+        val y = layout.getLineTop(layout.getLineForOffset(offset.coerceIn(0, view.length()))) + view.totalPaddingTop
+        scrollSource(view, y.coerceIn(0, most))
+    }
+
+    private fun scrollSource(view: EditText, y: Int) {
+        ours = true
+        try {
+            view.scrollTo(0, y)
+        } finally {
+            ours = false
+        }
+        recordTop(view)
+    }
+
+    /* The offset at the top of the text, for a fold: the layout's own line start, no scan. */
+    private fun recordTop(view: EditText) {
+        val layout = view.layout ?: return
+        edit.topOffset = layout.getLineStart(layout.getLineForVertical(maxOf(view.scrollY - view.totalPaddingTop, 0)))
+    }
+
+    /* The text scrolled: kept for a fold, and side by side the preview follows, unless the link scrolled it. */
+    fun sourceScrolled() {
+        if (ours) return
+        editText?.let(::recordTop)
+        if (!linked) return
+        movePreview(sourceLine() ?: return)
+    }
+
+    /* Side by side, after a rendering: the preview goes where the source is. */
+    fun followSource() {
+        movePreview(sourceLine() ?: return)
+    }
+
+    /* The fractional source line at the top of the preview. */
+    fun previewLine(): Double? {
+        val state = listState ?: return null
+        val map = edit.lineMap ?: return null
+        // The item firstVisibleItemScrollOffset belongs to: one still showing in the content padding above is not it.
+        val index = state.firstVisibleItemIndex
+        val first = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index } ?: return null
+        val fraction = if (first.size > 0) state.firstVisibleItemScrollOffset.toDouble() / first.size else 0.0
+        return map.line(first.index, fraction)
+    }
+
+    /*
+     * Puts `line` at the top of the preview: its block, then as far down it as the line is. A block not laid out yet has
+     * no height to take a fraction of: it is scrolled to first, measured, and then put at the fraction (a narrow switch
+     * in the middle of a tall code block keeps its line).
+     */
+    fun movePreview(line: Double) {
+        val state = listState ?: return
+        val (index, fraction) = edit.lineMap?.place(line) ?: return
+        scope?.launch {
+            var size = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size
+            if (size == null) {
+                expected = index to 0
+                state.scrollToItem(index, 0)
+                withFrameNanos { }
+                size = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: return@launch
+            }
+            val offset = (fraction * size).toInt()
+            if (state.firstVisibleItemIndex == index && state.firstVisibleItemScrollOffset == offset) return@launch
+            expected = index to offset
+            state.scrollToItem(index, offset)
+        }
+    }
+
+    /* The preview's first block or offset changed: its own move lands here once and is let go; a person's moves the text. */
+    fun previewMoved(index: Int, offset: Int, byPerson: Boolean) {
+        if (expected == index to offset) {
+            expected = null
+            return
+        }
+        if (!byPerson || !linked) return
+        previewLine()?.let(::showSource)
     }
 }
 
 /* The EditText: over `buffer` in place when editing, or `text` read-only; `hidden` while the preview covers it. */
 @Composable
-private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: () -> Unit, hidden: Boolean = false) {
+private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: () -> Unit, scroll: EditorScroll, hidden: Boolean = false) {
     val alpine = Alpine.colors
     val ink = alpine.ink.toArgb()
     val background = alpine.ground.toArgb()
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { context ->
-            EditText(context).apply {
+            // Where the person was before a fold, an unfold or a resize made this view again: read before the new view's
+            // own first selection and scroll replace them.
+            val edit = scroll.edit
+            val keptSelection = edit.selection
+            val keptOffset = edit.topOffset
+            var ready = false
+            object : EditText(context) {
+                override fun onSelectionChanged(selStart: Int, selEnd: Int) {
+                    super.onSelectionChanged(selStart, selEnd)
+                    if (ready) edit.selection = selStart to selEnd
+                }
+            }.apply {
                 // The text is never written into the saved instance state (a Bundle the system may keep on disk).
                 isSaveEnabled = false
                 freezesText = false
@@ -692,13 +993,23 @@ private fun PlainText(text: String?, buffer: SpannableStringBuilder?, onEdit: ()
                     addTextChangedListener(object : TextWatcher {
                         override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                         override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                        override fun afterTextChanged(s: Editable?) = onEdit()
+                        override fun afterTextChanged(s: Editable?) {
+                            onEdit()
+                        }
                     })
                 } else {
                     contentDescription = "Text, read only"
                     keyListener = null
                     setTextIsSelectable(true)
                     setText(text.orEmpty())
+                }
+                scroll.editText = this
+                setOnScrollChangeListener { _, _, _, _, _ -> if (ready) scroll.sourceScrolled() }
+                keptSelection?.let { (start, end) -> setSelection(start.coerceIn(0, length()), end.coerceIn(0, length())) }
+                // Laid out first, then put back where it was.
+                post {
+                    scroll.showOffset(keptOffset)
+                    ready = true
                 }
             }
         },

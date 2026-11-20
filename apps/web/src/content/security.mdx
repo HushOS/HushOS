@@ -354,7 +354,7 @@ Every name and every version is also signed by the account that wrote it. Your d
         ],
         [
             'Viewers',
-            'After you unlock, the app fetches every viewer (the zip reader included, and the Markdown renderer the editor’s preview also uses), the text editor, every syntax grammar and structured-text parser and thumbnail renderer once, so which ones it fetched does not say what you opened or edited. An edit started before that finishes fetches every grammar and parser too, never just the one its file needs. Text in UTF-16 or with a byte order mark is read and written by the editor’s own code, so nothing more is fetched for it',
+            'After you unlock, the app fetches every viewer (the zip reader included, and the Markdown renderer the editor’s preview also uses, with every kind of diagram it draws), every syntax grammar the viewers use and every thumbnail renderer once, so which ones it fetched does not say what you opened. The text editor is fetched in full the first time you edit a file: the editor, every language it colours and every structured-text parser, the same whatever the file, so it says only that you edit, never what kind of file. Text in UTF-16 or with a byte order mark is read and written by the editor’s own code, so nothing more is fetched for it',
         ],
         [
             'Signatures',

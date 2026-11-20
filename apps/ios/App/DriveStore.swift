@@ -128,6 +128,91 @@ final class DriveStore {
     @ObservationIgnored private var heldIntent: (@MainActor () -> Void)?
     @ObservationIgnored private var intentDropped: (@MainActor () -> Void)?
     @ObservationIgnored var editorOpen = false
+    /*
+     * The open editor's work (EditorWork: its text view, baseline and state), held here rather than by the screens: an
+     * unfold or a resize that tears the screens down leaves it, and the viewer presented again presents the editor with it.
+     */
+    @ObservationIgnored let editorWork = EditorParking<Vault, EditorWork>()
+
+    /*
+     * Whether the editor's held work may stay, and be saved (EditAccess), asked of the work's own file, never of a
+     * viewer's page. A family folder's file: its family removed is a loss; otherwise the folder's write verdict now,
+     * the one that offers Edit (not writable here right now: the text stays, saves stop). A file in another's
+     * workspace: the share that let this person edit it, as the last listing that answered has it. Only a confirmed
+     * loss empties the text; a refresh that couldn't tell keeps it.
+     */
+    func editAccess(_ work: EditorWork) -> EditAccess {
+        let file = work.file
+        if isFamily(file) { return .family(removed: familyRemoved(file), writable: familyWritable(file)) }
+        guard let own = myWorkspace else { return .uncertain }
+        if own.lowercased() == file.node.workspaceId.lowercased() { return .allowed }
+        let listing = sharesListed ? mounts.map { EditAccess.Grant(id: $0.share.id, role: $0.share.role, opened: $0.root != nil) } : nil
+        return .share(grant: work.grant, listing: listing)
+    }
+
+    /*
+     * The share that lets this person edit `item` now (mayEdit's nearest grant up the item's folders, an editor's):
+     * recorded with the editor's work, so a later listing can say whether that grant itself went. Nil for their own
+     * file or a family's.
+     */
+    func editGrant(for item: Opened) -> String? {
+        guard !isFamily(item), let own = myWorkspace, own.lowercased() != item.node.workspaceId.lowercased() else { return nil }
+        let workspace = item.node.workspaceId.lowercased()
+        let opened = mounts.filter { $0.share.workspaceId.lowercased() == workspace && $0.root != nil }
+        var cursor: String? = item.id
+        var steps = 0
+        while let id = cursor, steps < 256 {
+            let here = opened.filter { $0.root?.id == id }
+            if !here.isEmpty { return here.first { $0.share.role == "editor" }?.share.id }
+            cursor = (id == item.id ? item : known(id, in: workspace))?.node.parentId
+            steps += 1
+        }
+        return nil
+    }
+
+    /* Access to the open editor's file couldn't be confirmed: asked again (its family's check, or the shares' listing). */
+    func recheckEditorAccess(_ file: Opened) async {
+        if let family = family(of: file) { await refreshFamily(family) } else { await refreshMounts() }
+    }
+
+    /* The open editor's file was taken out of reach while it was on screen: it ends, its text gone (TextEditorScreen). */
+    var editorAccessEnded = 0
+
+    /*
+     * A family's removal or a share revoked: the held work goes now, on screen or parked, and an editor on screen ends.
+     * Checked against the editing target itself, whichever page a viewer shows. A refresh that couldn't tell keeps it.
+     */
+    private func checkEditorWork() {
+        guard let (work, presented) = editorWork.check(access: { [unowned self] _, work in editAccess(work) }) else { return }
+        if presented {
+            work.box.forget()
+            editorAccessEnded += 1
+        } else {
+            parkedEditorDropped(work)
+        }
+    }
+
+    /*
+     * Parked work let go with no editor on screen to close (access lost, or refused when it was to be presented again):
+     * its text emptied, and what its screen's close would have done, done here, so a link or a notification held for
+     * the editor goes on instead of waiting for one that no longer exists.
+     */
+    func parkedEditorDropped(_ work: EditorWork) {
+        work.box.forget()
+        holdForEditor(nil)
+        editorClosed()
+    }
+
+    /* Its family removed, forked or refused (FileViewer's familyGone, for a file no viewer shows). */
+    func familyRemoved(_ item: Opened) -> Bool {
+        guard isFamily(item), let groupId = familyAreaGroups[item.node.workspaceId.lowercased()],
+              let state = familyStates[groupId] else { return false }
+        switch state {
+        case .accepted: return false
+        case .failed(let words): return words != FamilyWords.noAnswer
+        default: return true
+        }
+    }
     var editorLeaveAsked = 0
 
     /* A move a notification asked for (another tab, a sheet): now, or once the editor has closed (never under it). */
@@ -139,6 +224,9 @@ final class DriveStore {
         intentDropped = dropped
         editorLeaveAsked += 1
     }
+
+    /* A link or an intent waits for the open editor's answer (Discard or Keep editing). */
+    var editorHoldsSomething: Bool { heldRoute != nil || heldIntent != nil }
 
     /* The editor's screen has gone (Discard, saved, nothing to lose, or its session ended): what was held goes on, once. */
     func editorClosed() {
@@ -197,7 +285,9 @@ final class DriveStore {
      * carry the family's verdicts, not the personal trust set's.
      */
     var familyList: [GroupSummary]?
-    var familyStates: [String: FamilyState] = [:]
+    var familyStates: [String: FamilyState] = [:] {
+        didSet { checkEditorWork() }
+    }
     /* How many times each family's state was published (`publishFamily`): a screen's own sync shown only over none newer. */
     @ObservationIgnored var familyGenerations = FamilyGenerations()
     /* The revision each family's shown answer was found at (FamilySync.syncRevised): only a later look replaces it. */
@@ -278,7 +368,14 @@ final class DriveStore {
     /* Moved by every trust reload (refreshSigners): pins saved or changed on another device are read again on it. */
     var trustGeneration = 0
     @ObservationIgnored var familiesSyncedAt: Date?
-    var mounts: [ShareMount] = []
+    var mounts: [ShareMount] = [] {
+        didSet {
+            sharesListed = true
+            checkEditorWork()
+        }
+    }
+    /* Whether a listing of received shares has answered this session: until then none is taken for revoked. */
+    @ObservationIgnored private var sharesListed = false
     var mountsError: String?
     var mountsLoaded = false
     var busy = false
@@ -439,6 +536,8 @@ final class DriveStore {
     func adopt(_ next: Vault) async {
         guard next !== vault else { return }
         vault = next
+        // An open editor's text belonged to the last session: emptied, not handed to this one.
+        editorWork.drop()?.box.forget()
         // A new session for this account (signed in again, here or from the Files sheet): the old one's end is no longer news.
         if error == Self.sessionEnded { error = nil }
         // The new session's vault has its own area ledger: families are checked again under it, and nothing the

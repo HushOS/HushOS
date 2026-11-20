@@ -6,8 +6,9 @@ import { parseFailure, type StructuredKind } from '@/lib/text-parse';
  * or the editor closing), so no parse, however long, holds the page. A YAML
  * file of 60,000 keys takes the parser seconds. XML is the browser's own
  * DOMParser, which a worker doesn't have; it stays here, under the editor's
- * size bound. The worker's script is fetched with the post-unlock preload
- * (`preloadCheckWorker`), so a check fetches nothing that says what was edited.
+ * size bound. The worker's script is fetched with the rest of the editor on the
+ * first Edit, whatever the file (`preloadCheckWorker`), so a check fetches
+ * nothing that says what was edited.
  */
 
 /* Where no worker can start, only text this small is checked here (a few milliseconds); larger goes unchecked. */
@@ -57,7 +58,7 @@ export function startCheck(kind: StructuredKind, text: string): Check {
     return { result, cancel: () => end('skipped') };
 }
 
-/* Fetches the check worker's script after unlock: started, asked to load, and let go. */
+/* Fetches the check worker's script with the editor's other code: started, asked to load, and let go. */
 export function preloadCheckWorker() {
     if (typeof Worker === 'undefined') return;
     try {

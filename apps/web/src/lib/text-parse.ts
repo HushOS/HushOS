@@ -15,8 +15,8 @@ const NAMES: Record<StructuredKind, string> = {
 };
 
 /*
- * The parsers and the check worker, for the post-unlock preload: fetched whether or not such a
- * file is edited (lib/text-check.ts runs the checks in the worker).
+ * The parsers and the check worker, fetched with the editor's other code on the first Edit, whether
+ * or not such a file is edited (lib/text-check.ts runs the checks in the worker).
  */
 let parsers: Promise<void> | null = null;
 export function preloadParsers() {

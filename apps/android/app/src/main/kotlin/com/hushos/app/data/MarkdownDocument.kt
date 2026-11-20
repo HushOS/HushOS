@@ -31,6 +31,7 @@ import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.Text
 import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 
 /*
@@ -46,6 +47,8 @@ object MarkdownDocument {
 
     private val parser = Parser.builder()
         .extensions(listOf(TablesExtension.create(), TaskListItemsExtension.create(), StrikethroughExtension.create(), AutolinkExtension.create()))
+        // Each block's source lines, for the editor's preview to scroll with its source (parseLined).
+        .includeSourceSpans(IncludeSourceSpans.BLOCKS)
         .build()
 
     /* Opened in the Markdown viewer: the web's previewKind rule. */
@@ -101,7 +104,14 @@ object MarkdownDocument {
     private const val CHARS_PER_WEIGHT = 200
 
     // A UTF-8 byte order mark is not the document's (the web's TextDecoder drops it): left in, "# Title" isn't a heading.
-    fun parse(text: String): List<MdBlock> = parseWhole(text.removePrefix("\uFEFF"))
+    fun parse(text: String): List<MdBlock> = parseLined(text).map { it.block }
+
+    /*
+     * The blocks with the source line each starts at, for the editor's preview to scroll with its source (the web's
+     * data-source-line, lib/scroll-sync.ts). A block cut into pieces shares its lines out among them in proportion; the file
+     * shown as its text spreads over all of its lines.
+     */
+    fun parseLined(text: String): List<MdPiece> = parseWhole(text.removePrefix("\uFEFF"))
 
     /*
      * Past this many emphasis and link marks the file is shown as its text, before the parser builds its tree: 2 MB of
@@ -110,18 +120,41 @@ object MarkdownDocument {
      */
     const val MARKS = 200_000
 
-    private fun parseWhole(text: String): List<MdBlock> = try {
-        if (text.count { it == '*' || it == '_' || it == '~' || it == '[' } > MARKS) cut(MdBlock.Code(null, flat(text)))
-        else blocks(parser.parse(text), 0)
-    } catch (_: StackOverflowError) {
-        // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
-        cut(MdBlock.Code(null, flat(text)))
-    } catch (_: OutOfMemoryError) {
-        // Anything else the scan above misses: the tree is dropped as this unwinds, and the text is shown instead.
-        cut(MdBlock.Code(null, flat(text)))
-    } catch (_: RuntimeException) {
-        // The parser refuses some files outright (a table of more than a million cells, from 14 KB): shown as text too.
-        cut(MdBlock.Code(null, flat(text)))
+    private fun parseWhole(text: String): List<MdPiece> {
+        val asText = { spread(cut(MdBlock.Code(null, flat(text))), 1.0, (text.count { it == '\n' } + 2).toDouble()) }
+        return try {
+            if (text.count { it == '*' || it == '_' || it == '~' || it == '[' } > MARKS) asText()
+            else lined(parser.parse(text))
+        } catch (_: StackOverflowError) {
+            // Nothing here should recurse that far; if the parser itself does, the file is shown as its text.
+            asText()
+        } catch (_: OutOfMemoryError) {
+            // Anything else the scan above misses: the tree is dropped as this unwinds, and the text is shown instead.
+            asText()
+        } catch (_: RuntimeException) {
+            // The parser refuses some files outright (a table of more than a million cells, from 14 KB): shown as text too.
+            asText()
+        }
+    }
+
+    /* The document's blocks, each with the lines its source spans (1-based; commonmark-java counts from 0). */
+    private fun lined(document: Node): List<MdPiece> {
+        val pieces = mutableListOf<MdPiece>()
+        for (child in children(document)) {
+            val made = block(child, 0) ?: continue
+            val after = pieces.lastOrNull()?.start ?: 1.0
+            val spans = child.sourceSpans
+            val start = spans.firstOrNull()?.let { it.lineIndex + 1.0 } ?: after
+            val end = spans.lastOrNull()?.let { it.lineIndex + 2.0 } ?: (start + 1)
+            pieces += spread(cut(made), maxOf(start, after), maxOf(end, start + 1))
+        }
+        return pieces
+    }
+
+    /* `blocks` sharing the lines from `start` up to `end` in equal parts, in order. */
+    private fun spread(blocks: List<MdBlock>, start: Double, end: Double): List<MdPiece> {
+        val share = (end - start) / maxOf(blocks.size, 1)
+        return blocks.mapIndexed { index, block -> MdPiece(block, start + share * index) }
     }
 
     private fun children(node: Node): Sequence<Node> = generateSequence(node.firstChild) { it.next }
@@ -419,6 +452,9 @@ object MarkdownDocument {
         return target.takeIf { scheme in setOf("http", "https", "mailto") && target.length > scheme.length + 1 }
     }
 }
+
+/* A block and the source line it starts at (1-based; fractional for a piece of a block cut in several). */
+data class MdPiece(val block: MdBlock, val start: Double)
 
 sealed interface MdBlock {
     data class Heading(val level: Int, val inline: MdInline) : MdBlock

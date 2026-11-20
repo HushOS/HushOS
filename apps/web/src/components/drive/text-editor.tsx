@@ -32,6 +32,7 @@ import {
     Suspense,
     useCallback,
     useEffect,
+    useLayoutEffect,
     useRef,
     useState,
     type ReactNode,
@@ -61,17 +62,21 @@ import {
     invalidateFolders,
     nodeSize,
 } from '@/lib/drive';
-import {
-    allLanguages,
-    editorLanguage,
-    loadLanguage,
-    preloadLanguages,
-    wrapsLines,
-} from '@/lib/editor-languages';
+import { allLanguages, editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
+import { frameThrottle, type FrameThrottle } from '@/lib/frame-throttle';
 import { holdPageWhile } from '@/lib/leave-guard';
 import { MARKDOWN_LIMIT } from '@/lib/markdown-limit';
 import { openReader, previewKindOf, readAll, type ReadProgress } from '@/lib/previews';
 import { RunStopped, SaveRefused, startSaveRun } from '@/lib/save-runs';
+import {
+    type Block,
+    lineForOffset,
+    measureBlocks,
+    offsetForLine,
+    ScrollLink,
+    type ScrollPane,
+    type Side,
+} from '@/lib/scroll-sync';
 import {
     mixedNote,
     openText,
@@ -108,12 +113,14 @@ const EditorPreview = lazy(() =>
  * explicit (Save, Ctrl or Cmd+S), a new version through the save path, with the stale
  * choices when someone else saved first. A save writes the file's own encoding, byte order mark
  * and line breaks (saveBytes); a file it can't save byte for byte opens read-only with a note.
- * Markdown shows the viewer's rendering beside the source on a wide screen, and Source or Preview
- * on a narrow one. Its text lives in this component only: a lock or a sign-out unmounts the drive
- * and the text goes with it, and nothing is kept on this device (drafts are Editing 1c).
+ * Markdown shows the viewer's rendering beside the source on a wide screen, following typing and
+ * scrolling with it both ways, and Source or Preview on a narrow one. Its text lives in this
+ * component only: a lock or a sign-out unmounts the drive and the text goes with it, and nothing is
+ * kept on this device (drafts are Editing 1c).
  *
- * Fetched with every grammar and parser in the post-unlock preload (lib/preload.ts), never on
- * first use, so which chunks a device fetched never says what kind of file was edited.
+ * Not in the post-unlock preload: the first Edit fetches the editor with every grammar, parser and
+ * the preview's renderer (editorAssets), the same set whatever the file, so which chunks a device
+ * fetched says only that someone edits, never what kind of file.
  */
 
 /*
@@ -130,21 +137,12 @@ export type EditGuard = {
 };
 type SessionToken = { opening: number; account: number };
 
-/*
- * The editor with every grammar and parser it may use, fetched after unlock (lib/preload.ts,
- * editing-design.md section 4): which ones a device fetched never says what was edited.
- */
-export async function preloadEditor() {
-    await preloadLanguages();
-    await preloadParsers();
-    await import('@/components/drive/editor-preview');
-}
 type GuardRef = { readonly current: EditGuard };
 
 /*
- * Every grammar and parser, whatever file the editor opens: an Edit pressed before the post-unlock
- * preload got to them fetches the whole set (in one fixed order), never one that names the file's
- * kind. Already fetched, it costs nothing.
+ * Every grammar and parser, whatever file the editor opens: the first Edit fetches the whole set (in
+ * one fixed order) while the editor says it is opening, never one that names the file's kind
+ * (editing-design.md section 4). Already fetched, it costs nothing.
  */
 function editorAssets() {
     return Promise.all([
@@ -359,11 +357,73 @@ function tooLongToPreview(doc: Text) {
 }
 
 /*
- * The preview follows typing only up to this length: parsing Markdown runs on the main thread, about
- * 30 ms for 32K characters on a fast laptop (a phone takes a few times that), and a megabyte took over
- * a second. A longer text is rendered when the preview comes into view, then again on Refresh preview.
+ * The preview follows typing only up to this length: parsing and rendering Markdown runs on the main
+ * thread on every frame that has a change. Measured on a fast laptop against a production build
+ * (60 keys, one every 80 ms): at 32K characters 48 of them left a task of about 50 ms (three dropped
+ * frames each); from 8K to 24K, at most one did (about half that per key at 16K). A phone or a slow
+ * laptop takes a few times as long, so the bound is 16K. A longer text is rendered when the preview
+ * comes into view, then again on Refresh preview.
  */
-const PREVIEW_LIVE_LIMIT = 32 * 1024;
+const PREVIEW_LIVE_LIMIT = 16 * 1024;
+
+/*
+ * The source as a scroll pane: a fractional line from CodeMirror's line blocks (a wrapped line is one
+ * block), so a position inside a long paragraph maps inside its rendering.
+ */
+function sourcePane(view: EditorView): ScrollPane {
+    const scroller = view.scrollDOM;
+    /* Where the document's first line starts in the scroller's content. */
+    const documentAt = () =>
+        view.documentTop - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    return {
+        scroller,
+        lineAt: (top) => {
+            const height = top - documentAt();
+            if (height <= 0) return 1;
+            const block = view.lineBlockAtHeight(height);
+            const line = view.state.doc.lineAt(block.from).number;
+            const within = block.height > 0 ? (height - block.top) / block.height : 0;
+            return line + Math.min(Math.max(within, 0), 0.999);
+        },
+        topOf: (line) => {
+            const doc = view.state.doc;
+            const number = Math.min(Math.max(Math.floor(line), 1), doc.lines);
+            const block = view.lineBlockAt(doc.line(number).from);
+            const within = Math.min(Math.max(line - number, 0), 1);
+            return documentAt() + block.top + within * block.height;
+        },
+    };
+}
+
+/*
+ * The link between the source and the preview (lib/scroll-sync.ts), over the panes on screen when it is
+ * asked: a hidden one (the narrow switch's other) has no layout to read. The preview's blocks are measured
+ * once per rendering or change of size (`previewBlocks`, emptied then) and kept for every scroll between.
+ */
+function scrollLinkFor(refs: {
+    source: { readonly current: EditorView | null };
+    sourceHost: { readonly current: HTMLElement | null };
+    preview: { readonly current: HTMLElement | null };
+    previewBlocks: { current: Block[] | null };
+}) {
+    const shownNow = (element: HTMLElement | null) =>
+        element !== null && element.getClientRects().length > 0;
+    return new ScrollLink(() => {
+        const panes: Partial<Record<Side, ScrollPane>> = {};
+        const source = refs.source.current;
+        if (source && shownNow(refs.sourceHost.current)) panes.source = sourcePane(source);
+        const scroller = refs.preview.current;
+        if (scroller && shownNow(scroller)) {
+            const blocks = () => (refs.previewBlocks.current ??= measureBlocks(scroller));
+            panes.preview = {
+                scroller,
+                lineAt: (top) => lineForOffset(blocks(), top),
+                topOf: (line) => offsetForLine(blocks(), line),
+            };
+        }
+        return panes;
+    });
+}
 
 /*
  * The preview's own failure (its renderer's chunk didn't load, or the renderer threw) stays in the
@@ -450,6 +510,8 @@ export function TextEditor({
     const target = useRef<EditTarget>(openedTarget(node));
     const host = useRef<HTMLDivElement>(null);
     const view = useRef<EditorView | null>(null);
+    /* The editor on screen, for its scroll events: a new one comes with Open theirs. */
+    const [sourceView, setSourceView] = useState<EditorView | null>(null);
     /* Whether the text may be changed: off for a read-only file, and once a copy's file can't be told. */
     const editability = useRef(new Compartment());
     const saved = useRef<Text | null>(null);
@@ -523,6 +585,8 @@ export function TextEditor({
         // Read for this account session only: a lock, a sign-out or another sign-in meanwhile shows nothing.
         const account = deviceSession.generation();
         const still = () => active && deviceSession.generation() === account;
+        // The editor's whole fixed set, fetched beside the read: the text shows once both are here.
+        const assets = editorAssets();
         void (async () => {
             // The file as the server lists it now: a listing on screen can be a version behind
             // (another device's save the feed hasn't brought yet), and editing that one would end
@@ -553,6 +617,8 @@ export function TextEditor({
                     TEXT_EDIT_LIMIT + 1,
                     (progress) => still() && setPhase({ kind: 'loading', progress }),
                 );
+                if (!still()) return;
+                await assets;
                 if (!still()) return;
                 const text = openText(bytes);
                 target.current = openedTarget(file);
@@ -611,6 +677,7 @@ export function TextEditor({
             }),
         });
         view.current = made;
+        setSourceView(made);
         saved.current = made.state.doc;
         markDirty(false);
         setEdits((count) => count + 1);
@@ -625,6 +692,7 @@ export function TextEditor({
             active = false;
             made.destroy();
             if (view.current === made) view.current = null;
+            setSourceView((shown) => (shown === made ? null : shown));
             saved.current = null;
         };
     }, [shownText, editable, language, loadFrom.name, markDirty]);
@@ -665,10 +733,11 @@ export function TextEditor({
         };
     }, [edits, checks, editable]);
 
-    // The Markdown preview, a moment after typing stops: the viewer's renderer, sanitized the same
-    // way (images and links named, never fetched). Past the renderer's limit it says so instead.
-    // Nothing is scheduled or mounted while it can't be seen; it shows the text as it is now when it can.
-    // Past PREVIEW_LIVE_LIMIT it stops following typing and offers Refresh preview instead.
+    // The Markdown preview, following typing at most once a frame (never waiting for it to stop): the
+    // viewer's renderer, sanitized the same way (images and links named, never fetched). Past the
+    // renderer's limit it says so instead. Nothing is scheduled or mounted while it can't be seen; it
+    // shows the text as it is now when it can. Past PREVIEW_LIVE_LIMIT it stops following typing and
+    // offers Refresh preview instead.
     /*
      * The editor and the document (CodeMirror's are immutable: a change is a new one) the preview last
      * rendered: a new editor (Open theirs) renders at once, and only a document that differs is stale.
@@ -683,9 +752,17 @@ export function TextEditor({
         previewedDoc.current = doc;
         setPreview({ text: tooLongToPreview(doc) ? null : doc.toString(), stale: false });
     }, [setPreview]);
+    /* Leading and trailing, at most once a frame: the first keystroke shows at once, the last always. */
+    const followTyping = useRef<FrameThrottle | null>(null);
+    useEffect(() => {
+        const throttle = frameThrottle(renderPreview);
+        followTyping.current = throttle;
+        return () => throttle.cancel();
+    }, [renderPreview]);
     useEffect(() => {
         const current = view.current;
         if (!previewShown || !current) {
+            followTyping.current?.cancel();
             previewedFrom.current = null;
             previewedDoc.current = null;
             setPreview(null);
@@ -693,18 +770,96 @@ export function TextEditor({
         }
         // At once when it comes into view or a new text opens, so it never opens empty or on older text.
         if (previewedFrom.current !== current) {
+            followTyping.current?.cancel();
             const timer = window.setTimeout(renderPreview, 0);
             return () => window.clearTimeout(timer);
         }
         // Already showing this text (a render that landed before this effect saw its count): nothing to do.
         if (current.state.doc === previewedDoc.current) return;
         if (current.state.doc.length > PREVIEW_LIVE_LIMIT) {
+            followTyping.current?.cancel();
             setPreview((shown) => (shown && !shown.stale ? { ...shown, stale: true } : shown));
             return;
         }
-        const timer = window.setTimeout(renderPreview, 250);
-        return () => window.clearTimeout(timer);
+        followTyping.current?.call();
     }, [edits, previewShown, renderPreview]);
+
+    // Scrolling together (lib/scroll-sync.ts): beside each other, either pane moves the other; on a
+    // narrow screen, switching between them keeps the line that was at the top.
+    const previewScroller = useRef<HTMLElement>(null);
+    /* The preview's blocks as last measured; null once it renders again or changes size. */
+    const previewBlocks = useRef<Block[] | null>(null);
+    /* A narrow switch's line, until the pane switched to can be put there. */
+    const keptLine = useRef<{ side: Side; line: number } | null>(null);
+    /* Made on first use, outside render: it reads the panes' refs only when asked. */
+    const linkRef = useRef<ScrollLink | null>(null);
+    const scrollLink = useCallback(
+        () =>
+            (linkRef.current ??= scrollLinkFor({
+                source: view,
+                sourceHost: host,
+                preview: previewScroller,
+                previewBlocks,
+            })),
+        [],
+    );
+    const sideBySide = markdown && wide;
+    useEffect(() => {
+        const scroller = previewScroller.current;
+        if (!sideBySide || !sourceView || !scroller || !previewShown) return;
+        const fromSource = () => scrollLink().scrolled('source');
+        const fromPreview = () => scrollLink().scrolled('preview');
+        sourceView.scrollDOM.addEventListener('scroll', fromSource, { passive: true });
+        scroller.addEventListener('scroll', fromPreview, { passive: true });
+        return () => {
+            sourceView.scrollDOM.removeEventListener('scroll', fromSource);
+            scroller.removeEventListener('scroll', fromPreview);
+        };
+    }, [sideBySide, sourceView, previewShown, scrollLink]);
+    /* The preview changed (rendered again, or resized): measured afresh, and put where the source is. */
+    const previewMoved = useCallback(() => {
+        previewBlocks.current = null;
+        const kept = keptLine.current;
+        if (kept?.side === 'preview') {
+            if (scrollLink().show('preview', kept.line)) keptLine.current = null;
+            return;
+        }
+        // Typing: the source keeps the cursor in view, and the preview follows the source.
+        if (sideBySide) scrollLink().follow('source');
+    }, [scrollLink, sideBySide]);
+    useLayoutEffect(() => {
+        if (preview) previewMoved();
+    }, [preview, previewMoved]);
+    /*
+     * The preview's body, watched for its own size from when it mounts until it unmounts (a callback ref):
+     * Open theirs or a narrow switch mounts a new body, and the observer follows it, never the old one.
+     */
+    const latestPreviewMoved = useRef(previewMoved);
+    useEffect(() => {
+        latestPreviewMoved.current = previewMoved;
+    });
+    const previewBody = useCallback((body: HTMLDivElement | null) => {
+        if (!body) return;
+        const observer = new ResizeObserver(() => latestPreviewMoved.current());
+        observer.observe(body);
+        return () => observer.disconnect();
+    }, []);
+    /* Source or Preview on a narrow screen, keeping the line at the top of the one left. */
+    const switchPane = (next: 'source' | 'preview') => {
+        if (next === pane) return;
+        const line = scrollLink().lineOf(pane);
+        keptLine.current = line === null ? null : { side: next, line };
+        setPane(next);
+    };
+    useLayoutEffect(() => {
+        const kept = keptLine.current;
+        if (pane !== 'source' || kept?.side !== 'source') return;
+        keptLine.current = null;
+        // CodeMirror measures again once it is shown: put the line at the top after that too.
+        scrollLink().show('source', kept.line);
+        const frame = requestAnimationFrame(() => scrollLink().show('source', kept.line));
+        return () => cancelAnimationFrame(frame);
+    }, [pane, scrollLink]);
 
     // Leaving the page with changes asks first; a lock or a sign-out (no account unlocked) never waits on it.
     useEffect(
@@ -1061,7 +1216,7 @@ export function TextEditor({
                                   key={value}
                                   type="button"
                                   aria-pressed={pane === value}
-                                  onClick={() => setPane(value)}
+                                  onClick={() => switchPane(value)}
                                   className={cn(
                                       'h-8 cursor-pointer rounded-sm px-2.5 text-[13px] font-semibold outline-none focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-ring sm:px-3',
                                       pane === value
@@ -1166,32 +1321,36 @@ export function TextEditor({
                     {previewShown && (
                         // Beside the source on a wide screen; in its place on a narrow one, when chosen.
                         <section
+                            ref={previewScroller}
                             aria-label={editorWords.preview}
                             data-markdown-preview
-                            className="min-h-0 min-w-0 flex-1 overflow-auto border-rule lg:border-l"
+                            // No scroll anchoring: the preview moves only with the source or the person.
+                            className="min-h-0 min-w-0 flex-1 overflow-auto border-rule [overflow-anchor:none] lg:border-l"
                         >
-                            {preview?.stale && (
-                                <div className="sticky top-0 z-10 flex justify-end border-b border-rule bg-background px-4 py-2">
-                                    <Button variant="outline" onClick={renderPreview}>
-                                        {editorWords.refreshPreview}
-                                    </Button>
-                                </div>
-                            )}
-                            {preview?.text === null ? (
-                                <p className="px-6 py-10 text-center text-sm text-muted-foreground">
-                                    {editorWords.previewTooLong}
-                                </p>
-                            ) : (
-                                preview && (
-                                    // A failure here stays in this pane: the source, its text and Save go on.
-                                    <PreviewBoundary text={preview.text}>
-                                        <Suspense fallback={null}>
-                                            {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
-                                            <EditorPreview text={preview.text} />
-                                        </Suspense>
-                                    </PreviewBoundary>
-                                )
-                            )}
+                            <div ref={previewBody}>
+                                {preview?.stale && (
+                                    <div className="sticky top-0 z-10 flex justify-end border-b border-rule bg-background px-4 py-2">
+                                        <Button variant="outline" onClick={renderPreview}>
+                                            {editorWords.refreshPreview}
+                                        </Button>
+                                    </div>
+                                )}
+                                {preview?.text === null ? (
+                                    <p className="px-6 py-10 text-center text-sm text-muted-foreground">
+                                        {editorWords.previewTooLong}
+                                    </p>
+                                ) : (
+                                    preview && (
+                                        // A failure here stays in this pane: the source, its text and Save go on.
+                                        <PreviewBoundary text={preview.text}>
+                                            <Suspense fallback={null}>
+                                                {/* Fences stay plain until the preload has every grammar: typing one never fetches its language's. */}
+                                                <EditorPreview text={preview.text} />
+                                            </Suspense>
+                                        </PreviewBoundary>
+                                    )
+                                )}
+                            </div>
                         </section>
                     )}
                 </div>

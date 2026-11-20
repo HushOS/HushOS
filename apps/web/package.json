@@ -92,6 +92,7 @@
         "mediabunny": "^1.66.1",
         "motion": "^14.14.0",
         "pdfjs-dist": "6.5.438",
+        "pele": "1.13.0",
         "react": "19.3.1",
         "react-dom": "19.3.1",
         "rehype-sanitize": "6.0.0",
