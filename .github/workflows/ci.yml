@@ -521,10 +521,12 @@ jobs:
     # Built on pull requests only with the `full-ci` label (a Dockerfile change wants it);
     # every push to main builds and publishes them as sha-<commit>. Not `latest`: runs for
     # different commits overlap, and an older one finishing last would move it backwards. The
-    # `latest` job moves it, in commit order.
+    # `latest` job moves it, in commit order. They wait for the unit tests as well as the checks:
+    # a self-hoster can pin a sha- tag, so one must never be published for a commit whose tests
+    # failed.
     images:
         name: Image ${{ matrix.image }}
-        needs: check
+        needs: [check, test]
         if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'full-ci')
         runs-on: ubuntu-latest
         permissions:
