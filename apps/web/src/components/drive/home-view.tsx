@@ -82,6 +82,11 @@ function folderLink(rootId: string, folderId: string) {
 }
 
 // One PDF's dialog arrives when it is first asked for, not with Home.
+const PdfPagesDialog = lazy(() =>
+    import('@/components/drive/dialogs/pdf-pages-dialog').then((m) => ({
+        default: m.PdfPagesDialog,
+    })),
+);
 const ImagesPdfDialog = lazy(() =>
     import('@/components/drive/dialogs/images-pdf-dialog').then((m) => ({
         default: m.ImagesPdfDialog,
@@ -142,6 +147,11 @@ export function HomeView() {
         name: string;
         images: DriveNode[];
     } | null>(null);
+    const [pagesFor, setPagesFor] = useState<{
+        folder: DriveNode;
+        name: string;
+        files: DriveNode[];
+    } | null>(null);
     const [moving, setMoving] = useState<DriveNode[] | null>(null);
     const [copying, setCopying] = useState<DriveNode[] | null>(null);
     const [versionsOf, setVersionsOf] = useState<DriveNode | null>(null);
@@ -175,8 +185,9 @@ export function HomeView() {
         tagging !== null ||
         paletteOpen ||
         previewing !== null ||
-        // One PDF's dialog: Delete or Enter there acts on its controls, never the images behind it.
-        pdfFor !== null
+        // One PDF's and Edit pages' dialogs: Delete or Enter there acts on their controls, never the files behind.
+        pdfFor !== null ||
+        pagesFor !== null
     );
 
     const access = useAccessIndex(true);
@@ -385,6 +396,7 @@ export function HomeView() {
         onReport: null,
         onTrash: (nodes) => void trash(nodes),
         onImagesPdf: (nodes) => void onePdf(nodes),
+        onPdfPages: (nodes) => void editPages(nodes),
     };
     /*
      * Convert, then One PDF, from Home: into the folder the images are in (the catalogue holds only one's own),
@@ -411,6 +423,34 @@ export function HomeView() {
                 folder: target,
                 name: target.parentId === null ? 'My files' : target.name,
                 images: nodes,
+            });
+        } catch (error) {
+            toast.add({ type: 'error', title: driveError(error) });
+        }
+    }
+    /* Edit pages from Home: into the folder the PDFs are in, all of them in that one folder. */
+    async function editPages(nodes: DriveNode[]) {
+        const [first] = nodes;
+        if (!first?.parentId) return;
+        if (
+            nodes.some(
+                (node) =>
+                    node.parentId !== first.parentId || node.workspaceId !== first.workspaceId,
+            )
+        ) {
+            const { MIXED_FOLDERS: mixed } = await import('@/lib/pdf-tools/names');
+            toast.add({ type: 'error', title: mixed });
+            return;
+        }
+        try {
+            const listing = await queryClient.fetchQuery(
+                folderQueryOptions(first.parentId, first.workspaceId),
+            );
+            const target = listing.folder;
+            setPagesFor({
+                folder: target,
+                name: target.parentId === null ? 'My files' : target.name,
+                files: nodes,
             });
         } catch (error) {
             toast.add({ type: 'error', title: driveError(error) });
@@ -725,7 +765,32 @@ export function HomeView() {
                     onSelectAll={selectAll}
                     onClear={clear}
                     onImagesPdf={(nodes) => void onePdf(nodes)}
+                    onPdfPages={(nodes) => void editPages(nodes)}
                 />
+            )}
+            {pagesFor && (
+                <Suspense fallback={null}>
+                    <PdfPagesDialog
+                        folder={pagesFor.folder}
+                        files={pagesFor.files}
+                        onOpenChange={(open) => !open && setPagesFor(null)}
+                        onSave={(choice) => {
+                            const { folder: into, name, files } = pagesFor;
+                            clear();
+                            // A lock while the engine loads drops this start before it names anything.
+                            const from = toolRunRows.epoch();
+                            void import('@/lib/pdf-tools/make').then(({ savePdfPages }) => {
+                                if (toolRunRows.epoch() !== from) return;
+                                void savePdfPages(queryClient, {
+                                    folder: into,
+                                    folderName: name,
+                                    sources: files,
+                                    ...choice,
+                                });
+                            });
+                        }}
+                    />
+                </Suspense>
             )}
             {pdfFor && (
                 <Suspense fallback={null}>

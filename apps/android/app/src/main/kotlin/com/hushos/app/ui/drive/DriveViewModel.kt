@@ -647,6 +647,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     private fun leaveSession() {
         if (state.value.gate != Gate.SIGNED_IN) return
         endImagesPdf()
+        endPdfPages()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -976,6 +977,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
     fun signOut() {
         endTwoStepFlow()
         endImagesPdf()
+        endPdfPages()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -1016,6 +1018,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         if (ownChange.mutesSessionEnd) return
         endTwoStepFlow()
         endImagesPdf()
+        endPdfPages()
         approvals.clear()
         showingOwnWords = false
         contactStep = null
@@ -2688,6 +2691,124 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
             ?: com.hushos.app.data.transfers.SaveRuns.reason(error)
             ?: (error as? com.hushos.app.data.transfers.ToolFailed)?.message
             ?: com.hushos.core.toolFailedMessage()
+    }
+
+    /*
+     * Edit pages' run, held here and not by its sheet, so a rotation or a fold keeps it: the PDFs read
+     * (their bytes, in memory only, and what the core read of each), then the save's progress, what to
+     * say when it failed or stopped, and done. A session's end drops all of it.
+     */
+    data class PagesRun(
+        val reading: Boolean = false,
+        val read: com.hushos.app.data.transfers.PdfPages.Read? = null,
+        val folder: Opened? = null,
+        val current: Opened? = null,
+        val saving: Boolean = false,
+        val progress: Pair<Int, Int>? = null,
+        val failure: String? = null,
+        val done: Boolean = false,
+    )
+    private val _pagesRun = kotlinx.coroutines.flow.MutableStateFlow(PagesRun())
+    val pagesRun: kotlinx.coroutines.flow.StateFlow<PagesRun> = _pagesRun
+    private var pagesJob: kotlinx.coroutines.Job? = null
+    private var pagesSession = 0
+
+    private fun endPdfPages() {
+        pagesSession++
+        pagesJob?.cancel()
+        pagesJob = null
+        _pagesRun.value = PagesRun()
+    }
+
+    /* This phone's limits for Edit pages: its memory, and one array on the app's heap. */
+    fun pdfPagesLimits(): com.hushos.core.PdfToolsLimits {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val memory = android.app.ActivityManager.MemoryInfo().also { manager.getMemoryInfo(it) }.totalMem
+        val large = context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_LARGE_HEAP != 0
+        val heap = (if (large) manager.largeMemoryClass else manager.memoryClass).toLong() shl 20
+        return com.hushos.app.data.transfers.PdfPages.limits(memory, heap)
+    }
+
+    /* Reads `files` for the sheet (data/transfers/PdfPages.kt), into the folder they are in. */
+    fun readPdfPages(files: List<Opened>) {
+        if (pagesJob?.isActive == true) return
+        val opening = vault ?: return
+        val session = pagesSession
+        val signedIn = Shared.session(context)
+        _pagesRun.value = PagesRun(reading = true)
+        pagesJob = viewModelScope.launch {
+            val result = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    if (!com.hushos.app.data.transfers.PdfPages.oneFolder(files))
+                        throw com.hushos.app.data.transfers.ImagesPdfRefused(com.hushos.app.data.transfers.PdfPages.MIXED_FOLDERS)
+                    val writer = com.hushos.app.data.transfers.VaultSaveWriter(opening, storage = { Auth.storage(context) })
+                    val (folder, current) = writer.editTarget(files.first())
+                    val read = com.hushos.app.data.transfers.PdfPages.read(opening, files, pdfPagesLimits())
+                    Triple(read, folder, current)
+                }
+            }
+            if (session != pagesSession) return@launch
+            result.onSuccess { (read, folder, current) ->
+                val pages = read.inspections.sumOf { it.pages.size }
+                _pagesRun.value = if (pages > 2_000) PagesRun(failure = "These PDFs have more than 2,000 pages together, too many to edit here.")
+                else PagesRun(read = read, folder = folder, current = if (files.size == 1) current else null)
+            }.onFailure { error ->
+                if (sessionGone(error, signedIn)) return@onFailure
+                if (error is kotlinx.coroutines.CancellationException) return@onFailure
+                _pagesRun.value = PagesRun(failure = (error as? com.hushos.app.data.transfers.ImagesPdfRefused)?.message
+                    ?: (error as? com.hushos.app.data.transfers.ToolFailed)?.message ?: com.hushos.core.toolFailedMessage())
+            }
+        }
+    }
+
+    /* Saves the sheet's choice; the run cleans up after a Stop or a failure, and says how it ended. */
+    fun savePdfPages(files: List<Opened>, choice: com.hushos.app.data.transfers.PdfPages.Choice) {
+        val now = _pagesRun.value
+        val read = now.read ?: return
+        val folder = now.folder ?: return
+        if (pagesJob?.isActive == true) return
+        val opening = vault ?: return
+        val session = pagesSession
+        val signedIn = Shared.session(context)
+        _pagesRun.value = now.copy(saving = true, progress = 0 to 1, failure = null)
+        pagesJob = viewModelScope.launch {
+            var stopped: com.hushos.app.data.transfers.SaveRunStopped? = null
+            val result = runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val writer = com.hushos.app.data.transfers.VaultSaveWriter(opening, storage = { Auth.storage(context) })
+                    com.hushos.app.data.transfers.PdfPages.save(writer, com.hushos.app.data.transfers.SaveRunJournal.of(context), files, read,
+                        folder, choice, pdfPagesLimits(), progress = { done, all ->
+                            if (session == pagesSession) _pagesRun.update { it.copy(progress = done to all) }
+                        }, stopped = { stopped = it })
+                }
+            }
+            if (session != pagesSession) return@launch
+            result.onSuccess { said ->
+                refresh(folder.id)
+                notify(said)
+                _pagesRun.value = PagesRun(done = true)
+            }.onFailure { error ->
+                if (sessionGone(error, signedIn)) return@onFailure
+                val said = if (error is kotlinx.coroutines.CancellationException) stopped?.message ?: com.hushos.app.data.transfers.SaveRuns.CANCELLED
+                else (error as? com.hushos.app.data.transfers.ImagesPdfRefused)?.message
+                    ?: com.hushos.app.data.transfers.SaveRuns.reason(error)
+                    ?: (error as? com.hushos.app.data.transfers.ToolFailed)?.message
+                    ?: com.hushos.core.toolFailedMessage()
+                _pagesRun.update { it.copy(saving = false, progress = null, failure = said) }
+            }
+        }
+    }
+
+    fun stopPdfPages() {
+        pagesJob?.cancel()
+    }
+
+    /* The sheet went: a run that ended is forgotten, and the PDFs read with it (a save still going keeps going until it ends or is stopped). */
+    fun forgetPdfPages() {
+        if (pagesJob?.isActive != true || _pagesRun.value.reading) {
+            if (_pagesRun.value.reading) pagesJob?.cancel()
+            _pagesRun.value = PagesRun()
+        }
     }
 
     /* A sign-out or a refused session under a run: the session check says it, not the run. */

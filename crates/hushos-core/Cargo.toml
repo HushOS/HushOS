@@ -55,6 +55,10 @@ deflate64 = "0.1.12"
 # HMAC state is ours to wipe (archive.rs).
 aes = { version = "0.8.4", features = ["zeroize"] }
 sha1 = { version = "0.10.6", features = ["compress"] }
+# Edit pages on the phones (docs/file-tools-design.md, feature (c)): reading untrusted PDFs and
+# writing new ones from their pages. Exactly this release; without its default features (rayon's
+# parallel parsing and chrono's clock), which nothing here needs.
+lopdf = { version = "=0.47.0", default-features = false }
 
 [dev-dependencies]
 # Only reports.rs's tests use it: suite 1, a libsodium sealed box, which the core no longer makes.

@@ -83,6 +83,12 @@ export type ToolRunOptions<I> = {
     maxTotalBytes?: number;
     /* The person's words for each refusal code the tool may send; any other failure is TOOL_FAILED. */
     refusals?: Record<string, string>;
+    /*
+     * A viewer's look, not a run (a dialog reading what its files are): it starts at once, never
+     * takes or waits for the one-run slot, and produces nothing (a result fails it). Everything else
+     * holds: the watchdog, the read allowance, cancel by terminating.
+     */
+    viewer?: boolean;
 };
 
 export class ToolCancelled extends Error {
@@ -234,6 +240,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
      * is let go when the run ends, so a handle kept after that holds none of it.
      */
     const { label, refusals } = options;
+    const viewer = options.viewer === true;
     const budget = options.budget ?? toolBudget;
     const watchdogMs = options.watchdogMs ?? TOOL_WATCHDOG_MS;
     const maxOutputs = capOf('maxOutputs', options.maxOutputs, RUN_OUTPUTS_MAX);
@@ -485,6 +492,7 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
                     const name: unknown = msg.name;
                     const mime: unknown = msg.mime;
                     if (
+                        viewer ||
                         awaiting !== null ||
                         id !== nextId ||
                         // Outside the budget, so held to a size: a name or type is never a way to carry bytes.
@@ -572,7 +580,14 @@ export function startToolRun<I, R>(options: ToolRunOptions<I>): ToolRun<R> {
     /* A lock or sign-out: a run going or waiting is cancelled; one done drops what it still holds. */
     const endForAccount = () => (ended ? dropOutputs() : cancel());
     const untrack = trackToolRun(endForAccount);
-    if (current) {
+    if (viewer) {
+        // Never in the queue: `finish` finds it neither current nor waiting, and advances nothing.
+        try {
+            begin();
+        } catch {
+            failed();
+        }
+    } else if (current) {
         queue.push(entry);
         set({ status: 'waiting', behind: current.label });
     } else {

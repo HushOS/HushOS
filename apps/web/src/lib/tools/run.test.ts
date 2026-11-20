@@ -838,6 +838,33 @@ describe('one run at a time', () => {
         expect(c.worker.terminated).toBe(true);
     });
 
+    test('a viewer’s look starts beside a run, never holds the slot, and may produce nothing', async () => {
+        const first = run({}, 'Extracting Photos.zip');
+        const look = run({ viewer: true }, 'Reading 2 PDFs');
+        // Started at once, though a run is going.
+        expect(look.made).toBe(1);
+        expect(look.handle.getState().status).toBe('running');
+        // A run asked for meanwhile waits behind the run, never behind the look.
+        const second = run({}, 'Converting 3 photos');
+        expect(second.handle.getState()).toEqual({
+            status: 'waiting',
+            behind: 'Extracting Photos.zip',
+        });
+        look.worker.send({ type: 'done', result: { pages: 3 } });
+        await expect(look.handle.result).resolves.toEqual({ pages: 3 });
+        // Its end lets nothing in: the run still holds the slot.
+        expect(second.made).toBe(0);
+        first.handle.cancel();
+        expect(second.made).toBe(1);
+        // A result from a look fails it, its bytes dropped.
+        const greedy = run({ viewer: true, onOutput: () => {} }, 'Reading 1 PDF');
+        const bytes = new ArrayBuffer(16);
+        greedy.worker.send({ type: 'output', id: 0, name: 'x', mime: null, bytes });
+        await expect(greedy.handle.result).rejects.toThrow(TOOL_FAILED);
+        expect(bytes.byteLength).toBe(0);
+        expect(greedy.worker.terminated).toBe(true);
+    });
+
     test('a run that ends settles first, whatever the next does when it starts', async () => {
         const first = run({}, 'First');
         // A listener that throws, and a next run whose input can't be sent.

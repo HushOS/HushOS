@@ -41,6 +41,7 @@
         "mobile.spec.ts": 12,
         "office.spec.ts": 18,
         "palette.spec.ts": 12,
+        "pdf-tools.spec.ts": 24,
         "preview.spec.ts": 29,
         "recover.spec.ts": 20,
         "referrals.spec.ts": 29,
