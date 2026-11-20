@@ -631,3 +631,39 @@ export async function scriptsDuring(p: Page, work: () => Promise<unknown>) {
     }
     return fetched;
 }
+
+/*
+ * A right-click as a person makes one: the release a moment after the press. Base UI closes a
+ * context menu whose release the page handles more than 500 ms after its contextmenu event,
+ * outside the menu: a press held and let go elsewhere. Playwright releases only once the page has
+ * handled the press, and WebKit then runs Base UI's 500 ms timer before the release, so on a
+ * runner that takes that long over the press (a CI trace showed WebKit busy 1.2 s) the menu
+ * closes as it opens. A press the page saw as held is made again, up to three times; one it saw
+ * as a click is never repeated, so a menu that fails to open on a click still fails the test.
+ */
+export async function rightClick(
+    target: Locator,
+    options: { position?: { x: number; y: number } } = {},
+) {
+    const page = target.page();
+    const menuGone = () => expect(page.locator('[role=menu]')).toHaveCount(0, { timeout: 5_000 });
+    for (let attempt = 1; ; attempt++) {
+        await page.evaluate(() => {
+            const press: { down?: number; up?: number } = {};
+            (window as unknown as { e2ePress: typeof press }).e2ePress = press;
+            const at = (key: 'down' | 'up') => () => (press[key] = performance.now());
+            addEventListener('contextmenu', at('down'), { capture: true, once: true });
+            addEventListener('mouseup', at('up'), { capture: true, once: true });
+        });
+        await target.click({ ...options, button: 'right' });
+        const held = await page.evaluate(() => {
+            const { down, up } = (window as unknown as { e2ePress: { down?: number; up?: number } })
+                .e2ePress;
+            return down === undefined || up === undefined ? 0 : up - down;
+        });
+        if (held < 500 || attempt === 3) return;
+        // Still open: the release landed in it, and a hold changed nothing.
+        if ((await page.locator('[role=menu][data-open]').count()) > 0) return;
+        await menuGone();
+    }
+}
