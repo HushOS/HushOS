@@ -1,5 +1,5 @@
 {
-    "note": "The family write rules as steps (docs/groups-mobile-plan.md, core step 1). Both twins run every scenario on their own ledger (packages/crypto/src/area-ledger-testkit.ts, crates/hushos-core/tests/common/area_ledger.rs); each step with an `expect` must give exactly it, and each twin's fixture holds every step's outcome for the other to match.",
+    "note": "The family write rules as steps (docs/groups-mobile-plan.md, core step 1). Both twins run every scenario on their own ledger (packages/crypto/src/groups/area-ledger-testkit.ts, crates/hushos-core/tests/common/area_ledger.rs); each step with an `expect` must give exactly it, and each twin's fixture holds every step's outcome for the other to match.",
     "scenarios": [
         {
             "name": "a family folder takes writes once its top level is the one the member list committed to",

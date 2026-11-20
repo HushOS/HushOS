@@ -1,5 +1,5 @@
 //! Roster calls (groups 1d, Core 5a) as this core builds them, for the web
-//! to read (`packages/crypto/src/roster-call-fixtures.test.ts`) and for the
+//! to read (`packages/crypto/src/groups/roster-call-fixtures.test.ts`) and for the
 //! server to store (`packages/groups/src/server.test.ts`): the family's
 //! history, every call's body (or its refusal), the admin's join codes and
 //! the outbox entries this core sealed, and (Core 5b) its removals, key

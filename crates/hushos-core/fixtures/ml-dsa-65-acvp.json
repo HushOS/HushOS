@@ -19,7 +19,7 @@
                 "tgId": 3
             }
         },
-        "note": "ML-DSA-65 only, a representative subset copied verbatim (hex as published). keyGen: seed xi to pk and the expanded sk. sigGen: pure ML-DSA, external interface with a context string; tgId 3 deterministic (rnd = 32 zero bytes), tgId 15 hedged with the published rnd. sigVer: pure, external, with a context; testPassed false for a modified message, z, commitment or hint (malformed hints included). Both crates/hushos-core/tests/ml_dsa_acvp.rs and packages/crypto/src/ml-dsa-acvp.test.ts check every case."
+        "note": "ML-DSA-65 only, a representative subset copied verbatim (hex as published). keyGen: seed xi to pk and the expanded sk. sigGen: pure ML-DSA, external interface with a context string; tgId 3 deterministic (rnd = 32 zero bytes), tgId 15 hedged with the published rnd. sigVer: pure, external, with a context; testPassed false for a modified message, z, commitment or hint (malformed hints included). Both crates/hushos-core/tests/ml_dsa_acvp.rs and packages/crypto/src/primitives/ml-dsa-acvp.test.ts check every case."
     },
     "keyGen": [
         {

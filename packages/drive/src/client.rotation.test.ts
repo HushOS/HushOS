@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from '@hushos/crypto';
 import { createDeviceKey, rememberAccountKey } from '@hushos/crypto/device';
 import { createIdentity } from '@hushos/crypto/identity';
-import { createWorkspaceGrant } from '../../crypto/src/workspace';
+import { createWorkspaceGrant } from '../../crypto/src/drive/workspace';
 import type { DriveApi, NodeView, RotateNodeWire, RotationWorkNode, UploadNodeInput } from './api';
 import { DriveApiError } from './api';
 import { createDriveClient, type DriveNode, type Rpc } from './client';

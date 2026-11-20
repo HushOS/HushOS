@@ -1,5 +1,5 @@
 //! Joining and consent (groups 1d, Core 4), for the shared fixtures: the twin
-//! of `packages/crypto/src/join-testkit.ts`. Both build the same cases in the
+//! of `packages/crypto/src/groups/join-testkit.ts`. Both build the same cases in the
 //! same order from the same people (group testkit persons 1, 2 and 3; person 2
 //! is the newcomer who previews), write the histories they signed, the chain
 //! records their own acceptance sealed and the identities their own code made,

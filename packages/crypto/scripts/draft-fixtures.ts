@@ -7,14 +7,14 @@ import {
     draftSlot,
     draftWorkspaceTag,
     sealDraft,
-} from '../src/drafts';
-import { encode } from '../src/keys';
+} from '../src/account/drafts';
+import { encode } from '../src/primitives/keys';
 
 /*
  * Writes crates/hushos-core/fixtures/drafts.json: one draft sealed by the web twin with a fixed
  * account key and nonce (its key, slot, associated data and record), the records and inputs
  * that must not open, and the restore decision's cases. Read by the core's drafts.rs tests and
- * packages/crypto/src/drafts.test.ts. Every refusal and every offer is stated by hand; only the
+ * packages/crypto/src/account/drafts.test.ts. Every refusal and every offer is stated by hand; only the
  * key, the slot and the record are computed. Run with `bun packages/crypto/scripts/draft-fixtures.ts`.
  */
 

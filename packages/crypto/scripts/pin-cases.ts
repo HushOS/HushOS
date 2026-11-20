@@ -1,5 +1,5 @@
 import { writeFile } from 'node:fs/promises';
-import { keyCommitment, pinKeysOfServed } from '../src/pins';
+import { keyCommitment, pinKeysOfServed } from '../src/trust/pins';
 
 /*
  * Writes crates/hushos-core/fixtures/pin-cases.json: the pin rules of

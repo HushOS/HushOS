@@ -5,7 +5,7 @@
 //! typed-words checks agree with the shared cases; the links the web offered
 //! for consent are the ones offered here, its consent signs and refuses here
 //! as there, and every consent the web signed holds here. The other direction
-//! is `packages/crypto/src/join-fixtures.test.ts`. Regenerate both with
+//! is `packages/crypto/src/groups/join-fixtures.test.ts`. Regenerate both with
 //! `bun run fixtures:groups`.
 
 mod common;

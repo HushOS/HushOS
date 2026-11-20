@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
-import type { ContactPin, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';
-import { createDeviceKey, rememberAccountKey } from './device';
-import { fingerprint, hexBytes, keyDigest } from './fingerprint';
-import type { GroupChainCache, JoinMark } from './group-trust';
+import type { ContactPin, SettingsEnvelope, SettingsKeyEnvelope } from './trust/contacts';
+import { createDeviceKey, rememberAccountKey } from './account/device';
+import { fingerprint, hexBytes, keyDigest } from './primitives/fingerprint';
+import type { GroupChainCache, JoinMark } from './groups/group-trust';
 import {
     groupKeyPair,
     newGroupSeed,
@@ -10,22 +10,22 @@ import {
     rosterDigest,
     signGroup,
     type GroupRole,
-} from './groups';
+} from './groups/groups';
 import {
     createIdentity,
     publicIdentity,
     verifySuccessionConsent,
     type IdentityEnvelope,
     type SuccessionLink,
-} from './identity';
-import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './drive';
-import { decode, encode } from './keys';
-import { keyCommitment, type GroupPin } from './pins';
+} from './account/identity';
+import { CONTENT_SUITE, openNodeKey, wrapNodeKey, wrapPreviousRootKey } from './drive/drive';
+import { decode, encode } from './primitives/keys';
+import { keyCommitment, type GroupPin } from './trust/pins';
 import { FAMILY_SHARING, KEY_CHANGE_PENDING, NOT_CARRIED, SHARED_IN_FAMILY } from './protocol';
 import { createCryptoSession, type CryptoRequests, type CryptoResults } from './session';
-import { openAreaSelfGrant } from './workspace';
-import { createAreaLedger } from './area-ledger';
-import { chains, PERSONAL } from './area-ledger-testkit';
+import { openAreaSelfGrant } from './drive/workspace';
+import { createAreaLedger } from './groups/area-ledger';
+import { chains, PERSONAL } from './groups/area-ledger-testkit';
 import {
     AREA,
     AREA_SEED,
@@ -34,7 +34,7 @@ import {
     OTHER_GROUP,
     pattern,
     rootKeyAt,
-} from './group-testkit';
+} from './groups/group-testkit';
 import {
     createGroupSession,
     openDeviceRecord,
@@ -47,14 +47,14 @@ import {
     type RosterCallBody,
     type ServedChain,
     type SignedStatementWire,
-} from './session-groups';
+} from './groups/session-groups';
 import {
     digest,
     metadataRekeyedStatement,
     metadataResealedStatement,
     metadataStatement,
     verifyStatement,
-} from './signatures';
+} from './primitives/signatures';
 
 /*
  * The crypto worker's group plumbing (milestone 1c, plan section 1.2), driven

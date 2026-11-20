@@ -1,6 +1,6 @@
 //! A record's verdict in a family folder, and how a copy out of one signs it
 //! (docs/groups-design.md 2.8): the twin of `recordVerdicts` and `judgeWith`
-//! in `packages/crypto/src/group-verdicts.ts`, which the web worker's group
+//! in `packages/crypto/src/groups/group-verdicts.ts`, which the web worker's group
 //! session runs. [`crate::AreaLedger::record_verdict`] and
 //! [`crate::AreaLedger::copy_form`] call it with the ledger's committed chain,
 //! the areas the family opened and the node key at a re-keyed record's epoch.

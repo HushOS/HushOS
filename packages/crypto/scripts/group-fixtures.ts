@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import type { AcceptInput } from '../src/group-trust';
+import type { AcceptInput } from '../src/groups/group-trust';
 import {
     areaGrantContext,
     groupFingerprint,
@@ -9,7 +9,7 @@ import {
     type AreaGrantContext,
     type GroupKeySealContext,
     type SignedGroupStatement,
-} from '../src/groups';
+} from '../src/groups/groups';
 import {
     AREA,
     AREA_SEED,
@@ -36,11 +36,11 @@ import {
     sealerVerdict,
     succeed,
     type Person,
-} from '../src/group-testkit';
-import { deriveId, type GroupIdKind } from '../src/ids';
-import { verifySuccessionChain } from '../src/identity';
-import { encode } from '../src/keys';
-import { metadataStatement, signStatement } from '../src/signatures';
+} from '../src/groups/group-testkit';
+import { deriveId, type GroupIdKind } from '../src/primitives/ids';
+import { verifySuccessionChain } from '../src/account/identity';
+import { encode } from '../src/primitives/keys';
+import { metadataStatement, signStatement } from '../src/primitives/signatures';
 
 /*
  * The group statements, signatures, seals and verdicts as the web makes them,

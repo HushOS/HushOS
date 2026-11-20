@@ -1,5 +1,5 @@
 //! A device's rollback marks for one account, sealed: the twin of
-//! `packages/crypto/src/rollback-marks.ts`, byte for byte (docs/integrity-design.md,
+//! `packages/crypto/src/trust/rollback-marks.ts`, byte for byte (docs/integrity-design.md,
 //! "Rollback marks"). The highest settings sequence and own identity key version
 //! this device has seen, and whether it has opened a version 2 settings document
 //! and a version 2 identity, say how far an account got on the phone, so they are

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
+import { createDeviceKey, rememberAccountKey } from './account/device';
 import { createCryptoSession } from './session';
 
 /*

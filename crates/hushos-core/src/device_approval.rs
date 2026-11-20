@@ -1,6 +1,6 @@
 //! Approving on another device, as the second step (`docs/two-step-design.md` 12,
 //! `docs/devices-design.md` 2): what the asking device and the approving device both
-//! build. The twin of `packages/crypto/src/device-approval.ts`; the server's copy is
+//! build. The twin of `packages/crypto/src/account/device-approval.ts`; the server's copy is
 //! `packages/db/src/signatures.ts`.
 //!
 //! The asking device holds the step token. It commits to its signing key and a nonce

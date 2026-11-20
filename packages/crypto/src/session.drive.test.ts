@@ -1,8 +1,8 @@
 import { describe, expect, test, vi } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
+import { createDeviceKey, rememberAccountKey } from './account/device';
 import { createCryptoSession } from './session';
-import { createWorkspaceGrant } from './workspace';
-import { createIdentity } from './identity';
+import { createWorkspaceGrant } from './drive/workspace';
+import { createIdentity } from './account/identity';
 import {
     CHUNK_SIZE,
     CHUNK_TAG_BYTES,
@@ -15,8 +15,8 @@ import {
     openNodeKey,
     openVersion,
     thumbnailRange,
-} from './drive';
-import { decode, encode } from './keys';
+} from './drive/drive';
+import { decode, encode } from './primitives/keys';
 import sodium from 'libsodium-wrappers';
 import {
     metadataResealedStatement,
@@ -26,8 +26,8 @@ import {
     verifyStatement,
     versionSavedStatement,
     versionStatement,
-} from './signatures';
-import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './links';
+} from './primitives/signatures';
+import { generateLinkSalt, generateLinkSecret, sealLinkKey } from './drive/links';
 
 /*
  * The worker side of Drive: keys are opened parent-first and stay in the session,
@@ -388,7 +388,7 @@ describe('drive session operations', () => {
         };
 
         // Checked with the raw primitives, so the session cannot agree with itself by accident.
-        const { openWorkspaceKey } = await import('./workspace');
+        const { openWorkspaceKey } = await import('./drive/workspace');
         const workspaceKey = await openWorkspaceKey(root, USER, grant);
         const aKey = await openNodeKey(decode(created.nodes[0]!.keyEnvelope, 72), workspaceKey, {
             workspaceId: WS,
@@ -558,7 +558,7 @@ describe('drive session operations', () => {
                 },
             ],
         })) as { nodes: { keyEnvelope: string; metadataEnvelope: string }[] };
-        const { openWorkspaceKey } = await import('./workspace');
+        const { openWorkspaceKey } = await import('./drive/workspace');
         const workspaceKey = await openWorkspaceKey(root, USER, grant);
         const nodeKey = await openNodeKey(decode(created.nodes[0]!.keyEnvelope, 72), workspaceKey, {
             workspaceId: WS,
@@ -627,7 +627,7 @@ describe('the thumbnail trailer', () => {
         expect(decode(prepared.contentKeyEnvelope)).toHaveLength(84);
 
         // The raw primitives agree on what was sealed: the sizes, and a trailer the content key opens.
-        const { openWorkspaceKey } = await import('./workspace');
+        const { openWorkspaceKey } = await import('./drive/workspace');
         const workspaceKey = await openWorkspaceKey(root, USER, grant);
         const aKey = await openNodeKey(decode(created.nodes[0]!.keyEnvelope, 72), workspaceKey, {
             workspaceId: WS,
@@ -1158,9 +1158,9 @@ describe('a suite 3 object end to end', () => {
                 },
             ],
         })) as { nodes: { keyEnvelope: string }[] };
-        const { openWorkspaceKey } = await import('./workspace');
+        const { openWorkspaceKey } = await import('./drive/workspace');
         const { encryptChunk, generateContentNonce, generateKey, sealVersion } =
-            await import('./drive');
+            await import('./drive/drive');
         const aKey = await openNodeKey(
             decode(created.nodes[0]!.keyEnvelope, 72),
             await openWorkspaceKey(root, USER, grant),

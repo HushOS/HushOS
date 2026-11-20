@@ -1,0 +1,4210 @@
+import { OLDER_CHAIN, type AreaLedger } from './area-ledger';
+import {
+    CHECK_MANAGER_FIRST,
+    FAMILY_FORGOTTEN,
+    GUARD_NOT_KEPT,
+    GUARD_AHEAD,
+    GUARD_CONFLICT,
+    NOT_THIS_ACCOUNT,
+    OPEN_SETTINGS,
+} from '../protocol';
+import { areaKeyCommitment } from './area-keys';
+import { encodeStatement, sameBytes, uuid } from '../primitives/canonical';
+import {
+    DEVICE_STORE_VERSION,
+    deriveStoreKey,
+    openStoreBytes,
+    sealStoreBytes,
+} from '../account/device-store';
+import type { ContactPin } from '../trust/contacts';
+import {
+    contactPinOf,
+    familyCheckOf,
+    refuseDowngrade,
+    settingsMarks,
+    settingsPinOf,
+    type SettingsMarks,
+} from '../trust/settings-marks';
+import {
+    generateKey,
+    openDocument,
+    openNodeKey,
+    openPreviousRootKey,
+    sealDocument,
+    sealMetadata,
+    wrapNodeKey,
+    wrapPreviousRootKey,
+    type NodeMetadata,
+} from '../drive/drive';
+import { namesSide } from '../account/consent-due';
+import { CryptoError } from '../primitives/errors';
+import {
+    HOLDS_UNREADABLE,
+    NOT_SHOWN,
+    checkCode,
+    holdsValue,
+    newJoinFamily,
+    randomUint32,
+    restoreHolds,
+    showCode,
+    stillShown,
+    typedComplete,
+    type JoinFamily,
+} from './join-session';
+import { digestHex, sameKeyDigest } from '../primitives/fingerprint';
+import { requireAccepted } from '../trust/accepted';
+import type { GuardEntry } from '../trust/first-seen';
+import {
+    acceptRosters,
+    pairCodeAt,
+    servedIsEntry,
+    NOT_LET_IN,
+    firstRoster,
+    foldInEntry,
+    joinCode,
+    newRosterEntry,
+    nextRoster,
+    ownRosterEntry,
+    pinAfter,
+    trustAsGroupDoes,
+    type AcceptedRosters,
+    type GroupChainCache,
+    type GroupIntegrity,
+    type FamilyChecked,
+    type GroupAnchor,
+    type GroupReading,
+    type JoinMark,
+    type RosterFork,
+    type ServedIdentity,
+    type WriterPin,
+} from './group-trust';
+import {
+    AREA_GRANT_BYTES,
+    GROUP_KEY_SEAL_BYTES,
+    activeWith,
+    areaWriteVersion,
+    areasToRotate,
+    groupKeyPair,
+    groupWords,
+    newGroupSeed,
+    openAreaGrant,
+    openGroupKey,
+    parseRoster,
+    rosterDigest,
+    rosterEntry,
+    sameGroupKey,
+    sealAreaGrant,
+    sealGroupKey,
+    signGroupSuccession,
+    signRoster,
+    type GroupKeyPair,
+    type GroupPublicKey,
+    type GroupRole,
+    type Roster,
+    type RosterMember,
+    type SignedGroupStatement,
+    type SignerHistory,
+} from './groups';
+import {
+    openIdentityMlDsaKey,
+    openIdentitySigningKey,
+    publicIdentity,
+    verifyOwnIdentity,
+    verifySuccessionLink,
+    SUCCESSION_CONSENT_BYTES,
+    type IdentityEnvelope,
+    type ServedKeys,
+    type SuccessionLink,
+} from '../account/identity';
+import { checkId, newId } from '../primitives/ids';
+import { decode, encode } from '../primitives/keys';
+import {
+    checkGroupPin,
+    checkTime,
+    entryCommitment,
+    guardAfter,
+    keyCommitment,
+    pinVerified,
+    type GroupPin,
+    type OpenedArea,
+    type PinKeys,
+} from '../trust/pins';
+import { ML_DSA_PUBLIC_KEY_BYTES } from '../primitives/pq';
+import { GROUP_OPERATIONS } from '../protocol';
+import type { GranteeSecrets } from '../primitives/sealing';
+import type {
+    DriveSignedNode,
+    DriveSigners,
+    RekeyOut,
+    RotateNodeInput,
+    RotatedNode,
+    RotatedRecord,
+    ServedRekey,
+} from '../session';
+import {
+    digest,
+    metadataStatementAs,
+    metadataStatements,
+    signHybrid,
+    signStatement,
+    successionConsentStatement,
+    versionStatements,
+    HYBRID_SIGNATURE_BYTES,
+    type HybridSigningKey,
+    type MetadataStatement,
+    type RekeyedRecord,
+    type SignatureForm,
+    type StatementForms,
+    type TrustedSigner,
+    type VersionStatement,
+} from '../primitives/signatures';
+import { grantAreaKey, openAreaSelfGrant, type WorkspaceKeyEnvelope } from '../drive/workspace';
+import { judgeWith, recordVerdicts } from './group-verdicts';
+
+/*
+ * The crypto worker's side of groups (milestone 1c; docs/groups-design.md 2.4
+ * and 3, the 1c plan's section 1.2). Every accepted chain lives here and only
+ * here: accepted.ts keeps accepted chains in a WeakSet of this realm, so a
+ * chain posted to the main thread and back opens and vouches for nothing. The
+ * main thread gets plain views, signed bodies to send, and sealed records to
+ * keep; the group seeds, the area keys and the staged secrets never leave.
+ *
+ * Two kinds of chain:
+ * - the committed chain of a group, accepted only from what the server
+ *   served (groupAccept), the one whose cache and pin may be written;
+ * - a staged chain per roster call (groupStage, groupCreate), the caller's own
+ *   signed, unsent roster accepted on top of the committed chain, used only to
+ *   seal and grant for that call and to judge writers for its rotations. A
+ *   staged chain never becomes a mark: no record or pin is ever made from it,
+ *   and nothing stages on top of one.
+ *
+ * The write rule (F9, plan section 5): a group area is written only under its
+ * latest version on the committed chain (`writeVersion`), and only while the
+ * last groupOpenArea found nothing that says the server is behind or ahead.
+ */
+
+/* ------------------------------------------------------------------------- */
+/* Wire shapes: structurally the group routes' (packages/groups/src/api.ts)   */
+/* ------------------------------------------------------------------------- */
+
+export type SignedStatementWire = {
+    statement: string;
+    signature: { ed25519: string; mlDsa: string };
+    signerSignature: string;
+};
+export type SealWire = {
+    groupKeyVersion: number;
+    holderUserId: string;
+    holderKeyVersion: number;
+    rosterVersion: number;
+    rosterDigest: string;
+    envelope: string;
+};
+export type GrantWire = {
+    workspaceId: string;
+    workspaceKeyVersion: number;
+    granteeUserId: string;
+    granteeKeyVersion: number;
+    rosterVersion: number;
+    rosterDigest: string;
+    envelope: string;
+};
+export type AreaRootWire = {
+    id: string;
+    idSeed: string;
+    keyEpoch: number;
+    parentKeyEpoch: number;
+    keyEnvelope: string;
+    metadataEnvelope: string;
+    metadataSignature: string;
+};
+export type RotatedNodeWire = {
+    id: string;
+    changeSeq: number;
+    parentKeyEpoch: number;
+    keyEnvelope: string;
+    rotated: {
+        metadataEnvelope: string;
+        /* Re-keyed records carry no legacy signature in a family folder (decision D3). */
+        metadataSignature?: string | null;
+        metadataRekey?: RekeyOut | null;
+        metadataDropOrigin?: boolean;
+        versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[];
+        shares: { id: string; shareEnvelope: string }[];
+        links: { id: string; linkEnvelope: string; secretEnvelope: string }[];
+        unsealableLinks: string[];
+    } | null;
+};
+export type RotationWire = {
+    workspaceId: string;
+    fromVersion: number;
+    toVersion: number;
+    targetEpoch: number;
+    root: RotatedNodeWire;
+    /*
+     * The root's old key wrapped under the new area key, under the
+     * previous-root label of its own (previousRootKeyContext in drive.ts:
+     * ["hushos/drive/previous-root-key",1,workspaceId,root,workspaceId,
+     * toVersion,the root's epoch before]), so it opens only as the root's
+     * previous key, never as its current one (docs/groups-server.md 8,
+     * option A).
+     */
+    previousRootKeyEnvelope: string;
+    selfGrant: WorkspaceKeyEnvelope;
+    /*
+     * Every workspace document of the area, sealed again under the new area
+     * key: `version` is the version read (the precondition, as on PUT
+     * /drive/workspaces/:id/documents/:kind), and `envelope` is sealed for
+     * version + 1. The server must store them in the roster call's transaction
+     * or refuse the call (docs/groups-server.md 8).
+     */
+    documents: RotatedDocumentWire[];
+};
+export type RotatedDocumentWire = { kind: string; version: number; envelope: string };
+export type CreateGroupBody = {
+    id: string;
+    idSeed: string;
+    kind: 'family';
+    name: string;
+    groupKey: GroupPublicKey;
+    roster: SignedStatementWire;
+    keySeal: { envelope: string };
+    area: {
+        workspaceId: string;
+        idSeed: string;
+        root: AreaRootWire;
+        grant: { envelope: string };
+        selfGrant: WorkspaceKeyEnvelope;
+    };
+};
+/* Every roster route's body (7, 17, 18, 19, 21, 24): what applies to the call, nothing else. */
+export type RosterCallBody = {
+    expectedRevision: number;
+    roster: SignedStatementWire;
+    succession?: SignedStatementWire;
+    seals?: SealWire[];
+    keySeal?: SealWire;
+    grants?: GrantWire[];
+    rotations?: RotationWire[];
+    rotation?: RotationWire;
+    area?: {
+        workspaceId: string;
+        idSeed: string;
+        root: AreaRootWire;
+        selfGrant: WorkspaceKeyEnvelope;
+    };
+};
+
+/* Route 5's page, as the caller gathered it from version 1 or after the cache. */
+export type ServedChain = {
+    rosters: SignedStatementWire[];
+    successions: SignedStatementWire[];
+    firstKeys: GroupPublicKey;
+    /* SHA-256 (base64url) of every signer's ML-DSA key, to that key. */
+    signerKeys: Record<string, string>;
+};
+
+/*
+ * A writer as a group verdict takes them: the reader's pin of them (with its
+ * origin), their identity and links as route 6 served them (null when they did
+ * not load), and the personal keys driveVerify would use, for records the
+ * roster does not speak for.
+ */
+export type GroupWriter = {
+    userId: string;
+    pinned: WriterPin | null;
+    served: ServedKeys | null;
+    links: SuccessionLink[] | null;
+    personal: { current: string; retired: string[]; seen?: boolean } | null;
+};
+/* driveRotateNodes in a group's area: whose roster judges each record before it is signed again. */
+export type GroupRotationTrust = {
+    groupId: string;
+    /* The roster call whose staged chain judges (a removal's rotation), or null for the committed chain. */
+    staged: string | null;
+    writers: GroupWriter[];
+};
+
+/*
+ * The area root as a roster rotation re-keys it: the worker's input, built
+ * from the root as the server serves it for that purpose (a Drive
+ * RotationWorkNode of the root, served per area), mapped as the Drive walk
+ * maps its nodes:
+ * - id, kind ('folder'), keyEpoch, keyEnvelope, metadataVersion,
+ *   metadataEnvelope, changeSeq: as served;
+ * - parentId: the area's workspace id;
+ * - wrappedParentKeyEpoch: the served parentKeyEpoch, the area key version
+ *   the root's envelope is under now (the rotation's fromVersion);
+ * - parentKeyEpoch: the area key version the root goes under, toVersion
+ *   (fromVersion + 1), set by the client, never served;
+ * - metadataSigner / metadataSignature: the served signer's id and signature,
+ *   null before signatures;
+ * - versions: each { id, objectId, contentKeyEnvelope, contentSuite,
+ *   plaintextSize (a number, null under suites 2 and 3), signer (id or null),
+ *   signature };
+ * - shares: each live share the owner's ledger and the grantee's pin let the
+ *   rotator re-seal, { id, granteeUserId, granteePublicKey,
+ *   granteeKemPublicKey } (from the served grantee identity, checked first);
+ * - links: each { id, hasPassword, secretEnvelope (null when unsealable) }.
+ */
+export type AreaRootRotationInput = RotateNodeInput & { changeSeq: number };
+/* What a Drive rotation of an area's root needs, as the rotation work serves the root. */
+export type AreaRotationInput = {
+    workspaceId: string;
+    /* Drawn from /drive/workspaces/:id/epochs, above every epoch a node in the area carries. */
+    targetEpoch: number;
+    root: AreaRootRotationInput;
+    /*
+     * Every workspace document of the area as served (/drive/workspaces/:id/
+     * documents/:kind): each opens under the area's current key and is sealed
+     * again under the new one in the same call, so documents never sit under a
+     * key the rotation takes away.
+     */
+    documents: RotatedDocumentWire[];
+};
+
+export type GroupStageOp =
+    /*
+     * The newcomer's contact pin is the one in the settings this worker last
+     * opened (settingsOpen), never the caller's: a verified or a first-seen
+     * pin of the served keys, never a family's word (newRosterEntry,
+     * docs/optional-verification.md 3.2). `members` only over a verified pin:
+     * a manager is checked before they get the family's key (3.6).
+     */
+    | { kind: 'admit'; userId: string; served: ServedIdentity; roles: GroupRole[] }
+    /* `endsLapsed`: the lapsed plans (ids) the person pays for that the remover confirmed end. */
+    | { kind: 'remove'; userId: string; rotations: AreaRotationInput[]; endsLapsed?: string[] }
+    | { kind: 'markLeft'; userIds: string[]; rotations: AreaRotationInput[] }
+    /*
+     * Giving `members` to someone without it needs a verified contact pin of
+     * them, no family's word, over the very keys of their entry now (3.6).
+     */
+    | { kind: 'roles'; userId: string; roles: GroupRole[] }
+    | {
+          kind: 'foldIn';
+          members: { userId: string; served: ServedIdentity; links: SuccessionLink[] }[];
+          /* The account's earlier identities, for one's own fold-in signed with the keys the old entry names. */
+          history?: IdentityEnvelope[];
+          /*
+           * Members whose served keys no signed chain reaches, whom a manager let
+           * back in with Continue (docs/optional-verification.md 3.3, 3.6, 6.9):
+           * their entry is made from this account's contact pin of the served
+           * keys (first-seen or verified, never a family's word), every family
+           * folder is rotated in the same roster, and a manager among them keeps
+           * `members` only over a verified pin, so the family's key is never
+           * sealed to keys nobody checked.
+           */
+          continued?: string[];
+          /* With `continued`: every live family folder's rotation (removal's rule, 3.3). */
+          rotations?: AreaRotationInput[];
+      }
+    | { kind: 'area'; name: string }
+    | { kind: 'rotate'; rotation: AreaRotationInput }
+    /* Deleting a family folder: its tombstone on the next roster (docs/groups-design.md 2.10). */
+    | { kind: 'retire'; workspaceId: string };
+
+/* A plain view of a committed chain: what the main thread may know of it. */
+export type GroupView = {
+    groupId: string;
+    kind: 'family' | 'org';
+    rosterVersion: number;
+    rosterDigest: string;
+    groupKeyVersion: number;
+    creatorUserId: string;
+    members: RosterMember[];
+    /* Each area's write version: its latest key version on the chain. */
+    areas: Record<string, number>;
+    successionDue: boolean;
+    ownEntryWrongAt: number[];
+    ownEntryBehindAt: number[];
+    deadBranches: { version: number; signerUserId: string }[];
+};
+
+type SealInput = {
+    groupKeyVersion: number;
+    holderKeyVersion: number;
+    sealerUserId: string;
+    rosterVersion: number;
+    rosterDigest: string;
+    envelope: string;
+};
+type GrantInput = {
+    workspaceKeyVersion: number;
+    granteeKeyVersion: number;
+    granterUserId: string;
+    rosterVersion: number;
+    rosterDigest: string;
+    envelope: string;
+};
+
+/* Records the data layer keeps sealed in its own IndexedDB stores. */
+/*
+ * The data layer's own store. `joins` (the compared code) and `holds` (the
+ * join's escalation) are this worker's alone, as `chains` is: a joins record
+ * the data layer could seal would commit a family nobody compared.
+ */
+export type DeviceStore = 'outbox';
+
+export type GroupRequests = {
+    /*
+     * A family, made and staged here: the group seed and id, the first area
+     * ("Family") with its key and root, roster version 1 from firstRoster with
+     * the creator's own entry (roles billing and members), the seed sealed and
+     * the area granted to the creator, and the creator's self-grant. Refused
+     * unless the staged acceptance, with the account's identities as just
+     * fetched (each proven to open under this account), reports no wrong or
+     * behind own entry (design 3.1). Keep `stagedEnvelope` in the outbox until
+     * the first committed acceptance has written the record and the pin.
+     */
+    groupCreate: {
+        userId: string;
+        name: string;
+        areaName?: string;
+        identities: { identity: IdentityEnvelope; history: IdentityEnvelope[] };
+    };
+    groupWords: { groupId: string; firstKeys: GroupPublicKey };
+    /*
+     * Accepts what route 5 served against this person's marks: the group pin
+     * and the family check (familyChecks) in the settings this worker last
+     * opened or sealed (settingsOpen, settingsSeal; refused when it has opened
+     * none), and this device's sealed record (its cache and device pin). With
+     * no mark at all only two callers may vouch for the first keys: `joining`
+     * (the join flow, with the joins record of a compared join code, or of a
+     * first use: docs/optional-verification.md 3.3) and `creating` (the
+     * creator's outbox entry, whose seed must derive the served first keys;
+     * refused when any mark exists). Where marks exist, `joining` vouches for
+     * nothing: the marks decide, and its record is one more. A refusal throws,
+     * and the group then reads unavailable. Staged calls whose roster the
+     * accepted chain holds are dropped and named in `dropped`.
+     */
+    groupAccept: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        checkedAt: string;
+        /*
+         * The joins record groupJoinCheck sealed on a match ("They match" with
+         * the two hidden words right), which only this worker writes: the
+         * compared code is the join mark, and its check time the pin's. Taken
+         * once per family and session (groupForget lets a join that was not
+         * kept run again), and only while the served chain still gives its
+         * code ('changed' otherwise).
+         */
+        joining?: { joinsRecord: string } | null;
+        creating?: { stagedEnvelope: string } | null;
+        /*
+         * This device's family guard (docs/optional-verification.md 2.8, kept
+         * apart from the record and never cleared by a `not-member` wipe nor
+         * by anything the server answers): the latest pin this device
+         * accepted, advanced on every acceptance (the result's `guard`) and
+         * never lowered, a mark like any pin, so a family that once was here is
+         * never taken on first use again, nor replayed below what this device
+         * accepted; 'unreadable' when the guard's store could not be read,
+         * which refuses the acceptance (GUARD_UNREADABLE: never first use, and
+         * nothing taken on it). A caller that passes it (null for none) keeps a
+         * guard: from the commit, every write into the family (Drive writes in
+         * its folders, staging, grants, seals, self-grants, repairs) is refused
+         * with GUARD_NOT_KEPT until groupGuardKept says the guard handed back
+         * is stored.
+         */
+        guard?: GroupPin | 'unreadable' | null;
+        /*
+         * The record's device pin is a mark, its cache is left out: for a
+         * record whose cache this release refuses (one a newer release wrote,
+         * or a damaged one). The pin still refuses any chain below it, so a
+         * server cannot roll the device back by getting its cache refused.
+         */
+        withoutCache?: boolean;
+        /*
+         * A refusal of this attempt is retried by the caller (acceptFromRecord):
+         * the family stays committed under the chain this session holds, and
+         * only the last attempt's refusal uncommits it. A fork always does.
+         */
+        retried?: boolean;
+    };
+    /*
+     * The join code a newcomer compares with the admin's screen (design 2.4,
+     * 3.2): the served chain verified against this person's marks, or, with
+     * none, from version 1 over the served first keys, and the code of the
+     * roster at which this account's entry last became active (the one that
+     * admitted them), shown with two hidden positions drawn from the crypto
+     * RNG, anew for each showing unless a wrong pair holds them
+     * (join-session.ts). Nothing else is committed, kept or marked, and a fork
+     * sets nothing: only groupAccept with the joins record a match sealed does.
+     */
+    groupJoinPreview: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        /*
+         * The family's escalation the data layer kept (from groupJoinCheck),
+         * folded in first: pass it on the first showing after a reload or a
+         * lock. One that does not open here is refused with HOLDS_UNREADABLE.
+         */
+        holds?: string | null;
+    };
+    /*
+     * A newcomer's join on first use (docs/optional-verification.md 3.2 step
+     * 4, 3.3), the default join: the served chain verified as groupAccept
+     * would verify it, against this person's marks and the family guard;
+     * with none, from version 1 over the served first keys, only with
+     * settings this worker opened and only when this account's entry is
+     * active at the head. Nothing is committed: the version 4 joins record of
+     * the head's pin is sealed for the data layer to keep, then groupAccept
+     * with it as `joining` commits, and the data layer deletes the record once
+     * the record and pin are written. With marks (a rejoin) the marks decide.
+     */
+    groupJoinFirstUse: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        guard?: GroupPin | 'unreadable' | null;
+        now: string;
+    };
+    /*
+     * The pair code this account compares with member `userId` (pairCode),
+     * over the committed chain. `rosters` is route 5 from version 1.
+     */
+    groupPairCode: { groupId: string; userId: string; rosters: SignedStatementWire[] };
+    /*
+     * "They match" in a family check (pairMatch) with member `userId`, over
+     * the committed chain and the contact pin of them in the settings this
+     * worker last opened: the check record and the verified pin to save, each
+     * only when the rules allow. `guard` is this device's guard entry for
+     * them. Nothing is saved here.
+     */
+    groupPairMatch: {
+        groupId: string;
+        userId: string;
+        rosters: SignedStatementWire[];
+        rosterVersion: number;
+        code: string[];
+        guard: GuardEntry | null | 'unreadable';
+        now: string;
+    };
+    /*
+     * "They match" (the core's join_check): `mark` must be a code this worker
+     * showed for the family and `typed` two words, before anything is
+     * verified; then the served chain is worked out again (another code is
+     * 'changed', with a showing of it, and the words are not checked); then
+     * the words against the code at its issued positions, with the family's
+     * escalation (join-session.ts). A match seals the joins record, checked at
+     * the settings pin's check time if the account has one, else `now`.
+     */
+    groupJoinCheck: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        mark: JoinMark;
+        /* The positions the page hid for `mark`: a showing this session still holds. */
+        hidden: [number, number];
+        /* The showing's `session`: one from before a lock is refused, whatever it hid. */
+        session: number;
+        typed: string[];
+        now: string;
+        holds?: string | null;
+    };
+
+    /* Opens the group key's seal to this account (route 8), with the sealer's identity and links from route 6. */
+    groupOpenSeal: {
+        groupId: string;
+        seal: SealInput;
+        sealerMlDsaPublicKey: string;
+        sealerHistory?: SignerHistory | null;
+    };
+    /*
+     * Opens an area from route 25: the self-grant only when it is at the
+     * area's latest version on the chain and the served one (and its key is the
+     * chain's), else the area grant (envelope-migrations 5).
+     */
+    groupOpenArea: {
+        groupId: string;
+        workspaceId: string;
+        idSeed: string;
+        /* The area's workspaceKeyVersion as served. */
+        servedVersion: number;
+        grant: GrantInput | null;
+        granterMlDsaPublicKey?: string | null;
+        granterHistory?: SignerHistory | null;
+        selfGrant: WorkspaceKeyEnvelope | null;
+    };
+    /*
+     * Stages one roster call on the committed chain: the roster, signed, and
+     * accepted as a staged chain, then the succession, seals, grants (to every
+     * active member, the uploader included), rotations and self-grants it makes
+     * due. `kems` is every member's ML-KEM key from route 6, checked here
+     * against their entries; `writers` judges the records a rotation re-signs.
+     */
+    groupStage: {
+        groupId: string;
+        expectedRevision: number;
+        op: GroupStageOp;
+        kems: Record<string, string>;
+        writers?: GroupWriter[];
+    };
+    /*
+     * The staged chain again from the committed chain and the body's own
+     * roster (after a reload, before a resend); with `rebuild`, the named
+     * rotations made again with the same area and root keys (409 rotating,
+     * epoch-stale, root-moved). The roster bytes never change.
+     */
+    groupRestage: {
+        groupId: string;
+        stagedEnvelope: string;
+        body: RosterCallBody;
+        rebuild?: { rotations: AreaRotationInput[]; writers: GroupWriter[] } | null;
+    };
+    groupDrop: { outboxId: string };
+    /* Grants owed on the committed chain (route 22): each area's current key to an active member. */
+    groupGrants: {
+        groupId: string;
+        missing: { workspaceId: string; userId: string; kemPublicKey: string }[];
+    };
+    /* The current group key sealed again to holders on the committed chain (route 9). */
+    groupReseal: { groupId: string; holders: { userId: string; kemPublicKey: string }[] };
+    groupVerify: {
+        groupId: string;
+        workspaceId: string;
+        writers: GroupWriter[];
+        nodes: DriveSignedNode[];
+    };
+    /*
+     * The join code an admin reads to a newcomer: over the committed chain,
+     * the roster at which `userId`'s entry last became active. `rosters` is
+     * route 5 from version 1; only those whose digest is the committed chain's
+     * at their version are read. `pinMatches`: whether their entry on that
+     * roster names exactly the keys of this account's contact pin of them, from
+     * the settings this worker last opened (null without one).
+     */
+    groupJoinCode: {
+        groupId: string;
+        userId: string;
+        rosters: SignedStatementWire[];
+    };
+    groupTrustAs: {
+        groupId: string;
+        userId: string;
+        served: ServedIdentity;
+        contact: { email: string; name: string; pinnedAt: string };
+    };
+    /* The two consent halves of a link between two of this account's identities, signed by each. */
+    /*
+     * `link` is the served link from `old` to `next`: it must name exactly
+     * their keys and carry the old identity's own version 2 signature, so no
+     * link a server made up gets consent (the core's succession_consent_sign).
+     */
+    identityConsent: {
+        userId: string;
+        link: SuccessionLink;
+        old: IdentityEnvelope;
+        next: IdentityEnvelope;
+    };
+    /*
+     * Let go of a family this session holds (a `not-member` wipe, or a join
+     * committed here and not kept on the device). `guard` is the family guard
+     * this device holds (groupAccept's), `checkedAt` the time a guard made
+     * here records. The result says whether it forgot, or hands back the guard
+     * to store, nothing dropped, before asking again
+     * (docs/optional-verification.md 2.8).
+     */
+    groupForget: { groupId: string; guard?: GroupPin | 'unreadable' | null; checkedAt: string };
+    groupStoreSeal: { userId: string; groupId: string; store: DeviceStore; value: unknown };
+    groupStoreOpen: { userId: string; groupId: string; store: DeviceStore; envelope: string };
+    /*
+     * An area root's previous envelope during a roster rotation (option A),
+     * checked with the area's current key: whether it opens, and when it does
+     * not, the repair route 28 takes, from the root's old key this session
+     * held before the rotation (docs/groups-server.md 8, "Repair"). The root as
+     * route 25 serves it.
+     */
+    groupPreviousRoot: {
+        groupId: string;
+        workspaceId: string;
+        root: {
+            id: string;
+            parentKeyEpoch: number;
+            prevKeyEnvelope: string | null;
+            prevKeyEpoch: number | null;
+            prevParentKeyEpoch: number | null;
+        };
+    };
+    /*
+     * Folders this family's committed member list names that are not its own:
+     * one another family opened here, or the account's own workspace. The
+     * ledger ignores those listings for every decision (area-ledger.ts,
+     * `foreignListings`); this only says so, for the family's page.
+     */
+    groupForeignListings: { groupId: string };
+    /*
+     * The app stored the family guard an acceptance handed back (2.8):
+     * `guard` is what its store holds now. Writes into the family go on again
+     * once that covers the guard owed, or is past it; anything else keeps them
+     * waiting.
+     */
+    groupGuardKept: { groupId: string; guard: GroupPin };
+};
+
+export type GroupStaged = {
+    outboxId: string;
+    body: RosterCallBody;
+    stagedEnvelope: string;
+    /* An admission's join code, over the staged roster. */
+    joinCode: { rosterVersion: number; code: string[] } | null;
+    /* Members whose served identity no succession chain reaches from their entry. */
+    needsCheck: string[];
+    /* Workspace documents that did not open and were replaced by an empty one of their kind. */
+    replaced: ReplacedDocument[];
+    /*
+     * An admission's newcomer and the key commitment of the contact pin it was
+     * built from (the outbox's `admits`; keyCommitment in ./pins).
+     */
+    admits: { userId: string; keys: string } | null;
+    /* The head the call was built on and its own roster, by digest: whether a kept call landed, or never can. */
+    previousRosterDigest: string;
+    rosterDigest: string;
+};
+export type ReplacedDocument = { workspaceId: string; kind: string };
+export type GroupResults = {
+    groupCreate: {
+        outboxId: string;
+        groupId: string;
+        body: CreateGroupBody;
+        stagedEnvelope: string;
+    };
+    groupWords: { words: string[] };
+    groupJoinPreview:
+        /*
+         * `hidden`: the two positions to hide, the same for this code until a
+         * match. `session`: the worker session it was shown in, passed back
+         * with the check, so a showing from before a lock is not checked.
+         */
+        | {
+              status: 'code';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
+        /* The served chain holds no active entry for this account at its head: not let in yet. */
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
+    groupJoinCheck:
+        /*
+         * Keep `joinsRecord` (the joins store), then groupAccept with it.
+         * `holds`, here and on a wrong pair, is the escalation to keep in place
+         * of the one kept before (null: delete it).
+         */
+        | { status: 'matched'; joinsRecord: string; holds: string | null }
+        | { status: 'wrong-words'; holds: string | null }
+        | { status: 'mismatch'; holds: string | null }
+        | { status: 'incomplete' }
+        | {
+              status: 'changed';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
+
+    groupJoinFirstUse:
+        /* Keep `joinsRecord` (the joins store), then groupAccept with it. */
+        | { status: 'first-use'; joinsRecord: string; rosterVersion: number }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' };
+    groupPairCode: PairCode;
+    groupPairMatch: PairMatch;
+    groupAccept:
+        | {
+              status: 'accepted';
+              view: GroupView;
+              /* The sealed record to keep (cache and device pin). */
+              record: string | null;
+              /* The pin after this acceptance, for the settings document. */
+              pin: GroupPin | null;
+              /*
+               * The family guard to keep (docs/optional-verification.md 2.8): the held one moved on
+               * to this acceptance (mergePin with the folders opened here), only when it records
+               * anything new; null otherwise (nothing to write). Never lower than the one held.
+               * Write it before the record, without waiting for the settings save (a crash
+               * then leaves it at or above the record, never below); write nothing under this
+               * acceptance until it is stored (reading may go on). Store it merged into what
+               * the device holds (mergePin, never lower, under the account's lock), never
+               * over it. A `not-member` answer or a fork hands none back: groupForget drops
+               * nothing until the guard it hands back is stored and it is asked again.
+               */
+              guard: GroupPin | null;
+              /* What vouched for the family in this acceptance (AcceptedRosters.checked). */
+              checked: FamilyChecked | null;
+              /* Outbox ids of this device's staged calls the served chain holds: they landed. */
+              dropped: string[];
+          }
+        | { status: 'fork'; fork: RosterFork }
+        /*
+         * This device's record did not open (sealed under an earlier account
+         * root, after a master-key rotation): nothing was accepted. The caller
+         * deletes it and accepts again without it, against the settings pin.
+         */
+        | { status: 'record-unreadable' }
+        /*
+         * A join: this account was let in again at a later roster and the chain
+         * still passes through the one compared with its code. Show this one;
+         * nothing was kept. (Another code at the roster compared is the fork.)
+         */
+        | {
+              status: 'changed';
+              rosterVersion: number;
+              code: string[];
+              hidden: [number, number];
+              session: number;
+          }
+        /* A join: no active entry for this account at the served head. */
+        | { status: 'not-admitted' }
+        /* A join: the joins record did not open (another account root, an earlier version's): delete it. */
+        | { status: 'join-unreadable' };
+    groupOpenSeal: { groupKeyVersion: number };
+    groupOpenArea: {
+        version: number;
+        writable: boolean;
+        /* Why the area may not be written: the reader shows "Couldn't check this folder's keys". */
+        reason:
+            | 'no-grant-at-latest'
+            | 'server-behind'
+            | 'server-ahead'
+            | 'root-behind'
+            | 'root-unknown'
+            | null;
+        selfGrantToStore: WorkspaceKeyEnvelope | null;
+        /* Which envelope opened the key: the self-grant, or the area grant (the core's AreaKeyFrom). */
+        from: 'self-grant' | 'grant';
+        /* The only way an area enters a pin (pins.ts, mergePin). */
+        pinArea: OpenedArea;
+    };
+    groupStage: GroupStaged | { outboxId: null; needsCheck: string[] };
+    groupRestage: {
+        outboxId: string;
+        body: RosterCallBody;
+        stagedEnvelope: string;
+        replaced: ReplacedDocument[];
+    };
+    groupDrop: { dropped: boolean };
+    groupGrants: { grants: GrantWire[] };
+    groupReseal: { seals: SealWire[] };
+    groupVerify: {
+        nodes: {
+            id: string;
+            metadata: GroupIntegrity;
+            via: string | null;
+            /* A re-keyed record's re-keyer and binding (its verdict above is its origin's). */
+            metadataRekey?: GroupRekeyCheck | null;
+            versions: {
+                id: string;
+                integrity: GroupIntegrity;
+                via: string | null;
+                rekey?: GroupRekeyCheck | null;
+            }[];
+        }[];
+    };
+    groupJoinCode: { rosterVersion: number; code: string[]; pinMatches: boolean | null };
+    groupTrustAs: { pin: ContactPin };
+    identityConsent: { consent: string };
+    /*
+     * Store before delete, enforced here: when the held guard does not cover
+     * the highest chain this session accepted for the family (its floor),
+     * nothing is dropped and `guard` is the one to store, the held one moved
+     * on to that floor with the folders opened here (guardAfter); the app
+     * stores it (merged into what it holds, never lower) and asks again. Only
+     * a held guard that covers the floor, or no floor, forgets: `guard` is
+     * then null and `forgotten` says whether this session held anything of
+     * the family. `unreadable`: the held guard could not be read and there is
+     * a floor, so `guard` is the floor's alone, to store once the entry reads
+     * again or the person resets it (2.8); with no floor an unreadable guard
+     * does not hold the wipe up. Only a held guard equal to the floor at the
+     * floor's own roster and key versions covers it. One that disagrees with
+     * it (guardAfter's 'conflict': two histories this device accepted, or
+     * crossed versions) throws GUARD_CONFLICT; one past it ('ahead', which
+     * cannot show the floor is on its history) throws GUARD_AHEAD, for the
+     * caller to accept up to the guard first. Either way nothing is dropped.
+     */
+    groupForget: { forgotten: boolean; guard: GroupPin | null; unreadable: boolean };
+    groupStoreSeal: { envelope: string };
+    /* `unreadable`: sealed under another account root (a master-key rotation) or not this group's. */
+    groupStoreOpen: { value: unknown } | { unreadable: true };
+    groupPreviousRoot:
+        /* No previous envelope under the current area key: nothing to check. */
+        | { status: 'none' }
+        | { status: 'opens' }
+        /* It does not open, and this device held the old key: route 28's body. */
+        | { status: 'repair'; previousRootKeyEnvelope: string }
+        /* It does not open, and this device never held the old key. */
+        | { status: 'cannot' };
+    /* `openedBy`: the family that opened the folder here, or null for the account's own workspace. */
+    groupForeignListings: { listings: { workspaceId: string; openedBy: string | null }[] };
+    /* Whether writes into the family go on again. */
+    groupGuardKept: { kept: boolean };
+};
+
+/* Every group operation is listed in GROUP_OPERATIONS (protocol.ts), and nothing else is. */
+type Unlisted = Exclude<keyof GroupRequests, (typeof GROUP_OPERATIONS)[number]>;
+type Unknown = Exclude<(typeof GROUP_OPERATIONS)[number], keyof GroupRequests>;
+const LISTED: [Unlisted, Unknown] extends [never, never] ? true : never = true;
+void LISTED;
+export type GroupMessage = {
+    [K in keyof GroupRequests]: { id: number; operation: K; input: GroupRequests[K] };
+}[keyof GroupRequests];
+export function isGroupMessage(message: { operation: string }): message is GroupMessage {
+    return (GROUP_OPERATIONS as readonly string[]).includes(message.operation);
+}
+
+/* A re-keyed record's re-keyer in a family folder, as the group's trust judges them, and the binding. */
+export type GroupRekeyCheck = {
+    rekeyer: GroupIntegrity;
+    via: string | null;
+    bound: boolean | null;
+};
+function rekeyCheckOf(verdict: {
+    rekeyer: { integrity: GroupIntegrity; via: string | null };
+    bound: boolean | null;
+}): GroupRekeyCheck {
+    return { rekeyer: verdict.rekeyer.integrity, via: verdict.rekeyer.via, bound: verdict.bound };
+}
+
+/*
+ * How a record written again is signed, from the record as served: for a copy
+ * the form itself; for a rotation the legacy signature beside a re-keyed
+ * record (its writer's record is what is judged), or null for none, which is
+ * what a family folder's rotation sends (decision D3: nothing a rotation
+ * signs there claims authorship, and no shipped reader needs the legacy one).
+ */
+export type RecordJudge = (record: {
+    statements: () => Promise<StatementForms>;
+    signer: string | null;
+    signature: string | null;
+    /*
+     * A re-keyed record (a copy's source in a family folder): judged on its
+     * origin's verdict when its bytes bind, re-sealed when they do not, with
+     * the node's key at its epoch and the re-keyer (the record's signer).
+     */
+    rekeyed?: { record: RekeyedRecord; nodeKey: Uint8Array | null; rekeyer: string | null };
+}) => Promise<SignatureForm | null>;
+
+/* A family folder's rotation: re-keyed records only, nothing judged, so nothing unreadable stops it. */
+export const rekeyOnly: RecordJudge = async () => null;
+
+/*
+ * A re-keyed record as the reader checks it, from what the server serves: the
+ * current envelope under the node key at `keyEpoch`, its origin and the
+ * re-key signature (docs/integrity-design.md, "Re-keyed records").
+ */
+export function servedRekeyedRecord(
+    record: 'metadata' | 'version',
+    statement: MetadataStatement | VersionStatement,
+    keyEpoch: number,
+    envelope: string,
+    rekey: ServedRekey,
+): RekeyedRecord {
+    return {
+        record,
+        statement,
+        keyEpoch,
+        envelope: decode(envelope),
+        origin: {
+            envelope: decode(rekey.origin.envelope),
+            signerId: rekey.origin.signerId,
+            signature: decode(rekey.origin.signature),
+            keyEnvelope: decode(rekey.origin.keyEnvelope),
+        },
+        rekeySignature: decode(rekey.signature),
+    } as RekeyedRecord;
+}
+
+type RekeyedNode = {
+    id: string;
+    keyEnvelope: string;
+    metadataEnvelope: string;
+    metadataSignature: string | null;
+    metadataRekey?: RekeyOut | null;
+    metadataDropOrigin?: true;
+    versions: ({ id: string; contentKeyEnvelope: string } & RotatedRecord)[];
+    shares: { id: string; shareEnvelope: string }[];
+    links: Extract<RotatedNode, { links: unknown }>['links'];
+};
+
+/* What the session lends this module: its unlocked root, open identity and Drive keys. */
+export type GroupHost = {
+    /* A 32-bit draw for the hidden join positions; the crypto RNG unless a test kit stands in for it. */
+    randomUint32?: () => number;
+    /* The account, with a copy of its root the caller zeroes. */
+    unlocked(): { userId: string; root: Uint8Array<ArrayBuffer>; keyVersion: number };
+    /* The open version 2 identity and the earlier version 2 ones, as proven when opened. */
+    identity(): { userId: string; served: ServedIdentity; history: ServedIdentity[] };
+    hybridKeys(): HybridSigningKey;
+    granteeSecrets(keyVersion: number): GranteeSecrets;
+    ownSigner(): TrustedSigner;
+    personalSigners(signers: DriveSigners): Map<string, TrustedSigner>;
+    /* The session's Drive keys and the family write rules (area-ledger.ts). */
+    ledger: AreaLedger;
+    workspaceKey(workspaceId: string, version: number): Uint8Array | undefined;
+    dropWorkspace(workspaceId: string): void;
+    currentKeyOf(workspaceId: string, node: RotateNodeInput): Promise<Uint8Array<ArrayBuffer>>;
+    /* The node's key at `epoch` as the session holds it, not to be zeroed; null when it does not. */
+    nodeKeyAt(workspaceId: string, nodeId: string, epoch: number): Uint8Array | null;
+    /* A copy of the previous key this session holds for a node at `epoch` (the caller zeroes it). */
+    previousNodeKey(workspaceId: string, nodeId: string, epoch: number): Uint8Array | undefined;
+    rekeyNode(input: {
+        workspaceId: string;
+        targetEpoch: number;
+        granterUserId: string | null;
+        node: RotateNodeInput;
+        judge: RecordJudge;
+        old: Uint8Array;
+        fresh: Uint8Array;
+        parentKey: Uint8Array;
+    }): Promise<RekeyedNode>;
+};
+
+/* ------------------------------------------------------------------------- */
+/* The device store                                                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * What this device keeps of a group, sealed under a key derived from the
+ * account root (HKDF-SHA-256, salt 32 zero bytes, info
+ * "hushos/group/device-store/v1"), each record bound to the account, the
+ * group and the store it is kept in by its associated data
+ * ["hushos/group/device-store",1,userId,groupId,store]. Membership is the
+ * social graph, so none of it sits on disk in the clear. A master-key rotation
+ * makes it unreadable: groupAccept answers `record-unreadable` and
+ * groupStoreOpen `unreadable`, and the data layer deletes those records and
+ * verifies from version 1 against the settings pin alone (a family with no pin
+ * either is then unchecked on this device).
+ * `chains` (the cache and the device pin) and `staged` (a roster call's
+ * secrets) are opened only here; `outbox` and `joins` are the data layer's.
+ */
+const STORE_INFO = 'hushos/group/device-store/v1';
+const STORE_DOMAIN = 'hushos/group/device-store';
+const STORE_VERSION = DEVICE_STORE_VERSION;
+type Store = DeviceStore | 'chains' | 'staged' | 'joins' | 'holds';
+
+function storeKey(root: Uint8Array<ArrayBuffer>) {
+    return deriveStoreKey(root, STORE_INFO);
+}
+function storeContext(userId: string, groupId: string, store: Store) {
+    return encodeStatement([
+        STORE_DOMAIN,
+        STORE_VERSION,
+        uuid(userId, 'user id'),
+        uuid(groupId, 'group id'),
+        store,
+    ]);
+}
+/* Bytes sealed in the device store: [version][24-byte nonce][XChaCha20-Poly1305 of the bytes]. */
+async function sealDeviceBytes(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    store: Store,
+    plaintext: Uint8Array,
+) {
+    const key = await storeKey(root);
+    try {
+        return await sealStoreBytes(key, storeContext(userId, groupId, store), plaintext);
+    } finally {
+        key.fill(0);
+    }
+}
+/* The bytes a device store envelope holds: the caller's, to zero. */
+async function openDeviceBytes(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    store: Store,
+    envelope: string,
+) {
+    const refused = () =>
+        new CryptoError('This saved family record could not be opened on this account.');
+    const context = storeContext(userId, groupId, store);
+    const key = await storeKey(root);
+    try {
+        return await openStoreBytes(key, context, envelope, refused);
+    } finally {
+        key.fill(0);
+    }
+}
+/* A record that holds no secret (the chain cache and pin, the data layer's own), as JSON. */
+export async function sealDeviceRecord(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    store: Store,
+    value: unknown,
+) {
+    const plaintext = new TextEncoder().encode(JSON.stringify(value));
+    try {
+        return await sealDeviceBytes(root, userId, groupId, store, plaintext);
+    } finally {
+        plaintext.fill(0);
+    }
+}
+export async function openDeviceRecord(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    store: Store,
+    envelope: string,
+): Promise<unknown> {
+    const plaintext = await openDeviceBytes(root, userId, groupId, store, envelope);
+    try {
+        return JSON.parse(new TextDecoder().decode(plaintext));
+    } catch {
+        throw new CryptoError('This saved family record could not be opened on this account.');
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+/*
+ * What a roster call's staged secrets keep across a reload: the keys its
+ * parts are made of, bound to the roster they were made for (its digest). The
+ * keys are kept as raw bytes after a header that names them, never as text:
+ * strings cannot be zeroed.
+ *   [u32 header length][header JSON][key bytes, in the header's order]
+ */
+type StagedRecord = {
+    v: 2;
+    outboxId: string;
+    groupId: string;
+    op: GroupStageOp['kind'] | 'create';
+    rosterDigest: string;
+    areaSeeds: Record<string, string>;
+    /* Each key by name ('seed', 'successor', 'area:<workspaceId>', 'root:<workspaceId>') and length. */
+    keys: [string, number][];
+};
+type Secrets = {
+    /* Creation's group seed: what lets the first committed acceptance vouch for the first keys. */
+    seed: Uint8Array | null;
+    /* A succession's new seed. */
+    successor: Uint8Array | null;
+    areaKeys: Map<string, Uint8Array>;
+    areaSeeds: Map<string, string>;
+    rootKeys: Map<string, Uint8Array>;
+};
+function zeroSecrets(secrets: Secrets) {
+    secrets.seed?.fill(0);
+    secrets.successor?.fill(0);
+    for (const key of secrets.areaKeys.values()) key.fill(0);
+    for (const key of secrets.rootKeys.values()) key.fill(0);
+    secrets.areaKeys.clear();
+    secrets.rootKeys.clear();
+}
+async function sealStaged(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    record: Omit<StagedRecord, 'v' | 'keys' | 'areaSeeds'>,
+    secrets: Secrets,
+) {
+    const parts: [string, Uint8Array][] = [];
+    if (secrets.seed) parts.push(['seed', secrets.seed]);
+    if (secrets.successor) parts.push(['successor', secrets.successor]);
+    for (const [at, key] of secrets.areaKeys) parts.push([`area:${at}`, key]);
+    for (const [at, key] of secrets.rootKeys) parts.push([`root:${at}`, key]);
+    const header = new TextEncoder().encode(
+        JSON.stringify({
+            ...record,
+            v: 2,
+            areaSeeds: Object.fromEntries(secrets.areaSeeds),
+            keys: parts.map(([name, key]) => [name, key.length]),
+        } satisfies StagedRecord),
+    );
+    const total = parts.reduce((sum, [, key]) => sum + key.length, 0);
+    const plaintext = new Uint8Array(4 + header.length + total);
+    try {
+        new DataView(plaintext.buffer).setUint32(0, header.length);
+        plaintext.set(header, 4);
+        let at = 4 + header.length;
+        for (const [, key] of parts) {
+            plaintext.set(key, at);
+            at += key.length;
+        }
+        return await sealDeviceBytes(root, userId, record.groupId, 'staged', plaintext);
+    } finally {
+        plaintext.fill(0);
+    }
+}
+async function openStaged(
+    root: Uint8Array<ArrayBuffer>,
+    userId: string,
+    groupId: string,
+    envelope: string,
+): Promise<{ record: StagedRecord; secrets: Secrets }> {
+    const refused = () => new CryptoError('This saved change is not one this device made.');
+    const plaintext = await openDeviceBytes(root, userId, groupId, 'staged', envelope);
+    const secrets: Secrets = {
+        seed: null,
+        successor: null,
+        areaKeys: new Map(),
+        areaSeeds: new Map(),
+        rootKeys: new Map(),
+    };
+    try {
+        if (plaintext.length < 4) throw refused();
+        const length = new DataView(plaintext.buffer, plaintext.byteOffset).getUint32(0);
+        if (4 + length > plaintext.length) throw refused();
+        const record = JSON.parse(
+            new TextDecoder().decode(plaintext.subarray(4, 4 + length)),
+        ) as StagedRecord;
+        if (
+            typeof record !== 'object' ||
+            record === null ||
+            record.v !== 2 ||
+            record.groupId !== groupId ||
+            typeof record.outboxId !== 'string' ||
+            typeof record.rosterDigest !== 'string' ||
+            !Array.isArray(record.keys)
+        )
+            throw refused();
+        let at = 4 + length;
+        for (const [name, size] of record.keys) {
+            if (
+                typeof name !== 'string' ||
+                !Number.isSafeInteger(size) ||
+                at + size > plaintext.length
+            )
+                throw refused();
+            const key = plaintext.slice(at, at + size);
+            at += size;
+            const [kind, workspaceId] = name.split(':') as [string, string | undefined];
+            if (kind === 'seed' && size === 64) secrets.seed = key;
+            else if (kind === 'successor' && size === 64) secrets.successor = key;
+            else if (kind === 'area' && size === 32)
+                secrets.areaKeys.set(uuid(workspaceId, 'workspace id'), key);
+            else if (kind === 'root' && size === 32)
+                secrets.rootKeys.set(uuid(workspaceId, 'workspace id'), key);
+            else {
+                key.fill(0);
+                throw refused();
+            }
+        }
+        if (at !== plaintext.length) throw refused();
+        for (const [workspaceId, seed] of Object.entries(record.areaSeeds ?? {}))
+            secrets.areaSeeds.set(uuid(workspaceId, 'workspace id'), String(seed));
+        return { record, secrets };
+    } catch (error) {
+        zeroSecrets(secrets);
+        throw error instanceof CryptoError ? error : refused();
+    } finally {
+        plaintext.fill(0);
+    }
+}
+
+/* ------------------------------------------------------------------------- */
+/* Helpers                                                                   */
+/* ------------------------------------------------------------------------- */
+
+function wire(signed: SignedGroupStatement): SignedStatementWire {
+    return {
+        statement: encode(signed.statement),
+        signature: {
+            ed25519: encode(signed.signature.ed25519),
+            mlDsa: encode(signed.signature.mlDsa),
+        },
+        signerSignature: encode(signed.signerSignature),
+    };
+}
+function unwire(value: SignedStatementWire): SignedGroupStatement {
+    try {
+        return {
+            statement: decode(value.statement),
+            signature: {
+                ed25519: decode(value.signature.ed25519),
+                mlDsa: decode(value.signature.mlDsa),
+            },
+            signerSignature: decode(value.signerSignature),
+        };
+    } catch {
+        throw new CryptoError('The server sent a member list this device cannot read.');
+    }
+}
+function atRoster(chain: AcceptedRosters) {
+    return { rosterVersion: chain.roster.rosterVersion, rosterDigest: chain.rosterDigest };
+}
+function zeroPair(pair: GroupKeyPair | null) {
+    pair?.signingKey.fill(0);
+    pair?.mlDsaSecretKey.fill(0);
+}
+function viewOf(chain: AcceptedRosters): GroupView {
+    return {
+        groupId: chain.groupId,
+        kind: chain.kind,
+        rosterVersion: chain.roster.rosterVersion,
+        rosterDigest: chain.rosterDigest,
+        groupKeyVersion: chain.groupKeyVersion,
+        creatorUserId: chain.creatorUserId,
+        members: chain.roster.members.map((member) => ({ ...member, roles: [...member.roles] })),
+        // A retired area (a deleted family folder, design 2.10) is no folder of the family's now.
+        areas: Object.fromEntries(
+            Object.entries(chain.areaKeys)
+                .filter(([workspaceId]) => !chain.retiredAreas.includes(workspaceId))
+                .map(([workspaceId, list]) => [workspaceId, list.length]),
+        ),
+        successionDue: chain.successionDue,
+        ownEntryWrongAt: [...chain.ownEntryWrongAt],
+        ownEntryBehindAt: [...chain.ownEntryBehindAt],
+        deadBranches: chain.deadBranches.map((branch) => ({ ...branch })),
+    };
+}
+/* Whether an entry names exactly these keys: X25519, Ed25519 and the ML-DSA key by digest. */
+async function entryNames(entry: RosterMember | undefined, keys: ServedKeys) {
+    if (!entry) return false;
+    return (
+        entry.encryptionPublicKey === keys.encryptionPublicKey &&
+        entry.signingPublicKey === keys.signingPublicKey &&
+        entry.mlDsaPublicKeyDigest ===
+            (await digest(decode(keys.mlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES)))
+    );
+}
+async function mlDsaKeysOf(identities: ServedKeys[]) {
+    const out: Record<string, string> = {};
+    for (const identity of identities)
+        out[await digest(decode(identity.mlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES))] =
+            identity.mlDsaPublicKey;
+    return out;
+}
+function folderMetadata(name: string): NodeMetadata {
+    return { name, mime: null, size: null, modified: null };
+}
+
+/*
+ * The empty document of each kind a rotation may have to stand in for one it
+ * cannot open (docs/groups-server.md 8): the kinds shipped clients write
+ * (DOCUMENT_KINDS in @hushos/drive/protocol), each as its reader takes "none"
+ * (emptyRegistry in @hushos/drive/tags).
+ */
+const EMPTY_DOCUMENTS: Record<string, () => unknown> = {
+    tags: () => ({ version: 2, tags: [], items: {} }),
+};
+
+/*
+ * A workspace document as a rotation carries it on: opened under the key
+ * being replaced, or, when it does not open there (bytes a member wrote that
+ * are no document of its kind), an empty document of its kind. Nobody could
+ * read the junk before either, and aborting would let one member's bytes
+ * block every removal of the folder. A kind with no empty form is refused.
+ */
+async function openOrReplace(
+    document: RotatedDocumentWire,
+    key: Uint8Array,
+    workspaceId: string,
+): Promise<{ value: unknown; replaced: boolean }> {
+    try {
+        return {
+            value: await openDocument(decode(document.envelope), key, {
+                workspaceId,
+                kind: document.kind,
+                version: document.version,
+            }),
+            replaced: false,
+        };
+    } catch (error) {
+        const empty = Object.hasOwn(EMPTY_DOCUMENTS, document.kind)
+            ? EMPTY_DOCUMENTS[document.kind]
+            : undefined;
+        if (!(error instanceof CryptoError) || !empty) throw error;
+        return { value: empty(), replaced: true };
+    }
+}
+
+const NO_CHAIN = 'Check the family’s member list first.';
+const NO_SEED = 'Open the family’s key first.';
+const NOT_OPENED = 'Open every family folder first.';
+/* A role change that would leave nobody active holding `billing`, as the core's ORGANIZER_FIRST. */
+const ORGANIZER_FIRST = 'Make someone else the organizer first.';
+/* The core's NOT_MANAGER, NOT_CHECKED, UNCHANGED and SELF_TAKE. */
+const NOT_MANAGER = 'Only someone who manages the family can change its members.';
+const NOT_CHECKED = 'Check their words first.';
+const ADMIT_AS_MEMBER = 'Let them in first. Roles are given afterwards.';
+const UNCHANGED = 'That doesn’t change their roles.';
+const SELF_TAKE = 'Ask another manager to take this role from you.';
+/*
+ * The roster format this worker writes (docs/groups-design.md 2.10): format
+ * 2, from a family's first roster and on an older family's next one. Every
+ * client that reads family rosters reads it: the web served by this same
+ * server (a tab still running the previous release refuses it until it
+ * reloads, which the release notice offers) and the server itself; the iOS
+ * and Android apps have no families and parse no roster. A chain never goes
+ * back to format 1.
+ */
+const ROSTER_FORMAT = 2;
+const NOT_CHECKED_KEYS = 'Couldn’t check this folder’s keys. Reload to continue.';
+/* identityConsent's refusal for an identity that does not open here, as the core's succession_consent_sign words it. */
+const NOT_OWN_IDENTITY = 'This identity does not open on this account.';
+
+/* ------------------------------------------------------------------------- */
+/* The session                                                               */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The roster at which `userId`'s entry last became active on a verified chain
+ * (the roster that admitted them, or let them in again): the earliest version
+ * of the run of active entries that reaches the head. Only served rosters
+ * whose digest is the chain's at their version are read, so what the server
+ * adds beside them changes nothing; one missing from the run is refused.
+ * Null when the head has no active entry for them.
+ */
+export async function admittedAt(
+    rosterDigests: readonly string[],
+    served: readonly SignedStatementWire[],
+    userId: string,
+) {
+    return runStart(await onChain(rosterDigests, served), rosterDigests.length, userId);
+}
+
+/* The served rosters whose digest is the chain's at their version, by version. */
+async function onChain(rosterDigests: readonly string[], served: readonly SignedStatementWire[]) {
+    const out = new Map<number, Roster>();
+    for (const wire of served) {
+        try {
+            const statement = decode(wire.statement);
+            const roster = parseRoster(statement);
+            if (rosterDigests[roster.rosterVersion - 1] === (await rosterDigest(statement)))
+                out.set(roster.rosterVersion, roster);
+        } catch {
+            // Not a roster of this chain: ignored, as acceptance ignores it.
+        }
+    }
+    return out;
+}
+
+function runStart(rosters: Map<number, Roster>, head: number, userId: string) {
+    const at = (version: number) => {
+        const roster = rosters.get(version);
+        if (!roster) throw new CryptoError('The server left out part of the family’s member list.');
+        return activeWith(rosterEntry(roster, userId));
+    };
+    let version = head;
+    if (version === 0 || !at(version)) return null;
+    while (version > 1 && at(version - 1)) version--;
+    return version;
+}
+
+/* Whether an entry names exactly the keys a contact pin holds (the lattice keys by digest). */
+function entryIsPin(entry: RosterMember | undefined, pin: ContactPin) {
+    return (
+        entry !== undefined &&
+        entry.encryptionPublicKey === pin.encryptionPublicKey &&
+        entry.signingPublicKey === pin.signingPublicKey &&
+        sameKeyDigest(pin.mlDsaPublicKeyHash, entry.mlDsaPublicKeyDigest) &&
+        sameKeyDigest(pin.kemPublicKeyHash, entry.kemPublicKeyDigest)
+    );
+}
+
+/*
+ * The join code of the roster at `version` on a verified chain, under the group key it is under.
+ * Both screens' code comes from here; acceptance works its own out (group-trust.ts), and the two
+ * must agree at every version (session-groups.join.test.ts).
+ */
+/*
+ * The latest roster version what the server served reaches: the highest a
+ * served roster claims (one that does not parse claims nothing), or the
+ * device record's cache when nothing after it was served. Only a lower bound
+ * is taken from it; acceptance verifies the rest.
+ */
+function servedHead(served: ServedChain, cache: GroupChainCache | null) {
+    // The cache as the record holds it, before acceptance checks it: a damaged one names no head.
+    const digests: unknown = cache?.rosterDigests;
+    let head = Array.isArray(digests) ? digests.length : 0;
+    for (const roster of served.rosters)
+        try {
+            head = Math.max(head, parseRoster(decode(roster.statement)).rosterVersion);
+        } catch {
+            /* Not a roster: it reaches nothing. */
+        }
+    return head;
+}
+
+export async function codeAt(chain: AcceptedRosters, version: number) {
+    if (!Number.isSafeInteger(version) || version < 1 || version > chain.rosterDigests.length)
+        throw new CryptoError('This member list is not on the family’s history.');
+    // The group key that roster is under: one above every succession tied to an earlier roster.
+    let keyVersion = 1;
+    for (const out of chain.cache.successions) if (out.lastRosterVersion < version) keyVersion++;
+    return joinCode(
+        chain.rosterDigests[version - 1]!,
+        chain.groupKeys[keyVersion - 1]!,
+        keyVersion,
+    );
+}
+
+/*
+ * The pair code this account compares with `otherUserId` to check each other
+ * and the family (docs/optional-verification.md 3.4), over a chain this
+ * device accepted: the roster at which the later-admitted of the two last
+ * became active (admittedAt over `rosters`, route 5 from version 1, only those
+ * on the chain read), under the group key it is under. `own-entry-wrong`,
+ * with no code, when this account's own entry there names none of its own
+ * identities (`me.identities`, every one it has had) or acceptance found it
+ * wrong there: what such a device would compare is keys it does not hold, so
+ * personal words are the way to check that member. `not-admitted` when either
+ * has no active entry at the head. Both screens work it out alike, and it
+ * does not change when the family does.
+ */
+export type PairCode =
+    | { status: 'code'; rosterVersion: number; code: string[] }
+    | { status: 'own-entry-wrong'; rosterVersion: number }
+    | { status: 'not-admitted' };
+export async function pairCode(
+    chain: AcceptedRosters,
+    me: { userId: string; identities: ServedKeys[] },
+    otherUserId: string,
+    rosters: readonly SignedStatementWire[],
+): Promise<PairCode> {
+    requireAccepted(chain);
+    const other = uuid(otherUserId, 'user id');
+    if (other === me.userId) throw new CryptoError('A pair code is between two members.');
+    const onIt = await onChain(chain.rosterDigests, rosters);
+    const head = chain.rosterDigests.length;
+    const mine = runStart(onIt, head, me.userId);
+    const theirs = runStart(onIt, head, other);
+    if (mine === null || theirs === null) return { status: 'not-admitted' };
+    const version = Math.max(mine, theirs);
+    const entry = rosterEntry(onIt.get(version)!, me.userId);
+    let own = false;
+    for (const identity of me.identities)
+        if (entry && (await servedIsEntry(identity, entry))) own = true;
+    if (!own || chain.ownEntryWrongAt.includes(version))
+        return { status: 'own-entry-wrong', rosterVersion: version };
+    return {
+        status: 'code',
+        rosterVersion: version,
+        code: await pairCodeAt(chain, version, me.userId, other),
+    };
+}
+
+/*
+ * What a family check that matched writes on this device
+ * (docs/optional-verification.md 3.4): the check record for the settings
+ * (`familyChecks[groupId]`), only when `code` is the pair code this device
+ * works out for the two of them at `rosterVersion` (pairCode, so never on a
+ * device whose own entry there was wrong); and a verified pin of the other
+ * member's keys (the key fields of a version 3 pin, fingerprint over them, no
+ * trustedVia), only when:
+ * - their entry at the head of the chain is active and names the very keys
+ *   of their entry at the compared roster (a member whose keys changed since,
+ *   by a handover or a Continue, is checked with personal words instead);
+ * - and those keys are the ones this device's guard holds for them if it has
+ *   a guard entry (an unreadable guard writes nothing), or else the settings
+ *   pin's if there is one; with neither, the pin is written.
+ * On any mismatch of keys the check record may still be written (it is about
+ * the family), but no pin: the guard and the settings pin stay as they were.
+ * Nothing here is saved: the caller saves both in one settings write, then
+ * moves the guard (2.8).
+ */
+export type PairMatch = {
+    check: { rosterVersion: number; with: string; code: string[]; checkedAt: string } | null;
+    pin: PinKeys | null;
+};
+export async function pairMatch(input: {
+    chain: AcceptedRosters;
+    me: { userId: string; identities: ServedKeys[] };
+    otherUserId: string;
+    rosters: readonly SignedStatementWire[];
+    rosterVersion: number;
+    code: string[];
+    guard: GuardEntry | null | 'unreadable';
+    settingsPin: PinKeys | null;
+    checkedAt: string;
+}): Promise<PairMatch> {
+    const nothing: PairMatch = { check: null, pin: null };
+    const shown = await pairCode(input.chain, input.me, input.otherUserId, input.rosters);
+    if (
+        shown.status !== 'code' ||
+        shown.rosterVersion !== input.rosterVersion ||
+        shown.code.join(' ') !== input.code.join(' ')
+    )
+        return nothing;
+    const other = uuid(input.otherUserId, 'user id');
+    const check = {
+        rosterVersion: shown.rosterVersion,
+        with: other,
+        code: [...shown.code],
+        checkedAt: input.checkedAt,
+    };
+    const onIt = await onChain(input.chain.rosterDigests, input.rosters);
+    const compared = rosterEntry(onIt.get(shown.rosterVersion)!, other)!;
+    const head = rosterEntry(input.chain.roster, other);
+    if (!activeWith(head) || !sameEntryKeys(head!, compared)) return { check, pin: null };
+    const keys = {
+        keyVersion: head!.keyVersion,
+        encryptionPublicKey: head!.encryptionPublicKey,
+        signingPublicKey: head!.signingPublicKey,
+        mlDsaPublicKeyHash: digestHex(head!.mlDsaPublicKeyDigest),
+        kemPublicKeyHash: digestHex(head!.kemPublicKeyDigest),
+    };
+    const commitment = await keyCommitment(keys);
+    if (commitment === null) return { check, pin: null };
+    if (input.guard === 'unreadable') return { check, pin: null };
+    const held = input.guard ?? input.settingsPin;
+    if (held !== null && (await keyCommitment(held)) !== commitment) return { check, pin: null };
+    return { check, pin: { ...keys, fingerprint: commitment } };
+}
+
+/* Whether two entries name the same four keys (the lattice ones by digest), key version aside. */
+function sameEntryKeys(a: RosterMember, b: RosterMember) {
+    return (
+        a.encryptionPublicKey === b.encryptionPublicKey &&
+        a.signingPublicKey === b.signingPublicKey &&
+        a.mlDsaPublicKeyDigest === b.mlDsaPublicKeyDigest &&
+        a.kemPublicKeyDigest === b.kemPublicKeyDigest
+    );
+}
+
+const USED_JOIN = 'This join code was already used to join. Compare it again.';
+/* A device whose family guard could not be read (2.8): never first use, and no join on it. */
+export const GUARD_UNREADABLE = 'HushOS couldn’t check this right now.';
+
+/* The check time of the floor's pin when it is only a mark (admission): acceptance reads none. */
+const FLOOR_CHECKED_AT = '1970-01-01T00:00:00.000Z';
+const sameMark = (a: JoinMark, b: JoinMark) =>
+    a.rosterVersion === b.rosterVersion && a.code.join(' ') === b.code.join(' ');
+
+/* SHA-256 of a joins record as kept: which one joined a family. */
+async function recordDigest(record: string) {
+    return encode(
+        new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(record))),
+    );
+}
+
+/*
+ * A joins record, or null (docs/optional-verification.md 3.3):
+ * - version 4 with a join mark, `{v:4, groupId, joinMark, checkedAt}`, as
+ *   groupJoinCheck seals it after a match, and version 3 of the same shape (a
+ *   join in flight on an earlier release), read as before;
+ * - version 4 with a first use, `{v:4, groupId, firstUse: <pin>}`, as
+ *   groupJoinFirstUse seals it: the pin of the head the first acceptance
+ *   took (pinAfter's: its first keys, roster version and digest, group key
+ *   version and digest, areas and check time), held as one more pin when the
+ *   join commits, so a reload before the pin is written finishes against that
+ *   very history (its version 1 keys and group keys included) rather than
+ *   taking first use again over whatever is served then.
+ * Version 2 was sealed through the data layer (the earlier join.ts) and is
+ * refused: a join in flight compares the code once more.
+ */
+type JoinsRecord =
+    | { kind: 'code'; mark: JoinMark; checkedAt: string }
+    | { kind: 'first-use'; pin: GroupPin; checkedAt: string };
+const rosterVersionOf = (value: unknown): value is number =>
+    Number.isSafeInteger(value) && (value as number) >= 1;
+function joinsRead(groupId: string, value: unknown): JoinsRecord | null {
+    if (typeof value !== 'object' || value === null) return null;
+    const record = value as Record<string, unknown>;
+    if ((record.v !== 3 && record.v !== 4) || record.groupId !== groupId) return null;
+    const first = record.firstUse as Record<string, unknown> | null | undefined;
+    // An object, as the core reads it (an array is none: the record is then read for its join mark).
+    if (record.v === 4 && typeof first === 'object' && first !== null && !Array.isArray(first)) {
+        if (record.joinMark !== undefined) return null;
+        let pin: GroupPin;
+        try {
+            pin = checkGroupPin(groupId, first);
+        } catch {
+            return null;
+        }
+        return { kind: 'first-use', pin, checkedAt: pin.checkedAt };
+    }
+    const mark = record.joinMark as Record<string, unknown> | null | undefined;
+    if (typeof mark !== 'object' || mark === null) return null;
+    const { rosterVersion, code } = mark;
+    if (
+        !Array.isArray(code) ||
+        code.length !== 12 ||
+        !code.every((word) => typeof word === 'string' && /^[a-z]{3,8}$/.test(word)) ||
+        !rosterVersionOf(rosterVersion) ||
+        typeof record.checkedAt !== 'string'
+    )
+        return null;
+    return {
+        kind: 'code',
+        mark: { rosterVersion, code: [...(code as string[])] },
+        checkedAt: record.checkedAt,
+    };
+}
+
+export function createGroupSession(host: GroupHost) {
+    /* Committed chains, from what the server served only. */
+    const chains = new Map<string, AcceptedRosters>();
+    /* Each family's join escalation, and the joins records that already joined it this session. */
+    const joinFamilies = new Map<string, JoinFamily>();
+    const usedJoins = new Map<string, Set<string>>();
+    /* Bumped by forget(): an acceptance commits only into the session it began in. */
+    let generation = 0;
+    /* Per family, bumped by every forgetGroup and never reset: an acceptance commits only into the family it began with. */
+    const forgets = new Map<string, number>();
+    /* Groups whose last acceptance was a fork: roster verdicts are personal until it is sorted, and their folders' keys are held back (area-ledger.ts heldBack). */
+    const forked = new Set<string>();
+    /* Group seeds by `${groupId}:${groupKeyVersion}`. */
+    const seeds = new Map<string, Uint8Array>();
+    /* Staged chains and their secrets, by outbox id. */
+    const staged = new Map<
+        string,
+        { groupId: string; op: StagedRecord['op']; chain: AcceptedRosters | null; secrets: Secrets }
+    >();
+    /* Areas opened on this device, per group: their id seed (areaOf passed) and the version opened. */
+    const opened = new Map<string, Map<string, { idSeed: string; version: number }>>();
+    /*
+     * Each area's write version, why one may not be written, and the version
+     * its root was last seen at: the session's area ledger keeps them
+     * (area-ledger.ts), from what this session tells it.
+     */
+    const ledger = host.ledger;
+    /* The guard each family's last acceptance handed back, until the app says it is stored (ledger.owe). */
+    const guardsOwed = new Map<string, GroupPin>();
+    /* Refused while a guard is owed: nothing is written under that acceptance until it is stored (2.8). */
+    function requireGuardKept(groupId: string) {
+        if (ledger.owes(uuid(groupId, 'group id'))) throw new CryptoError(GUARD_NOT_KEPT);
+    }
+    /* The settings this worker last opened (settings-marks.ts): the only settings marks taken, and the only contact pins read. */
+    let settingsPins: SettingsMarks | null = null;
+    /* The session's succession verification cache (groupWriterTrust's `verified`). */
+    const verified = new Map<string, boolean>();
+
+    const seedSlot = (groupId: string, version: number) => `${groupId}:${version}`;
+
+    function committed(groupId: string) {
+        const chain = chains.get(uuid(groupId, 'group id'));
+        if (!chain) throw new CryptoError(NO_CHAIN);
+        return chain;
+    }
+    function areasOf(groupId: string) {
+        return opened.get(groupId) ?? new Map<string, { idSeed: string; version: number }>();
+    }
+    const { isArea, readVersion, writeVersion, requireWritable } = ledger;
+    /* The settings document this worker opened (session.ts's settingsOpen), or none: settings-marks.ts. */
+    function useSettings(
+        userId: string,
+        settings: { groups?: unknown; contacts?: unknown; familyChecks?: unknown } | null,
+        settingsVersion = 0,
+    ) {
+        settingsPins = settingsMarks(settingsPins, userId, settings, settingsVersion);
+    }
+    /* This account's contact pin of `userId`, from the settings it last opened; null without one. */
+    function contactPin(userId: string): ContactPin | null {
+        let account: string;
+        try {
+            // The open identity's account (open through a password change, which closes the root).
+            account = host.identity().userId;
+        } catch {
+            return null;
+        }
+        return contactPinOf(settingsPins, account, userId);
+    }
+    /*
+     * A version 1 document: it opens nowhere, and is not "no settings" either
+     * (the account has something stored), so it gives acceptance no marks at
+     * all, and after settings that opened it is a rollback.
+     */
+    function legacySettings(userId: string) {
+        refuseDowngrade(settingsPins, userId);
+    }
+    /* Refused (NOT_THIS_ACCOUNT) once the session an acceptance began in was forgotten, or another account is open. */
+    function stillTheSession(began: number, userId: string) {
+        if (generation !== began) throw new CryptoError(NOT_THIS_ACCOUNT);
+        const { userId: now, root } = host.unlocked();
+        root.fill(0);
+        if (now !== userId) throw new CryptoError(NOT_THIS_ACCOUNT);
+    }
+    /*
+     * Refused (FAMILY_FORGOTTEN) once the family was let go of (forgetGroup)
+     * after an acceptance of it began at `epoch`: what it verified was against
+     * the floor the wipe dropped, and committing it would take the family back.
+     */
+    function stillTheFamily(groupId: string, epoch: number) {
+        if ((forgets.get(groupId) ?? 0) !== epoch) throw new CryptoError(FAMILY_FORGOTTEN);
+    }
+    function commit(chain: AcceptedRosters) {
+        // The ledger first: a chain it refuses (older, or another at the version held) leaves the
+        // session's chains as they were, so the two never disagree about the family.
+        ledger.commit(chain);
+        chains.set(chain.groupId, chain);
+        forked.delete(chain.groupId);
+        // Seeds of keys the group has replaced sign nothing any more.
+        for (const [at, seed] of seeds) {
+            const [groupId, version] = at.split(':');
+            if (groupId === chain.groupId && Number(version) < chain.groupKeyVersion) {
+                seed.fill(0);
+                seeds.delete(at);
+            }
+        }
+        // Staged calls built on another head can never land: their secrets go.
+        for (const [outboxId, entry] of staged)
+            if (
+                entry.groupId === chain.groupId &&
+                entry.chain &&
+                entry.chain.roster.previousRosterDigest !== chain.rosterDigest
+            )
+                dropStaged(outboxId);
+    }
+    /* A refusal or a fork: nothing in the group is vouched for by its roster, and its areas are not written. */
+    function uncommit(groupId: string, fork: boolean) {
+        ledger.uncommit(groupId);
+        chains.delete(groupId);
+        if (fork) forked.add(groupId);
+        else forked.delete(groupId);
+    }
+    function readingOf(groupId: string): GroupReading {
+        const chain = chains.get(groupId);
+        if (chain) return { status: 'accepted', chain };
+        return forked.has(groupId) ? { status: 'fork' } : { status: 'unavailable' };
+    }
+    function dropStaged(outboxId: string) {
+        const entry = staged.get(outboxId);
+        if (!entry) return false;
+        zeroSecrets(entry.secrets);
+        staged.delete(outboxId);
+        return true;
+    }
+    function forgetGroup(groupId: string) {
+        guardsOwed.delete(groupId);
+        // An acceptance begun before this commits nothing (stillTheFamily).
+        forgets.set(groupId, (forgets.get(groupId) ?? 0) + 1);
+        for (const [slot, seed] of seeds)
+            if (slot.startsWith(`${groupId}:`)) {
+                seed.fill(0);
+                seeds.delete(slot);
+            }
+        for (const [outboxId, entry] of staged) if (entry.groupId === groupId) dropStaged(outboxId);
+        // Only the areas this family opened: another family's chain listing them touches nothing.
+        ledger.forgetGroup(groupId);
+        opened.delete(groupId);
+        chains.delete(groupId);
+        forked.delete(groupId);
+        // A join that committed and then could not be kept may run again; the hidden positions stay.
+        usedJoins.delete(groupId);
+    }
+    function forget() {
+        guardsOwed.clear();
+        for (const groupId of new Set([...chains.keys(), ...opened.keys()])) forgetGroup(groupId);
+        for (const seed of seeds.values()) seed.fill(0);
+        seeds.clear();
+        for (const outboxId of staged.keys()) dropStaged(outboxId);
+        ledger.forgetAllGroups();
+        chains.clear();
+        generation++;
+        forked.clear();
+        opened.clear();
+        verified.clear();
+        settingsPins = null;
+        joinFamilies.clear();
+        usedJoins.clear();
+    }
+
+    /* Every identity this account has had (version 2), as the open session proved them. */
+    function ownIdentities() {
+        const me = host.identity();
+        return { me, identities: [me.served, ...me.history] as ServedKeys[] };
+    }
+
+    /*
+     * The staged chain of a roster call: `signed` (and `succession`) accepted
+     * on top of the committed chain's cache, never as a mark, and only if every
+     * device holding the committed chain would take it.
+     */
+    async function stageChain(
+        chain: AcceptedRosters,
+        signed: SignedGroupStatement,
+        succession: SignedGroupStatement | null,
+    ) {
+        const { me, identities } = ownIdentities();
+        const accepted = await acceptRosters({
+            groupId: chain.groupId,
+            firstKeys: chain.groupKeys[0]!,
+            anchor: null,
+            pins: [],
+            rosters: [signed],
+            successions: succession ? [succession] : [],
+            mlDsaKeys: await mlDsaKeysOf(identities),
+            me: { userId: me.userId, identities },
+            cache: chain.cache,
+        });
+        if (accepted.status !== 'accepted')
+            throw new CryptoError('This change does not follow the family’s member list.');
+        if (accepted.roster.rosterVersion !== chain.roster.rosterVersion + 1)
+            throw new CryptoError('This change does not follow the family’s member list.');
+        if (succession && accepted.groupKeyVersion !== chain.groupKeyVersion + 1)
+            throw new CryptoError('The family’s new key would not be taken.');
+        if (accepted.successionDue)
+            throw new CryptoError('The family’s key must be replaced in the same change.');
+        return accepted;
+    }
+
+    /* A record's group verdict (group-verdicts.ts), as this session's chain and keys judge it. */
+    function verdicts(
+        groupId: string,
+        workspaceId: string,
+        reading: GroupReading,
+        writers: GroupWriter[],
+        trusted: Map<string, TrustedSigner>,
+    ) {
+        return recordVerdicts({
+            groupId,
+            workspaceId,
+            reading,
+            writers,
+            trusted,
+            me: host.identity().userId,
+            areas: Object.fromEntries(
+                [...areasOf(groupId)].map(([at, area]) => [at, area.version]),
+            ),
+            verified,
+        });
+    }
+    function personalOf(writers: GroupWriter[]) {
+        const signers: DriveSigners = {};
+        for (const writer of writers) if (writer.personal) signers[writer.userId] = writer.personal;
+        return host.personalSigners(signers);
+    }
+    /*
+     * The reading a family folder's rotation or copy is judged on: the staged
+     * chain of the roster call named, or the committed one; refused unless it
+     * is this family's area, opened on this device, on that chain.
+     */
+    function areaReading(workspaceId: string, group: GroupRotationTrust) {
+        const groupId = uuid(group.groupId, 'group id');
+        let reading = readingOf(groupId);
+        if (group.staged !== null) {
+            const entry = staged.get(group.staged);
+            if (!entry || entry.groupId !== groupId || !entry.chain)
+                throw new CryptoError('This change is no longer staged on this device.');
+            reading = { status: 'accepted', chain: entry.chain };
+        }
+        // Only the group whose area this is judges it: an area opened on this device, on its chain.
+        if (
+            reading.status !== 'accepted' ||
+            !Object.hasOwn(reading.chain.areaKeys, workspaceId) ||
+            !areasOf(groupId).has(workspaceId)
+        )
+            throw new CryptoError('This folder is not one of this family’s.');
+        return { groupId, reading };
+    }
+    /*
+     * A Drive walk of a family folder: every record with a writer's signature
+     * is kept re-keyed and nothing is re-signed as the walker's, so no record
+     * is judged at all (one nobody can check no longer stops a removal), and
+     * a departing member's records keep their name whoever walks them.
+     */
+    async function rotationJudge(
+        workspaceId: string,
+        group: GroupRotationTrust,
+    ): Promise<RecordJudge> {
+        areaReading(workspaceId, group);
+        return rekeyOnly;
+    }
+    /* A copy out of a family folder's record, judged as its member list says. */
+    async function copyJudge(
+        workspaceId: string,
+        group: GroupRotationTrust,
+        trusted: Map<string, TrustedSigner>,
+    ): Promise<RecordJudge> {
+        const { groupId, reading } = areaReading(workspaceId, group);
+        return judgeWith(verdicts(groupId, workspaceId, reading, group.writers, trusted));
+    }
+
+    /*
+     * The roster's signer. Acceptance checks a roster's signer signature
+     * against the signer's entry on the roster before it, so a member whose
+     * entry still names an earlier identity signs the roster that folds in
+     * their current one with that earlier identity's keys (plan finding 4):
+     * opened here from its envelope only for that roster, only when the old
+     * entry names exactly that identity and the new one names the open one,
+     * and zeroed once it has signed. Every other roster is signed with the
+     * open identity, which the old entry must name.
+     */
+    async function signerFor(
+        chain: AcceptedRosters,
+        next: { members: RosterMember[] },
+        op: GroupStageOp,
+    ): Promise<{ keys: HybridSigningKey; mlDsaPublicKey: string; zero: () => void }> {
+        const me = host.identity();
+        const before = rosterEntry(chain.roster, me.userId);
+        if (await entryNames(before, me.served))
+            return {
+                keys: host.hybridKeys(),
+                mlDsaPublicKey: me.served.mlDsaPublicKey,
+                zero: () => {},
+            };
+        const after = next.members.find((member) => member.userId === me.userId);
+        if (op.kind !== 'foldIn' || !(await entryNames(after, me.served)))
+            throw new CryptoError(
+                'Your entry on the family’s member list is not your current keys. Fold in your new keys first.',
+            );
+        for (const envelope of op.history ?? []) {
+            if (envelope.version !== 2) continue;
+            const served = publicIdentity(envelope);
+            if (!(await entryNames(before, served))) continue;
+            const { userId, root } = host.unlocked();
+            let signingKey: Uint8Array | null = null;
+            let mlDsa: { secretKey: Uint8Array } | null = null;
+            try {
+                // Each opens under this account's root and derives the public key the envelope names.
+                signingKey = await openIdentitySigningKey(root, userId, envelope);
+                mlDsa = await openIdentityMlDsaKey(root, userId, envelope);
+            } catch (error) {
+                signingKey?.fill(0);
+                throw error;
+            } finally {
+                root.fill(0);
+            }
+            if (!mlDsa) {
+                signingKey.fill(0);
+                continue;
+            }
+            const keys = { signingKey, mlDsaSecretKey: mlDsa.secretKey };
+            return {
+                keys,
+                mlDsaPublicKey: served.mlDsaPublicKey,
+                zero: () => {
+                    keys.signingKey.fill(0);
+                    keys.mlDsaSecretKey.fill(0);
+                },
+            };
+        }
+        throw new CryptoError('Your earlier keys are needed to sign this. Unlock again and retry.');
+    }
+
+    /*
+     * An area's rotation riding on a roster call: the root re-keyed at the
+     * target epoch under the new area key (never through the session's own
+     * caches: the call may still be refused), the root's old key wrapped again
+     * under the new area key (option A), and both opened again with the new
+     * area key before anything is returned, or nothing is sent.
+     */
+    async function rotationOf(
+        groupId: string,
+        rotation: AreaRotationInput,
+        fromVersion: number,
+        areaKey: Uint8Array,
+        rootKey: Uint8Array,
+        judge: RecordJudge,
+        selfGrant: WorkspaceKeyEnvelope,
+        /* Where documents that did not open, and went on empty, are reported. */
+        replaced: ReplacedDocument[],
+    ): Promise<RotationWire> {
+        const { workspaceId, targetEpoch, root } = rotation;
+        const toVersion = fromVersion + 1;
+        if (root.parentId !== workspaceId || root.parentKeyEpoch !== toVersion)
+            throw new CryptoError('This is not the root of the family folder being rotated.');
+        if (!Number.isSafeInteger(targetEpoch) || targetEpoch <= root.keyEpoch)
+            throw new CryptoError('Draw a new key epoch for this folder first.');
+        if (!areasOf(groupId).has(workspaceId)) throw new CryptoError(NOT_OPENED);
+        // The area's documents, opened under the key being replaced (and only that one) and sealed
+        // for their next version under the new key: they move with the roster, never after it.
+        const fromKey = host.workspaceKey(workspaceId, fromVersion);
+        if (!fromKey) throw new CryptoError(NOT_OPENED);
+        const documents: RotatedDocumentWire[] = [];
+        const kinds = new Set<string>();
+        for (const document of rotation.documents) {
+            if (kinds.has(document.kind))
+                throw new CryptoError('A folder’s document is sealed again only once.');
+            kinds.add(document.kind);
+            const { value, replaced: empty } = await openOrReplace(document, fromKey, workspaceId);
+            if (empty) replaced.push({ workspaceId, kind: document.kind });
+            documents.push({
+                kind: document.kind,
+                version: document.version,
+                envelope: encode(
+                    await sealDocument(value, areaKey, {
+                        workspaceId,
+                        kind: document.kind,
+                        version: document.version + 1,
+                    }),
+                ),
+            });
+        }
+        const old = await host.currentKeyOf(workspaceId, root);
+        try {
+            const rekeyed = await host.rekeyNode({
+                workspaceId,
+                targetEpoch,
+                granterUserId: host.identity().userId,
+                node: root,
+                judge,
+                old,
+                fresh: rootKey,
+                parentKey: areaKey,
+            });
+            const current = {
+                workspaceId,
+                nodeId: root.id,
+                parentId: workspaceId,
+                parentKeyEpoch: toVersion,
+                keyEpoch: targetEpoch,
+            };
+            const previous = { ...current, keyEpoch: root.keyEpoch };
+            const previousRootKeyEnvelope = await wrapPreviousRootKey(old, areaKey, previous);
+            // The groups-server.md 8 requirement: a member holding only the new area key must open both.
+            const opensNew = await openNodeKey(decode(rekeyed.keyEnvelope, 72), areaKey, current);
+            const opensOld = await openPreviousRootKey(previousRootKeyEnvelope, areaKey, previous);
+            const ok = sameBytes(opensNew, rootKey) && sameBytes(opensOld, old);
+            opensNew.fill(0);
+            opensOld.fill(0);
+            if (!ok)
+                throw new CryptoError(
+                    'The family folder’s new keys didn’t open, so nothing was sent.',
+                );
+            const sealed = rekeyed.links.filter(
+                (link): link is { id: string; linkEnvelope: string; secretEnvelope: string } =>
+                    !('unsealable' in link),
+            );
+            return {
+                workspaceId,
+                fromVersion,
+                toVersion,
+                targetEpoch,
+                root: {
+                    id: root.id,
+                    changeSeq: root.changeSeq,
+                    parentKeyEpoch: toVersion,
+                    keyEnvelope: rekeyed.keyEnvelope,
+                    rotated: {
+                        metadataEnvelope: rekeyed.metadataEnvelope,
+                        metadataSignature: rekeyed.metadataSignature,
+                        metadataRekey: rekeyed.metadataRekey ?? null,
+                        ...(rekeyed.metadataDropOrigin ? { metadataDropOrigin: true } : {}),
+                        versions: rekeyed.versions,
+                        shares: rekeyed.shares,
+                        links: sealed,
+                        unsealableLinks: rekeyed.links
+                            .filter((link) => 'unsealable' in link)
+                            .map((link) => link.id),
+                    },
+                },
+                previousRootKeyEnvelope: encode(previousRootKeyEnvelope),
+                selfGrant,
+                documents,
+            };
+        } finally {
+            old.fill(0);
+        }
+    }
+
+    /* A new area's root folder: key epoch 1 under the area key at version 1, signed by its creator. */
+    async function newRoot(
+        workspaceId: string,
+        areaKey: Uint8Array,
+        rootKey: Uint8Array,
+        name: string,
+        signer: HybridSigningKey,
+    ): Promise<AreaRootWire> {
+        const node = await newId('node', workspaceId);
+        const keyEnvelope = await wrapNodeKey(rootKey, areaKey, {
+            workspaceId,
+            nodeId: node.id,
+            parentId: workspaceId,
+            parentKeyEpoch: 1,
+            keyEpoch: 1,
+        });
+        const metadataEnvelope = await sealMetadata(folderMetadata(name), rootKey, {
+            workspaceId,
+            nodeId: node.id,
+            metadataVersion: 1,
+        });
+        const signature = await signStatement(
+            await metadataStatementAs(
+                'ordinary',
+                { workspaceId, nodeId: node.id, kind: 'folder', metadataVersion: 1 },
+                metadataEnvelope,
+            ),
+            signer.signingKey,
+        );
+        return {
+            id: node.id,
+            idSeed: node.seed,
+            keyEpoch: 1,
+            parentKeyEpoch: 1,
+            keyEnvelope: encode(keyEnvelope),
+            metadataEnvelope: encode(metadataEnvelope),
+            metadataSignature: encode(signature),
+        };
+    }
+
+    async function selfGrantOf(
+        groupId: string,
+        workspaceId: string,
+        key: Uint8Array,
+        version: number,
+    ) {
+        const { userId, root, keyVersion } = host.unlocked();
+        try {
+            return await grantAreaKey(key, root, userId, groupId, workspaceId, keyVersion, version);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* ------------------------------------------------------------------- */
+    /* The operations                                                      */
+    /* ------------------------------------------------------------------- */
+
+    async function create(
+        input: GroupRequests['groupCreate'],
+    ): Promise<GroupResults['groupCreate']> {
+        const { userId, root, keyVersion } = host.unlocked();
+        const secrets: Secrets = {
+            seed: null,
+            successor: null,
+            areaKeys: new Map(),
+            areaSeeds: new Map(),
+            rootKeys: new Map(),
+        };
+        let pair: GroupKeyPair | null = null;
+        let kept = false;
+        try {
+            if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            const me = host.identity();
+            if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+            if (
+                typeof input.name !== 'string' ||
+                input.name.trim().length === 0 ||
+                input.name.length > 100
+            )
+                throw new CryptoError('Give the family a name of at most 100 characters.');
+            // The account's identities as just fetched, each proven to open under this account.
+            const fresh: ServedKeys[] = [];
+            for (const envelope of [...input.identities.history, input.identities.identity]) {
+                await verifyOwnIdentity(root, userId, envelope);
+                if (envelope.version === 2) fresh.push(publicIdentity(envelope));
+            }
+            const seed = newGroupSeed();
+            secrets.seed = seed;
+            pair = await groupKeyPair(seed);
+            const group = await newId('group', userId);
+            const area = await newId('workspace', group.id);
+            const areaKey = generateKey();
+            const rootKey = generateKey();
+            secrets.areaKeys.set(area.id, areaKey);
+            secrets.areaSeeds.set(area.id, area.seed);
+            secrets.rootKeys.set(area.id, rootKey);
+            const entry = await ownRosterEntry(userId, me.served, {
+                roles: ['billing', 'members'],
+            });
+            const roster = await firstRoster(group.id, entry, {
+                kind: 'family',
+                format: ROSTER_FORMAT,
+                areaKeys: [{ workspaceId: area.id, workspaceKey: areaKey, rootKey }],
+            });
+            const signer = host.hybridKeys();
+            const signed = await signRoster(roster, pair, signer);
+            // Staged: the keys this worker just made are the ones it vouches for, and only them.
+            const chain = await acceptRosters({
+                groupId: group.id,
+                firstKeys: pair.publicKey,
+                anchor: 'created',
+                pins: [],
+                rosters: [signed],
+                successions: [],
+                mlDsaKeys: await mlDsaKeysOf([me.served]),
+                me: { userId, identities: fresh },
+                cache: null,
+            });
+            if (chain.status !== 'accepted')
+                throw new CryptoError('This family’s first member list would not be taken.');
+            // Design 3.1: never found a family on an identity the account has replaced.
+            if (chain.ownEntryWrongAt.length > 0 || chain.ownEntryBehindAt.length > 0)
+                throw new CryptoError(
+                    'Your keys changed on another device. Unlock again, then create the family.',
+                );
+            const kem = decode(me.served.kemPublicKey);
+            const keySeal = await sealGroupKey(
+                seed,
+                {
+                    groupId: group.id,
+                    groupKeyVersion: 1,
+                    holderUserId: userId,
+                    holderKeyVersion: me.served.keyVersion,
+                    sealerUserId: userId,
+                    ...atRoster(chain),
+                },
+                { chain, holderKemPublicKey: kem, sealer: signer },
+            );
+            const grant = await sealAreaGrant(
+                areaKey,
+                {
+                    groupId: group.id,
+                    workspaceId: area.id,
+                    workspaceKeyVersion: 1,
+                    granteeUserId: userId,
+                    granteeKeyVersion: me.served.keyVersion,
+                    granterUserId: userId,
+                    ...atRoster(chain),
+                },
+                { chain, areaIdSeed: area.seed, granteeKemPublicKey: kem, granter: signer },
+            );
+            const rootWire = await newRoot(
+                area.id,
+                areaKey,
+                rootKey,
+                input.areaName ?? 'Family',
+                signer,
+            );
+            const selfGrant = await grantAreaKey(
+                areaKey,
+                root,
+                userId,
+                group.id,
+                area.id,
+                keyVersion,
+                1,
+            );
+            const outboxId = crypto.randomUUID();
+            const stagedEnvelope = await sealStaged(
+                root,
+                userId,
+                { outboxId, groupId: group.id, op: 'create', rosterDigest: chain.rosterDigest },
+                secrets,
+            );
+            staged.set(outboxId, { groupId: group.id, op: 'create', chain, secrets });
+            kept = true;
+            return {
+                outboxId,
+                groupId: group.id,
+                stagedEnvelope,
+                body: {
+                    id: group.id,
+                    idSeed: group.seed,
+                    kind: 'family',
+                    name: input.name,
+                    groupKey: { ...pair.publicKey },
+                    roster: wire(signed),
+                    keySeal: { envelope: encode(keySeal) },
+                    area: {
+                        workspaceId: area.id,
+                        idSeed: area.seed,
+                        root: rootWire,
+                        grant: { envelope: encode(grant) },
+                        selfGrant,
+                    },
+                },
+            };
+        } finally {
+            root.fill(0);
+            zeroPair(pair);
+            if (!kept) zeroSecrets(secrets);
+        }
+    }
+
+    /*
+     * This person's marks for a group: the settings pin and family check (from
+     * settings this worker opened), this device's record, opened, and the
+     * family guard (2.8) when given. `marks` also counts what this session
+     * holds, a committed chain or a fork. `null`: the record did not open
+     * (sealed under an earlier account root). A guard that could not be read
+     * refuses before anything else is read.
+     */
+    async function marksOf(input: {
+        userId: string;
+        groupId: string;
+        record: string | null;
+        withoutCache?: boolean;
+        guard?: GroupPin | 'unreadable' | null;
+    }) {
+        if (input.guard === 'unreadable') throw new CryptoError(GUARD_UNREADABLE);
+        const groupId = uuid(input.groupId, 'group id');
+        const { userId, root } = host.unlocked();
+        try {
+            if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            let record: { cache: GroupChainCache | null; pin: GroupPin | null } | null = null;
+            if (input.record) {
+                let value: { v?: number; cache?: GroupChainCache; pin?: GroupPin } | null;
+                try {
+                    value = (await openDeviceRecord(
+                        root,
+                        userId,
+                        groupId,
+                        'chains',
+                        input.record,
+                    )) as typeof value;
+                } catch (error) {
+                    // Sealed under an earlier account root: the caller starts over without it.
+                    if (error instanceof CryptoError) return null;
+                    throw error;
+                }
+                if (value?.v !== 1) return null;
+                record = {
+                    cache: input.withoutCache ? null : (value.cache ?? null),
+                    pin: value.pin ?? null,
+                };
+            }
+            if (!settingsPins || settingsPins.userId !== userId)
+                throw new CryptoError(OPEN_SETTINGS);
+            const settingsPin = settingsPinOf(settingsPins, groupId);
+            const pins = [settingsPin, record?.pin ?? null, input.guard ?? null].filter(
+                (pin): pin is GroupPin => pin !== null && pin !== undefined,
+            );
+            const check = familyCheckOf(settingsPins, groupId);
+            // Marks include what this session already holds: a committed chain, or a fork; and a
+            // family check, though it fixes no first keys.
+            const marks =
+                pins.length > 0 ||
+                (record?.cache ?? null) !== null ||
+                check.checked ||
+                chains.has(groupId) ||
+                forked.has(groupId);
+            return {
+                groupId,
+                userId,
+                pins,
+                pairMarks: check.pairMarks,
+                cache: record?.cache ?? null,
+                marks,
+            };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    async function accept(
+        input: GroupRequests['groupAccept'],
+    ): Promise<GroupResults['groupAccept']> {
+        // The session and the family as this call found them, before any await (a record's
+        // decryption, a join's admission): a lock or a wipe before it ends keeps nothing, however
+        // early it lands (the core's accept_served and accept_matched take theirs as early).
+        const began = { generation, epoch: forgets.get(uuid(input.groupId, 'group id')) ?? 0 };
+        if (input.joining && input.creating)
+            throw new CryptoError('A family is either joined or created, not both.');
+        // Joining always carries the join code the person compared: there is no joining without
+        // it, so nothing accepts, views or keeps a chain over first keys nobody checked.
+        if (input.joining && typeof input.joining.joinsRecord !== 'string')
+            throw new CryptoError('Compare the join code first.');
+        if (!input.joining) return acceptRun(input, began, null, input.checkedAt, null);
+        // A join: the code compared, from the joins record only a match sealed, or a first use,
+        // from the record only groupJoinFirstUse sealed (the core's accept_joining). After the
+        // record is opened and digested, checked and taken with no await between the two, so of
+        // two submissions of the same record at once only one runs; given back when nothing is
+        // committed.
+        const joinGroup = uuid(input.groupId, 'group id');
+        const opened = await openJoins(input.userId, joinGroup, input.joining.joinsRecord);
+        if (!opened) return { status: 'join-unreadable' };
+        const used = await recordDigest(input.joining.joinsRecord);
+        const taken = usedJoins.get(joinGroup) ?? new Set<string>();
+        if (taken.has(used)) throw new CryptoError(USED_JOIN);
+        usedJoins.set(joinGroup, taken.add(used));
+        let result: GroupResults['groupAccept'];
+        try {
+            result =
+                opened.kind === 'code'
+                    ? await joinRun(input, began, joinGroup, opened)
+                    : await firstUseRun(input, began, opened);
+        } catch (error) {
+            usedJoins.get(joinGroup)?.delete(used);
+            throw error;
+        }
+        if (result.status !== 'accepted') usedJoins.get(joinGroup)?.delete(used);
+        return result;
+    }
+
+    /*
+     * The join after its record's checks: the admission again. This account let
+     * in again at a later roster, on a chain that still passes through the
+     * roster compared with its code, is 'changed'; anything else that differs
+     * (another code at that roster, a chain short of it) is acceptance's to
+     * answer with the compared code as its mark: the fork, or a refusal.
+     */
+    async function joinRun(
+        input: GroupRequests['groupAccept'],
+        began: Began,
+        joinGroup: string,
+        opened: { mark: JoinMark; checkedAt: string },
+    ): Promise<GroupResults['groupAccept']> {
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        const later =
+            now.mark.rosterVersion > opened.mark.rosterVersion &&
+            (await codeAt(now.chain, opened.mark.rosterVersion)).join(' ') ===
+                opened.mark.code.join(' ');
+        if (later) return showing(joinGroup, now.mark, 'changed');
+        return acceptRun(input, began, opened.mark, opened.checkedAt, null);
+    }
+
+    /*
+     * A first use after its record's checks: the admission again (this
+     * account's entry active at the head, else 'not-admitted' and nothing
+     * kept), then the acceptance with the record's pin as one more mark: the
+     * chain must pass through its roster, under its version 1 keys and its
+     * group key there (another of any of them is the fork or a refusal, a
+     * chain short of it a rollback), so a reload before the pin is written
+     * never takes first use again over whatever is served then.
+     */
+    async function firstUseRun(
+        input: GroupRequests['groupAccept'],
+        began: Began,
+        opened: { pin: GroupPin; checkedAt: string },
+    ): Promise<GroupResults['groupAccept']> {
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        return acceptRun(input, began, null, opened.checkedAt, opened.pin);
+    }
+
+    /* The session (generation) and the family (epoch) an acceptance call began with. */
+    type Began = { generation: number; epoch: number };
+    async function acceptRun(
+        input: GroupRequests['groupAccept'],
+        { generation: began, epoch }: Began,
+        joinMark: JoinMark | null,
+        checkedAt: string,
+        firstUse: GroupPin | null,
+    ): Promise<GroupResults['groupAccept']> {
+        const marked = await marksOf(input);
+        if (!marked) return { status: 'record-unreadable' };
+        const { groupId, userId, pins, pairMarks, cache, marks } = marked;
+        let anchor: GroupAnchor | null = null;
+        // Creation vouches for the first keys only where nothing marks the family (F1).
+        if (input.creating && marks)
+            throw new CryptoError('This device has already checked this family.');
+        // Joining vouches for them only where nothing does either, through its join mark, which
+        // the chain must pass through (a made-up history gives another code). A first use's
+        // commit needs no anchor: its record's pin, from the acceptance groupJoinFirstUse made on
+        // first use, is a mark. With marks (a rejoin after a not-member wipe, which keeps the
+        // settings pin and the guard) the marks decide the first keys and the history, and the
+        // join mark only adds to them.
+        if (input.joining && !marks && joinMark) anchor = 'join';
+        const marking = firstUse ? [...pins, firstUse] : pins;
+        if (input.creating) {
+            const { root } = host.unlocked();
+            try {
+                const { secrets } = await openStaged(
+                    root,
+                    userId,
+                    groupId,
+                    input.creating.stagedEnvelope,
+                );
+                try {
+                    if (!secrets.seed)
+                        throw new CryptoError('This saved change did not create the family.');
+                    const pair = await groupKeyPair(secrets.seed);
+                    zeroPair(pair);
+                    // Only the keys this device made: served first keys that are not the seed's are refused.
+                    if (!sameGroupKey(pair.publicKey, input.served.firstKeys))
+                        throw new CryptoError('These are not the family keys this device made.');
+                    anchor = 'created';
+                } finally {
+                    zeroSecrets(secrets);
+                }
+            } finally {
+                root.fill(0);
+            }
+        }
+        const { me, identities } = ownIdentities();
+        if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        // The floor, the highest chain this session committed for the family (the ledger keeps it,
+        // and a refusal never drops it), is one of the person's marks: served short of it, the run
+        // lost a race with a later one (or the server rolled back), and nothing of it is kept;
+        // served through another roster at a version it fixes, the acceptance below reports the
+        // fork, the hard warning, and never commits it.
+        const held = ledger.floor(groupId);
+        if (held && servedHead(input.served, cache) < held.roster.rosterVersion)
+            throw new CryptoError(OLDER_CHAIN);
+        const sessionPin = held ? await pinAfter([], held, checkedAt) : null;
+        // Served digests: a roster this device staged that the server now serves landed.
+        const served = new Set(
+            await Promise.all(
+                input.served.rosters.map(async (roster) => {
+                    try {
+                        return await rosterDigest(decode(roster.statement));
+                    } catch {
+                        return '';
+                    }
+                }),
+            ),
+        );
+        let chain;
+        try {
+            chain = await acceptRosters({
+                groupId,
+                firstKeys: input.served.firstKeys,
+                anchor,
+                pins: sessionPin ? [...marking, sessionPin] : marking,
+                rosters: input.served.rosters.map(unwire),
+                successions: input.served.successions.map(unwire),
+                mlDsaKeys: { ...input.served.signerKeys },
+                me: { userId, identities },
+                cache,
+                joinMark,
+                pairMarks,
+            });
+        } catch (error) {
+            // Only under the session the run began in, and the family not let go of since; a
+            // refusal on a forked group keeps the fork: it is still the person's own marks' conflict.
+            stillTheSession(began, userId);
+            stillTheFamily(groupId, epoch);
+            // An attempt the caller retries keeps what this session committed: the next attempt
+            // either commits over it or, refused too, uncommits it.
+            if (!input.retried) uncommit(groupId, forked.has(groupId));
+            throw error;
+        }
+        if (chain.status === 'fork') {
+            stillTheSession(began, userId);
+            stillTheFamily(groupId, epoch);
+            uncommit(groupId, true);
+            return { status: 'fork', fork: chain };
+        }
+        // A lock or another account meanwhile: nothing is committed into a session this run did not
+        // begin in; nor into a family let go of meanwhile, which would take it back after its wipe.
+        stillTheSession(began, userId);
+        stillTheFamily(groupId, epoch);
+        // An acceptance that lost a race with one committed while it ran changes nothing: no
+        // staged call dropped, no record or pin written; nor does one beside it, through another
+        // roster or another group key at a version committed meanwhile (verified against the
+        // floor read before, not this one). The ledger holds the whole floor to it again here.
+        ledger.checkCommit(chain);
+        // Staged calls whose roster the server served and this acceptance took: they landed (another
+        // tab sent them, or a resend this tab never heard back from), and go with their secrets.
+        // Only after acceptance held, so junk served beside them, or under them, drops nothing.
+        const dropped: string[] = [];
+        for (const [outboxId, entry] of staged)
+            if (
+                entry.groupId === groupId &&
+                entry.chain &&
+                served.has(entry.chain.rosterDigest) &&
+                chain.rosterDigests.includes(entry.chain.rosterDigest)
+            )
+                dropped.push(outboxId);
+        for (const outboxId of dropped) dropStaged(outboxId);
+        // A caller that keeps a family guard (it passes `guard`, null for none, as the apps do)
+        // owes it from the commit on, before any await: no write lands under this chain until the
+        // guard is stored, and one never worked out (a throw below) keeps writes waiting.
+        const keepsGuard = input.guard !== undefined;
+        if (keepsGuard) ledger.owe(groupId);
+        commit(chain);
+        const pin = await pinAfter(marking, chain, checkedAt);
+        // The family guard moves on with every acceptance, never down (docs/optional-verification.md
+        // 2.8): the held one merged with this pin and the folders opened here, only when that
+        // records anything new.
+        const next = guardAfter(
+            groupId,
+            input.guard && input.guard !== 'unreadable'
+                ? checkGroupPin(groupId, input.guard)
+                : null,
+            pin,
+            [...areasOf(groupId)].map(([workspaceId, area]) => ({
+                groupId,
+                workspaceId,
+                version: area.version,
+            })),
+        );
+        // The guard was a mark, so a chain that disagrees with it was the fork above, and one
+        // short of it refused; nothing is ever written over it or below it.
+        const guard = next === 'conflict' || next === 'ahead' ? null : next;
+        // Nothing new to store (the held guard covers this chain): writes go on. Otherwise they
+        // wait for groupGuardKept.
+        if (guard === null) {
+            guardsOwed.delete(groupId);
+            ledger.kept(groupId);
+        } else if (keepsGuard) guardsOwed.set(groupId, guard);
+        const unlocked = host.unlocked();
+        try {
+            return {
+                status: 'accepted',
+                view: viewOf(chain),
+                record: await sealDeviceRecord(unlocked.root, userId, groupId, 'chains', {
+                    v: 1,
+                    cache: chain.cache,
+                    pin,
+                }),
+                pin,
+                guard,
+                checked: chain.checked,
+                dropped,
+            };
+        } finally {
+            unlocked.root.fill(0);
+        }
+    }
+
+    /*
+     * The newcomer's admission, over what route 5 serves: verified as
+     * acceptance would verify it, then nothing done with it. No commit, no
+     * uncommit, no fork set, no staged call dropped, no record or pin: the
+     * chain is dropped here, and the code is all that leaves.
+     */
+    async function admission(input: {
+        userId: string;
+        groupId: string;
+        served: ServedChain;
+        record: string | null;
+        guard?: GroupPin | 'unreadable' | null;
+    }): Promise<
+        | { status: 'code'; mark: JoinMark; chain: AcceptedRosters }
+        | { status: 'not-admitted' }
+        | { status: 'fork'; fork: RosterFork }
+        | { status: 'record-unreadable' }
+    > {
+        const marked = await marksOf(input);
+        if (!marked) return { status: 'record-unreadable' };
+        const { groupId, userId, pins, pairMarks, cache, marks } = marked;
+        const { me, identities } = ownIdentities();
+        if (me.userId !== userId) throw new CryptoError('Open your identity first.');
+        // The session's floor (the highest chain committed here, kept through a refusal that
+        // uncommitted it) is a mark too, its pin among the pins, as acceptance holds it.
+        const floor = ledger.floor(groupId);
+        const floorPin = floor ? await pinAfter([], floor, FLOOR_CHECKED_AT) : null;
+        let chain;
+        try {
+            chain = await acceptRosters({
+                groupId,
+                firstKeys: input.served.firstKeys,
+                // With no mark, over the served first keys on first use: for the code only, or for
+                // the record a first use keeps; only the acceptance that carries one commits.
+                anchor: marks || floorPin ? null : 'first-use',
+                pins: floorPin ? [...pins, floorPin] : pins,
+                rosters: input.served.rosters.map(unwire),
+                successions: input.served.successions.map(unwire),
+                mlDsaKeys: { ...input.served.signerKeys },
+                me: { userId, identities },
+                cache,
+                pairMarks,
+            });
+        } catch (error) {
+            // First use takes a chain only when its head lets this account in: not let in yet.
+            if (error instanceof CryptoError && error.message === NOT_LET_IN)
+                return { status: 'not-admitted' };
+            throw error;
+        }
+        if (chain.status === 'fork') return { status: 'fork', fork: chain };
+        const version = await admittedAt(chain.rosterDigests, input.served.rosters, userId);
+        if (version === null) return { status: 'not-admitted' };
+        return {
+            status: 'code',
+            mark: { rosterVersion: version, code: await codeAt(chain, version) },
+            chain,
+        };
+    }
+
+    /* The family's escalation (join-session.ts), for this account's session. */
+    function joinFamily(groupId: string) {
+        let family = joinFamilies.get(groupId);
+        if (!family) joinFamilies.set(groupId, (family = newJoinFamily()));
+        return family;
+    }
+
+    /* One showing of `mark`: its positions, drawn only when the code was never shown. */
+    function showing<S extends 'code' | 'changed'>(groupId: string, mark: JoinMark, status: S) {
+        const hidden = showCode(joinFamily(groupId), mark, host.randomUint32 ?? randomUint32);
+        return {
+            status,
+            rosterVersion: mark.rosterVersion,
+            code: [...mark.code],
+            hidden,
+            session: generation,
+        };
+    }
+
+    /*
+     * Folds the escalation the data layer kept into this session's (only ever
+     * more held), under the unlocked account. One that does not open here is
+     * refused with HOLDS_UNREADABLE, the only answer the data layer deletes it on.
+     */
+    async function restoreFrom(groupId: string, holds: string | null | undefined) {
+        const { userId, root } = host.unlocked();
+        try {
+            if (holds === null || holds === undefined) return;
+            let value: unknown;
+            try {
+                value = await openDeviceRecord(root.slice(), userId, groupId, 'holds', holds);
+            } catch (error) {
+                if (error instanceof CryptoError) throw new CryptoError(HOLDS_UNREADABLE);
+                throw error;
+            }
+            restoreHolds(joinFamily(groupId), value);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The family's escalation sealed for the data layer to keep, or null when nothing is held. */
+    async function exportHolds(groupId: string) {
+        const value = holdsValue(joinFamilies.get(groupId));
+        if (!value) return null;
+        const { userId, root } = host.unlocked();
+        try {
+            return await sealDeviceRecord(root, userId, groupId, 'holds', value);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The newcomer's join code, over what route 5 serves (groupJoinPreview), and one showing of it. */
+    async function joinPreview(
+        input: GroupRequests['groupJoinPreview'],
+    ): Promise<GroupResults['groupJoinPreview']> {
+        const groupId = uuid(input.groupId, 'group id');
+        await restoreFrom(groupId, input.holds);
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        return showing(groupId, now.mark, 'code');
+    }
+
+    /* "They match" (groupJoinCheck), in the core's join_check order. */
+    async function joinCheckOf(
+        input: GroupRequests['groupJoinCheck'],
+    ): Promise<GroupResults['groupJoinCheck']> {
+        const groupId = uuid(input.groupId, 'group id');
+        const began = generation;
+        await restoreFrom(groupId, input.holds);
+        // Shown in this session (not before a lock, whatever a restore holds now) and not replaced.
+        if (
+            input.session !== began ||
+            !stillShown(joinFamilies.get(groupId), input.mark, input.hidden)
+        )
+            throw new CryptoError(NOT_SHOWN);
+        if (!typedComplete(input.typed)) return { status: 'incomplete' };
+        const now = await admission(input);
+        // A lock or another account while the chain was verified, or the showing replaced
+        // meanwhile: not a showing this session holds any more.
+        const family = joinFamilies.get(groupId);
+        if (generation !== began || !family || !stillShown(family, input.mark, input.hidden))
+            throw new CryptoError(NOT_SHOWN);
+        if (now.status !== 'code') return now;
+        if (!sameMark(now.mark, input.mark)) return showing(groupId, now.mark, 'changed');
+        const outcome = checkCode(family, now.mark, input.typed);
+        const holds = await exportHolds(groupId);
+        if (outcome !== 'match') return { status: outcome, holds };
+        // A rejoin keeps the date the family was first checked on this account.
+        const checkedAt = settingsPins?.pins[groupId]?.checkedAt ?? input.now;
+        const { userId, root } = host.unlocked();
+        try {
+            const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
+                v: 4,
+                groupId,
+                joinMark: now.mark,
+                checkedAt,
+            });
+            return { status: 'matched', joinsRecord, holds };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /*
+     * The join on first use (groupJoinFirstUse): the admission (this account
+     * let in at the head, verified against the marks and the guard, or on
+     * first use with none), then the version 4 joins record of the head's
+     * pin (pinAfter: first keys, roster, group key, checked at the settings
+     * pin's time when the account has one, a rejoin keeping its first
+     * acceptance, else `now`). Nothing is committed.
+     */
+    async function joinFirstUse(
+        input: GroupRequests['groupJoinFirstUse'],
+    ): Promise<GroupResults['groupJoinFirstUse']> {
+        const groupId = uuid(input.groupId, 'group id');
+        const now = await admission(input);
+        if (now.status !== 'code') return now;
+        const checkedAt = settingsPins?.pins[groupId]?.checkedAt ?? input.now;
+        const { userId, root } = host.unlocked();
+        try {
+            const joinsRecord = await sealDeviceRecord(root, userId, groupId, 'joins', {
+                v: 4,
+                groupId,
+                firstUse: await pinAfter([], now.chain, checkedAt),
+            });
+            return {
+                status: 'first-use',
+                joinsRecord,
+                rosterVersion: now.chain.roster.rosterVersion,
+            };
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    /* The pair code with member `userId` over the committed chain (groupPairCode). */
+    async function pairCodeOf(
+        input: GroupRequests['groupPairCode'],
+    ): Promise<GroupResults['groupPairCode']> {
+        const chain = committed(input.groupId);
+        const { me, identities } = ownIdentities();
+        return pairCode(chain, { userId: me.userId, identities }, input.userId, input.rosters);
+    }
+
+    /* A family check's "They match" with member `userId` (groupPairMatch): what to save, if anything. */
+    async function pairMatchOf(
+        input: GroupRequests['groupPairMatch'],
+    ): Promise<GroupResults['groupPairMatch']> {
+        const chain = committed(input.groupId);
+        const { me, identities } = ownIdentities();
+        checkTime(input.now);
+        return pairMatch({
+            chain,
+            me: { userId: me.userId, identities },
+            otherUserId: input.userId,
+            rosters: input.rosters,
+            rosterVersion: input.rosterVersion,
+            code: input.code,
+            guard: input.guard,
+            settingsPin: contactPin(uuid(input.userId, 'user id')),
+            checkedAt: input.now,
+        });
+    }
+
+    /* The joins record, or null when it does not open or is no version 3 or 4 record of this family's. */
+    async function openJoins(userIdIn: string, groupId: string, envelope: string) {
+        const { userId, root } = host.unlocked();
+        try {
+            if (userIdIn !== userId) throw new CryptoError('Unlock your account first.');
+            let value: unknown;
+            try {
+                value = await openDeviceRecord(root, userId, groupId, 'joins', envelope);
+            } catch (error) {
+                if (error instanceof CryptoError) return null;
+                throw error;
+            }
+            return joinsRead(groupId, value);
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    async function openSeal(
+        input: GroupRequests['groupOpenSeal'],
+    ): Promise<GroupResults['groupOpenSeal']> {
+        const chain = committed(input.groupId);
+        const me = host.identity();
+        const { seal } = input;
+        const seed = await openGroupKey(
+            decode(seal.envelope, GROUP_KEY_SEAL_BYTES),
+            {
+                groupId: chain.groupId,
+                groupKeyVersion: seal.groupKeyVersion,
+                holderUserId: me.userId,
+                holderKeyVersion: seal.holderKeyVersion,
+                sealerUserId: seal.sealerUserId,
+                rosterVersion: seal.rosterVersion,
+                rosterDigest: seal.rosterDigest,
+            },
+            {
+                chain,
+                sealerMlDsaPublicKey: decode(input.sealerMlDsaPublicKey, ML_DSA_PUBLIC_KEY_BYTES),
+                sealerHistory: input.sealerHistory ?? null,
+                reader: { userId: me.userId, keyVersion: seal.holderKeyVersion },
+                holder: host.granteeSecrets(seal.holderKeyVersion),
+            },
+        );
+        // A replaced key's seed signs nothing any more: it is not kept.
+        if (seal.groupKeyVersion < chain.groupKeyVersion) {
+            seed.fill(0);
+            return { groupKeyVersion: seal.groupKeyVersion };
+        }
+        const slot = seedSlot(chain.groupId, seal.groupKeyVersion);
+        seeds.get(slot)?.fill(0);
+        seeds.set(slot, seed);
+        return { groupKeyVersion: seal.groupKeyVersion };
+    }
+
+    async function openArea(
+        input: GroupRequests['groupOpenArea'],
+    ): Promise<GroupResults['groupOpenArea']> {
+        const chain = committed(input.groupId);
+        const groupId = chain.groupId;
+        const workspaceId = uuid(input.workspaceId, 'workspace id');
+        try {
+            await checkId('workspace', groupId, input.idSeed, workspaceId);
+        } catch {
+            throw new CryptoError('This folder does not belong to the family.');
+        }
+        const latest = areaWriteVersion(chain, workspaceId);
+        if (latest === null)
+            throw new CryptoError('This folder is not on the family’s member list.');
+        const listed = chain.areaKeys[workspaceId]!;
+        const served = input.servedVersion;
+        const { userId, root, keyVersion } = host.unlocked();
+        let key: Uint8Array | null = null;
+        let version = 0;
+        let fromGrant = false;
+        try {
+            // The self-grant only at the latest version both the chain and the server name.
+            const self = input.selfGrant;
+            if (
+                self &&
+                self.workspaceId === workspaceId &&
+                self.workspaceKeyVersion >= latest &&
+                self.workspaceKeyVersion >= served &&
+                self.workspaceKeyVersion <= listed.length
+            )
+                try {
+                    const opened = await openAreaSelfGrant(root, userId, groupId, self);
+                    if (
+                        (await areaKeyCommitment(opened)) === listed[self.workspaceKeyVersion - 1]
+                    ) {
+                        key = opened;
+                        version = self.workspaceKeyVersion;
+                    } else opened.fill(0);
+                } catch {
+                    // Ignored: the area grant decides.
+                }
+            if (!key && input.grant) {
+                const grant = input.grant;
+                if (!input.granterMlDsaPublicKey)
+                    throw new CryptoError('This grant needs the key of the person who made it.');
+                key = await openAreaGrant(
+                    decode(grant.envelope, AREA_GRANT_BYTES),
+                    {
+                        groupId,
+                        workspaceId,
+                        workspaceKeyVersion: grant.workspaceKeyVersion,
+                        granteeUserId: userId,
+                        granteeKeyVersion: grant.granteeKeyVersion,
+                        granterUserId: grant.granterUserId,
+                        rosterVersion: grant.rosterVersion,
+                        rosterDigest: grant.rosterDigest,
+                    },
+                    {
+                        chain,
+                        areaIdSeed: input.idSeed,
+                        granterMlDsaPublicKey: decode(
+                            input.granterMlDsaPublicKey,
+                            ML_DSA_PUBLIC_KEY_BYTES,
+                        ),
+                        granterHistory: input.granterHistory ?? null,
+                        reader: { userId, keyVersion: grant.granteeKeyVersion },
+                        grantee: host.granteeSecrets(grant.granteeKeyVersion),
+                    },
+                );
+                version = grant.workspaceKeyVersion;
+                fromGrant = true;
+            }
+            if (!key) throw new CryptoError(NOT_CHECKED_KEYS);
+            // The server takes a self-grant only at the area's current version, and none is made
+            // while the family's guard is not stored (2.8): the key still opens for reading.
+            const selfGrantToStore =
+                fromGrant && version === latest && served === latest && !ledger.owes(groupId)
+                    ? await grantAreaKey(
+                          key,
+                          root,
+                          userId,
+                          groupId,
+                          workspaceId,
+                          keyVersion,
+                          version,
+                      )
+                    : null;
+            // Held under this family alone (its id checked as derived under it, the key's
+            // commitment as the chain lists it), and blocked while behind the chain or the server
+            // disagrees; writable only once a root at the latest version is seen too (the
+            // listing's to decide).
+            const held = await ledger.openArea(
+                groupId,
+                workspaceId,
+                input.idSeed,
+                version,
+                key as Uint8Array<ArrayBuffer>,
+                served,
+            );
+            key = null;
+            const areas = opened.get(groupId) ?? new Map();
+            const before = areas.get(workspaceId);
+            areas.set(workspaceId, {
+                idSeed: input.idSeed,
+                version: Math.max(before?.version ?? 0, version),
+            });
+            opened.set(groupId, areas);
+            return {
+                version,
+                writable: held === null,
+                reason: held,
+                selfGrantToStore,
+                from: fromGrant ? ('grant' as const) : ('self-grant' as const),
+                pinArea: { groupId, workspaceId, version },
+            };
+        } finally {
+            root.fill(0);
+            key?.fill(0);
+        }
+    }
+
+    /* The KEM key a seal or grant goes to: this account's own, or the one route 6 served (checked against the entry when sealed). */
+    function kemFor(userId: string, kems: Record<string, string>) {
+        const me = host.identity();
+        const value = userId === me.userId ? me.served.kemPublicKey : kems[userId];
+        if (!value) throw new CryptoError('HushOS couldn’t load everyone’s keys. Try again.');
+        return decode(value);
+    }
+
+    async function grantTo(
+        chain: AcceptedRosters,
+        workspaceId: string,
+        version: number,
+        key: Uint8Array,
+        idSeed: string,
+        member: RosterMember,
+        kems: Record<string, string>,
+    ): Promise<GrantWire> {
+        const me = host.identity();
+        const ctx = {
+            groupId: chain.groupId,
+            workspaceId,
+            workspaceKeyVersion: version,
+            granteeUserId: member.userId,
+            granteeKeyVersion: member.keyVersion,
+            granterUserId: me.userId,
+            ...atRoster(chain),
+        };
+        const envelope = await sealAreaGrant(key, ctx, {
+            chain,
+            areaIdSeed: idSeed,
+            granteeKemPublicKey: kemFor(member.userId, kems),
+            granter: host.hybridKeys(),
+        });
+        return {
+            workspaceId,
+            workspaceKeyVersion: version,
+            granteeUserId: member.userId,
+            granteeKeyVersion: member.keyVersion,
+            rosterVersion: ctx.rosterVersion,
+            rosterDigest: ctx.rosterDigest,
+            envelope: encode(envelope),
+        };
+    }
+    async function sealTo(
+        chain: AcceptedRosters,
+        seed: Uint8Array,
+        groupKeyVersion: number,
+        holder: RosterMember,
+        kems: Record<string, string>,
+    ): Promise<SealWire> {
+        const me = host.identity();
+        const ctx = {
+            groupId: chain.groupId,
+            groupKeyVersion,
+            holderUserId: holder.userId,
+            holderKeyVersion: holder.keyVersion,
+            sealerUserId: me.userId,
+            ...atRoster(chain),
+        };
+        const envelope = await sealGroupKey(seed, ctx, {
+            chain,
+            holderKemPublicKey: kemFor(holder.userId, kems),
+            sealer: host.hybridKeys(),
+        });
+        return {
+            groupKeyVersion,
+            holderUserId: holder.userId,
+            holderKeyVersion: holder.keyVersion,
+            rosterVersion: ctx.rosterVersion,
+            rosterDigest: ctx.rosterDigest,
+            envelope: encode(envelope),
+        };
+    }
+    /* An area this device opened, at the version it is written under, with its key and id seed. */
+    function currentArea(chain: AcceptedRosters, workspaceId: string) {
+        const area = areasOf(chain.groupId).get(workspaceId);
+        const version = areaWriteVersion(chain, workspaceId);
+        const key = version === null ? undefined : host.workspaceKey(workspaceId, version);
+        if (!area || version === null || !key) throw new CryptoError(NOT_OPENED);
+        return { version, key, idSeed: area.idSeed };
+    }
+
+    async function stage(input: GroupRequests['groupStage']): Promise<GroupResults['groupStage']> {
+        requireGuardKept(input.groupId);
+        const chain = committed(input.groupId);
+        const groupId = chain.groupId;
+        const { op } = input;
+        // A newcomer's and a folded-in member's ML-KEM keys are the ones their entry is made from.
+        const kems: Record<string, string> = { ...input.kems };
+        if (op.kind === 'admit') kems[op.userId] = op.served.kemPublicKey;
+        if (op.kind === 'foldIn')
+            for (const member of op.members) kems[member.userId] = member.served.kemPublicKey;
+        const me = host.identity();
+        const next = chain.roster.rosterVersion + 1;
+        // Only a holder of `members` changes the member list: refused before any key is asked for.
+        if (!activeWith(rosterEntry(chain.roster, me.userId), 'members'))
+            throw new CryptoError(NOT_MANAGER);
+        const seed = seeds.get(seedSlot(groupId, chain.groupKeyVersion));
+        if (!seed) throw new CryptoError(NO_SEED);
+        let members = chain.roster.members.map((member) => ({
+            ...member,
+            roles: [...member.roles],
+        }));
+        const entryOf = (userId: string) => members.find((member) => member.userId === userId);
+        const put = (entry: RosterMember) => {
+            members = [...members.filter((member) => member.userId !== entry.userId), entry];
+        };
+        const active = (userId: string) => {
+            const entry = entryOf(userId);
+            if (!activeWith(entry)) throw new CryptoError('This person is not in the family now.');
+            return entry!;
+        };
+        let rotations: AreaRotationInput[] = [];
+        let newArea: { workspaceId: string; idSeed: string; name: string } | null = null;
+        let admits: { userId: string; keys: string } | null = null;
+        const needsCheck: string[] = [];
+        const folded: string[] = [];
+        /* Members let back in on a Continue (foldIn's `continued`): every family folder rotates. */
+        const refolded: string[] = [];
+        switch (op.kind) {
+            case 'admit': {
+                if (activeWith(entryOf(op.userId)))
+                    throw new CryptoError('This person is in the family already.');
+                const pin = contactPin(op.userId);
+                if (!pin) throw new CryptoError(NOT_CHECKED);
+                // Let in over a first-seen pin as over a verified one (docs/optional-verification.md
+                // 3.2; newRosterEntry refuses anything else, a family's word included), and always
+                // as a plain member: the roles an invitation carries are the server's word, so none
+                // is ever signed in on admission. A role is a role change afterwards, by a manager
+                // who chose it, under the manager rule (3.6). The core's admit_body does the same.
+                if (op.roles.length > 0) throw new CryptoError(ADMIT_AS_MEMBER);
+                const entry = await newRosterEntry(pin, op.served, {
+                    roles: op.roles,
+                    rosterVersion: next,
+                });
+                if (entry.userId !== op.userId)
+                    throw new CryptoError('These are not the keys whose words were checked.');
+                // The keys it is built from, by their commitment: never the pin's `fingerprint`,
+                // which every first-seen pin holds as "".
+                const keys = await keyCommitment(pin);
+                if (keys === null) throw new CryptoError(NOT_CHECKED);
+                admits = { userId: op.userId, keys };
+                put(entry);
+                break;
+            }
+            case 'remove':
+                put({ ...active(op.userId), status: 'left' });
+                rotations = op.rotations;
+                break;
+            case 'markLeft':
+                if (op.userIds.length === 0)
+                    throw new CryptoError('No one is due to be marked as left.');
+                for (const userId of op.userIds) put({ ...active(userId), status: 'left' });
+                rotations = op.rotations;
+                break;
+            case 'roles': {
+                const before = active(op.userId);
+                const sorted = (roles: readonly string[]) => [...new Set(roles)].sort().join();
+                if (sorted(before.roles) === sorted(op.roles)) throw new CryptoError(UNCHANGED);
+                // The succession must be signed by someone who keeps `members`: never oneself.
+                if (
+                    op.userId === me.userId &&
+                    before.roles.includes('members') &&
+                    !op.roles.includes('members')
+                )
+                    throw new CryptoError(SELF_TAKE);
+                // Someone active keeps `billing`: the server refuses a family without an organizer.
+                if (
+                    before.roles.includes('billing') &&
+                    !op.roles.includes('billing') &&
+                    !members.some(
+                        (member) => member.userId !== op.userId && activeWith(member, 'billing'),
+                    )
+                )
+                    throw new CryptoError(ORGANIZER_FIRST);
+                // The manager rule (docs/optional-verification.md 3.6): `members` is given only to
+                // keys this account checked, its own verified pin of them (never a family's word)
+                // over the very keys their entry names now. A check made before their account
+                // changed, and a Continue since, leaves a first-seen pin: no role on it.
+                if (op.roles.includes('members') && !before.roles.includes('members')) {
+                    const pin = contactPin(op.userId);
+                    if (
+                        !pin ||
+                        (pin.trustedVia !== undefined && pin.trustedVia !== null) ||
+                        !(await pinVerified(pin)) ||
+                        (await keyCommitment(pin)) !== (await entryCommitment(before))
+                    )
+                        throw new CryptoError(CHECK_MANAGER_FIRST);
+                }
+                put({ ...before, roles: [...op.roles] });
+                break;
+            }
+            case 'foldIn': {
+                const continued = new Set((op.continued ?? []).map((id) => id.toLowerCase()));
+                rotations = op.rotations ?? [];
+                for (const member of op.members) {
+                    const entry = active(member.userId);
+                    const result = await foldInEntry(entry, member.served, member.links, next);
+                    if (result.changed) {
+                        put(result.entry);
+                        folded.push(member.userId);
+                    } else if (result.needsCheck && continued.has(entry.userId)) {
+                        // Continue on an account change no signed chain explains (3.3): the entry
+                        // from this account's own pin of the served keys, which Continue (or a
+                        // check) wrote, and the role that holds the family's key only over a
+                        // verified pin (3.6): sealed to their new keys after a check, never before.
+                        const pin = contactPin(entry.userId);
+                        if (!pin) throw new CryptoError(NOT_CHECKED);
+                        const verified = await pinVerified(pin);
+                        // A manager among several let back in at once loses the role the same way:
+                        // the server takes that on POST rosters for an entry with new keys.
+                        const roles = entry.roles.filter((role) => verified || role !== 'members');
+                        put(
+                            await newRosterEntry(pin, member.served, {
+                                roles,
+                                rosterVersion: next,
+                            }),
+                        );
+                        folded.push(member.userId);
+                        refolded.push(entry.userId);
+                    } else if (result.needsCheck) needsCheck.push(member.userId);
+                }
+                if (folded.length === 0) return { outboxId: null, needsCheck };
+                // Only a Continue rotates: a fold-in along signed chains alone carries none.
+                if (refolded.length === 0) rotations = [];
+                break;
+            }
+            case 'area': {
+                const area = await newId('workspace', groupId);
+                newArea = { workspaceId: area.id, idSeed: area.seed, name: op.name };
+                break;
+            }
+            case 'rotate':
+                rotations = [op.rotation];
+                break;
+            case 'retire':
+                if (areaWriteVersion(chain, op.workspaceId) === null)
+                    throw new CryptoError('This folder is not on the family’s member list.');
+                break;
+        }
+        // A family's removal rotates every area, and so does a Continue on an account change no
+        // signed chain explains (the keys left behind may be in someone else's hands, 3.3); only
+        // what is named is rotated.
+        const toRotate =
+            op.kind === 'rotate'
+                ? [op.rotation.workspaceId]
+                : refolded.length > 0 && chain.kind === 'family'
+                  ? Object.keys(chain.areaKeys)
+                        .filter((workspaceId) => !chain.retiredAreas.includes(workspaceId))
+                        .sort()
+                  : areasToRotate(chain, members);
+        const named = rotations.map((rotation) => rotation.workspaceId).sort();
+        if (named.join() !== [...toRotate].sort().join() || new Set(named).size !== named.length)
+            throw new CryptoError('Every family folder must get new keys in this change.');
+        for (const workspaceId of toRotate)
+            if (areaWriteVersion(chain, workspaceId) === null)
+                throw new CryptoError('This folder is not on the family’s member list.');
+
+        const secrets: Secrets = {
+            seed: null,
+            successor: null,
+            areaKeys: new Map(),
+            areaSeeds: new Map(),
+            rootKeys: new Map(),
+        };
+        let pair: GroupKeyPair | null = null;
+        let successorPair: GroupKeyPair | null = null;
+        let signer: Awaited<ReturnType<typeof signerFor>> | null = null;
+        let kept = false;
+        try {
+            for (const workspaceId of toRotate) {
+                secrets.areaKeys.set(workspaceId, generateKey());
+                secrets.rootKeys.set(workspaceId, generateKey());
+            }
+            if (newArea) {
+                secrets.areaKeys.set(newArea.workspaceId, generateKey());
+                secrets.areaSeeds.set(newArea.workspaceId, newArea.idSeed);
+                secrets.rootKeys.set(newArea.workspaceId, generateKey());
+            }
+            // Format 2 (docs/groups-design.md 2.10): each new key commits to its root's key too.
+            const roster = await nextRoster(chain, members, {
+                signerUserId: me.userId,
+                format: ROSTER_FORMAT,
+                areaKeys: [...secrets.areaKeys].map(([workspaceId, workspaceKey]) => ({
+                    workspaceId,
+                    workspaceKey,
+                    rootKey: secrets.rootKeys.get(workspaceId)!,
+                })),
+                ...(op.kind === 'retire' ? { retireAreas: [op.workspaceId] } : {}),
+            });
+            signer = await signerFor(chain, roster, op);
+            // An admission grants every live folder's key: each must be open here before anything is signed.
+            if (op.kind === 'admit')
+                for (const workspaceId of Object.keys(chain.areaKeys).sort())
+                    if (!chain.retiredAreas.includes(workspaceId)) currentArea(chain, workspaceId);
+            pair = await groupKeyPair(seed);
+            const signed = await signRoster(roster, pair, signer.keys);
+            signer.zero();
+            // A roster that takes a holder away is the last under its key: the succession rides with it.
+            const drops = chain.roster.members.some(
+                (entry) =>
+                    activeWith(entry, 'members') &&
+                    !activeWith(rosterEntry(roster, entry.userId), 'members'),
+            );
+            let succession: SignedGroupStatement | null = null;
+            if (drops) {
+                secrets.successor = newGroupSeed();
+                successorPair = await groupKeyPair(secrets.successor);
+                succession = await signGroupSuccession(
+                    {
+                        groupId,
+                        oldVersion: chain.groupKeyVersion,
+                        newVersion: chain.groupKeyVersion + 1,
+                        oldEd25519PublicKey: pair.publicKey.ed25519PublicKey,
+                        oldMlDsaPublicKey: pair.publicKey.mlDsaPublicKey,
+                        newEd25519PublicKey: successorPair.publicKey.ed25519PublicKey,
+                        newMlDsaPublicKey: successorPair.publicKey.mlDsaPublicKey,
+                        lastRosterVersion: next,
+                        lastRosterDigest: await rosterDigest(signed.statement),
+                        signerUserId: me.userId,
+                    },
+                    pair,
+                    host.hybridKeys(),
+                );
+            }
+            const stagedChain = await stageChain(chain, signed, succession);
+            const parts = await partsOf({
+                chain,
+                stagedChain,
+                op,
+                secrets,
+                seed,
+                kems,
+                rotations,
+                newArea,
+                folded,
+                writers: input.writers ?? [],
+            });
+            const body: RosterCallBody = {
+                expectedRevision: input.expectedRevision,
+                roster: wire(signed),
+                ...(succession ? { succession: wire(succession) } : {}),
+                ...parts.body,
+            };
+            const outboxId = crypto.randomUUID();
+            const { userId, root } = host.unlocked();
+            let stagedEnvelope: string;
+            try {
+                stagedEnvelope = await sealStaged(
+                    root,
+                    userId,
+                    { outboxId, groupId, op: op.kind, rosterDigest: stagedChain.rosterDigest },
+                    secrets,
+                );
+            } finally {
+                root.fill(0);
+            }
+            staged.set(outboxId, { groupId, op: op.kind, chain: stagedChain, secrets });
+            kept = true;
+            return {
+                outboxId,
+                body,
+                stagedEnvelope,
+                joinCode:
+                    op.kind === 'admit'
+                        ? {
+                              rosterVersion: next,
+                              code: await joinCode(
+                                  stagedChain.rosterDigest,
+                                  stagedChain.groupKey,
+                                  stagedChain.groupKeyVersion,
+                              ),
+                          }
+                        : null,
+                needsCheck,
+                replaced: parts.replaced,
+                admits,
+                previousRosterDigest: chain.rosterDigest,
+                rosterDigest: stagedChain.rosterDigest,
+            };
+        } finally {
+            signer?.zero();
+            zeroPair(pair);
+            zeroPair(successorPair);
+            if (!kept) zeroSecrets(secrets);
+        }
+    }
+
+    /*
+     * The seals, grants, rotations, new area and self-grants a roster call
+     * carries, made against its staged chain: grants of each new key to every
+     * member active on it (the uploader included), an admission's grants of
+     * every area's current key, a fold-in's grants to the members' new keys,
+     * a new holder's seal, a succession's seals to every remaining holder.
+     */
+    async function partsOf(input: {
+        chain: AcceptedRosters;
+        stagedChain: AcceptedRosters;
+        op: GroupStageOp;
+        secrets: Secrets;
+        seed: Uint8Array;
+        kems: Record<string, string>;
+        rotations: AreaRotationInput[];
+        newArea: { workspaceId: string; idSeed: string; name: string } | null;
+        folded: string[];
+        writers: GroupWriter[];
+    }) {
+        const { chain, stagedChain, op, secrets, kems } = input;
+        const after = stagedChain.roster;
+        const activeAfter = after.members.filter((member) => activeWith(member));
+        const body: Omit<RosterCallBody, 'expectedRevision' | 'roster' | 'succession'> = {};
+        const grants: GrantWire[] = [];
+        // Seals: a succession's new seed to every holder on the new roster, else a new holder's seal.
+        if (secrets.successor) {
+            body.seals = [];
+            for (const holder of after.members.filter((member) => activeWith(member, 'members')))
+                body.seals.push(
+                    await sealTo(
+                        stagedChain,
+                        secrets.successor,
+                        stagedChain.groupKeyVersion,
+                        holder,
+                        kems,
+                    ),
+                );
+        } else {
+            const promoted = after.members.filter(
+                (member) =>
+                    activeWith(member, 'members') &&
+                    !activeWith(rosterEntry(chain.roster, member.userId), 'members'),
+            );
+            if (promoted.length > 1) throw new CryptoError('Give one person the role at a time.');
+            if (promoted[0])
+                body.keySeal = await sealTo(
+                    stagedChain,
+                    input.seed,
+                    stagedChain.groupKeyVersion,
+                    promoted[0],
+                    kems,
+                );
+        }
+        // Grants of every area's current key to a newcomer, or to members' folded-in keys.
+        const receivers =
+            op.kind === 'admit' ? [op.userId] : op.kind === 'foldIn' ? input.folded : [];
+        for (const userId of receivers) {
+            const member = rosterEntry(after, userId)!;
+            for (const workspaceId of Object.keys(chain.areaKeys).sort()) {
+                if (secrets.areaKeys.has(workspaceId)) continue;
+                // A deleted family folder (design 2.10) is granted to nobody: before this, an
+                // admission into a family that had deleted one asked for its key and was refused.
+                if (chain.retiredAreas.includes(workspaceId)) continue;
+                const area = currentArea(chain, workspaceId);
+                grants.push(
+                    await grantTo(
+                        stagedChain,
+                        workspaceId,
+                        area.version,
+                        area.key,
+                        area.idSeed,
+                        member,
+                        kems,
+                    ),
+                );
+            }
+        }
+        // Each new key to every active member.
+        for (const [workspaceId, key] of secrets.areaKeys) {
+            const version = stagedChain.areaKeys[workspaceId]!.length;
+            const idSeed =
+                secrets.areaSeeds.get(workspaceId) ??
+                areasOf(chain.groupId).get(workspaceId)?.idSeed;
+            if (!idSeed) throw new CryptoError(NOT_OPENED);
+            for (const member of activeAfter)
+                grants.push(
+                    await grantTo(stagedChain, workspaceId, version, key, idSeed, member, kems),
+                );
+        }
+        // Rotations keep every writer's record (re-keyed): nobody's record is judged, or re-signed.
+        const rotations: RotationWire[] = [];
+        const replaced: ReplacedDocument[] = [];
+        for (const rotation of input.rotations) {
+            const workspaceId = rotation.workspaceId;
+            const key = secrets.areaKeys.get(workspaceId)!;
+            const version = stagedChain.areaKeys[workspaceId]!.length;
+            rotations.push(
+                await rotationOf(
+                    chain.groupId,
+                    rotation,
+                    version - 1,
+                    key,
+                    secrets.rootKeys.get(workspaceId)!,
+                    rekeyOnly,
+                    await selfGrantOf(chain.groupId, workspaceId, key, version),
+                    replaced,
+                ),
+            );
+        }
+        if (op.kind === 'rotate') body.rotation = rotations[0];
+        else if (rotations.length > 0) body.rotations = rotations;
+        if (input.newArea) {
+            const { workspaceId, idSeed, name } = input.newArea;
+            const key = secrets.areaKeys.get(workspaceId)!;
+            body.area = {
+                workspaceId,
+                idSeed,
+                root: await newRoot(
+                    workspaceId,
+                    key,
+                    secrets.rootKeys.get(workspaceId)!,
+                    name,
+                    host.hybridKeys(),
+                ),
+                selfGrant: await selfGrantOf(chain.groupId, workspaceId, key, 1),
+            };
+        }
+        if (grants.length > 0) body.grants = grants;
+        return { body, replaced };
+    }
+    async function restage(
+        input: GroupRequests['groupRestage'],
+    ): Promise<GroupResults['groupRestage']> {
+        requireGuardKept(input.groupId);
+        const chain = committed(input.groupId);
+        const groupId = chain.groupId;
+        const { userId, root } = host.unlocked();
+        let opened: { record: StagedRecord; secrets: Secrets };
+        try {
+            opened = await openStaged(root, userId, groupId, input.stagedEnvelope);
+        } finally {
+            root.fill(0);
+        }
+        const { record, secrets } = opened;
+        let kept = false;
+        try {
+            const signed = unwire(input.body.roster);
+            // Bound to the very roster these secrets were made for, whatever the call changes.
+            if ((await rosterDigest(signed.statement)) !== record.rosterDigest)
+                throw new CryptoError('This saved change does not match its member list.');
+            const succession = input.body.succession ? unwire(input.body.succession) : null;
+            const stagedChain = await stageChain(chain, signed, succession);
+            // The body's roster must be the one these secrets were made for: its rows are their keys.
+            for (const [workspaceId, key] of secrets.areaKeys)
+                if (stagedChain.areaKeys[workspaceId]?.at(-1) !== (await areaKeyCommitment(key)))
+                    throw new CryptoError('This saved change does not match its member list.');
+            const rows = stagedChain.roster.areas ?? [];
+            if (rows.length !== secrets.areaKeys.size)
+                throw new CryptoError('This saved change does not match its member list.');
+            if (secrets.successor) {
+                const pair = await groupKeyPair(secrets.successor);
+                zeroPair(pair);
+                if (!sameGroupKey(pair.publicKey, stagedChain.groupKey))
+                    throw new CryptoError('This saved change does not match its member list.');
+            }
+            let body = input.body;
+            const replaced: ReplacedDocument[] = [];
+            if (input.rebuild) {
+                const rebuilt = new Map<string, RotationWire>();
+                for (const rotation of input.rebuild.rotations) {
+                    const workspaceId = rotation.workspaceId;
+                    const key = secrets.areaKeys.get(workspaceId);
+                    const rootKey = secrets.rootKeys.get(workspaceId);
+                    const existing = [
+                        ...(body.rotations ?? []),
+                        ...(body.rotation ? [body.rotation] : []),
+                    ].find((at) => at.workspaceId === workspaceId);
+                    if (!key || !rootKey || !existing)
+                        throw new CryptoError('This change does not rotate that folder.');
+                    const version = stagedChain.areaKeys[workspaceId]!.length;
+                    rebuilt.set(
+                        workspaceId,
+                        await rotationOf(
+                            groupId,
+                            rotation,
+                            version - 1,
+                            key,
+                            rootKey,
+                            rekeyOnly,
+                            existing.selfGrant,
+                            replaced,
+                        ),
+                    );
+                }
+                const swap = (at: RotationWire) => rebuilt.get(at.workspaceId) ?? at;
+                body = {
+                    ...body,
+                    ...(body.rotations ? { rotations: body.rotations.map(swap) } : {}),
+                    ...(body.rotation ? { rotation: swap(body.rotation) } : {}),
+                };
+            }
+            dropStaged(record.outboxId);
+            staged.set(record.outboxId, { groupId, op: record.op, chain: stagedChain, secrets });
+            kept = true;
+            return {
+                outboxId: record.outboxId,
+                body,
+                stagedEnvelope: input.stagedEnvelope,
+                replaced,
+            };
+        } finally {
+            if (!kept) zeroSecrets(secrets);
+        }
+    }
+
+    async function grantsOwed(
+        input: GroupRequests['groupGrants'],
+    ): Promise<GroupResults['groupGrants']> {
+        requireGuardKept(input.groupId);
+        const chain = committed(input.groupId);
+        // Folder and person ids lowercase (the core's grants_body), each owed grant once.
+        const seen = new Set<string>();
+        const missing = input.missing
+            .map((at) => ({
+                ...at,
+                workspaceId: at.workspaceId.toLowerCase(),
+                userId: at.userId.toLowerCase(),
+            }))
+            .filter((at) => {
+                const key = `${at.workspaceId}:${at.userId}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+        const kems = Object.fromEntries(missing.map((at) => [at.userId, at.kemPublicKey]));
+        const grants: GrantWire[] = [];
+        for (const at of missing) {
+            const member = rosterEntry(chain.roster, at.userId);
+            if (!activeWith(member))
+                throw new CryptoError('Areas are granted only to active members.');
+            const area = currentArea(chain, at.workspaceId);
+            grants.push(
+                await grantTo(
+                    chain,
+                    at.workspaceId,
+                    area.version,
+                    area.key,
+                    area.idSeed,
+                    member!,
+                    kems,
+                ),
+            );
+        }
+        return { grants };
+    }
+
+    async function reseal(
+        input: GroupRequests['groupReseal'],
+    ): Promise<GroupResults['groupReseal']> {
+        requireGuardKept(input.groupId);
+        const chain = committed(input.groupId);
+        const seed = seeds.get(seedSlot(chain.groupId, chain.groupKeyVersion));
+        if (!seed) throw new CryptoError(NO_SEED);
+        const kems = Object.fromEntries(input.holders.map((at) => [at.userId, at.kemPublicKey]));
+        const seals: SealWire[] = [];
+        for (const holder of input.holders) {
+            const entry = rosterEntry(chain.roster, holder.userId);
+            if (!activeWith(entry, 'members'))
+                throw new CryptoError('The group key is sealed only to members who hold it.');
+            seals.push(await sealTo(chain, seed, chain.groupKeyVersion, entry!, kems));
+        }
+        return { seals };
+    }
+
+    async function verify(
+        input: GroupRequests['groupVerify'],
+    ): Promise<GroupResults['groupVerify']> {
+        const groupId = uuid(input.groupId, 'group id');
+        const { workspaceId } = input;
+        // The family is the one the folder was opened under here, never the caller's word for it.
+        if (ledger.familyOf(workspaceId) !== groupId)
+            throw new CryptoError('This folder is not one of this family’s.');
+        const verdict = verdicts(
+            groupId,
+            workspaceId,
+            readingOf(groupId),
+            input.writers,
+            personalOf(input.writers),
+        );
+        const nodes: GroupResults['groupVerify']['nodes'] = [];
+        for (const node of input.nodes) {
+            const key =
+                node.keyEpoch === undefined
+                    ? null
+                    : host.nodeKeyAt(workspaceId, node.id, node.keyEpoch);
+            const metadataStatement = {
+                workspaceId,
+                nodeId: node.id,
+                kind: node.kind,
+                metadataVersion: node.metadataVersion,
+            };
+            let metadata: { integrity: GroupIntegrity; via: string | null };
+            let metadataRekey: GroupRekeyCheck | null = null;
+            if (node.metadataRekey) {
+                const checked = await verdict.rekeyed(
+                    servedRekeyedRecord(
+                        'metadata',
+                        metadataStatement,
+                        node.keyEpoch ?? 0,
+                        node.metadataEnvelope,
+                        node.metadataRekey,
+                    ),
+                    key,
+                    node.metadataSigner,
+                );
+                metadata = checked.origin;
+                metadataRekey = rekeyCheckOf(checked);
+            } else
+                metadata = await verdict(
+                    async () =>
+                        metadataStatements(metadataStatement, decode(node.metadataEnvelope)),
+                    node.metadataSigner,
+                    node.metadataSignature,
+                );
+            const versions: GroupResults['groupVerify']['nodes'][number]['versions'] = [];
+            for (const version of node.versions ?? []) {
+                const statement = {
+                    workspaceId,
+                    nodeId: node.id,
+                    versionId: version.id,
+                    objectId: version.objectId,
+                    contentSuite: version.contentSuite,
+                };
+                if (version.rekey) {
+                    const checked = await verdict.rekeyed(
+                        servedRekeyedRecord(
+                            'version',
+                            statement,
+                            node.keyEpoch ?? 0,
+                            version.contentKeyEnvelope,
+                            version.rekey,
+                        ),
+                        key,
+                        version.signer,
+                    );
+                    versions.push({
+                        id: version.id,
+                        ...checked.origin,
+                        rekey: rekeyCheckOf(checked),
+                    });
+                    continue;
+                }
+                const result = await verdict(
+                    async () => versionStatements(statement, decode(version.contentKeyEnvelope)),
+                    version.signer,
+                    version.signature,
+                );
+                versions.push({ id: version.id, ...result });
+            }
+            nodes.push({
+                id: node.id,
+                metadata: metadata.integrity,
+                via: metadata.via,
+                ...(metadataRekey ? { metadataRekey } : {}),
+                versions,
+            });
+        }
+        return { nodes };
+    }
+
+    async function joinCodeOf(
+        input: GroupRequests['groupJoinCode'],
+    ): Promise<GroupResults['groupJoinCode']> {
+        const chain = committed(input.groupId);
+        const rosters = await onChain(chain.rosterDigests, input.rosters);
+        const version = runStart(rosters, chain.rosterDigests.length, input.userId);
+        if (version === null)
+            throw new CryptoError('This person is not in the family’s member list yet.');
+        const entry = rosterEntry(rosters.get(version)!, input.userId);
+        return {
+            rosterVersion: version,
+            code: await codeAt(chain, version),
+            pinMatches: ((pin) => (pin ? entryIsPin(entry, pin) : null))(contactPin(input.userId)),
+        };
+    }
+
+    async function consent(
+        input: GroupRequests['identityConsent'],
+    ): Promise<GroupResults['identityConsent']> {
+        const { userId, root } = host.unlocked();
+        const opened: Uint8Array[] = [];
+        try {
+            const { old, next } = input;
+            if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            if (ownIdentities().me.userId !== userId)
+                throw new CryptoError('Open your identity first.');
+            if (old.version !== 2 || next.version !== 2 || next.keyVersion <= old.keyVersion)
+                throw new CryptoError('Only a link between two upgraded identities takes consent.');
+            // Every key the consent names, not only the two that sign: each private half opens
+            // under this account and derives its public key, and each keys statement holds. One
+            // refusal for any of it, the core's (consent.rs) too.
+            for (const envelope of [old, next])
+                try {
+                    await verifyOwnIdentity(root, userId, envelope);
+                } catch (error) {
+                    if (error instanceof CryptoError) throw new CryptoError(NOT_OWN_IDENTITY);
+                    throw error;
+                }
+            // The succession is the account's own: its old key signed exactly this step.
+            if (
+                !namesSide(old, input.link, 'old') ||
+                !namesSide(next, input.link, 'new') ||
+                !(await verifySuccessionLink(userId, input.link, {
+                    signingPublicKey: old.signingPublicKey,
+                    mlDsaPublicKey: old.mlDsa.publicKey,
+                }))
+            )
+                throw new CryptoError('This link is not one this account made.');
+            // And the two are one step of this account's own history, as this session opened it.
+            const { identities } = ownIdentities();
+            const ordered = [...identities].sort((a, b) => a.keyVersion - b.keyVersion);
+            const same = (a: ServedKeys, b: ServedKeys) =>
+                a.keyVersion === b.keyVersion &&
+                a.encryptionPublicKey === b.encryptionPublicKey &&
+                a.signingPublicKey === b.signingPublicKey &&
+                a.mlDsaPublicKey === b.mlDsaPublicKey &&
+                a.kemPublicKey === b.kemPublicKey;
+            const at = ordered.findIndex((identity) => same(identity, publicIdentity(old)));
+            if (at < 0 || !ordered[at + 1] || !same(ordered[at + 1]!, publicIdentity(next)))
+                throw new CryptoError(
+                    'These are not two identities this device opened one after the other.',
+                );
+            const keysOf = async (envelope: IdentityEnvelope) => {
+                const signingKey = await openIdentitySigningKey(root, userId, envelope);
+                opened.push(signingKey);
+                const mlDsa = await openIdentityMlDsaKey(root, userId, envelope);
+                if (!mlDsa)
+                    throw new CryptoError(
+                        'Only a link between two upgraded identities takes consent.',
+                    );
+                opened.push(mlDsa.secretKey);
+                return { signingKey, mlDsaSecretKey: mlDsa.secretKey };
+            };
+            const oldKeys = await keysOf(old);
+            const nextKeys = await keysOf(next);
+            const fields = {
+                userId,
+                oldKeyVersion: old.keyVersion,
+                newKeyVersion: next.keyVersion,
+                oldEncryptionPublicKey: old.encryptionPublicKey,
+                oldSigningPublicKey: old.signingPublicKey,
+                oldMlDsaPublicKey: old.mlDsa.publicKey,
+                newEncryptionPublicKey: next.encryptionPublicKey,
+                newSigningPublicKey: next.signingPublicKey,
+                newMlDsaPublicKey: next.mlDsa.publicKey,
+                newKemPublicKey: next.kem.publicKey,
+            };
+            const out = new Uint8Array(SUCCESSION_CONSENT_BYTES);
+            out.set(await signHybrid(await successionConsentStatement(fields, 'old'), oldKeys));
+            out.set(
+                await signHybrid(await successionConsentStatement(fields, 'new'), nextKeys),
+                HYBRID_SIGNATURE_BYTES,
+            );
+            return { consent: encode(out) };
+        } finally {
+            root.fill(0);
+            for (const secret of opened) secret.fill(0);
+        }
+    }
+
+    async function storeSeal(input: GroupRequests['groupStoreSeal']) {
+        if (input.store !== 'outbox')
+            throw new CryptoError('This is not a family record this device keeps.');
+        const { userId, root } = host.unlocked();
+        try {
+            if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            return {
+                envelope: await sealDeviceRecord(
+                    root,
+                    userId,
+                    input.groupId,
+                    input.store,
+                    input.value,
+                ),
+            };
+        } finally {
+            root.fill(0);
+        }
+    }
+    async function storeOpen(input: GroupRequests['groupStoreOpen']) {
+        if (input.store !== 'outbox')
+            throw new CryptoError('This is not a family record this device keeps.');
+        const { userId, root } = host.unlocked();
+        try {
+            if (input.userId !== userId) throw new CryptoError('Unlock your account first.');
+            try {
+                return {
+                    value: await openDeviceRecord(
+                        root,
+                        userId,
+                        input.groupId,
+                        input.store,
+                        input.envelope,
+                    ),
+                };
+            } catch (error) {
+                // Sealed under an earlier account root, or not this group's or store's: never readable here.
+                if (error instanceof CryptoError) return { unreadable: true as const };
+                throw error;
+            }
+        } finally {
+            root.fill(0);
+        }
+    }
+
+    async function previousRoot(
+        input: GroupRequests['groupPreviousRoot'],
+    ): Promise<GroupResults['groupPreviousRoot']> {
+        requireGuardKept(input.groupId);
+        const chain = committed(input.groupId);
+        const workspaceId = uuid(input.workspaceId, 'workspace id');
+        const { root } = input;
+        const area = currentArea(chain, workspaceId);
+        if (
+            !root.prevKeyEnvelope ||
+            root.prevKeyEpoch === null ||
+            root.prevParentKeyEpoch !== area.version ||
+            root.parentKeyEpoch !== area.version
+        )
+            return { status: 'none' };
+        const context = {
+            workspaceId,
+            nodeId: root.id,
+            parentId: workspaceId,
+            parentKeyEpoch: area.version,
+            keyEpoch: root.prevKeyEpoch,
+        };
+        let served: Uint8Array | null = null;
+        try {
+            served = await openPreviousRootKey(decode(root.prevKeyEnvelope), area.key, context);
+        } catch {
+            // Not an envelope under this key: repaired below if this device can.
+        }
+        // The old key this device opened itself as the root's own, before the key change. An
+        // envelope that opens to anything else is no better than one that does not open.
+        const old = host.previousNodeKey(workspaceId, root.id, root.prevKeyEpoch);
+        if (served && (!old || sameBytes(served, old))) {
+            served.fill(0);
+            old?.fill(0);
+            return { status: 'opens' };
+        }
+        served?.fill(0);
+        if (!old) return { status: 'cannot' };
+        try {
+            const envelope = await wrapPreviousRootKey(old, area.key, context);
+            // As a rotation's own: refused unless the new key opens it to the key wrapped.
+            const back = await openPreviousRootKey(envelope, area.key, context);
+            const same = sameBytes(back, old);
+            back.fill(0);
+            if (!same)
+                throw new CryptoError('The folder’s earlier key didn’t open, so nothing was sent.');
+            return { status: 'repair', previousRootKeyEnvelope: encode(envelope) };
+        } finally {
+            old.fill(0);
+        }
+    }
+
+    async function handle(message: GroupMessage): Promise<GroupResults[keyof GroupResults]> {
+        switch (message.operation) {
+            case 'groupCreate':
+                return create(message.input);
+            case 'groupWords':
+                return { words: await groupWords(message.input.groupId, message.input.firstKeys) };
+            case 'groupAccept':
+                return accept(message.input);
+            case 'groupJoinPreview':
+                return joinPreview(message.input);
+            case 'groupJoinCheck':
+                return joinCheckOf(message.input);
+            case 'groupJoinFirstUse':
+                return joinFirstUse(message.input);
+            case 'groupPairCode':
+                return pairCodeOf(message.input);
+            case 'groupPairMatch':
+                return pairMatchOf(message.input);
+            case 'groupOpenSeal':
+                return openSeal(message.input);
+            case 'groupOpenArea':
+                return openArea(message.input);
+            case 'groupStage':
+                return stage(message.input);
+            case 'groupRestage':
+                return restage(message.input);
+            case 'groupDrop':
+                return { dropped: dropStaged(message.input.outboxId) };
+            case 'groupGrants':
+                return grantsOwed(message.input);
+            case 'groupReseal':
+                return reseal(message.input);
+            case 'groupVerify':
+                return verify(message.input);
+            case 'groupJoinCode':
+                return joinCodeOf(message.input);
+            case 'groupTrustAs': {
+                const { groupId, userId, served, contact } = message.input;
+                return { pin: await trustAsGroupDoes(committed(groupId), userId, served, contact) };
+            }
+            case 'identityConsent':
+                return consent(message.input);
+            case 'groupForget': {
+                const { guard: held, checkedAt } = message.input;
+                const groupId = uuid(message.input.groupId, 'group id');
+                // A held guard that is no pin is refused, floor or not.
+                const heldPin = held && held !== 'unreadable' ? checkGroupPin(groupId, held) : null;
+                for (;;) {
+                    const floor = ledger.floor(groupId);
+                    if (!floor) break;
+                    const pin = await pinAfter([], floor, checkedAt);
+                    // An acceptance committed while this ran: work it out again over the new floor.
+                    if (ledger.floor(groupId) !== floor) continue;
+                    const guard = guardAfter(
+                        groupId,
+                        heldPin,
+                        pin,
+                        [...areasOf(groupId)].map(([workspaceId, area]) => ({
+                            groupId,
+                            workspaceId,
+                            version: area.version,
+                        })),
+                    );
+                    // A held guard that disagrees with the floor covers nothing: two histories
+                    // this device accepted. Wiping would erase the floor, the only evidence of
+                    // one of them, so nothing is dropped and the wipe is refused.
+                    if (guard === 'conflict') throw new CryptoError(GUARD_CONFLICT);
+                    // Past the floor: no proof the floor is on the guard's history (another
+                    // history's later roster would look the same), so nothing is dropped until
+                    // acceptance brings the floor up to it.
+                    if (guard === 'ahead') throw new CryptoError(GUARD_AHEAD);
+                    if (held === 'unreadable')
+                        return { forgotten: false, guard: guard ?? pin, unreadable: true };
+                    if (guard) return { forgotten: false, guard, unreadable: false };
+                    break;
+                }
+                const known = chains.has(groupId) || opened.has(groupId) || forked.has(groupId);
+                forgetGroup(groupId);
+                return { forgotten: known, guard: null, unreadable: false };
+            }
+            case 'groupStoreSeal':
+                return storeSeal(message.input);
+            case 'groupStoreOpen':
+                return storeOpen(message.input);
+            case 'groupPreviousRoot':
+                return previousRoot(message.input);
+            case 'groupGuardKept': {
+                const groupId = uuid(message.input.groupId, 'group id');
+                const owed = guardsOwed.get(groupId);
+                // Owed with no guard worked out (an acceptance that threw after its commit): only the
+                // next acceptance says what to store.
+                if (!owed) return { kept: !ledger.owes(groupId) };
+                const after = guardAfter(
+                    groupId,
+                    checkGroupPin(groupId, message.input.guard),
+                    owed,
+                );
+                if (after !== null && after !== 'ahead') return { kept: false };
+                guardsOwed.delete(groupId);
+                ledger.kept(groupId);
+                return { kept: true };
+            }
+            case 'groupForeignListings': {
+                const groupId = uuid(message.input.groupId, 'group id');
+                return {
+                    listings: ledger
+                        .foreignListings()
+                        .filter((listing) => listing.groupId === groupId)
+                        .map(({ workspaceId, openedBy }) => ({ workspaceId, openedBy })),
+                };
+            }
+        }
+    }
+
+    return {
+        handle,
+        readVersion,
+        writeVersion,
+        requireWritable,
+        useSettings,
+        legacySettings,
+        isArea,
+        rotationJudge,
+        copyJudge,
+        forget,
+    };
+}

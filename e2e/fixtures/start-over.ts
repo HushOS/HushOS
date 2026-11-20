@@ -12,7 +12,7 @@
  *   DATABASE_URL=<the server's database> bun e2e/fixtures/start-over.ts <email>
  */
 import { SQL } from 'bun';
-import { createIdentity } from '../../packages/crypto/src/identity';
+import { createIdentity } from '../../packages/crypto/src/account/identity';
 
 const email = process.argv[2];
 const url = process.env.DATABASE_URL;

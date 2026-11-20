@@ -1,5 +1,5 @@
 //! Removals, key replacements and folder deletions (groups 1d, Core 5b), for
-//! the shared fixtures: the twin of `packages/crypto/src/removal-calls-testkit.ts`,
+//! the shared fixtures: the twin of `packages/crypto/src/groups/removal-calls-testkit.ts`,
 //! over the family of `roster_calls.rs`. Each twin builds the same calls on
 //! person 1's device (here [`AreaLedger::removal_body`], `mark_left_body`,
 //! `area_rotation_body` and `area_delete_body`, there the worker's

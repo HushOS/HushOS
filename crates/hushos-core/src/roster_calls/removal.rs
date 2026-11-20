@@ -1,7 +1,7 @@
 //! Core 5b (docs/groups-mobile-plan.md): the roster calls that rotate a
 //! family's folders, twins of the worker's `groupStage` kinds `remove`,
 //! `markLeft`, `rotate` and `retire` and of `groupPreviousRoot`
-//! (`packages/crypto/src/session-groups.ts`): a removal (the person marked
+//! (`packages/crypto/src/groups/session-groups.ts`): a removal (the person marked
 //! left, every live folder rotated, a succession when a manager leaves), the
 //! departed marked left (route 7), one folder's key replacement (route 24),
 //! a folder's deletion (the tombstone roster, route 30), and the

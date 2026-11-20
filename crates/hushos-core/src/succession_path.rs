@@ -16,7 +16,7 @@ use crate::pq::ML_DSA_PUBLIC_KEY_BYTES;
  * strict verifier, succession_chain_verify, whose callers rely on its chain
  * being contiguous in the order served, and which must never reuse this
  * walk's `verified` map: the two accept links on different proofs).
- * packages/crypto/src/succession-path.ts is its twin.
+ * packages/crypto/src/groups/succession-path.ts is its twin.
  *
  * Each link is verified once, under its proof:
  * - by default its version 2 signature under the old keys it names (what every

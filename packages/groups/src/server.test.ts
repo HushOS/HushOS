@@ -16,7 +16,7 @@ import {
     rotationsRepository,
     scopedId,
 } from '@hushos/db';
-import { areaKeyCommitment, areaRootCommitment } from '../../crypto/src/area-keys';
+import { areaKeyCommitment, areaRootCommitment } from '../../crypto/src/groups/area-keys';
 import { acceptStoredChain, storedRecord } from '@hushos/crypto/group-trust/server';
 import {
     history,
@@ -24,7 +24,7 @@ import {
     person,
     tombstoneAt,
     type Person,
-} from '../../crypto/src/group-testkit';
+} from '../../crypto/src/groups/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountKeys,

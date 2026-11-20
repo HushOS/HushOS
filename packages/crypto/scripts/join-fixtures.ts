@@ -12,7 +12,7 @@ import {
     sessionFixture,
     signSays,
     type CheckFile,
-} from '../src/join-testkit';
+} from '../src/groups/join-testkit';
 
 /*
  * Joining and consent (groups 1d, Core 4) as the web decides them, for the
@@ -23,7 +23,7 @@ import {
  * crates/hushos-core/fixtures/join-session-scenarios.json, and one account's
  * identities with the links that need consent and the consent the worker
  * signed. Every case is checked against its declaration before anything is
- * written (src/join-testkit.ts). Fresh keys differ on every run. Regenerate
+ * written (src/groups/join-testkit.ts). Fresh keys differ on every run. Regenerate
  * with `bun run fixtures:groups` at the repository root.
  */
 

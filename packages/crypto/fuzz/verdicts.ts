@@ -1,14 +1,14 @@
 import { isDeepStrictEqual } from 'node:util';
-import { encodeStatement, parseStatement } from '../src/canonical';
-import { deviceSessionStatement } from '../src/device-identity';
-import { CryptoError } from '../src/errors';
+import { encodeStatement, parseStatement } from '../src/primitives/canonical';
+import { deviceSessionStatement } from '../src/account/device-identity';
+import { CryptoError } from '../src/primitives/errors';
 import {
     digestBase64url,
     digestHex,
     fingerprint,
     fingerprintOfKeys,
     sameKeyDigest,
-} from '../src/fingerprint';
+} from '../src/primitives/fingerprint';
 import {
     checkPairMark,
     pairCodeOf,
@@ -16,8 +16,8 @@ import {
     type GroupChainCache,
     type PairMark,
     type ServedIdentity,
-} from '../src/group-trust';
-import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/group-testkit';
+} from '../src/groups/group-trust';
+import { GROUP, verdictOf, type RecordProbe, type RootProbe } from '../src/groups/group-testkit';
 import {
     areaGrantStatement,
     groupFingerprint,
@@ -36,7 +36,7 @@ import {
     type GroupPublicKey,
     type Roster,
     type RosterFormat,
-} from '../src/groups';
+} from '../src/groups/groups';
 import {
     publicIdentity,
     verifyIdentityKeys,
@@ -48,10 +48,10 @@ import {
     type PinnedKeys,
     type ServedKeys,
     type SuccessionLink,
-} from '../src/identity';
-import { decode, encode } from '../src/keys';
-import { checkGroupPin, pinVerified, type GroupPin } from '../src/pins';
-import { openShareKey, type ShareContext } from '../src/shares';
+} from '../src/account/identity';
+import { decode, encode } from '../src/primitives/keys';
+import { checkGroupPin, pinVerified, type GroupPin } from '../src/trust/pins';
+import { openShareKey, type ShareContext } from '../src/drive/shares';
 import {
     keysStatement,
     metadataRekeyedStatement,
@@ -66,30 +66,30 @@ import {
     type RekeyedRecord,
     type VersionStatement,
     verifyStatement,
-} from '../src/signatures';
+} from '../src/primitives/signatures';
 import {
     contentKeyContext,
     metadataContext,
     openEnvelopeBytes,
     openOriginKey,
     openWithOriginKey,
-} from '../src/drive';
-import { opensAsMade, readSteps, runSteps } from '../src/area-ledger-testkit';
+} from '../src/drive/drive';
+import { opensAsMade, readSteps, runSteps } from '../src/groups/area-ledger-testkit';
 import {
     ROOT as DEVICE_ROOT,
     family as deviceFamily,
     run as runDeviceCase,
-} from '../src/device-record-testkit';
+} from '../src/account/device-record-testkit';
 import {
     createGroupSession,
     sealDeviceRecord,
     type GroupHost,
     type GroupMessage,
     type GroupResults,
-} from '../src/session-groups';
-import { createAreaLedger } from '../src/area-ledger';
-import { linksNeedingConsent } from '../src/consent-due';
-import { joinCheck } from '../src/join-check';
+} from '../src/groups/session-groups';
+import { createAreaLedger } from '../src/groups/area-ledger';
+import { linksNeedingConsent } from '../src/account/consent-due';
+import { joinCheck } from '../src/groups/join-check';
 import {
     CONSENT_ROOT,
     CONSENT_USER,
@@ -98,13 +98,18 @@ import {
     runPreview,
     runPreviewFlow,
     runSession,
-} from '../src/join-testkit';
-import { drawPositions } from '../src/join-session';
-import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/rekeyed-testkit';
-import { readOutboxEntry } from '../src/outbox';
-import { readSettingsDocument } from '../src/contacts';
-import { contactPinOf, familyCheckOf, settingsMarks, settingsPinOf } from '../src/settings-marks';
-import { runArea } from '../src/settings-areas-testkit';
+} from '../src/groups/join-testkit';
+import { drawPositions } from '../src/groups/join-session';
+import { carriedRekeyed, judgeRekeyed, readRekeyed } from '../src/groups/rekeyed-testkit';
+import { readOutboxEntry } from '../src/groups/outbox';
+import { readSettingsDocument } from '../src/trust/contacts';
+import {
+    contactPinOf,
+    familyCheckOf,
+    settingsMarks,
+    settingsPinOf,
+} from '../src/trust/settings-marks';
+import { runArea } from '../src/trust/settings-areas-testkit';
 import {
     JUNK,
     committedSession,
@@ -116,13 +121,13 @@ import {
     sessionRun,
     sessionStep as rosterSessionStep,
     verdict as rosterVerdict,
-} from '../src/roster-calls-testkit';
+} from '../src/groups/roster-calls-testkit';
 import {
     previousEnvelope,
     previousRootRun,
     removalRun,
     removalVerdict,
-} from '../src/removal-calls-testkit';
+} from '../src/groups/removal-calls-testkit';
 import {
     chain,
     core,

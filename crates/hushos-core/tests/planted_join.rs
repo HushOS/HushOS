@@ -6,7 +6,7 @@
 //! entry wrong only afterwards. Here: that phone's device gets no pair code at
 //! that roster, the organizer's pair code with it is not the code 0.10.0
 //! compared, and the one-way path (the old join code read to the phone) gives
-//! the organizer's device nothing to save. `packages/crypto/src/planted-join.test.ts`
+//! the organizer's device nothing to save. `packages/crypto/src/groups/planted-join.test.ts`
 //! holds the web to the same.
 
 use hushos_core::*;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
-import type { Draft } from './drafts';
+import { createDeviceKey, rememberAccountKey } from './account/device';
+import type { Draft } from './account/drafts';
 import { createCryptoSession } from './session';
 
 /*

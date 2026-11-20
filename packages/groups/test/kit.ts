@@ -18,14 +18,14 @@ import {
 import { signHybrid } from '@hushos/crypto/signatures';
 import { driveRepository, groupsRepository, scopedId } from '@hushos/db';
 // The group core's test kit and area commitments: test-only, not package exports.
-import { areaKeyCommitment } from '../../crypto/src/area-keys';
+import { areaKeyCommitment } from '../../crypto/src/groups/area-keys';
 import {
     groupIdFor,
     history,
     person,
     type History,
     type Person,
-} from '../../crypto/src/group-testkit';
+} from '../../crypto/src/groups/group-testkit';
 import { db } from '../../db/src/client';
 import {
     accountIdentities,

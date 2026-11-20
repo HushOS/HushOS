@@ -1,7 +1,7 @@
 //! The family write rules as the core's `AreaLedger` runs the shared
 //! scenarios (`fixtures/area-ledger-scenarios.json`): every step's outcome
 //! and every key envelope a step made, for the web to match step for step and
-//! open (`packages/crypto/src/area-ledger-fixtures.test.ts`), the mirror of
+//! open (`packages/crypto/src/groups/area-ledger-fixtures.test.ts`), the mirror of
 //! `packages/crypto/scripts/area-ledger-fixtures.ts`. Writes
 //! `packages/crypto/src/__fixtures__/core-area-ledger.json`; each scenario's
 //! stated outcomes are checked before anything is written. Also the nodes this

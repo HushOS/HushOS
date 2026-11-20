@@ -1,7 +1,7 @@
 //! Joining a family (docs/groups-design.md 2.4 and 3.2), the newcomer's side,
-//! all of it: the twin of the web worker's join (`packages/crypto/src/session-groups.ts`:
+//! all of it: the twin of the web worker's join (`packages/crypto/src/groups/session-groups.ts`:
 //! `groupJoinPreview`, `groupJoinCheck` and `groupAccept` with `joining`) and
-//! of the escalation it runs (`packages/crypto/src/join-session.ts`), so
+//! of the escalation it runs (`packages/crypto/src/groups/join-session.ts`), so
 //! neither phone writes a rule of its own:
 //!
 //! - [`AreaLedger::group_join_preview`] verifies what route 5 served as
@@ -86,7 +86,7 @@ const HOLDS: &str = "holds";
 
 /// What the person is told after a wrong pair, the calm line (`again` false)
 /// or the alarm's (`again` true), with `them` the admin's name. The web's join
-/// page says the same words (`joinCheckMessage` in `packages/crypto/src/join-session.ts`).
+/// page says the same words (`joinCheckMessage` in `packages/crypto/src/groups/join-session.ts`).
 ///
 /// ```
 /// assert!(hushos_core::join_check_message(false, "Maya".into()).contains("Ask Maya to read them again"));

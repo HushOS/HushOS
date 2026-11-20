@@ -11,7 +11,7 @@ import com.hushos.core.checkName
 
 /*
  * `text` with each lone surrogate replaced by U+FFFD, pairs kept: the web's `wellFormed`
- * (packages/crypto/src/drive.ts). For names the platform hands over (a display name, a shared
+ * (packages/crypto/src/drive/drive.ts). For names the platform hands over (a display name, a shared
  * file's, a picked folder's): such a file uploads under a readable name rather than failing.
  */
 fun wellFormed(text: String): String {

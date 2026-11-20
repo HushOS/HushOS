@@ -1,5 +1,5 @@
 //! Approving on another device as this core builds it (`docs/two-step-design.md` 12), for
-//! the web to match byte for byte (`packages/crypto/src/device-approval.test.ts`) and for
+//! the web to match byte for byte (`packages/crypto/src/account/device-approval.test.ts`) and for
 //! the server's own copy (`packages/db/src/signatures.test.ts`): for one request of each
 //! purpose, the commitment, the code, the statement, the approving device's signature and
 //! the QR text. Every value is derived from a label, so a run changes nothing unless the

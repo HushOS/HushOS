@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { S3Client, SQL } from 'bun';
 import { expect, test, type BrowserContext, type Page, type Route } from '@playwright/test';
-import { ciphertextSize, THUMBNAIL_MAX_BYTES } from '../packages/crypto/src/drive';
+import { ciphertextSize, THUMBNAIL_MAX_BYTES } from '../packages/crypto/src/drive/drive';
 import { cutJpeg } from '../apps/web/src/lib/images-pdf/jpeg';
 import {
     FIXTURES,

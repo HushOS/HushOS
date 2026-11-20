@@ -1,9 +1,9 @@
 //! What a device keeps of a family, and the pins it writes from it
 //! (docs/groups-design.md 2.4 and 2.7), the twin of the web worker's device
-//! store and acceptance (`packages/crypto/src/session-groups.ts`: the device
+//! store and acceptance (`packages/crypto/src/groups/session-groups.ts`: the device
 //! store, `marksOf`, `accept`), the order the web's data layer accepts in
-//! (`packages/crypto/src/record-acceptance.ts`), and the settings pin's merge
-//! (`packages/crypto/src/pins.ts`: `mergePin`, `pinAhead`):
+//! (`packages/crypto/src/trust/record-acceptance.ts`), and the settings pin's merge
+//! (`packages/crypto/src/trust/pins.ts`: `mergePin`, `pinAhead`):
 //!
 //! - every record is sealed under a key derived from the account root
 //!   (HKDF-SHA-256, salt 32 zero bytes, info `hushos/group/device-store/v1`)

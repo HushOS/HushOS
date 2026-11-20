@@ -1,5 +1,5 @@
 export * from './protocol';
-export { CryptoError, RefusedError, SavedAccessError } from './errors';
+export { CryptoError, RefusedError, SavedAccessError } from './primitives/errors';
 export {
     createCryptoSession,
     type CryptoRequests,
@@ -44,21 +44,21 @@ export type {
     RotatedDocumentWire,
     RotationWire,
     ServedChain,
-} from './session-groups';
-export type { RememberedAccount } from './device';
+} from './groups/session-groups';
+export type { RememberedAccount } from './account/device';
 export type {
     SecurityAction,
     SecurityChallenge,
     SecurityUpdate,
     SecurityWorkspaceGrant,
-} from './security';
-export type { WorkspaceKeyEnvelope } from './workspace';
-export type { NodeAttributes, NodeMetadata } from './drive';
-export type { Integrity, NodeKind, SignatureForm } from './signatures';
-export { checkId, deriveId, newId, type GroupIdKind, type IdKind } from './ids';
-export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from './contacts';
-export type { PinnedKeys, ServedKeys, SuccessionLink } from './identity';
-export { fingerprint, keyDigest, publicKeyBytes } from './fingerprint';
+} from './trust/security';
+export type { WorkspaceKeyEnvelope } from './drive/workspace';
+export type { NodeAttributes, NodeMetadata } from './drive/drive';
+export type { Integrity, NodeKind, SignatureForm } from './primitives/signatures';
+export { checkId, deriveId, newId, type GroupIdKind, type IdKind } from './primitives/ids';
+export type { ContactPin, Settings, SettingsEnvelope, SettingsKeyEnvelope } from './trust/contacts';
+export type { PinnedKeys, ServedKeys, SuccessionLink } from './account/identity';
+export { fingerprint, keyDigest, publicKeyBytes } from './primitives/fingerprint';
 export {
     admittedKeys,
     outboxStep,
@@ -67,7 +67,7 @@ export {
     type OutboxRead,
     type OutboxRoute,
     type OutboxStep,
-} from './outbox';
+} from './groups/outbox';
 export type {
     GroupKind,
     GroupPublicKey,
@@ -78,7 +78,7 @@ export type {
     RosterArea,
     RosterMember,
     SignedGroupStatement,
-} from './groups';
+} from './groups/groups';
 export type {
     AcceptInput,
     JoinMark,
@@ -90,5 +90,5 @@ export type {
     GroupWriterTrust,
     RosterChain,
     RosterFork,
-} from './group-trust';
-export type { GroupPin } from './pins';
+} from './groups/group-trust';
+export type { GroupPin } from './trust/pins';
