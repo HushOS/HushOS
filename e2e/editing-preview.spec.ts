@@ -357,6 +357,39 @@ const scrollTo = (scroller: ReturnType<Page['locator']>, top: number) =>
     }, top);
 
 /*
+ * Whether the source has settled: its scroll has stopped and its line numbers sit beside the lines
+ * drawn. After a jump CodeMirror draws the lines where it estimated them, measures them and moves
+ * both; in between its numbers can sit a line or two off the text (a Linux CI trace had the gutter
+ * 41 px above it), and the gutter, which the top line is read from, says another line than the one
+ * on screen, which the preview follows. The last lines are compared: the editor also keeps the
+ * cursor's line drawn, wherever it is.
+ */
+async function sourceSettled(p: Page) {
+    const read = () =>
+        sourceScroller(p).evaluate((scroller) => {
+            const numbers = [
+                ...scroller.querySelectorAll('.cm-lineNumbers .cm-gutterElement'),
+            ].filter((element) => element.getBoundingClientRect().height > 0);
+            const lines = [...scroller.querySelectorAll('.cm-content > .cm-line')];
+            const count = Math.min(8, numbers.length, lines.length);
+            if (!count) return null;
+            const pairs = numbers
+                .slice(-count)
+                .map((number, index) => [number, lines.slice(-count)[index]!]);
+            const aligned = pairs.every(
+                ([number, line]) =>
+                    Math.abs(
+                        number!.getBoundingClientRect().top - line!.getBoundingClientRect().top,
+                    ) < 1,
+            );
+            return aligned ? scroller.scrollTop : null;
+        });
+    const first = await read();
+    await p.waitForTimeout(200);
+    return first !== null && first === (await read());
+}
+
+/*
  * Moves the source's view a few pixels into the line its top is on, when that top is within 2px of
  * the line's edge. On an edge the gutter can read one line and the editor the one beside it (a
  * pixel either way is the same place), and which one depends on the fonts: Linux CI's put 6,000 px
@@ -386,6 +419,7 @@ test('the source and the preview scroll together, both ways', async () => {
 
     // The source scrolled: the block holding its top line comes to the top of the preview.
     await scrollTo(source, 5_000);
+    await expect.poll(() => sourceSettled(page)).toBe(true);
     await offLineEdge(source);
     await expect.poll(async () => previewAtLine(page, await sourceTopLine(page))).toBe(true);
     expect(await shown.evaluate((element) => element.scrollTop)).toBeGreaterThan(500);
@@ -459,8 +493,9 @@ test('on a narrow screen, switching between Source and Preview keeps the place',
     const source = sourceScroller(page);
     await expect(dialog(page).getByRole('button', { name: 'Preview', exact: true })).toBeVisible();
     await scrollTo(source, 6_000);
+    await expect.poll(() => sourceSettled(page)).toBe(true);
     await offLineEdge(source);
-    await page.waitForTimeout(300);
+    await expect.poll(() => sourceSettled(page)).toBe(true);
     const line = (await sourceTopLine(page))!;
     await dialog(page).getByRole('button', { name: 'Preview', exact: true }).click();
     const preview = dialog(page).getByRole('region', { name: 'Preview' });
