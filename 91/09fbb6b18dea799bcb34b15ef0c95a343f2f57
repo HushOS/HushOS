@@ -1,0 +1,29 @@
+e2e/timing-reporter.ts
+  s_c60e24772e04af::t_6f156fc1650beb 1-26
+.github/workflows/ci.yml
+  s_c60e24772e04af::t_c2b7e3a333ed7d 524-526,529
+.github/workflows/webkit.yml
+  s_c60e24772e04af::t_20c5e00a407cb8 145-146,148-152
+e2e/README.md
+  s_c60e24772e04af::t_661262045a1166 18
+playwright.config.ts
+  s_c60e24772e04af::t_d42e1023464822 20
+scripts/e2e-durations.ts
+  s_c60e24772e04af::t_8a9435e2c8a3c7 12-15,35-36,45,47,52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9109fbb6b18dea799bcb34b15ef0c95a343f2f57",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
