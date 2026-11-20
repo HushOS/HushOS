@@ -1,0 +1,21 @@
+e2e/editing-preview.spec.ts
+  s_c60e24772e04af::t_d3e77866171b68 161-165,170-171,174-175,184
+e2e/editing.ts
+  s_c60e24772e04af::t_fc4d5dde1a77d8 5,143-144,153-160
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4804b83cae3698502f66f2fca8e0f08af2a1479b",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
