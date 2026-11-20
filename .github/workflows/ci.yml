@@ -265,8 +265,12 @@ jobs:
             PUSH_TEST_DATABASE_URL: postgresql://hushos_push:ci@127.0.0.1:5432/hushos_push
         steps:
             - uses: actions/checkout@v7
+            # rust-cache's key leaves out Cargo.toml's [profile] sections: a profile change keeps
+            # restoring builds made under the old one, rebuilds them every run, and never saves.
+            # Name the profile here, and change the name with it.
             - uses: Swatinem/rust-cache@v2
               with:
+                  key: dependencies-at-opt-level-3
                   workspaces: |
                       . -> target
                       crates/hushos-core/fuzz -> target
