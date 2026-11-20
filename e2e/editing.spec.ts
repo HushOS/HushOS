@@ -944,11 +944,15 @@ test.describe('when someone else saved first', () => {
         await expect(row(other, 'notes.txt')).toBeVisible({ timeout: 60_000 });
     });
 
-    /* Mine open with an edit, theirs saved meanwhile from the other tab; then mine saves. */
+    /*
+     * Mine open with an edit, theirs saved meanwhile from the other tab; then mine saves. Both are
+     * opened before either types: an editor opened on a file another tab has unsaved text in is
+     * offered that tab's draft once it is kept (two seconds after typing; WebKit's run got there).
+     */
     async function race(mine: string, theirs: string) {
         await openEditor(page, 'notes.txt');
-        await retype(page, mine);
         await openEditor(other, 'notes.txt');
+        await retype(page, mine);
         await retype(other, theirs);
         await other.keyboard.press('ControlOrMeta+s');
         await expect(dialog(other).getByText('Saved', { exact: true })).toBeVisible({
