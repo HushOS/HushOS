@@ -2,7 +2,7 @@ import type { GroupWriter } from '@hushos/crypto';
 import { pinTrust } from '@hushos/crypto/pins';
 import { signersFromPins, type Pin } from '@hushos/drive/trust';
 import type { GroupContext } from './context';
-import { pinsById } from '@/lib/family-pin';
+import { pinsById } from '@/lib/families/family-pin';
 import { fetchIdentities } from './sync';
 
 /*

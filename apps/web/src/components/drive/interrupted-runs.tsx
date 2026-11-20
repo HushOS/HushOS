@@ -11,10 +11,10 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from '@/components/ui/toast';
-import { answerInterrupted, useInterruptedRuns } from '@/lib/interrupted-runs';
+import { answerInterrupted, useInterruptedRuns } from '@/lib/drive/runs/interrupted-runs';
 
 /*
- * A run a closed tab left behind (lib/interrupted-runs.ts), one at a time: delete what it made,
+ * A run a closed tab left behind (lib/drive/runs/interrupted-runs.ts), one at a time: delete what it made,
  * or keep it. Asked once the drive is open; the row carries ids only, so the question names how
  * many items, not which.
  */

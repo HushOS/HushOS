@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { publicOrigin } from '@/lib/social';
+import { publicOrigin } from '@/lib/site/social';
 
 export const Route = createFileRoute('/robots.txt')({
     server: {

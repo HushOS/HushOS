@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { Button } from '@/components/ui/button';
-import { capabilitiesQueryOptions } from '@/lib/families-shell';
+import { capabilitiesQueryOptions } from '@/lib/families/families-shell';
 
 /*
  * Every families page: shown only when the server says it serves families

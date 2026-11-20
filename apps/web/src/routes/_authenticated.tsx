@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { safeReturnPath } from '@/lib/return-to';
-import { ensureSessionUser } from '@/lib/session';
+import { safeReturnPath } from '@/lib/auth/return-to';
+import { ensureSessionUser } from '@/lib/auth/session';
 
 /*
  * One guard for every signed-in surface (/app/*, /setup/*). It is route UX, not the
@@ -10,7 +10,7 @@ import { ensureSessionUser } from '@/lib/session';
 export const Route = createFileRoute('/_authenticated')({
     beforeLoad: async ({ context, location }) => {
         const user = await ensureSessionUser(context.queryClient);
-        // The page asked for rides along, so signing in comes back to it (see lib/return-to).
+        // The page asked for rides along, so signing in comes back to it (see lib/auth/return-to).
         if (!user)
             throw redirect({
                 to: '/login',

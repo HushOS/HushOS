@@ -18,7 +18,7 @@ import {
     GuardRacedError,
     GuardUnreadableError,
     GuardUnsavedError,
-} from '@/lib/contact-guard';
+} from '@/lib/trust/contact-guard';
 import type { GroupContext, GroupNotice } from './context';
 import { flushOutbox } from './outbox';
 import { settlePin, type OpenedArea } from './pins';
@@ -46,7 +46,7 @@ export type AreaState = {
     rootListed: boolean;
     /* The folder's name, from its root's sealed metadata; null when the root did not open. */
     name: string | null;
-    /* Route 25's view of the area: what its Drive client opens (lib/spaces.ts). */
+    /* Route 25's view of the area: what its Drive client opens (lib/families/spaces.ts). */
     view: {
         workspaceKeyVersion: number;
         changeSeq: number;

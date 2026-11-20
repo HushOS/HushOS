@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { LegalLayout } from '@/components/legal-layout';
+import { LegalLayout } from '@/components/site/legal-layout';
 import Terms, { headings } from '@/content/legal/terms.mdx';
 import { frontmatter } from '@/content/legal/terms.mdx?meta';
-import { pageSocialMeta, publicOrigin, readOperator } from '@/lib/social';
+import { pageSocialMeta, publicOrigin, readOperator } from '@/lib/site/social';
 
 export const Route = createFileRoute('/terms')({
     loader: () => ({ origin: publicOrigin(), operator: readOperator() }),

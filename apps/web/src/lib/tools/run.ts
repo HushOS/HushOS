@@ -1,4 +1,4 @@
-import { PREVIEW_LIMITS } from '@/lib/preview-limits';
+import { PREVIEW_LIMITS } from '@/lib/viewers/preview-limits';
 import { trackToolRun } from './active';
 import { toolBudget, type PlaintextBudget } from './budget';
 import {
@@ -17,7 +17,7 @@ import {
 } from './protocol';
 import { readAllowance, serveRanges, type RangeReader } from './ranges';
 import { createWatchdog } from './watchdog';
-import { holdPageWhile } from '@/lib/leave-guard';
+import { holdPageWhile } from '@/lib/platform/leave-guard';
 
 /*
  * A tool run, from the page: one worker, its sources served by range, its results handed
@@ -116,7 +116,7 @@ type Queued = {
 let current: Queued | null = null;
 const queue: Queued[] = [];
 
-/* Results not yet released, across runs: while any wait, leaving the page asks first (lib/leave-guard.ts). */
+/* Results not yet released, across runs: while any wait, leaving the page asks first (lib/platform/leave-guard.ts). */
 let unreleased = 0;
 let holding = false;
 function countUnreleased(delta: number) {

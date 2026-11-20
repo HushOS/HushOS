@@ -6,18 +6,18 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { familyKeys } from '@/lib/families';
-import { keepInvitedRole } from '@/lib/family-pending';
+import { familyKeys } from '@/lib/families/families';
+import { keepInvitedRole } from '@/lib/families/family-pending';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * "Invite someone" (docs/optional-verification.md 6.8): the server mails a
  * link to the address. Accepting it does not let anyone in: they wait until a
  * manager lets them in, with no words on either side, always as a member.
  * Asked to manage the family, the role waits on this account's own record of
- * it (lib/family-pending.ts): once they're checked here, this account is
+ * it (lib/families/family-pending.ts): once they're checked here, this account is
  * asked whether to give it (3.6, 6.8).
  */
 export function InviteDialog({

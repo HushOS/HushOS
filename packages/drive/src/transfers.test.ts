@@ -380,7 +380,7 @@ describe('transfer manager', () => {
         });
         await settle(120);
         expect(h.server.begins).toHaveLength(1);
-        // apps/web/src/lib/sign-out.ts: deviceSession.signedOut() first, then transfers.forgetAll().
+        // apps/web/src/lib/auth/sign-out.ts: deviceSession.signedOut() first, then transfers.forgetAll().
         open = false;
         generation = 2;
         await h.manager.forgetAll();

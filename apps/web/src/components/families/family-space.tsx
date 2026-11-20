@@ -14,9 +14,14 @@ import {
     familyKeys,
     familyQueryOptions,
     useFamilySync,
-} from '@/lib/families';
+} from '@/lib/families/families';
 import { errorCopy } from '@/lib/groups/copy';
-import { areaClient, FamilySpaceProvider, pruneAreas, type FamilySpace } from '@/lib/spaces';
+import {
+    areaClient,
+    FamilySpaceProvider,
+    pruneAreas,
+    type FamilySpace,
+} from '@/lib/families/spaces';
 
 /*
  * A family's space (groups 1c step 6): its folders, each a Drive of its own.
@@ -27,7 +32,7 @@ import { areaClient, FamilySpaceProvider, pruneAreas, type FamilySpace } from '@
  * another manager made (a removal, which starts a key change) syncs the
  * family again; while a key change walks one of the folders the family is
  * synced again every so often too, so the pages see it end (a manager's
- * device walks it meanwhile: lib/family-work.ts). Uploads into a folder the
+ * device walks it meanwhile: lib/families/family-work.ts). Uploads into a folder the
  * walk has not reached wait in the queue and go once it has.
  *
  * The family's pages (/app/s/<family>) sit inside it, and so does the family

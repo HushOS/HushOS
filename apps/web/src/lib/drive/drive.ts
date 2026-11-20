@@ -1,0 +1,420 @@
+import {
+    contentSize,
+    createDriveClient,
+    createIndexedDbMirror,
+    type DriveClient,
+    type DriveNode,
+    type TrashItem,
+} from '@hushos/drive/client';
+import { ROOT_LABEL } from '@hushos/drive/protocol';
+import { queryOptions, type QueryClient } from '@tanstack/react-query';
+import { useSyncExternalStore } from 'react';
+import { authClient } from '@/lib/auth/auth-client';
+import {
+    openIdentity,
+    resealAll,
+    resealedAll,
+    resealedTo,
+    resealPending,
+    sharingLedger,
+    trustedSigners,
+    trustGrantee,
+    trustGranter,
+    onGuardMovedElsewhere,
+} from '@/lib/trust/contacts';
+import { driveApi, linkApi, reportApi } from '@/lib/drive/drive-api';
+import { keyChangeWords } from '@/lib/families/key-change-words';
+import { purgeBatch, restoreBatch, trashBatch, type TrashParts } from '@/lib/drive/trash-batch';
+import { createSpaceRegistry } from '@/lib/drive/space-registry';
+
+/*
+ * The browser's Drive client and its query layer. Folder listings live in the
+ * query cache keyed by folder id; every mutation invalidates the folders it
+ * touched. Keys stay in the crypto worker, so nothing here is sensitive.
+ */
+
+function unlockedUser() {
+    const userId = authClient.store.getState().unlockedUserId;
+    if (!userId) throw new Error('Unlock your account first.');
+    return userId;
+}
+
+export const driveClient = createDriveClient(authClient.rpc, driveApi, {
+    mirror: typeof indexedDB === 'undefined' ? undefined : createIndexedDbMirror(),
+    trustGranter,
+    // The server names the grantee here (a rotation, the re-seal pass): a legacy pin whose
+    // migration can't be saved for room is sealed to its own keys unsaved, never left out.
+    trustGrantee: async (granteeUserId, served) =>
+        trustGrantee(unlockedUser(), granteeUserId, served, { sealUnsaved: true }),
+    signers: async () => trustedSigners(unlockedUser()),
+    openIdentity: (userId) => openIdentity(userId),
+    resealPending: async () => resealPending(unlockedUser()),
+    resealedTo: async (ids) => resealedTo(unlockedUser(), ids),
+    resealAll: async () => resealAll(unlockedUser()),
+    resealedAll: async () => resealedAll(unlockedUser()),
+    linkApi,
+    reportApi,
+    ledger: sharingLedger(() => authClient.store.getState().unlockedUserId),
+});
+// Another tab continued, checked or added someone: the catalogue's verdicts are judged again.
+onGuardMovedElsewhere(() => void driveClient.recheckIntegrity().catch(() => {}));
+
+/*
+ * Family folders each have a Drive client of their own (lib/families/spaces.ts, loaded
+ * with the family pages), registered here by workspace so code that holds a
+ * node reaches the client that lists, checks and writes it without importing
+ * the families layer. Anything never registered is this account's own Drive;
+ * a family folder forgotten here throws rather than falling back to it
+ * (lib/drive/space-registry.ts).
+ */
+const spaces = createSpaceRegistry<DriveClient>(() => driveClient);
+export const registerSpace = spaces.register;
+export const clientFor = spaces.clientFor;
+export const clientOfNode = spaces.clientOfNode;
+/* The family a family folder's workspace belongs to; null for this account's own Drive and shares. */
+export const groupOfSpace = spaces.groupOf;
+/* Why nothing may be added to `folder` now, or null: checked before any upload, folder or move into it. */
+export const refuseWrite = spaces.refuseWrite;
+/* Why nothing in a family folder may be changed now; undefined for a workspace never registered here. */
+export const refuseChange = spaces.refuseChange;
+/* Whether that refusal is only a family folder's key change still on its way to `folder`: adds wait. */
+export const waitsForKeyChange = spaces.waitsForKeyChange;
+/* A family folder's family synced again while an upload waits out its key change. */
+export const refreshKeyChange = spaces.refreshKeyChange;
+/* After a lock or a sign-out: every family folder's client forgets what it opened, as the personal one does. */
+export const closeSpaces = spaces.closeAll;
+/* What the families layer stops with them: its walks' retries (lib/families/spaces.ts). */
+export const onSpacesClosed = spaces.onClose;
+/* That alone, the clients left open: a sign-out starting, before the device's stores go. */
+export const stopSpaces = spaces.stopAll;
+/* A family wiped from this device, or a folder it no longer has: its client goes, and stays gone. */
+export const forgetSpace = spaces.forget;
+export const pruneSpaces = spaces.prune;
+
+/* Shown while a key change walks a family folder: adding to a folder it has not reached waits. */
+export const FINISHING_KEY_CHANGE = 'Finishing a key change…';
+
+export const driveKeys = {
+    all: ['drive'] as const,
+    shared: ['drive', 'shared'] as const,
+    mine: ['drive', 'mine'] as const,
+    open: (userId: string) => ['drive', 'open', userId] as const,
+    folder: (folderId: string) => ['drive', 'folder', folderId] as const,
+    trash: ['drive', 'trash'] as const,
+    versions: (nodeId: string) => ['drive', 'versions', nodeId] as const,
+};
+
+/* Opens the workspace in the worker and makes sure the root exists. */
+export const driveOpenQueryOptions = (userId: string) =>
+    queryOptions({
+        queryKey: driveKeys.open(userId),
+        queryFn: () => driveClient.open(userId),
+        staleTime: Infinity,
+        gcTime: Infinity,
+        retry: false,
+    });
+
+/*
+ * The catalogue answers first when it can, so a folder draws before the server
+ * is asked. `workspaceId` names a family folder's workspace, whose client
+ * lists it; without it, this account's own Drive does (shares included).
+ */
+export const folderQueryOptions = (folderId: string, workspaceId?: string | null) =>
+    queryOptions({
+        queryKey: driveKeys.folder(folderId),
+        queryFn: () => clientFor(workspaceId).listFolder(folderId),
+        placeholderData: () => clientFor(workspaceId).localListing(folderId) ?? undefined,
+        staleTime: 15_000,
+        retry: 1,
+    });
+
+/* What others shared with this person, keys opened; refreshed on every visit. */
+export const sharedQueryOptions = queryOptions({
+    queryKey: driveKeys.shared,
+    queryFn: () => driveClient.mountShares(true),
+    staleTime: 15_000,
+    retry: 1,
+});
+
+/* What this account shares out: by account and by link. */
+/*
+ * Everything this person shares. Every share, link and revocation made here
+ * refreshes it at once, so it is kept for minutes rather than refetched on every
+ * folder that shows who can open its rows.
+ */
+export const mySharingQueryOptions = queryOptions({
+    queryKey: driveKeys.mine,
+    queryFn: () => driveClient.mySharing(),
+    staleTime: 5 * 60_000,
+});
+
+export const trashQueryOptions = queryOptions({
+    queryKey: driveKeys.trash,
+    queryFn: () => driveClient.listTrash(),
+    staleTime: 15_000,
+    retry: 1,
+});
+
+/* Recent, search and tags read the catalogue, which otherwise waits for the next feed poll. */
+function catchUpCatalogues() {
+    return Promise.all(
+        [driveClient, ...spaces.clients()].map((client) => client.catchUp().catch(() => {})),
+    ).then(() => {});
+}
+
+async function invalidateListings(queryClient: QueryClient, folderIds: (string | null)[]) {
+    const ids = new Set(folderIds.filter((id): id is string => id !== null));
+    await Promise.all([
+        ...Array.from(ids, (id) =>
+            queryClient.invalidateQueries({ queryKey: driveKeys.folder(id) }),
+        ),
+        queryClient.invalidateQueries({ queryKey: driveKeys.trash }),
+        // Whatever changed a folder may have changed how much room is used: the sidebar meter.
+        queryClient.invalidateQueries({ queryKey: ['auth', 'storage'] }),
+    ]);
+}
+
+/* After a change: the folders that show the node, and the trash, are stale. */
+export async function invalidateFolders(queryClient: QueryClient, ...folderIds: (string | null)[]) {
+    await invalidateListings(queryClient, folderIds);
+    void catchUpCatalogues();
+}
+
+/*
+ * The same, settling only once the listings were fetched again and the catalogue
+ * has caught up: from then on they say themselves what a view was showing ahead
+ * of them (rows trashed or put back from it).
+ */
+export async function refreshFolders(queryClient: QueryClient, ...folderIds: (string | null)[]) {
+    await invalidateListings(queryClient, folderIds);
+    await catchUpCatalogues();
+}
+
+/*
+ * After a restore: what this person shares, fetched now even with no page
+ * showing it, so a row put back reads who can open it at once instead of
+ * "Only you" until the feed's next poll, and By me opens on fresh data.
+ */
+export function refreshSharing(queryClient: QueryClient) {
+    return queryClient.invalidateQueries({ queryKey: driveKeys.mine, refetchType: 'all' });
+}
+
+/* Trash and Undo for a selection, sent through the Drive client of each item's workspace (lib/drive/trash-batch.ts). */
+const trashParts: TrashParts = {
+    trash: (workspaceId, nodeIds) => clientFor(workspaceId).trashMany(workspaceId, nodeIds),
+    restore: (workspaceId, nodeIds) => clientFor(workspaceId).restoreMany(workspaceId, nodeIds),
+    purge: (workspaceId, nodeIds) => clientFor(workspaceId).purgeMany(workspaceId, nodeIds),
+    ancestorsOf: (node) => clientFor(node.workspaceId).ancestorsOf(node.id),
+};
+/* Trash rows carry their own folders: the catalogue leaves out what is in the Trash. */
+function trashRowParts(items: TrashItem[]): TrashParts {
+    const above = new Map(items.map((item) => [item.node.id, item.ancestors]));
+    return { ...trashParts, ancestorsOf: (node) => above.get(node.id) ?? [] };
+}
+/* Trash rows put back where they were, in place only (lib/drive/trash-batch.ts restoreBatch). */
+export function restoreTrashRows(items: TrashItem[], onBack?: (back: DriveNode[]) => void) {
+    return restoreBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onBack,
+    );
+}
+/* Trash rows deleted forever (lib/drive/trash-batch.ts purgeBatch). */
+export function purgeTrashRows(items: TrashItem[], onGone?: (ids: string[]) => void) {
+    return purgeBatch(
+        items.map((item) => item.node),
+        trashRowParts(items),
+        onGone,
+    );
+}
+export function trashNodes(nodes: DriveNode[], onMoved?: (ids: string[]) => void) {
+    return trashBatch(nodes, trashParts, onMoved);
+}
+export function restoreNodes(nodes: DriveNode[], onBack?: (back: DriveNode[]) => void) {
+    return restoreBatch(nodes, trashParts, onBack);
+}
+
+/* The name a copy takes among `taken`: the original, else "name (copy)", "name (copy 2)", and so on. */
+export function copyName(name: string, taken: Set<string>) {
+    const lower = new Set(Array.from(taken, (entry) => entry.toLowerCase()));
+    if (!lower.has(name.toLowerCase())) return name;
+    const dot = name.lastIndexOf('.');
+    const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    for (let n = 1; ; n++) {
+        const candidate = `${base} (copy${n > 1 ? ` ${n}` : ''})${ext}`;
+        if (!lower.has(candidate.toLowerCase())) return candidate;
+    }
+}
+
+/* The name a second upload takes beside an existing one: "name (2).ext", "name (3).ext", and so on. */
+export function nextName(name: string, taken: Set<string>) {
+    const lower = new Set(Array.from(taken, (entry) => entry.toLowerCase()));
+    if (!lower.has(name.toLowerCase())) return name;
+    const dot = name.lastIndexOf('.');
+    const [base, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];
+    for (let n = 2; ; n++) {
+        const candidate = `${base} (${n})${ext}`;
+        if (!lower.has(candidate.toLowerCase())) return candidate;
+    }
+}
+
+/*
+ * Copies `nodes` into `destination`, each under a name free in that folder, and
+ * refreshes the folders that changed. Reports items made so far.
+ */
+export async function copyInto(
+    queryClient: QueryClient,
+    nodes: DriveNode[],
+    destination: DriveNode,
+    onProgress?: (done: number) => void,
+) {
+    // A family folder this device may not write, or one a key change has not reached yet.
+    const refused = refuseWrite(destination);
+    if (refused) throw new Error(refused);
+    const listing = await queryClient.fetchQuery(
+        folderQueryOptions(destination.id, destination.workspaceId),
+    );
+    const taken = new Set(listing.children.map((child) => child.name));
+    let done = 0;
+    try {
+        for (const node of nodes) {
+            const name = copyName(node.name, taken);
+            taken.add(name);
+            const before = done;
+            await clientFor(destination.workspaceId).copyTree(node, destination, name, (made) => {
+                done = before + made;
+                onProgress?.(done);
+            });
+        }
+    } finally {
+        await invalidateFolders(queryClient, destination.id);
+    }
+    return done;
+}
+
+/* Folders first, then names the way a person expects them ordered. */
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+export function sortNodes(nodes: DriveNode[]) {
+    return [...nodes].sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+        return collator.compare(a.name, b.name);
+    });
+}
+
+// Lives in lib/platform/format, which public pages load without the drive client; re-exported here.
+export { formatBytes } from '@/lib/platform/format';
+
+/*
+ * Dates as the phones say them: "Today, 14:08", "Yesterday", "29 Sept", and the year
+ * only when it isn't this one, "29 Sept 2025". Day and month are written the en-GB
+ * way on every client; the time keeps the person's own 12 or 24 hour clock.
+ */
+const dayFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' });
+const dayYearFormat = new Intl.DateTimeFormat('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+});
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+
+function parse(iso: string | null | undefined) {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/* "29 Sept", or "29 Sept 2025" in another year: for "on", "until" and "ends". */
+export function formatDay(iso: string | null | undefined) {
+    const date = parse(iso);
+    if (!date) return '';
+    return date.getFullYear() === new Date().getFullYear()
+        ? dayFormat.format(date)
+        : dayYearFormat.format(date);
+}
+
+/* "14:08", or "2:08 pm", as the person's clock reads. */
+export function formatTime(iso: string | null | undefined) {
+    const date = parse(iso);
+    return date ? timeFormat.format(date) : '';
+}
+
+/*
+ * When something happened, for lists and facts: "Today, 14:08", "Yesterday", then
+ * a day. `lower` is for the middle of a sentence: "Added today, 14:08".
+ */
+export function formatWhen(iso: string | null | undefined, { lower = false } = {}) {
+    const date = parse(iso);
+    if (!date) return '';
+    const now = new Date();
+    const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    const relative =
+        date.toDateString() === now.toDateString()
+            ? `Today, ${timeFormat.format(date)}`
+            : date.toDateString() === yesterday.toDateString()
+              ? 'Yesterday'
+              : null;
+    if (!relative) return formatDay(iso);
+    return lower ? relative[0]!.toLowerCase() + relative.slice(1) : relative;
+}
+
+/* What a folder list is ordered by, as on the phone apps. */
+export type SortKey = 'name' | 'modified' | 'size';
+export type SortOrder = { key: SortKey; ascending: boolean };
+export const DEFAULT_SORT: SortOrder = { key: 'name', ascending: true };
+
+/* Folders first whichever key is chosen, as every drive does it; equal values fall back to the name. */
+export function sortNodesBy(nodes: DriveNode[], order: SortOrder) {
+    const value = (node: DriveNode) => {
+        if (order.key === 'modified')
+            return Date.parse(node.metadata?.modified ?? node.updatedAt) || 0;
+        const size = nodeSize(node);
+        return size === null || Number.isNaN(size) ? 0 : size;
+    };
+    return [...nodes].sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+        const primary = order.key === 'name' ? 0 : value(a) - value(b);
+        const result = primary !== 0 ? primary : collator.compare(a.name, b.name);
+        return order.ascending ? result : -result;
+    });
+}
+
+/* The size a file shows: what its version envelope sealed, else what its metadata says. */
+/*
+ * An item's name as the person sees it: their top folder is "My files",
+ * whatever it is stored as; a family folder's top folder is its own name.
+ */
+export function displayName(node: Pick<DriveNode, 'name' | 'parentId'> & { workspaceId?: string }) {
+    return node.parentId === null && !(node.workspaceId && spaces.has(node.workspaceId))
+        ? ROOT_LABEL
+        : node.name;
+}
+
+export function nodeSize(node: DriveNode) {
+    if (node.kind !== 'file') return null;
+    return contentSize(node) ?? node.metadata?.size ?? NaN;
+}
+
+/*
+ * A request that never reached the server fails with the browser's own words:
+ * "Failed to fetch" (Chromium), "Load failed" (Safari), "NetworkError when
+ * attempting to fetch resource." (Firefox). Said instead as what to do.
+ */
+export const OFFLINE_WORDS = 'Couldn’t reach HushOS. Check your connection, then try again.';
+export function isNetworkFailure(message: string | null | undefined) {
+    return Boolean(message && /^(failed to fetch|load failed|networkerror\b)/i.test(message));
+}
+
+export function driveError(error: unknown) {
+    if (!(error instanceof Error)) return 'Please try again.';
+    return isNetworkFailure(error.message) ? OFFLINE_WORDS : keyChangeWords(error.message);
+}
+
+/* Where the catalogue build is, for search results and the sidebar to follow. */
+const idleCatalogue = { phase: 'idle', pulled: 0, opened: 0, error: null } as const;
+export function useCatalogueState() {
+    return useSyncExternalStore(
+        driveClient.subscribeCatalogue,
+        () => driveClient.catalogueState,
+        () => idleCatalogue,
+    );
+}

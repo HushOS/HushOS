@@ -1,6 +1,6 @@
 import { initLogger, loggingOptions, redactAuthenticationEvent } from '@hushos/logging';
 import { definePlugin } from 'nitro';
-import { HUSHOS_VERSION } from '../../src/lib/version';
+import { HUSHOS_VERSION } from '../../src/lib/platform/version';
 
 const oneRequestPerConnection = process.env.CI === 'true';
 

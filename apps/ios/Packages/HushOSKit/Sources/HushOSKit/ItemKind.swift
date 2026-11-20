@@ -2,7 +2,7 @@ import Foundation
 
 /*
  * What an item is when search's kind words ("photos", "videos", "documents", "folders") and the
- * search type chips ask: the web's split (`nodeKind` in apps/web/src/lib/previews.ts, over
+ * search type chips ask: the web's split (`nodeKind` in apps/web/src/lib/viewers/previews.ts, over
  * `previewKind`), copied list for list so all three clients count the same files. An image or a
  * video is what the web previews as one; a document is what it opens as a PDF, an Office file,
  * Markdown or text. Audio and anything else is none of them. A change to the web's lists comes

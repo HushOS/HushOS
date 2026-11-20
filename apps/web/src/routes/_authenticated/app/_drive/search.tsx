@@ -1,6 +1,6 @@
 import { createFileRoute, useLocation } from '@tanstack/react-router';
 import { SearchView } from '@/components/drive/search-view';
-import { searchFromHash } from '@/lib/search';
+import { searchFromHash } from '@/lib/platform/search';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/search')({
     head: () => ({ meta: [{ title: 'Search · HushOS' }] }),

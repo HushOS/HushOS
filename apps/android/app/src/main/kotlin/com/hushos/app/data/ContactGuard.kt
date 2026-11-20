@@ -13,7 +13,7 @@ import org.json.JSONObject
 import java.io.File
 
 /*
- * The contact guard (docs/optional-verification.md 2.8; the web's lib/contact-guard.ts, iOS's ContactGuard.swift): what
+ * The contact guard (docs/optional-verification.md 2.8; the web's lib/trust/contact-guard.ts, iOS's ContactGuard.swift): what
  * this phone keeps, per account and per person, of the keys it last acted on, apart from the settings document. A newer
  * copy of the settings that drops or swaps a pin (an older copy saved over at a higher sequence, or an empty one) is met
  * here as a change, never as first use, since nothing in the settings can stand in for what this phone saw. Never

@@ -15,7 +15,7 @@ import {
 /*
  * The highlighted item is a fill, which is enough to follow a pointer and too faint (about
  * 1.3:1) to find by keyboard alone. Focus stays in the field here, so `:focus-visible` can't
- * tell the two apart: when the keyboard was used last (`data-moved`, lib/moved.ts) the item
+ * tell the two apart: when the keyboard was used last (`data-moved`, lib/platform/moved.ts) the item
  * also carries the focus ring (`focus-ring`, 3:1 and more on the fill).
  */
 function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {

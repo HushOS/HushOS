@@ -1,5 +1,5 @@
-import { Spinner } from '@/components/motion';
-import { OperatorHeader } from '@/components/operator';
+import { Spinner } from '@/components/shared/motion';
+import { OperatorHeader } from '@/components/app/operator';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
@@ -9,14 +9,14 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { formatWhen } from '@/lib/drive';
+import { formatWhen } from '@/lib/drive/drive';
 import {
     CATEGORIES,
     categoryLabel,
     describeDue,
     reportsQueryOptions,
     STATUS_LABELS,
-} from '@/lib/reports';
+} from '@/lib/admin/reports';
 import type { ReportCategory, ReportStatus } from '@hushos/drive/api';
 import { REPORT_CATEGORIES } from '@hushos/drive/api';
 import { useQuery } from '@tanstack/react-query';

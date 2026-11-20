@@ -11,9 +11,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { cn } from 'cn';
 import { ArrowUpRightIcon, MinusIcon, PlusIcon } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { PortalLink } from '@/components/portal-link';
-import { Segmented, Setting, SettingsGroup } from '@/components/settings';
-import { StorageMeter } from '@/components/storage-card';
+import { PortalLink } from '@/components/account/portal-link';
+import { Segmented, Setting, SettingsGroup } from '@/components/account/settings';
+import { StorageMeter } from '@/components/account/storage-card';
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -35,12 +35,12 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { billingQueryOptions, localeHintQueryOptions } from '@/lib/billing';
-import { storageQueryOptions } from '@/lib/queries';
-import { groupBillingApi } from '@/lib/billing-api';
-import { pickCurrency } from '@/lib/currency';
-import { formatDay } from '@/lib/drive';
-import { familyQueryOptions, type FamilyMember } from '@/lib/families';
+import { billingQueryOptions, localeHintQueryOptions } from '@/lib/billing/billing';
+import { storageQueryOptions } from '@/lib/billing/queries';
+import { groupBillingApi } from '@/lib/billing/billing-api';
+import { pickCurrency } from '@/lib/billing/currency';
+import { formatDay } from '@/lib/drive/drive';
+import { familyQueryOptions, type FamilyMember } from '@/lib/families/families';
 import {
     addRange,
     billingAccess,
@@ -71,17 +71,17 @@ import {
     type HeldChange,
     type Standing,
     type TierMove,
-} from '@/lib/family-billing';
-import { formatMoney, formatQuota, formatSpace } from '@/lib/format';
-import { authError } from '@/lib/form';
-import { usePageRestored } from '@/lib/page-restore';
+} from '@/lib/families/family-billing';
+import { formatMoney, formatQuota, formatSpace } from '@/lib/platform/format';
+import { authError } from '@/lib/platform/form';
+import { usePageRestored } from '@/lib/platform/page-restore';
 import {
     familyPairs,
     familyTierName as tierName,
     personalPlanEnding,
     twoMonthsFree,
-} from '@/lib/plans';
-import { cue } from '@/lib/sounds';
+} from '@/lib/billing/plans';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * A family's plan on its page (docs/groups-design.md 3.5). Before one is paid

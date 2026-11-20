@@ -3,12 +3,12 @@ import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { SearchIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Spinner } from '@/components/motion';
-import { FilterTabs, OperatorPage, OperatorTable, Pager, td, th } from '@/components/operator';
+import { Spinner } from '@/components/shared/motion';
+import { FilterTabs, OperatorPage, OperatorTable, Pager, td, th } from '@/components/app/operator';
 import { Input } from '@/components/ui/input';
-import { adminAccountsQueryOptions } from '@/lib/admin';
-import { formatBytes, formatWhen } from '@/lib/drive';
-import { formatQuota } from '@/lib/queries';
+import { adminAccountsQueryOptions } from '@/lib/admin/admin';
+import { formatBytes, formatWhen } from '@/lib/drive/drive';
+import { formatQuota } from '@/lib/billing/queries';
 
 /*
  * Every account, for an operator who needs to find someone: their name and

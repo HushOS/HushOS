@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { PendingLabel } from '@/components/motion';
+import { PendingLabel } from '@/components/shared/motion';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -11,12 +11,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { afterFamilyChange, familyContext } from '@/lib/families';
-import { familySynced } from '@/lib/families-keys';
+import { afterFamilyChange, familyContext } from '@/lib/families/families';
+import { familySynced } from '@/lib/families/families-keys';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy } from '@/lib/groups/copy';
 import { wipeGroup } from '@/lib/groups/sync';
-import { cue } from '@/lib/sounds';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * Backing out of a family someone accepted an invitation to and isn't let in to yet: a quiet

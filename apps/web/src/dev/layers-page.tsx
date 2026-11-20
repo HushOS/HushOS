@@ -2,7 +2,7 @@ import { cn } from 'cn';
 import { useDialKit } from 'dialkit';
 import { useCallback, useEffect, useState } from 'react';
 
-import { Segmented } from '@/components/settings';
+import { Segmented } from '@/components/account/settings';
 import { Demo } from '@/dev/demo';
 import { HAIRLINES, LAYERS, lookStyle, RADII, SHADOWS, type Layer, type Look } from '@/dev/layers';
 import { usePlayground } from '@/dev/playground-state';

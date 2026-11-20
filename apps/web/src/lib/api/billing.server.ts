@@ -2,7 +2,7 @@ import '@/lib/server-only';
 import { Elysia, t } from 'elysia';
 import * as billing from '@hushos/billing/server';
 import * as growth from '@hushos/billing/growth';
-import { chargeableCurrency } from '@/lib/currency';
+import { chargeableCurrency } from '@/lib/billing/currency';
 import {
     affiliateEmail,
     cancellationSchema,

@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { socialImage } from '@/lib/og.server';
+import { socialImage } from '@/lib/site/og.server';
 export const Route = createFileRoute('/og.jpg')({
     server: { handlers: { GET: () => socialImage('home') } },
 });

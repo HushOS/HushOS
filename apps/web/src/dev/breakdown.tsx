@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 
-import { Segmented } from '@/components/settings';
+import { Segmented } from '@/components/account/settings';
 import { MeasureOverlay } from '@/dev/measure-overlay';
 
 /*

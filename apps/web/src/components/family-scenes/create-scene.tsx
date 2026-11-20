@@ -1,6 +1,6 @@
 import { cn } from 'cn';
 import { UsersIcon } from 'lucide-react';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import type { Act } from '@/components/stageshow/act';
 import { segmentOn, segmentTrack } from '@/components/ui/segment';
 import {

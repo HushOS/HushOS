@@ -9,7 +9,7 @@ import {
     type RotationSource,
     type SettingsAccess,
 } from './context';
-import { createMemoryFamilyGuard } from '@/lib/contact-guard';
+import { createMemoryFamilyGuard } from '@/lib/trust/contact-guard';
 import { createMemoryGroupStore, type GroupStore } from './store';
 
 /*
@@ -123,7 +123,7 @@ export function harness(
         writes: [] as GroupSettings[],
         failWrite: null as Error | null,
         /*
-         * A copy one read left for the readers that only look (lib/contacts.ts): while set, a read
+         * A copy one read left for the readers that only look (lib/trust/contacts.ts): while set, a read
          * that does not ask `fresh` is handed it, whatever is stored now.
          */
         copy: null as GroupSettings | null,

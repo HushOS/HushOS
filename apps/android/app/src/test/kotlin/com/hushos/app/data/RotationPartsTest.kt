@@ -65,7 +65,7 @@ class RotationPartsTest {
     fun aTypicalPageIsOneRequestAndAnEmptyOneNone() {
         val page = array((0 until 200).map { node(it, 2000) })
         assertEquals(1, rotationParts(ws, page).size)
-        // A part must fit the server's rotation cap (ROTATION_BODY_BYTES in apps/web/src/lib/body-caps.ts).
+        // A part must fit the server's rotation cap (ROTATION_BODY_BYTES in apps/web/src/lib/platform/server/body-caps.ts).
         assertTrue(ROTATION_REQUEST_BYTES <= 8 * 1024 * 1024)
         assertTrue(rotationParts(ws, JSONArray()).isEmpty())
     }

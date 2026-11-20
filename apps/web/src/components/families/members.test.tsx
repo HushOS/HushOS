@@ -3,8 +3,8 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import type { GroupView } from '@hushos/crypto';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
-import type { FamilyMember } from '@/lib/families';
-import type * as Pending from '@/lib/family-pending';
+import type { FamilyMember } from '@/lib/families/families';
+import type * as Pending from '@/lib/families/family-pending';
 import type * as Copy from '@/lib/groups/copy';
 
 /*
@@ -40,7 +40,9 @@ let settingsDoc: Record<string, unknown> = { version: 2, contacts: {} };
  * The change is made when the call is, never after an await: a write landing later would reach
  * the next test's settings, which beforeEach has just set (it did, under load).
  */
-const { withoutPendingRoles } = await vi.importActual<typeof Pending>('@/lib/family-pending');
+const { withoutPendingRoles } = await vi.importActual<typeof Pending>(
+    '@/lib/families/family-pending',
+);
 const clearPendingRoles = vi.fn(
     (_queryClient: unknown, _userId: string, groupId: string, userIds: string[] | 'all') => {
         settingsDoc = withoutPendingRoles(settingsDoc as never, groupId, userIds) as never;
@@ -57,7 +59,7 @@ const letInWithoutWords = vi.fn(async (..._args: unknown[]) => ({
 /* The family as a sync reads it now: Sam managing it, when another device gave the role. */
 let syncedView: GroupView | null = null;
 
-vi.mock('@/components/drive/contact-flow', () => ({
+vi.mock('@/components/drive/sharing/contact-flow', () => ({
     ContactFlowDialog: ({
         start,
         onResolved,
@@ -121,16 +123,16 @@ vi.mock('@/components/drive/file-list', () => ({
 vi.mock('@/components/ui/toast', () => ({
     toast: { add: (...args: unknown[]) => toastAdd(...args) },
 }));
-vi.mock('@/lib/sounds', () => ({ cue: vi.fn() }));
-vi.mock('@/lib/drive', () => ({ formatDay: () => '3 Nov' }));
-vi.mock('@/lib/contacts', () => ({
+vi.mock('@/lib/platform/sounds', () => ({ cue: vi.fn() }));
+vi.mock('@/lib/drive/drive', () => ({ formatDay: () => '3 Nov' }));
+vi.mock('@/lib/trust/contacts', () => ({
     guardRevision: () => 0,
     settingsQueryOptions: (userId: string) => ({
         queryKey: ['settings', userId],
         queryFn: async () => ({ settings: settingsDoc }),
     }),
 }));
-vi.mock('@/lib/families', () => ({
+vi.mock('@/lib/families/families', () => ({
     afterFamilyChange: vi.fn(async (queryClient: { invalidateQueries: () => Promise<void> }) =>
         queryClient.invalidateQueries(),
     ),
@@ -153,8 +155,8 @@ vi.mock('@/lib/families', () => ({
     withRole: (roles: string[], role: string, on: boolean) =>
         ['billing', 'guardian', 'members'].filter((at) => (at === role ? on : roles.includes(at))),
 }));
-vi.mock('@/lib/family-leave', () => ({ removeBlocker: () => null }));
-vi.mock('@/lib/family-trust', () => ({
+vi.mock('@/lib/families/family-leave', () => ({ removeBlocker: () => null }));
+vi.mock('@/lib/families/family-trust', () => ({
     continueMembers: (...args: unknown[]) => continueMembers(...args),
     letInWithoutWords: (...args: unknown[]) => letInWithoutWords(...args),
     memberStandings: async () =>
@@ -175,7 +177,7 @@ vi.mock('@/lib/groups/outbox', () => ({
     dropKeptAdmission: vi.fn(),
     stageChange: (...args: unknown[]) => stageChange(...args),
 }));
-vi.mock('@/lib/family-pending', async (original) => ({
+vi.mock('@/lib/families/family-pending', async (original) => ({
     ...(await original<typeof Pending>()),
     clearPendingRoles: (...args: Parameters<typeof clearPendingRoles>) =>
         clearPendingRoles(...args),
@@ -213,7 +215,7 @@ vi.mock('@/lib/groups/copy', async (original) => ({
     outcomeCopy: () => null,
 }));
 const { ChangedMembers, InvitationList, MemberList, PendingList } = await import('./members');
-const { pendingRolesOf } = await import('@/lib/family-pending');
+const { pendingRolesOf } = await import('@/lib/families/family-pending');
 
 const person = (userId: string, name: string, roles: string[] = []): FamilyMember =>
     ({

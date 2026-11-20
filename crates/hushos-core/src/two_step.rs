@@ -1603,7 +1603,7 @@ pub fn device_confirmed_reply_read(status: u16, body: String) -> DeviceConfirmed
 /// What an approving device's prompt says is asked, by which device and roughly from
 /// where: "Change your password on Maya’s iPhone", "Sign-in on a new device calling itself
 /// “Chrome on Windows”, near Lyon, France". The web says the same
-/// (`apps/web/src/lib/approvals.ts`).
+/// (`apps/web/src/lib/auth/approvals.ts`).
 /// - `self_named` (`ApprovalPrompt.self_named`): the name is the asking device's own words,
 ///   not the account's record of one of its devices. The prompt then says "a new device
 ///   calling itself “…”", so nobody reads a stranger's chosen words as their own laptop.
@@ -1698,7 +1698,7 @@ pub struct ApprovalDetails {
 }
 
 /// The words of [`approval_asks`], in parts for the answer sheet (the web's `approvalDetails`,
-/// `apps/web/src/lib/approvals.ts`): what is asked as its title ("Approve this sign-in?" for a
+/// `apps/web/src/lib/auth/approvals.ts`): what is asked as its title ("Approve this sign-in?" for a
 /// sign-in), then the device and the place as rows. A name that is the device's own word is in
 /// quotes under "Calls itself", never under "Device", with the day it was added where it is one
 /// of the account's. The server words a place "near Lyon, France", or "in France" when only the

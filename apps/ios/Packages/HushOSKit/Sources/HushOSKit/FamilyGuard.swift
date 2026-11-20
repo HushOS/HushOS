@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * The family guard (docs/optional-verification.md 2.8, "per family"; the web's
- * createIndexedDbFamilyGuard in lib/contact-guard.ts): the latest group pin this phone accepted for
+ * createIndexedDbFamilyGuard in lib/trust/contact-guard.ts): the latest group pin this phone accepted for
  * each family, kept apart from the settings and the device record. Acceptance takes it as a mark
  * like any pin, so a family that once was here is never taken on first use again, and a chain
  * short of what this phone accepted is a rollback, whatever the server answers meanwhile: a

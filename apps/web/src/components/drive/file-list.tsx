@@ -17,8 +17,8 @@ import {
 } from 'react';
 import type { DriveNode } from '@hushos/drive/client';
 import { FirstPaintContext, useHoldFirstPaint } from '@/components/drive/first-paint';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
-import { Spinner } from '@/components/motion';
+import { UnverifiedMark } from '@/components/drive/sharing/unverified-mark';
+import { Spinner } from '@/components/shared/motion';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 

@@ -2,7 +2,7 @@ import Foundation
 import HushOSCore
 
 /*
- * First use (docs/optional-verification.md 2; the web's lib/contacts.ts): someone added, or met
+ * First use (docs/optional-verification.md 2; the web's lib/trust/contacts.ts): someone added, or met
  * through something they shared, is remembered with the keys the server serves then (a
  * first-seen pin) and shared with at once. Comparing twelve words, any time, makes the pin
  * verified. A later change is followed only along a succession chain signed by keys this phone

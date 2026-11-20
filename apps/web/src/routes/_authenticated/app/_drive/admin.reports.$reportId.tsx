@@ -1,18 +1,18 @@
 import { useDrive } from '@/components/drive/drive-shell';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
+import { UnverifiedMark } from '@/components/drive/sharing/unverified-mark';
 import { FileMark } from '@/components/drive/file-mark';
-import { Preview } from '@/components/drive/preview';
-import { PendingLabel, Spinner } from '@/components/motion';
-import { OperatorHeader } from '@/components/operator';
+import { Preview } from '@/components/drive/viewers/preview';
+import { PendingLabel, Spinner } from '@/components/shared/motion';
+import { OperatorHeader } from '@/components/app/operator';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { GUIDANCE } from '@/lib/authorities';
-import { openIdentity } from '@/lib/contacts';
-import { downloadNodes } from '@/lib/downloads';
+import { GUIDANCE } from '@/lib/admin/authorities';
+import { openIdentity } from '@/lib/trust/contacts';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
 import {
     driveClient,
     driveError,
@@ -21,9 +21,9 @@ import {
     formatDay,
     formatWhen,
     sortNodes,
-} from '@/lib/drive';
-import { reportApi, setActiveReport, setEvidenceUrls } from '@/lib/drive-api';
-import { buildEvidencePacket, saveEvidencePacket } from '@/lib/evidence-packet';
+} from '@/lib/drive/drive';
+import { reportApi, setActiveReport, setEvidenceUrls } from '@/lib/drive/drive-api';
+import { buildEvidencePacket, saveEvidencePacket } from '@/lib/admin/evidence-packet';
 import {
     categoryLabel,
     describeDue,
@@ -33,8 +33,8 @@ import {
     reportKeys,
     reportQueryOptions,
     STATUS_LABELS,
-} from '@/lib/reports';
-import { cue } from '@/lib/sounds';
+} from '@/lib/admin/reports';
+import { cue } from '@/lib/platform/sounds';
 import type { ReportEventView, ReportView } from '@hushos/drive/api';
 import { contentSize, type DriveNode } from '@hushos/drive/client';
 import { useQuery, useQueryClient } from '@tanstack/react-query';

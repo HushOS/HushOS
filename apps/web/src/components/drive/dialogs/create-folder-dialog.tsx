@@ -1,0 +1,140 @@
+import type { DriveNode } from '@hushos/drive/client';
+import { splitPath } from '@hushos/drive/client';
+import { useQueryClient } from '@tanstack/react-query';
+import { useId, useState } from 'react';
+import { PendingLabel } from '@/components/shared/motion';
+import { Button } from '@/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { clientFor, driveError, invalidateFolders, refuseWrite } from '@/lib/drive/drive';
+import { cue } from '@/lib/platform/sounds';
+
+/*
+ * One field. "Reports" makes a folder; "Reports/2026/Q3" makes the chain, each
+ * folder wrapped under the one before it, in a single request. The form mounts
+ * with the dialog, so every opening starts clean.
+ */
+export function CreateFolderDialog({
+    parent,
+    open,
+    onOpenChange,
+    onCreated,
+}: {
+    parent: DriveNode;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    onCreated?: (nodes: DriveNode[]) => void;
+}) {
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent className="sm:max-w-[440px]">
+                <CreateFolderForm
+                    parent={parent}
+                    onOpenChange={onOpenChange}
+                    onCreated={onCreated}
+                />
+            </DialogContent>
+        </Dialog>
+    );
+}
+
+function CreateFolderForm({
+    parent,
+    onOpenChange,
+    onCreated,
+}: {
+    parent: DriveNode;
+    onOpenChange: (open: boolean) => void;
+    onCreated?: (nodes: DriveNode[]) => void;
+}) {
+    const queryClient = useQueryClient();
+    const id = useId();
+    const [value, setValue] = useState('');
+    const [pending, setPending] = useState(false);
+    const [error, setError] = useState('');
+    const segments = splitPath(value);
+
+    async function submit() {
+        if (!segments.length) {
+            setError('Enter a folder name.');
+            return;
+        }
+        setPending(true);
+        setError('');
+        try {
+            const refused = refuseWrite(parent);
+            if (refused) throw new Error(refused);
+            const nodes = await clientFor(parent.workspaceId).createFolderPath(parent, segments);
+            await invalidateFolders(queryClient, parent.id);
+            cue('success');
+            onCreated?.(nodes);
+            onOpenChange(false);
+        } catch (error) {
+            cue('error');
+            setError(driveError(error));
+        } finally {
+            setPending(false);
+        }
+    }
+
+    return (
+        <form
+            className="contents"
+            onSubmit={(event) => {
+                event.preventDefault();
+                void submit();
+            }}
+            noValidate
+        >
+            <DialogHeader>
+                <DialogTitle>New folder</DialogTitle>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+                <label htmlFor={id} className="text-[13px] font-semibold">
+                    Name
+                </label>
+                <Input
+                    id={id}
+                    value={value}
+                    onChange={(event) => setValue(event.target.value)}
+                    placeholder="Reports/2026"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(error)}
+                    aria-describedby={`${id}-hint`}
+                    maxLength={2048}
+                    className="h-11 text-[15px]"
+                />
+                <p
+                    id={`${id}-hint`}
+                    role={error ? 'alert' : undefined}
+                    className={`text-[13px] leading-snug ${error ? 'text-destructive' : 'text-muted-foreground'}`}
+                >
+                    {error ||
+                        (segments.length > 1
+                            ? `Creates ${segments.length} folders: ${segments.join(' › ')}`
+                            : 'Use a slash to make folders inside folders: Reports › 2026.')}
+                </p>
+            </div>
+            <DialogFooter>
+                <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => onOpenChange(false)}
+                    disabled={pending}
+                >
+                    Cancel
+                </Button>
+                <Button type="submit" disabled={pending}>
+                    <PendingLabel pending={pending} idle="Create" busy="Creating" />
+                </Button>
+            </DialogFooter>
+        </form>
+    );
+}

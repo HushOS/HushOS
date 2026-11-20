@@ -10,17 +10,23 @@ import { useEffect, useState } from 'react';
 import type { StepChallenge } from '@hushos/auth/api';
 import { DeviceStorageUnreadable, TwoStepRequired } from '@hushos/auth/client';
 import { z } from 'zod';
-import { AuthInput } from '@/components/auth-input';
-import { AuthActions, AuthFields, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
-import { SignInStep } from '@/components/sign-in-step';
+import { AuthInput } from '@/components/auth/auth-input';
+import {
+    AuthActions,
+    AuthFields,
+    AuthLayout,
+    AuthNote,
+    authLink,
+} from '@/components/auth/auth-layout';
+import { SignInStep } from '@/components/auth/sign-in-step';
 import { Button } from '@/components/ui/button';
-import { authClient } from '@/lib/auth-client';
-import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/return-to';
-import { ensureSessionUser, sessionQueryOptions } from '@/lib/session';
-import { authError, emailValue } from '@/lib/form';
-import { oneOf } from '@/lib/search';
-import { cardMeta, publicOrigin } from '@/lib/social';
-import { cue } from '@/lib/sounds';
+import { authClient } from '@/lib/auth/auth-client';
+import { rememberReturn, returnTarget, safeReturnPath } from '@/lib/auth/return-to';
+import { ensureSessionUser, sessionQueryOptions } from '@/lib/auth/session';
+import { authError, emailValue } from '@/lib/platform/form';
+import { oneOf } from '@/lib/platform/search';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
+import { cue } from '@/lib/platform/sounds';
 
 const securityChanged = oneOf(['password', 'master-key', 'recovery-key', 'uncertain']);
 /* Why the sign-in after a security change did not happen here: this browser's device key was unreadable. */

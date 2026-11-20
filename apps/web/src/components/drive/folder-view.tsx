@@ -5,12 +5,12 @@ import {
     accessSentence,
     useAccessIndex,
     type Access,
-} from '@/components/drive/access';
-import { editableThroughShares } from '@/lib/text-edit';
-import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
-import { toolRunRows } from '@/lib/tool-run-rows';
+} from '@/components/drive/sharing/access';
+import { editableThroughShares } from '@/lib/editor/text-edit';
+import { CreateFolderDialog } from '@/components/drive/dialogs/create-folder-dialog';
+import { toolRunRows } from '@/lib/drive/runs/tool-run-rows';
 import { DetailsPanel } from '@/components/drive/details-panel';
-import { FolderColourDialog } from '@/components/drive/folder-colour-dialog';
+import { FolderColourDialog } from '@/components/drive/dialogs/folder-colour-dialog';
 import { useDrive } from '@/components/drive/drive-shell';
 import { AreaNotice } from '@/components/drive/area-notice';
 import { useFamilyArea, waitsForKeyChange, type FamilyArea } from '@/components/drive/family-area';
@@ -33,11 +33,11 @@ import {
     useListSelection,
     type Modifiers,
 } from '@/components/drive/file-list';
-import { folderTint } from '@/components/folder-mark';
+import { folderTint } from '@/components/marks/folder-mark';
 import { FileMark } from '@/components/drive/file-mark';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { InfoDialog } from '@/components/drive/info-dialog';
-import { MoveDialog } from '@/components/drive/move-dialog';
+import { InfoDialog } from '@/components/drive/dialogs/info-dialog';
+import { MoveDialog } from '@/components/drive/dialogs/move-dialog';
 import {
     NodeContextMenuItems,
     nodeEntries,
@@ -50,17 +50,17 @@ import {
     type NodeActions,
     type NodeMenuHandle,
 } from '@/components/drive/node-actions';
-import { Preview } from '@/components/drive/preview';
-import { RenameDialog } from '@/components/drive/rename-dialog';
-import { ReportDialog } from '@/components/drive/report-dialog';
-import { ShareDialog } from '@/components/drive/share-dialog';
-import { TagDialog } from '@/components/drive/tag-dialog';
-import { TagStamps } from '@/components/drive/tag-stamp';
-import { UnverifiedMark } from '@/components/drive/unverified-mark';
+import { Preview } from '@/components/drive/viewers/preview';
+import { RenameDialog } from '@/components/drive/dialogs/rename-dialog';
+import { ReportDialog } from '@/components/drive/dialogs/report-dialog';
+import { ShareDialog } from '@/components/drive/sharing/share-dialog';
+import { TagDialog } from '@/components/drive/tags/tag-dialog';
+import { TagStamps } from '@/components/drive/tags/tag-stamp';
+import { UnverifiedMark } from '@/components/drive/sharing/unverified-mark';
 import { isTyping, keyLabel } from '@/components/drive/shortcuts';
 import { AddMenu } from '@/components/drive/add-menu';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
-import { VersionsDialog } from '@/components/drive/versions-dialog';
+import { VersionsDialog } from '@/components/drive/dialogs/versions-dialog';
 import { VirtualGrid, VirtualTableBody } from '@/components/drive/virtual-list';
 import { Button } from '@/components/ui/button';
 import {
@@ -78,7 +78,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/components/ui/toast';
-import { downloadNodes } from '@/lib/downloads';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
 import {
     clientFor,
     copyInto,
@@ -98,13 +98,13 @@ import {
     DEFAULT_SORT,
     type SortKey,
     type SortOrder,
-} from '@/lib/drive';
-import { previewKind } from '@/lib/previews';
-import { saveCopy } from '@/lib/save-copy';
-import { cue } from '@/lib/sounds';
-import { tagsQueryOptions } from '@/lib/tags';
+} from '@/lib/drive/drive';
+import { previewKind } from '@/lib/viewers/previews';
+import { saveCopy } from '@/lib/drive/save-copy';
+import { cue } from '@/lib/platform/sounds';
+import { tagsQueryOptions } from '@/lib/drive/tags';
 import { folderColour, tagsOf, type TagRegistry } from '@hushos/drive/client';
-import { useThumbnail } from '@/lib/thumbnails';
+import { useThumbnail } from '@/lib/viewers/thumbnails';
 import { combine } from '@atlaskit/pragmatic-drag-and-drop/combine';
 import {
     draggable,
@@ -114,7 +114,7 @@ import {
 import { disableNativeDragPreview } from '@atlaskit/pragmatic-drag-and-drop/element/disable-native-drag-preview';
 import type { DriveNode, FolderListing } from '@hushos/drive/client';
 import { useHotkey } from '@tanstack/react-hotkeys';
-import { lendPaletteContext, usePaletteOpen } from '@/lib/palette';
+import { lendPaletteContext, usePaletteOpen } from '@/lib/drive/palette';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useRouter, useSearch } from '@tanstack/react-router';
 import { cn } from 'cn';
@@ -151,7 +151,9 @@ import {
 
 // One PDF's dialog arrives when it is first asked for, not with the folder view.
 const ImagesPdfDialog = lazy(() =>
-    import('@/components/drive/images-pdf-dialog').then((m) => ({ default: m.ImagesPdfDialog })),
+    import('@/components/drive/dialogs/images-pdf-dialog').then((m) => ({
+        default: m.ImagesPdfDialog,
+    })),
 );
 
 /* Where a folder's page is: one's own Drive, or a family folder's under its family's space. */

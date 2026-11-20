@@ -11,7 +11,7 @@ class RecoveryKitTextTest {
     private val phrase = "abandon ability able about above absent absorb abstract absurd abuse access accident account accuse achieve acid acoustic acquire across act action actor actress actual"
     private val words = phrase.split(" ")
 
-    /* The kit as the web and this app write it (apps/web/src/lib/recovery-kit.ts kitText). */
+    /* The kit as the web and this app write it (apps/web/src/lib/account/recovery-kit.ts kitText). */
     private fun kit(line: String = phrase, newline: String = "\n") = listOf(
         "HushOS recovery kit", "Saved 2026-10-05", "", "YOUR ACCOUNT", "Email:       maya@example.com", "",
         "YOUR RECOVERY PHRASE (24 words, in this order)", " 1. abandon       2. ability", "",

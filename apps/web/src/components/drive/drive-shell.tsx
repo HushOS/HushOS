@@ -13,35 +13,35 @@ import { useRouter } from '@tanstack/react-router';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { FirstPaintContext } from '@/components/drive/first-paint';
-import { Spinner } from '@/components/motion';
-import { UnlockDevice } from '@/components/unlock-device';
-import { authClient } from '@/lib/auth-client';
-import { useAuthView } from '@/lib/auth-view';
-import { ContactFlowHost } from '@/components/drive/contact-flow';
-import { backfillOwnConsent, bindContactsToQueries, trustedSigners } from '@/lib/contacts';
+import { Spinner } from '@/components/shared/motion';
+import { UnlockDevice } from '@/components/auth/unlock-device';
+import { authClient } from '@/lib/auth/auth-client';
+import { useAuthView } from '@/lib/auth/auth-view';
+import { ContactFlowHost } from '@/components/drive/sharing/contact-flow';
+import { backfillOwnConsent, bindContactsToQueries, trustedSigners } from '@/lib/trust/contacts';
 import {
     closeSpaces,
     driveClient,
     driveError,
     driveKeys,
     driveOpenQueryOptions,
-} from '@/lib/drive';
-import { familiesSyncAllKey } from '@/lib/families-keys';
-import { capabilitiesQueryOptions } from '@/lib/families-shell';
-import { useChangeFeed } from '@/lib/feed';
-import { preloadViewers } from '@/lib/preload';
-import { resumePendingRotation } from '@/lib/rotation';
-import { prepareDownloads } from '@/lib/downloads';
-import { forgetPreviews } from '@/lib/previews';
+} from '@/lib/drive/drive';
+import { familiesSyncAllKey } from '@/lib/families/families-keys';
+import { capabilitiesQueryOptions } from '@/lib/families/families-shell';
+import { useChangeFeed } from '@/lib/drive/feed';
+import { preloadViewers } from '@/lib/viewers/preload';
+import { resumePendingRotation } from '@/lib/drive/rotation';
+import { prepareDownloads } from '@/lib/drive/transfers/downloads';
+import { forgetPreviews } from '@/lib/viewers/previews';
 // The live runs only: the save path's engine comes in with the first editor or tool that saves.
 import { lockRuns as lockSaveRuns } from '@hushos/drive/save-runs-live';
 import { cancelAllToolRuns } from '@/lib/tools/active';
-import { lookForInterrupted } from '@/lib/interrupted-runs';
-import { forgetThumbnails } from '@/lib/thumbnails';
-import { restoreTransfers } from '@/lib/transfers';
-import { passesThrough } from '@/lib/own-keys';
-import { leaveApp } from '@/lib/sign-out';
-import { cue } from '@/lib/sounds';
+import { lookForInterrupted } from '@/lib/drive/runs/interrupted-runs';
+import { forgetThumbnails } from '@/lib/viewers/thumbnails';
+import { restoreTransfers } from '@/lib/drive/transfers/transfers';
+import { passesThrough } from '@/lib/platform/own-keys';
+import { leaveApp } from '@/lib/auth/sign-out';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * Every Drive page needs the account key unlocked on this device and
@@ -127,7 +127,7 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
     // Families, app-wide: what the outbox holds is sent again and every family synced, so a
     // change made on another page (or before a reload) lands, and family folders open checked.
     // Only on a server that serves families, and the families layer loads only then (the
-    // capability comes from lib/families-shell, which stays off that layer).
+    // capability comes from lib/families/families-shell, which stays off that layer).
     const capabilities = useQuery({
         ...capabilitiesQueryOptions,
         enabled: workspaceId !== undefined,
@@ -140,7 +140,7 @@ export function DriveRuntime({ user }: { user: SessionUser }) {
         queryKey: familiesSyncAllKey(user.id),
         // Each pass also does what is due in each family, and walks key changes, in the background.
         queryFn: async () =>
-            (await import('@/lib/families')).syncFamilies(user.id, {
+            (await import('@/lib/families/families')).syncFamilies(user.id, {
                 onChanged: () =>
                     void queryClient.invalidateQueries({ queryKey: ['families', user.id] }),
             }),

@@ -11,10 +11,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { toast } from '@/components/ui/toast';
-import { afterFamilyChange } from '@/lib/families';
+import { afterFamilyChange } from '@/lib/families/families';
 import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
-import { createFamilyFolder } from '@/lib/spaces';
-import { cue } from '@/lib/sounds';
+import { createFamilyFolder } from '@/lib/families/spaces';
+import { cue } from '@/lib/platform/sounds';
 
 /*
  * "New family folder" (route 21), for those who manage the family: a member

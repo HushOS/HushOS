@@ -1,10 +1,10 @@
 import { CreateFamilyDialog } from '@/components/families/create-family-dialog';
-import { defaultFamilyName, familyStanding } from '@/lib/family-signup';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
-import { PortalLink } from '@/components/portal-link';
-import { Segmented, SettingsGroup, SettingsPage } from '@/components/settings';
-import { StorageCard } from '@/components/storage-card';
+import { defaultFamilyName, familyStanding } from '@/lib/families/family-signup';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
+import { PortalLink } from '@/components/account/portal-link';
+import { Segmented, SettingsGroup, SettingsPage } from '@/components/account/settings';
+import { StorageCard } from '@/components/account/storage-card';
 import { Badge } from '@/components/ui/badge';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
@@ -23,15 +23,15 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { billingApi } from '@/lib/billing-api';
-import { pickCurrency, type LocaleHint } from '@/lib/currency';
-import { moneyFontLinks } from '@/lib/fonts';
-import { authError } from '@/lib/form';
-import { usePageRestored } from '@/lib/page-restore';
-import { useUnlocked } from '@/lib/families';
-import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
-import { familyCurrencies, tierTooSmall } from '@/lib/family-billing';
-import { useBackFromCheckout, useCheckoutOpening } from '@/lib/family-checkout';
+import { billingApi } from '@/lib/billing/billing-api';
+import { pickCurrency, type LocaleHint } from '@/lib/billing/currency';
+import { moneyFontLinks } from '@/lib/platform/fonts';
+import { authError } from '@/lib/platform/form';
+import { usePageRestored } from '@/lib/platform/page-restore';
+import { useUnlocked } from '@/lib/families/families';
+import { familiesQueryOptions, useGroupsEnabled } from '@/lib/families/families-shell';
+import { familyCurrencies, tierTooSmall } from '@/lib/families/family-billing';
+import { useBackFromCheckout, useCheckoutOpening } from '@/lib/families/family-checkout';
 import {
     currenciesOf,
     familyPairs,
@@ -43,7 +43,7 @@ import {
     priceOf,
     tiersOf,
     twoMonthsFree,
-} from '@/lib/plans';
+} from '@/lib/billing/plans';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
@@ -51,15 +51,15 @@ import {
     formatQuota,
     localeHintQueryOptions,
     storageQueryOptions,
-} from '@/lib/queries';
+} from '@/lib/billing/queries';
 import {
     CHECKOUT_SYNC_INTERVAL_MS,
     checkoutNotice,
     checkoutReturn,
     isRateLimited,
     SUPPORT_LABEL,
-} from '@/lib/checkout-return';
-import { cue } from '@/lib/sounds';
+} from '@/lib/billing/checkout-return';
+import { cue } from '@/lib/platform/sounds';
 import type {
     BillingSubscription,
     BillingSummary,
@@ -86,7 +86,7 @@ import {
     InfoIcon,
     TriangleAlertIcon,
 } from 'lucide-react';
-import { formatDay } from '@/lib/drive';
+import { formatDay } from '@/lib/drive/drive';
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 
 export const Route = createFileRoute('/_authenticated/app/billing')({
@@ -267,7 +267,7 @@ function BillingPage() {
     );
 
     // Back from checkout: Polar is re-read until a sync shows the plan live, a
-    // bounded number of times (lib/checkout-return.ts). Nothing says the payment
+    // bounded number of times (lib/billing/checkout-return.ts). Nothing says the payment
     // was received before then.
     const [syncTries, setSyncTries] = useState(0);
     const [synced, setSynced] = useState<BillingSubscription | null>(null);
@@ -391,7 +391,7 @@ function BillingPage() {
     const familyPlans = catalogue.data?.families ?? [];
     // Back from a family's checkout, the family's page is where it goes on; while one is made
     // for its checkout, the tiers stay as they were until the browser leaves
-    // (lib/family-checkout.ts).
+    // (lib/families/family-checkout.ts).
     useBackFromCheckout(user.id);
     const opening = useCheckoutOpening(user.id);
     const offerFamilies =

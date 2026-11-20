@@ -38,7 +38,7 @@ private fun RollbackMarks.highest(other: RollbackMarks) = RollbackMarks(
 )
 
 /*
- * Rollback marks (docs/integrity-design.md, "Rollback marks"; the web's lib/rollback-marks.ts): the newest settings
+ * Rollback marks (docs/integrity-design.md, "Rollback marks"; the web's lib/trust/rollback-marks.ts): the newest settings
  * sequence seen, whether a version 2 settings document was, and the highest own identity key version and identity
  * version opened, per account. The server keeps the settings and the identity and could hand back an older settings
  * document (a pin the person replaced, a ledger with a share they stopped) or none at all, or an identity the account

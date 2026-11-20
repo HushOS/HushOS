@@ -1,16 +1,16 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Spinner } from '@/components/motion';
+import { Spinner } from '@/components/shared/motion';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { useFamilyWork } from '@/lib/family-work';
-import { afterFamilyChange, familyContext } from '@/lib/families';
+import { useFamilyWork } from '@/lib/families/family-work';
+import { afterFamilyChange, familyContext } from '@/lib/families/families';
 import { errorCopy, outcomeCopy } from '@/lib/groups/copy';
 import { replaceKeys } from '@/lib/groups/removal';
 import type { AreaState } from '@/lib/groups/sync';
-import { cue } from '@/lib/sounds';
-import { useFamilyWalks } from '@/lib/spaces';
+import { cue } from '@/lib/platform/sounds';
+import { useFamilyWalks } from '@/lib/families/spaces';
 
 /*
  * Key changes on the family page (1c step 7): how far the walk of each family
@@ -72,7 +72,7 @@ export function KeyChangeNotice({
     );
 }
 
-/* When a stopped walk is tried again, as this tab has it lined up (lib/spaces.ts FamilyWalk). */
+/* When a stopped walk is tried again, as this tab has it lined up (lib/families/spaces.ts FamilyWalk). */
 function retryWords(retry: number | 'online' | null, family: string) {
     if (retry === 'online') return 'HushOS tries again once this device is back online.';
     if (retry === null) return `HushOS tries again the next time it checks ${family}.`;

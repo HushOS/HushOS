@@ -50,7 +50,7 @@ function mdxMeta(): Plugin {
  * them those images are dropped and those fonts substituted. They are served
  * from this origin under the build's assets path, versioned by pdf.js's own so
  * they can be cached for good, and `__PDFJS_ASSETS__` lists them for the
- * viewer and the thumbnailer (lib/pdf-assets.ts). The scripting engine is left
+ * viewer and the thumbnailer (lib/viewers/pdf-assets.ts). The scripting engine is left
  * out: scripts in a PDF never run.
  */
 function pdfjsAssets(): Plugin {

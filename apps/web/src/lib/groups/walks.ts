@@ -320,11 +320,11 @@ export function walkEndings() {
         },
     };
 }
-/* The app's one: lib/spaces.ts says it, the family pages (lib/families.ts) listen. */
+/* The app's one: lib/families/spaces.ts says it, the family pages (lib/families/families.ts) listen. */
 export const familyWalkEndings = walkEndings();
 
 /*
- * This tab's walks of the key changes running in its families' folders (lib/spaces.ts gives it
+ * This tab's walks of the key changes running in its families' folders (lib/families/spaces.ts gives it
  * the folders' clients): one walk per folder at a time, joined rather than started twice; the
  * runs a sync found, walked when due (walkRetries) and only with this device's own reason to
  * (ownReasonToWalk); a failed one walked again on its own timer through a sync of the family;

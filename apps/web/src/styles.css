@@ -210,7 +210,7 @@
     --input: var(--field);
     /*
      * The focus ring: the accent at two thirds, so it is found without shouting. It still stands
-     * 3:1 against the ground, the surface and the dark panel (lib/states.test.ts). High contrast
+     * 3:1 against the ground, the surface and the dark panel (lib/platform/states.test.ts). High contrast
      * draws it whole, below.
      */
     --ring: color-mix(in oklab, var(--primary) 65%, transparent);
@@ -555,7 +555,7 @@
  * The keyboard's highlight in a menu, a select or the command palette: the ring every control
  * draws, inset round the item's fill. The fill alone is about 1.3:1, and a state found only by
  * keyboard needs 3:1 (WCAG 1.4.11); the ring has it against the fill and the menu around it
- * (lib/states.test.ts). Drawn while the keyboard was used last (lib/moved.ts); the pointer has
+ * (lib/platform/states.test.ts). Drawn while the keyboard was used last (lib/platform/moved.ts); the pointer has
  * the fill to follow. In high contrast, on the highlighted item whatever moved it.
  */
 @utility focus-ring {

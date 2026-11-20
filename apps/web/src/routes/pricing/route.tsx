@@ -1,5 +1,5 @@
-import { FitPlanner, SizeDots } from '@/components/fit-planner';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
+import { FitPlanner, SizeDots } from '@/components/site/pricing/fit-planner';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
 import {
     container,
     Faq,
@@ -10,7 +10,7 @@ import {
     SiteSwitch,
     TalkToUs,
     TextLink,
-} from '@/components/site';
+} from '@/components/site/site';
 import { Button, buttonVariants } from '@/components/ui/button';
 import {
     Select,
@@ -19,22 +19,22 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { billingApi } from '@/lib/billing-api';
-import { currencyLabel, pickCurrency } from '@/lib/currency';
-import { authError } from '@/lib/form';
-import { usePageRestored } from '@/lib/page-restore';
-import { faqFor } from '@/lib/pricing-faq';
-import { familiesQueryOptions } from '@/lib/families-shell';
-import { familyStanding } from '@/lib/family-signup';
-import { sessionQueryOptions } from '@/lib/session';
+import { billingApi } from '@/lib/billing/billing-api';
+import { currencyLabel, pickCurrency } from '@/lib/billing/currency';
+import { authError } from '@/lib/platform/form';
+import { usePageRestored } from '@/lib/platform/page-restore';
+import { faqFor } from '@/lib/billing/pricing-faq';
+import { familiesQueryOptions } from '@/lib/families/families-shell';
+import { familyStanding } from '@/lib/families/family-signup';
+import { sessionQueryOptions } from '@/lib/auth/session';
 import {
     billingQueryOptions,
     catalogueQueryOptions,
     formatMoney,
     formatQuota,
     localeHintQueryOptions,
-} from '@/lib/queries';
-import { publicOrigin, salesContactQueryOptions } from '@/lib/social';
+} from '@/lib/billing/queries';
+import { publicOrigin, salesContactQueryOptions } from '@/lib/site/social';
 import type { Catalogue, Plan } from '@hushos/billing/api';
 import { lapsedPlan, livePlan } from '@hushos/billing/protocol';
 import {
@@ -53,9 +53,9 @@ import {
     yearsByMonth,
     type FamilyOffer,
     type Tier,
-} from '@/lib/plans';
+} from '@/lib/billing/plans';
 import { useQuery } from '@tanstack/react-query';
-import { moneyFontLinks } from '@/lib/fonts';
+import { moneyFontLinks } from '@/lib/platform/fonts';
 import { createFileRoute, Link, notFound, useNavigate } from '@tanstack/react-router';
 import { cn } from 'cn';
 import { CheckIcon } from 'lucide-react';

@@ -4,7 +4,7 @@ import { CryptoError } from './errors';
 import { decode, encode } from './keys';
 
 /*
- * A device's rollback marks for one account (the web's lib/rollback-marks.ts):
+ * A device's rollback marks for one account (the web's lib/trust/rollback-marks.ts):
  * the highest settings sequence and identity key version it has seen, and
  * whether it has opened a version 2 settings document and a version 2
  * identity. They say how far an account got on this browser, so they are kept

@@ -19,7 +19,7 @@ export async function loadApi() {
     vi.stubEnv('STORAGE_SECRET_ACCESS_KEY', 'test');
     vi.stubEnv('GROUPS_ENABLED', 'true');
     // Outside Nitro there is no request context for the logger.
-    vi.doMock('@/lib/logging.server', () => {
+    vi.doMock('@/lib/platform/server/logging.server', () => {
         const log = { set() {}, error() {}, info() {}, warn() {} };
         return { useLogger: () => log, useRequestId: () => 'test' };
     });

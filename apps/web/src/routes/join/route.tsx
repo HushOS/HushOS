@@ -1,23 +1,23 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { AuthActions, AuthLayout, AuthNote, authLink } from '@/components/auth-layout';
-import { Spinner } from '@/components/motion';
+import { AuthActions, AuthLayout, AuthNote, authLink } from '@/components/auth/auth-layout';
+import { Spinner } from '@/components/shared/motion';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { familyKeys } from '@/lib/families-shell';
+import { familyKeys } from '@/lib/families/families-shell';
 import {
     billingQueryOptions,
     formatSpace,
     storageQueryOptions,
     useBillingEnabled,
-} from '@/lib/queries';
-import { personalPlanEnding } from '@/lib/plans';
+} from '@/lib/billing/queries';
+import { personalPlanEnding } from '@/lib/billing/plans';
 import { GroupApiError, groupsApi } from '@/lib/groups/api';
 import { errorCopy, familyField, joinInFamilyCopy } from '@/lib/groups/copy';
-import { rememberReturn } from '@/lib/return-to';
-import { forgetSession, sessionQueryOptions } from '@/lib/session';
-import { signOut } from '@/lib/sign-out';
-import { cue } from '@/lib/sounds';
+import { rememberReturn } from '@/lib/auth/return-to';
+import { forgetSession, sessionQueryOptions } from '@/lib/auth/session';
+import { signOut } from '@/lib/auth/sign-out';
+import { cue } from '@/lib/platform/sounds';
 
 export const Route = createFileRoute('/join')({
     headers: () => ({
@@ -40,7 +40,7 @@ export const Route = createFileRoute('/join')({
  * `#`, so it never reaches a server log; this page keeps it in the tab
  * (sessionStorage) and takes it out of the address. Someone signed out signs
  * in or signs up and comes back here, token and all: that return is kept in
- * localStorage for up to an hour (lib/return-to), so it survives the sign-up
+ * localStorage for up to an hour (lib/auth/return-to), so it survives the sign-up
  * email opening in a new tab. That outlives the tab, the same trade-off a
  * shared link's key makes, and it is used once. Signed in, the invitation is
  * opened (route 14) and accepted (route 15), which leads to the join screen.

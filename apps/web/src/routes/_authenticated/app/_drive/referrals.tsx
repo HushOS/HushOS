@@ -4,15 +4,15 @@ import { cn } from 'cn';
 import { CheckIcon, CopyIcon, RotateCcwIcon, Share2Icon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { CopyValue } from '@/components/copy-value';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { CopyValue } from '@/components/shared/copy-value';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatQuota, formatMoney } from '@/lib/format';
-import { describeCommission, describeDiscount, referralsQueryOptions } from '@/lib/growth';
-import { cue } from '@/lib/sounds';
+import { formatQuota, formatMoney } from '@/lib/platform/format';
+import { describeCommission, describeDiscount, referralsQueryOptions } from '@/lib/billing/growth';
+import { cue } from '@/lib/platform/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/referrals')({
     head: () => ({ meta: [{ title: 'Invite friends · HushOS' }] }),

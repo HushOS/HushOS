@@ -4,7 +4,11 @@ import type { CryptoResults, GroupPin } from '@hushos/crypto';
 import { GUARD_NOT_KEPT } from '@hushos/crypto/protocol';
 import { digest } from '@hushos/crypto/signatures';
 import { describe, expect, test } from 'vitest';
-import { createIndexedDbFamilyGuard, GUARD_UNSAVED, type GuardSealer } from '@/lib/contact-guard';
+import {
+    createIndexedDbFamilyGuard,
+    GUARD_UNSAVED,
+    type GuardSealer,
+} from '@/lib/trust/contact-guard';
 import { GroupApiError, type GroupsApi } from './api';
 import { familyGuardOf, type FamilyGuard, type GroupContext } from './context';
 import { joinStatus } from './join';
@@ -758,7 +762,7 @@ describe('joining a family on first use', () => {
 
     /*
      * A join is an act: it reads the settings now, never the copy one read hands the readers that
-     * only look (lib/contacts.ts). Modelled here as a copy that does not open (it throws as an
+     * only look (lib/trust/contacts.ts). Modelled here as a copy that does not open (it throws as an
      * unopened one does) until a fresh read replaces it, and that is stale again once the join
      * holds the family's lock (another device saved while it waited). Fails if any read the join
      * makes before its acceptance takes the copy.

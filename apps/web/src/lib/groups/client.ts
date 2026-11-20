@@ -1,5 +1,9 @@
-import { authClient } from '@/lib/auth-client';
-import { compareAndSetSettings, familyGuardStore, readSettingsForFamilies } from '@/lib/contacts';
+import { authClient } from '@/lib/auth/auth-client';
+import {
+    compareAndSetSettings,
+    familyGuardStore,
+    readSettingsForFamilies,
+} from '@/lib/trust/contacts';
 import { groupsApi } from './api';
 import { familyGuardOf, groupWriteLock, type GroupContext, type RotationSource } from './context';
 import {

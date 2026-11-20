@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { cn } from 'cn';
-import { AccessDemo } from '@/components/access-demo';
-import { Shot } from '@/components/screenshot';
+import { AccessDemo } from '@/components/site/access-demo';
+import { Shot } from '@/components/site/screenshot';
 import {
     container,
     H1,
@@ -12,10 +12,10 @@ import {
     StartFree,
     TalkToUs,
     TextLink,
-} from '@/components/site';
-import { SiteFooter, SiteHeader } from '@/components/site-header';
-import { catalogueQueryOptions } from '@/lib/queries';
-import { pageSocialMeta, publicOrigin, salesContactQueryOptions } from '@/lib/social';
+} from '@/components/site/site';
+import { SiteFooter, SiteHeader } from '@/components/site/site-header';
+import { catalogueQueryOptions } from '@/lib/billing/queries';
+import { pageSocialMeta, publicOrigin, salesContactQueryOptions } from '@/lib/site/social';
 
 /*
  * For teams: what a small team can do with HushOS today, and, separately and

@@ -1,7 +1,7 @@
 import { appEnv } from '@hushos/env/app';
 import { storageEnv } from '@hushos/env/storage';
 import { definePlugin } from 'nitro';
-import { analyticsAllowed } from '../../src/lib/analytics-paths';
+import { analyticsAllowed } from '../../src/lib/site/analytics-paths';
 import {
     buildCsp,
     buildToolWorkerCsp,

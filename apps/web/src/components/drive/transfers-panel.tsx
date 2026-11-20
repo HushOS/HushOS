@@ -15,8 +15,8 @@ import {
 } from 'lucide-react';
 import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { FileMark } from '@/components/drive/file-mark';
-import { openStorageFull } from '@/components/drive/storage-full-dialog';
-import { Ring } from '@/components/drive/viewer-parts';
+import { openStorageFull } from '@/components/drive/dialogs/storage-full-dialog';
+import { Ring } from '@/components/drive/viewers/viewer-parts';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -28,17 +28,27 @@ import {
     AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Button } from '@/components/ui/button';
-import { downloads, useDownloads } from '@/lib/downloads';
-import { FINISHING_KEY_CHANGE, formatBytes, isNetworkFailure, OFFLINE_WORDS } from '@/lib/drive';
-import { transfers, useTransfers } from '@/lib/transfers';
-import { ended, toolRunRows, useToolRunRows, type RunRow as ToolRunRow } from '@/lib/tool-run-rows';
-import { useBatchProgress } from '@/lib/batch-progress';
-import { formatTimeLeft } from '@/lib/progress';
+import { downloads, useDownloads } from '@/lib/drive/transfers/downloads';
+import {
+    FINISHING_KEY_CHANGE,
+    formatBytes,
+    isNetworkFailure,
+    OFFLINE_WORDS,
+} from '@/lib/drive/drive';
+import { transfers, useTransfers } from '@/lib/drive/transfers/transfers';
+import {
+    ended,
+    toolRunRows,
+    useToolRunRows,
+    type RunRow as ToolRunRow,
+} from '@/lib/drive/runs/tool-run-rows';
+import { useBatchProgress } from '@/lib/drive/transfers/batch-progress';
+import { formatTimeLeft } from '@/lib/drive/transfers/progress';
 import {
     transferHeadline,
     waitsForKeyChange,
     WAITING_FOR_CONNECTION as WAITING,
-} from '@/lib/transfer-headline';
+} from '@/lib/drive/transfers/transfer-headline';
 
 /*
  * The one panel that follows the person around the app while transfers run: a

@@ -6,10 +6,10 @@ import { cn } from 'cn';
 import { CheckIcon, FileUpIcon, FolderPlusIcon } from 'lucide-react';
 import { lazy, Suspense, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { MIXED_FOLDERS } from '@/lib/images-pdf/limits';
-import { toolRunRows } from '@/lib/tool-run-rows';
-import { AccessCell, useAccessIndex } from '@/components/drive/access';
+import { toolRunRows } from '@/lib/drive/runs/tool-run-rows';
+import { AccessCell, useAccessIndex } from '@/components/drive/sharing/access';
 import { AddMenu } from '@/components/drive/add-menu';
-import { CreateFolderDialog } from '@/components/drive/create-folder-dialog';
+import { CreateFolderDialog } from '@/components/drive/dialogs/create-folder-dialog';
 import { DetailsPanel } from '@/components/drive/details-panel';
 import { useDrive } from '@/components/drive/drive-shell';
 import {
@@ -25,8 +25,8 @@ import {
     useListSelection,
 } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
-import { InfoDialog } from '@/components/drive/info-dialog';
-import { MoveDialog } from '@/components/drive/move-dialog';
+import { InfoDialog } from '@/components/drive/dialogs/info-dialog';
+import { MoveDialog } from '@/components/drive/dialogs/move-dialog';
 import {
     NodeContextMenu,
     nodeEntries,
@@ -36,21 +36,21 @@ import {
     useWideScreen,
     type NodeActions,
 } from '@/components/drive/node-actions';
-import { Preview } from '@/components/drive/preview';
-import { RenameDialog } from '@/components/drive/rename-dialog';
-import { ShareDialog } from '@/components/drive/share-dialog';
+import { Preview } from '@/components/drive/viewers/preview';
+import { RenameDialog } from '@/components/drive/dialogs/rename-dialog';
+import { ShareDialog } from '@/components/drive/sharing/share-dialog';
 import { isTyping } from '@/components/drive/shortcuts';
-import { Swatch } from '@/components/drive/tag-colour';
-import { TagDialog } from '@/components/drive/tag-dialog';
-import { TagStamps } from '@/components/drive/tag-stamp';
+import { Swatch } from '@/components/drive/tags/tag-colour';
+import { TagDialog } from '@/components/drive/tags/tag-dialog';
+import { TagStamps } from '@/components/drive/tags/tag-stamp';
 import { UploadInputs, useDropZone, type UploadPicker } from '@/components/drive/upload-controls';
-import { VersionsDialog } from '@/components/drive/versions-dialog';
-import { PageHeader } from '@/components/page-header';
+import { VersionsDialog } from '@/components/drive/dialogs/versions-dialog';
+import { PageHeader } from '@/components/shared/page-header';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Button } from '@/components/ui/button';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import { toast } from '@/components/ui/toast';
-import { downloadNodes } from '@/lib/downloads';
+import { downloadNodes } from '@/lib/drive/transfers/downloads';
 import {
     driveClient,
     driveError,
@@ -61,10 +61,10 @@ import {
     restoreNodes,
     trashNodes,
     useCatalogueState,
-} from '@/lib/drive';
-import { usePaletteOpen } from '@/lib/palette';
-import { cue } from '@/lib/sounds';
-import { tagsQueryOptions } from '@/lib/tags';
+} from '@/lib/drive/drive';
+import { usePaletteOpen } from '@/lib/drive/palette';
+import { cue } from '@/lib/platform/sounds';
+import { tagsQueryOptions } from '@/lib/drive/tags';
 
 /*
  * Home: where the app opens. What changed lately across every folder, from the
@@ -83,7 +83,9 @@ function folderLink(rootId: string, folderId: string) {
 
 // One PDF's dialog arrives when it is first asked for, not with Home.
 const ImagesPdfDialog = lazy(() =>
-    import('@/components/drive/images-pdf-dialog').then((m) => ({ default: m.ImagesPdfDialog })),
+    import('@/components/drive/dialogs/images-pdf-dialog').then((m) => ({
+        default: m.ImagesPdfDialog,
+    })),
 );
 
 export function HomeView() {

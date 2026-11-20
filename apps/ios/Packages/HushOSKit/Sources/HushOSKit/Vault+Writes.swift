@@ -247,7 +247,7 @@ extension Vault {
      * the server deletes the source in the transaction that completes the upload, or fails it
      * `stale` and keeps it. Never both, never neither, and nothing goes to the Trash. A folder is
      * made at the destination, its files moved one by one, and the source folder goes to the Trash
-     * once it holds only folders (the web's lib/move-across.ts). Into or out of someone's share
+     * once it holds only folders (the web's lib/drive/move-across.ts). Into or out of someone's share
      * nothing moves: the server refuses `moveOf` there. Older versions stay behind and are deleted
      * with the source (docs/families-shared-pool.md 3.8). `item` is nil for a file that landed but
      * whose row doesn't open here.

@@ -5,9 +5,9 @@ import { preventUnhandled } from '@atlaskit/pragmatic-drag-and-drop/prevent-unha
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useImperativeHandle, useRef, useState, type Ref, type RefObject } from 'react';
 import { toast } from '@/components/ui/toast';
-import { collectDroppedFiles, filesFromInput } from '@/lib/dropped-files';
-import { driveError } from '@/lib/drive';
-import { enqueueDropped } from '@/lib/uploads';
+import { collectDroppedFiles, filesFromInput } from '@/lib/drive/transfers/dropped-files';
+import { driveError } from '@/lib/drive/drive';
+import { enqueueDropped } from '@/lib/drive/transfers/uploads';
 
 export type UploadPicker = { pickFiles: () => void; pickFolder: () => void };
 

@@ -1,7 +1,7 @@
 //! The successor's consent for this account's own earlier successions that
 //! landed without it (flag F8; docs/groups-server.md 5, the backfill): the twin
 //! of `linksNeedingConsent` (`packages/crypto/src/consent-due.ts`, which the web's
-//! `apps/web/src/lib/consent-backfill.ts` calls) and of the worker's
+//! `apps/web/src/lib/trust/consent-backfill.ts` calls) and of the worker's
 //! `identityConsent` (`packages/crypto/src/session-groups.ts`). Group verdicts
 //! ask consent of the links a member's entry walks, so a link uploaded before
 //! the apps sent consent leaves this person's own records unchecked in their

@@ -10,12 +10,12 @@ import {
     UserXIcon,
 } from 'lucide-react';
 import { useState } from 'react';
-import { ContactFlowDialog, type FlowStart } from '@/components/drive/contact-flow';
+import { ContactFlowDialog, type FlowStart } from '@/components/drive/sharing/contact-flow';
 import { useDrive } from '@/components/drive/drive-shell';
 import { EmptyState, RowMenuButton, SkeletonRows } from '@/components/drive/file-list';
-import { OwnWordsDialog } from '@/components/own-words-dialog';
-import { PageHeader } from '@/components/page-header';
-import { PersonAvatar } from '@/components/person-avatar';
+import { OwnWordsDialog } from '@/components/account/own-words-dialog';
+import { PageHeader } from '@/components/shared/page-header';
+import { PersonAvatar } from '@/components/shared/person-avatar';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
     AlertDialog,
@@ -45,10 +45,10 @@ import {
     useAccountChanges,
     type AccountChange,
     type Pin as ContactPin,
-} from '@/lib/contacts';
-import { afterTrustChanged } from '@/lib/integrity';
-import { vouchLine } from '@/lib/family-pin';
-import { cue } from '@/lib/sounds';
+} from '@/lib/trust/contacts';
+import { afterTrustChanged } from '@/lib/trust/integrity';
+import { vouchLine } from '@/lib/families/family-pin';
+import { cue } from '@/lib/platform/sounds';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/contacts')({
     head: () => ({ meta: [{ title: 'Contacts · HushOS' }] }),

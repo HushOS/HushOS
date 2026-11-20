@@ -406,7 +406,7 @@ object StepWords {
     const val RESET_UNCERTAIN = "We couldn’t confirm that your password was changed. If it was, these 24 words are your recovery phrase now. If it wasn’t, your old phrase still is. Keep both until you have signed in."
     /*
      * The panel that shows new words to someone the change did not sign in again here, in the web's
-     * words (apps/web/src/components/new-phrase.tsx): its title, what it says after each change, the
+     * words (apps/web/src/components/account/new-phrase.tsx): its title, what it says after each change, the
      * line under the words, and its way on.
      */
     const val NEW_PHRASE_TITLE = "Save your new recovery phrase"

@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
-import { cardMeta, publicOrigin } from '@/lib/social';
-import { ensureSessionUser } from '@/lib/session';
+import { cardMeta, publicOrigin } from '@/lib/site/social';
+import { ensureSessionUser } from '@/lib/auth/session';
 
 export const Route = createFileRoute('/register')({
     // A plan from the pricing page, and a referral or affiliate code from an invite or a creator's page.

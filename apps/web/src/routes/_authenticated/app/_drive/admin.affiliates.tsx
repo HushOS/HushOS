@@ -4,9 +4,9 @@ import { cn } from 'cn';
 import { PlusIcon } from 'lucide-react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
-import { CopyValue } from '@/components/copy-value';
-import { Spinner } from '@/components/motion';
-import { OperatorHeader, OperatorTable, td, th } from '@/components/operator';
+import { CopyValue } from '@/components/shared/copy-value';
+import { Spinner } from '@/components/shared/motion';
+import { OperatorHeader, OperatorTable, td, th } from '@/components/app/operator';
 import {
     AlertDialog,
     AlertDialogAction,
@@ -43,7 +43,7 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { adminAccountsQueryOptions } from '@/lib/admin';
+import { adminAccountsQueryOptions } from '@/lib/admin/admin';
 import {
     type AffiliateDraft,
     type DraftField,
@@ -51,11 +51,11 @@ import {
     editPatch,
     emptyDraft,
     readDraft,
-} from '@/lib/affiliate-form';
-import { formatWhen } from '@/lib/drive';
-import { affiliatesQueryOptions, describeCommission, describeDiscount } from '@/lib/growth';
-import { growthApi } from '@/lib/growth-api';
-import { useDebouncedValue } from '@/lib/use-debounced-value';
+} from '@/lib/admin/affiliate-form';
+import { formatWhen } from '@/lib/drive/drive';
+import { affiliatesQueryOptions, describeCommission, describeDiscount } from '@/lib/billing/growth';
+import { growthApi } from '@/lib/billing/growth-api';
+import { useDebouncedValue } from '@/lib/platform/use-debounced-value';
 import { money } from '@/routes/_authenticated/app/_drive/referrals';
 
 /*

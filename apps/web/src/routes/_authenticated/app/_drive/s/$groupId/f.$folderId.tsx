@@ -6,8 +6,8 @@ import { EmptyState, SkeletonRows } from '@/components/drive/file-list';
 import { FamilyAreaProvider, type FamilyArea } from '@/components/drive/family-area';
 import { FolderView } from '@/components/drive/folder-view';
 import { Button } from '@/components/ui/button';
-import { driveError, driveKeys } from '@/lib/drive';
-import { areaOf, membersById, openArea, useAreaFeed, useFamilySpace } from '@/lib/spaces';
+import { driveError, driveKeys } from '@/lib/drive/drive';
+import { areaOf, membersById, openArea, useAreaFeed, useFamilySpace } from '@/lib/families/spaces';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/s/$groupId/f/$folderId')({
     head: () => ({ meta: [{ title: 'Family folder · HushOS' }] }),

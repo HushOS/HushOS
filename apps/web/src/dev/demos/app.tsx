@@ -4,8 +4,8 @@ import { cn } from 'cn';
 import { MoreHorizontalIcon, UploadIcon } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 
-import { AccessCell, type Access } from '@/components/access-cell';
-import { AccessMarker } from '@/components/drive/access';
+import { AccessCell, type Access } from '@/components/shared/access-cell';
+import { AccessMarker } from '@/components/drive/sharing/access';
 import { FileMark } from '@/components/drive/file-mark';
 import {
     EmptyState,
@@ -15,15 +15,15 @@ import {
     SkeletonRows,
 } from '@/components/drive/file-list';
 import { FamilyPlan, FamilyStorage } from '@/components/families/family-billing';
-import { PageHeader } from '@/components/page-header';
-import { PersonAvatar } from '@/components/person-avatar';
-import { PortalLink } from '@/components/portal-link';
-import { Segmented, Setting, SettingsGroup } from '@/components/settings';
-import { StorageMeter } from '@/components/storage-card';
+import { PageHeader } from '@/components/shared/page-header';
+import { PersonAvatar } from '@/components/shared/person-avatar';
+import { PortalLink } from '@/components/account/portal-link';
+import { Segmented, Setting, SettingsGroup } from '@/components/account/settings';
+import { StorageMeter } from '@/components/account/storage-card';
 import { Button } from '@/components/ui/button';
 import { Demo, Row, Sample, SheetFrame, States } from '@/dev/demo';
-import { familyBillingQueryOptions, type FamilyBilling } from '@/lib/family-billing';
-import { familyQueryOptions, type FamilyDetail } from '@/lib/families';
+import { familyBillingQueryOptions, type FamilyBilling } from '@/lib/families/family-billing';
+import { familyQueryOptions, type FamilyDetail } from '@/lib/families/families';
 
 const GB = 1024 ** 3;
 

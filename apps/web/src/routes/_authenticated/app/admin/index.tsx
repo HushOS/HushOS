@@ -1,12 +1,12 @@
 import { cn } from 'cn';
 import { ArrowRightIcon } from 'lucide-react';
-import { Spinner } from '@/components/motion';
-import { OperatorPage, OperatorTable, td, th } from '@/components/operator';
+import { Spinner } from '@/components/shared/motion';
+import { OperatorPage, OperatorTable, td, th } from '@/components/app/operator';
 import { buttonVariants } from '@/components/ui/button';
-import { adminOverviewQueryOptions } from '@/lib/admin';
-import { formatBytes, formatWhen } from '@/lib/drive';
-import { formatMoney } from '@/lib/format';
-import { useBillingEnabled } from '@/lib/queries';
+import { adminOverviewQueryOptions } from '@/lib/admin/admin';
+import { formatBytes, formatWhen } from '@/lib/drive/drive';
+import { formatMoney } from '@/lib/platform/format';
+import { useBillingEnabled } from '@/lib/billing/queries';
 import { useQuery } from '@tanstack/react-query';
 import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 

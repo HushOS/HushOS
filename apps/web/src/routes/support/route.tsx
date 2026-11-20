@@ -3,9 +3,9 @@ import { useQuery, queryOptions } from '@tanstack/react-query';
 import { createFileRoute } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import type { ReactNode } from 'react';
-import { PageLink } from '@/components/page-link';
-import { ReadingPage, type Heading } from '@/components/legal-layout';
-import { pageSocialMeta, publicOrigin } from '@/lib/social';
+import { PageLink } from '@/components/site/page-link';
+import { ReadingPage, type Heading } from '@/components/site/legal-layout';
+import { pageSocialMeta, publicOrigin } from '@/lib/site/social';
 
 /*
  * Where to get help, and who runs this instance: the page an app store asks

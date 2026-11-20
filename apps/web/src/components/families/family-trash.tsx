@@ -6,8 +6,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { EmptyState, SkeletonRows, useCoarsePointer } from '@/components/drive/file-list';
 import { FileMark } from '@/components/drive/file-mark';
 import { TRASH_COLUMN } from '@/components/drive/trash-view';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
 import {
     AlertDialog,
     AlertDialogCancel,
@@ -26,7 +26,7 @@ import {
     formatWhen,
     invalidateFolders,
     nodeSize,
-} from '@/lib/drive';
+} from '@/lib/drive/drive';
 import { useIsMobile } from '@/hooks/use-mobile';
 import {
     emptyConfirmText,
@@ -34,9 +34,9 @@ import {
     emptyResult,
     itemsCovered,
     staysLine,
-} from '@/lib/family-trash';
-import { openArea, useFamilySpace } from '@/lib/spaces';
-import { cue } from '@/lib/sounds';
+} from '@/lib/families/family-trash';
+import { openArea, useFamilySpace } from '@/lib/families/spaces';
+import { cue } from '@/lib/platform/sounds';
 
 type Row = TrashItem & { workspaceId: string; folder: string };
 
@@ -172,7 +172,7 @@ export function FamilyTrashView({ tabs }: { tabs: ReactNode }) {
         }
     }
 
-    // What Empty Trash deletes and what stays (lib/family-trash.ts): only items in folders
+    // What Empty Trash deletes and what stays (lib/families/family-trash.ts): only items in folders
     // this device may write, an item inside a trashed folder going with that folder.
     // Family folders this device couldn't open aren't listed (familyTrashQueryOptions skips
     // them), so their Trash is never counted: the page says so and never claims it is empty.

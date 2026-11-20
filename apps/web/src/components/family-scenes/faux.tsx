@@ -14,8 +14,8 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 import type { CSSProperties, ReactNode } from 'react';
-import { Wordmark } from '@/components/brand';
-import { PersonAvatar } from '@/components/person-avatar';
+import { Wordmark } from '@/components/marks/brand';
+import { PersonAvatar } from '@/components/shared/person-avatar';
 import { buttonVariants } from '@/components/ui/button';
 
 /*

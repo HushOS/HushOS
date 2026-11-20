@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * What the families screens say when something fails, as the web's errorCopy and
- * keyChangeWords word it (apps/web/src/lib/groups/copy.ts, lib/key-change-words.ts): a coded
+ * keyChangeWords word it (apps/web/src/lib/groups/copy.ts, lib/families/key-change-words.ts): a coded
  * refusal in the person's words, no answer as no answer, and the core's own sentence (never its
  * type's description) with only the key-change refusal reworded.
  */

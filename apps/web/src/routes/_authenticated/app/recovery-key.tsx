@@ -2,24 +2,24 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { CopyIcon, DownloadIcon, PrinterIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { NewKeyDialog } from '@/components/account-dialogs';
-import { Spinner } from '@/components/motion';
-import { PageHeader } from '@/components/page-header';
-import { SettingsPage } from '@/components/settings';
+import { NewKeyDialog } from '@/components/account/account-dialogs';
+import { Spinner } from '@/components/shared/motion';
+import { PageHeader } from '@/components/shared/page-header';
+import { SettingsPage } from '@/components/account/settings';
 import {
     downloadKit,
     KitSheet,
     PhraseGrid,
     PhraseQr,
     useRecoveryBackup,
-} from '@/components/recovery-phrase';
+} from '@/components/account/recovery-phrase';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { UnlockDevice } from '@/components/unlock-device';
-import { authClient } from '@/lib/auth-client';
-import { authError } from '@/lib/form';
-import { cue } from '@/lib/sounds';
-import { copySecret } from '@/lib/clipboard';
+import { UnlockDevice } from '@/components/auth/unlock-device';
+import { authClient } from '@/lib/auth/auth-client';
+import { authError } from '@/lib/platform/form';
+import { cue } from '@/lib/platform/sounds';
+import { copySecret } from '@/lib/platform/clipboard';
 
 export const Route = createFileRoute('/_authenticated/app/recovery-key')({
     head: () => ({

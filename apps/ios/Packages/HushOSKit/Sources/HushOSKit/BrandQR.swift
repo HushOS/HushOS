@@ -5,7 +5,7 @@ import Foundation
 
 /*
  * A QR code with the HushOS mark in the middle, drawn as the web draws it (`QrCode`,
- * apps/web/src/components/qr-code.tsx), so a code from any HushOS app is recognisable as one.
+ * apps/web/src/components/marks/qr-code.tsx), so a code from any HushOS app is recognisable as one.
  *
  * Error correction is H, so the modules under the mark (about a quarter of the side, exactly the
  * ones it covers) and round dots cost nothing in reading. The three finder squares and the

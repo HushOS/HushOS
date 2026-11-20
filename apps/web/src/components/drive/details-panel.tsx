@@ -3,21 +3,21 @@ import { integrityIssues, type IntegrityIssue } from '@hushos/drive/trust';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDownIcon, DownloadIcon, PackageIcon, XIcon } from 'lucide-react';
 import { Fragment, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { CopyValue } from '@/components/copy-value';
-import { AccessCell, useAccessIndex } from '@/components/drive/access';
+import { CopyValue } from '@/components/shared/copy-value';
+import { AccessCell, useAccessIndex } from '@/components/drive/sharing/access';
 import {
     SavedFromLinkLine,
     SeenBy,
     UnverifiedMark,
     useSeenBy,
     useSignerNames,
-} from '@/components/drive/unverified-mark';
+} from '@/components/drive/sharing/unverified-mark';
 import { useFamilyArea } from '@/components/drive/family-area';
 import { FileMark } from '@/components/drive/file-mark';
-import { TagStamps } from '@/components/drive/tag-stamp';
+import { TagStamps } from '@/components/drive/tags/tag-stamp';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
-import { useAuthView } from '@/lib/auth-view';
+import { useAuthView } from '@/lib/auth/auth-view';
 import {
     changedByLabel,
     changedByWords,
@@ -26,14 +26,20 @@ import {
     rekeyTechnical,
     verifiedByLine,
     vouchedByLine,
-} from '@/lib/integrity-lines';
-import { clientFor, driveError, formatBytes, formatWhen, type driveClient } from '@/lib/drive';
-import { extensionOf } from '@/lib/previews';
-import { saveSealedCopy } from '@/lib/sealed-copy';
-import { useSharpImage } from '@/lib/sharp-image';
-import { cue } from '@/lib/sounds';
-import { tagsQueryOptions } from '@/lib/tags';
-import { useThumbnail } from '@/lib/thumbnails';
+} from '@/lib/trust/integrity-lines';
+import {
+    clientFor,
+    driveError,
+    formatBytes,
+    formatWhen,
+    type driveClient,
+} from '@/lib/drive/drive';
+import { extensionOf } from '@/lib/viewers/previews';
+import { saveSealedCopy } from '@/lib/drive/sealed-copy';
+import { useSharpImage } from '@/lib/viewers/sharp-image';
+import { cue } from '@/lib/platform/sounds';
+import { tagsQueryOptions } from '@/lib/drive/tags';
+import { useThumbnail } from '@/lib/viewers/thumbnails';
 
 /*
  * Everything the app knows about one item, and on request the keys that

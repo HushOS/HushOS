@@ -4,16 +4,16 @@ import { revalidateLogic, useForm } from '@tanstack/react-form';
 import { useState } from 'react';
 import { z } from 'zod';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '@hushos/auth/protocol';
-import { AuthInput, StrengthHint } from '@/components/auth-input';
-import { AuthActions, AuthFields, AuthLayout, AuthNote } from '@/components/auth-layout';
-import { VerifiedEmailStep } from '@/components/verified-email-step';
+import { AuthInput, StrengthHint } from '@/components/auth/auth-input';
+import { AuthActions, AuthFields, AuthLayout, AuthNote } from '@/components/auth/auth-layout';
+import { VerifiedEmailStep } from '@/components/auth/verified-email-step';
 import { Button, buttonVariants } from '@/components/ui/button';
-import { getCurrentEnrollment } from '@/lib/auth';
-import { authClient } from '@/lib/auth-client';
-import { authError, newPasswordValue } from '@/lib/form';
-import { forgetSession } from '@/lib/session';
-import { cue } from '@/lib/sounds';
-import { signOut as signOutOfBrowser } from '@/lib/sign-out';
+import { getCurrentEnrollment } from '@/lib/auth/auth';
+import { authClient } from '@/lib/auth/auth-client';
+import { authError, newPasswordValue } from '@/lib/platform/form';
+import { forgetSession } from '@/lib/auth/session';
+import { cue } from '@/lib/platform/sounds';
+import { signOut as signOutOfBrowser } from '@/lib/auth/sign-out';
 
 const signupFields = z
     .object({

@@ -3,7 +3,7 @@ import HushOSCore
 
 /*
  * The recovery kit as a file, word for word what the web writes
- * (apps/web/src/lib/recovery-kit.ts kitText), so a kit saved on the phone opens in
+ * (apps/web/src/lib/account/recovery-kit.ts kitText), so a kit saved on the phone opens in
  * the web's recovery: the account, the phrase numbered four to a line, the same
  * phrase on one line (what the web reads back), and the wrapped key.
  */
@@ -92,7 +92,7 @@ extension Auth {
 }
 
 /*
- * The check before a phrase counts as saved, as the web asks it (apps/web/src/lib/recovery-kit.ts
+ * The check before a phrase counts as saved, as the web asks it (apps/web/src/lib/account/recovery-kit.ts
  * checkQuestions): three different positions, each offered with two other words of the same
  * phrase, shuffled so the answer isn't always first.
  */

@@ -2,7 +2,7 @@
 //!
 //! A push from the relay carries only an event id and a tag. The phone checks the tag is its own
 //! handle's, fetches the event over its own session (`GET /api/notifications/:id`) and writes the
-//! notice itself, in the web's words (`apps/web/src/lib/web-push.ts`, `noticeFor`). What the apps
+//! notice itself, in the web's words (`apps/web/src/lib/account/web-push.ts`, `noticeFor`). What the apps
 //! share is here: the tag, reading the event, the words, and which relay a phone may hand its push
 //! token to. The fetching and the system's notification calls stay in each app.
 
@@ -699,7 +699,7 @@ mod tests {
         }
     }
 
-    // The words are the web's (apps/web/src/lib/web-push.ts) and say what each email's subject
+    // The words are the web's (apps/web/src/lib/account/web-push.ts) and say what each email's subject
     // says. A stranger's words (a "checked sender" that has no place here) never reach them.
     #[test]
     fn two_step_notices_say_what_their_email_says_and_open_the_account() {

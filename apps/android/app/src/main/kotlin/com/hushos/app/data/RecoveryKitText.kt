@@ -1,7 +1,7 @@
 package com.hushos.app.data
 
 /*
- * Reading a recovery kit back, as the web's apps/web/src/lib/recovery-kit.ts does: a kit
+ * Reading a recovery kit back, as the web's apps/web/src/lib/account/recovery-kit.ts does: a kit
  * file this app or the web saved (the phrase is on the line after "The same phrase on one
  * line"), or a scanned code holding the kit's text or just the 24 words. Anything that
  * isn't one is refused before a word of it is used.

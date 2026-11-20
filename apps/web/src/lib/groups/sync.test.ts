@@ -1,7 +1,7 @@
 import type { CryptoResults } from '@hushos/crypto';
 import { OLDER_CHAIN, SPLIT_CHAIN } from '@hushos/crypto/protocol';
 import { describe, expect, test } from 'vitest';
-import { GUARD_UNREADABLE, GUARD_UNSAVED } from '@/lib/contact-guard';
+import { GUARD_UNREADABLE, GUARD_UNSAVED } from '@/lib/trust/contact-guard';
 import { areaWrite, changeRefusal, syncGroup, wipeGroup, writeRefusal } from './sync';
 import { AREA, GROUP, USER, harness, pinAt, refusal } from './test-harness';
 

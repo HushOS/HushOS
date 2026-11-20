@@ -19,7 +19,7 @@ import java.util.Locale
 import java.util.TimeZone
 
 /*
- * Drafts on the phone (docs/editing-design.md 3, "Draft"; Editing 1c; the web's lib/drafts.ts, iOS's Drafts.swift): the text
+ * Drafts on the phone (docs/editing-design.md 3, "Draft"; Editing 1c; the web's lib/editor/drafts.ts, iOS's Drafts.swift): the text
  * editor's unsaved text, sealed by the core under a key derived from the account key for this account and file (drafts.rs:
  * HKDF of the root, info ["hushos/drafts/v1",user,workspace,node]; XChaCha20-Poly1305 with the base version, the session's
  * save format and the time bound in), one record per file in `noBackupFilesDir/drafts`, found by a slot only the unlocked

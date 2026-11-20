@@ -7,8 +7,12 @@ import { SkeletonRows } from '@/components/drive/file-list';
 import { TrashView } from '@/components/drive/trash-view';
 import { FamilySpaceScope } from '@/components/families/family-space';
 import { FamilyTrashView, PrefetchFamilyTrash } from '@/components/families/family-trash';
-import { trashQueryOptions } from '@/lib/drive';
-import { activeFamily, familiesQueryOptions, useGroupsEnabled } from '@/lib/families-shell';
+import { trashQueryOptions } from '@/lib/drive/drive';
+import {
+    activeFamily,
+    familiesQueryOptions,
+    useGroupsEnabled,
+} from '@/lib/families/families-shell';
 
 export const Route = createFileRoute('/_authenticated/app/_drive/trash')({
     validateSearch: (search: Record<string, unknown>): { view?: 'family' } =>

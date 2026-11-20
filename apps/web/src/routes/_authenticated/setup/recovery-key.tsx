@@ -1,6 +1,6 @@
 import { createFileRoute, type SearchSchemaInput } from '@tanstack/react-router';
-import { RecoveryPhrase } from '@/components/recovery-phrase';
-import { oneOf } from '@/lib/search';
+import { RecoveryPhrase } from '@/components/account/recovery-phrase';
+import { oneOf } from '@/lib/platform/search';
 
 const reason = oneOf(['master-key', 'recovery-key']);
 

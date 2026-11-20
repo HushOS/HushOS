@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router';
-import { LegalLayout } from '@/components/legal-layout';
+import { LegalLayout } from '@/components/site/legal-layout';
 import Privacy, { headings } from '@/content/legal/privacy.mdx';
 import { frontmatter } from '@/content/legal/privacy.mdx?meta';
-import { pageSocialMeta, publicOrigin, readOperator } from '@/lib/social';
+import { pageSocialMeta, publicOrigin, readOperator } from '@/lib/site/social';
 
 export const Route = createFileRoute('/privacy')({
     loader: () => ({ origin: publicOrigin(), operator: readOperator() }),

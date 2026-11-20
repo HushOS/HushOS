@@ -6,33 +6,33 @@ import {
     DeleteAccountDialog,
     NewKeyDialog,
     ReplaceSharingKeysDialog,
-} from '@/components/account-dialogs';
-import { AccountDevices } from '@/components/account-devices';
-import { AccountFamily } from '@/components/account-family';
-import { AccountNotifications } from '@/components/account-notifications';
-import { AccountTwoStep } from '@/components/account-two-step';
-import { CopyValue } from '@/components/copy-value';
-import { openDeviceDialog } from '@/components/device-control';
-import { PageHeader } from '@/components/page-header';
+} from '@/components/account/account-dialogs';
+import { AccountDevices } from '@/components/account/account-devices';
+import { AccountFamily } from '@/components/account/account-family';
+import { AccountNotifications } from '@/components/account/account-notifications';
+import { AccountTwoStep } from '@/components/account/account-two-step';
+import { CopyValue } from '@/components/shared/copy-value';
+import { openDeviceDialog } from '@/components/account/device-control';
+import { PageHeader } from '@/components/shared/page-header';
 import {
     Segmented,
     Setting,
     SettingsDisclosure,
     SettingsGroup,
     SettingsPage,
-} from '@/components/settings';
-import { useTheme } from '@/components/theme-provider';
+} from '@/components/account/settings';
+import { useTheme } from '@/components/theme/theme-provider';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/components/ui/toast';
-import { authClient } from '@/lib/auth-client';
-import { useAuthView } from '@/lib/auth-view';
-import { authError } from '@/lib/form';
-import { useBillingEnabled } from '@/lib/queries';
-import { forgetSession } from '@/lib/session';
-import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/sounds';
-import type { Theme } from '@/lib/theme';
+import { authClient } from '@/lib/auth/auth-client';
+import { useAuthView } from '@/lib/auth/auth-view';
+import { authError } from '@/lib/platform/form';
+import { useBillingEnabled } from '@/lib/billing/queries';
+import { forgetSession } from '@/lib/auth/session';
+import { cue, setSoundsEnabled, useSoundsEnabled } from '@/lib/platform/sounds';
+import type { Theme } from '@/lib/platform/theme';
 
 export const Route = createFileRoute('/_authenticated/app/account')({
     head: () => ({ meta: [{ title: 'Account · HushOS' }] }),
