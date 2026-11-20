@@ -123,6 +123,7 @@ import {
 import { client, ready } from '@serenity-kit/opaque';
 import { encryptKey, decryptKey } from './aead';
 import { deriveStashKey, openStash, sealStash } from './stash';
+import { type Draft, type DraftPlace, draftSlot, openDraft, sealDraft } from './drafts';
 import {
     openRollbackMarks,
     RollbackMarksError,
@@ -666,6 +667,15 @@ type BaseRequests = {
     driveStashSeal: { userId: string; name: string; bytes: Uint8Array };
     driveStashOpen: { userId: string; name: string; stored: Blob };
     /*
+     * An editor's unsaved text (drafts.ts), sealed and opened here under a key derived from the
+     * account root for this account and file, so neither the root nor the key reaches the page.
+     * The slot names where the page keeps the record. Each needs this account unlocked; open
+     * answers null for a record that does not open here, which the page drops.
+     */
+    driveDraftSlot: DraftPlace;
+    driveDraftSeal: DraftPlace & { draft: Draft };
+    driveDraftOpen: DraftPlace & { record: string };
+    /*
      * The contact guard (contact-guard.ts), sealed and opened here under a key
      * derived from the settings key, so a locked browser holds only
      * ciphertext. Each needs the settings key open for `userId`. Ids find a
@@ -919,6 +929,9 @@ type BaseResults = {
     };
     driveStashSeal: { parts: Uint8Array<ArrayBuffer>[] };
     driveStashOpen: { parts: Uint8Array<ArrayBuffer>[] };
+    driveDraftSlot: { slot: string };
+    driveDraftSeal: { slot: string; record: string };
+    driveDraftOpen: { draft: Draft | null };
     contactGuardIds: { ids: string[] };
     contactGuardSeal: { rows: { id: string; envelope: string }[] };
     contactGuardOpen: { rows: ({ contactId: string; value: unknown } | null)[] };
@@ -3308,6 +3321,26 @@ export function createCryptoSession() {
                 const { userId, name, stored } = message.input;
                 return { parts: await openStash(await ownStashKey(userId), name, stored) };
             }
+            case 'driveDraftSlot':
+            case 'driveDraftSeal':
+            case 'driveDraftOpen': {
+                const { userId, workspaceId, nodeId } = message.input;
+                if (!accountKey || unlockedUserId !== userId)
+                    throw new CryptoError('Unlock your account first.');
+                const where = { userId, workspaceId, nodeId };
+                const slot = await draftSlot(accountKey, where);
+                if (message.operation === 'driveDraftSlot') return { slot };
+                if (message.operation === 'driveDraftSeal')
+                    return {
+                        slot,
+                        record: await sealDraft(accountKey, where, message.input.draft),
+                    };
+                try {
+                    return { draft: await openDraft(accountKey, where, message.input.record) };
+                } catch {
+                    return { draft: null };
+                }
+            }
             case 'contactGuardIds':
             case 'contactGuardSeal':
             case 'contactGuardOpen': {
@@ -3386,6 +3419,20 @@ export function createCryptoSession() {
         }
     }
 
+    /*
+     * A lock has begun (the page's transport says so before it ends this worker): every
+     * operation waiting on the queue is refused when its turn comes, and uploads under way stop
+     * now (their requests aborted), except an editor's last draft seal, asked for just before
+     * the lock, which the lock lets finish. The worker is ended soon after; nothing here
+     * outlives that.
+     */
+    let locking = false;
+    function lockBegins() {
+        locking = true;
+        for (const upload of uploads.values())
+            for (const request of upload.requests.values()) request.abort();
+    }
+
     function handle(
         message: Message,
         hooks: SessionHooks = {},
@@ -3398,6 +3445,8 @@ export function createCryptoSession() {
             queue = queue.then(async () => {
                 try {
                     checkGeneration(expected);
+                    if (locking && message.operation !== 'driveDraftSeal')
+                        throw new CryptoError('Your account was locked. Please try again.');
                     const result = await execute(message, expected, hooks);
                     checkGeneration(expected);
                     resolve(result);
@@ -3411,5 +3460,5 @@ export function createCryptoSession() {
         });
     }
 
-    return { handle, reset };
+    return { handle, reset, lockBegins };
 }

@@ -121,6 +121,7 @@ describe('signing out of this browser', () => {
             'hushos-drive-mirror',
             'hushos-groups',
             'hushos-contact-guard',
+            'hushos-drafts',
             `hushos-drive-mirror:${WORKSPACE}`,
             'someone-elses-database',
         ])
@@ -317,6 +318,8 @@ const API: Record<string, RegExp> = {
 const NOT_STORAGE = new Set([
     'hushos-auth',
     'hushos-signed-out',
+    // The pre-lock ask to every tab's editor to write its draft (lib/draft-flush.ts).
+    'hushos-draft-flush',
     'hushos-link-used',
     'hushos-device',
     'hushos-sign-out',

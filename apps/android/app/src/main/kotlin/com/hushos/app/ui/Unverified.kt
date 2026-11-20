@@ -38,9 +38,9 @@ import com.hushos.tokens.AlpineSpace
  * Try again. It warns; the item still opens.
  */
 @Composable
-fun UnverifiedMark(model: DriveViewModel, state: DriveState, item: Opened) {
-    if (model.families.isFamilyItem(item)) { FamilyMarkLabel(model, item); return }
-    val unverified = model.unverified(item, state) ?: return
+fun UnverifiedMark(model: DriveViewModel, state: DriveState, item: Opened, contentUnknown: Boolean = false) {
+    if (model.families.isFamilyItem(item) && !contentUnknown) { FamilyMarkLabel(model, item); return }
+    val unverified = com.hushos.app.data.Unverified.overRestored(model.unverified(item, state), contentUnknown) ?: return
     var open by remember { mutableStateOf(false) }
     val alpine = Alpine.colors
     val label = if (unverified.integrity == Integrity.UNCHECKED) "Couldn’t check" else "Unverified"

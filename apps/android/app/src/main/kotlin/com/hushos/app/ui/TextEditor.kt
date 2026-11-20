@@ -62,6 +62,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.hushos.app.data.Auth
+import com.hushos.app.data.DraftLookup
+import com.hushos.app.data.DraftRules
+import com.hushos.app.data.DraftStore
 import com.hushos.app.data.EditSession
 import com.hushos.app.data.MarkdownDocument
 import com.hushos.app.data.LineMap
@@ -77,6 +80,13 @@ import com.hushos.app.data.TextLines
 import com.hushos.app.data.TextSaved
 import com.hushos.app.data.Vault
 import com.hushos.app.data.VaultSaveWriter
+import com.hushos.app.data.readDraft
+import com.hushos.app.data.removeDraft
+import com.hushos.app.data.writeDraft
+import com.hushos.core.Draft
+import com.hushos.core.DraftFrame
+import com.hushos.core.DraftOffer
+import com.hushos.core.DraftSelection
 import com.hushos.core.RunControl
 import com.hushos.core.TextFormat
 import com.hushos.core.TextReadOnly
@@ -85,6 +95,7 @@ import com.hushos.tokens.AlpineSpace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -117,6 +128,10 @@ object EditorWords {
     const val PREVIEW = "Preview"
     const val PREVIEW_TOO_LONG = "This file is too long to preview while you edit."
     const val HALF_CHARACTER = "This text has half of an emoji or symbol in it. Delete it, then save."
+    fun restoreOffer(whenSaved: String) = "Restore your unsaved changes from $whenSaved"
+    const val RESTORE = "Restore"
+    const val DISCARD_DRAFT = "Discard"
+    const val DRAFT_NOT_KEPT = "Your unsaved changes couldn’t be kept on this device."
 }
 
 /* How many bytes `text` takes in UTF-8, counted without encoding it (a lone surrogate as the three of its replacement). */
@@ -142,12 +157,14 @@ internal fun utf8Length(text: CharSequence): Long {
  * place, saved explicitly as a new version through the save path (TextSave over SaveRuns) in the file's own encoding, byte
  * order mark and line breaks (TextEditing.SaveState), with the stale choices when someone else saved first. Markdown offers
  * Source or Preview, the viewer's rendering (MarkdownDocument: images named, never fetched). Held by the view model, so a rotation keeps the text; every path that ends a session ends this
- * one (`end`), its text emptied. Nothing is kept on the phone (drafts are Editing 1c), and the decrypted copy it reads goes
- * as soon as it is read.
+ * one (`end`), its text emptied. What was typed and not saved is kept as a draft (Editing 1c, data/Drafts.kt): sealed on this
+ * phone about two seconds after a change and when the app leaves the screen, and offered back at the next open of the file.
+ * The decrypted copy it reads goes as soon as it is read.
  */
 class TextEdit(val item: Opened, private val context: Context, private val scope: CoroutineScope, opening: Vault,
                current: () -> Vault?, private val saved: (parentId: String?) -> Unit,
-               private val refused: (com.hushos.app.data.Shared.Session?) -> Unit = {}) {
+               private val refused: (com.hushos.app.data.Shared.Session?) -> Unit = {},
+               private val drafts: DraftStore = DraftStore.of(context)) {
     /* The account session this editor opened under: a 401 ends it only while it is still the one in use (refused). */
     private val signedIn = com.hushos.app.data.Shared.session(context)
 
@@ -247,6 +264,45 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     var textLines: TextLines? = null; private set
     /* A narrow switch's line, until the pane switched to can be put there. */
     var keptLine: Double? = null
+
+    /* A draft found at the first open: what it holds, how it is restored, and the file and version it opened at. */
+    data class PendingDraft(val draft: Draft, val kind: DraftOffer, val openedVersionId: String?, val file: Opened)
+
+    /* The draft offer, unanswered: the dialog is up, and nothing is written meanwhile. */
+    var offer by mutableStateOf<PendingDraft?>(null); private set
+    /* The last draft couldn't be kept: one quiet line. */
+    var draftNotKept by mutableStateOf(false); private set
+    /* A draft was looked for: once, at the first open that reached the text (never after Open theirs). */
+    private var draftAsked = false
+    /* The write turn waiting to run; draft writes and removals run one at a time, in the order asked. */
+    private var draftTurn: Job? = null
+    private val draftLane = Dispatchers.IO.limitedParallelism(1)
+    /* Draft writes and removals, one after another in the order asked: a removal decides after the writes before it. */
+    private var draftWork: Job? = null
+    /*
+     * Whether this session owns the stored draft (it wrote it, or the person restored it): only then does a close, a save
+     * back to the baseline, Open theirs or a copy remove it. An editor that wrote nothing never removes another's draft.
+     */
+    private var ownsDraft = false
+    /*
+     * The version the session's text was first read from (what a copy is signed from), and whether it is the version read
+     * now: a draft restored from another version can't be checked, and its copy is re-sealed rather than vouched for.
+     */
+    private var sourceVersionId: String? = null
+    private var sourceKnown = true
+    /* The lookup couldn't answer: nothing is written over the draft it may have missed until one does. */
+    private var draftUnread = false
+    /* The header's row no longer speaks for the text (restored from another version) until a save or copy publishes it. */
+    var contentUnknown by mutableStateOf(false); private set
+
+    /* Runs `work` on the main thread after everything asked before it. */
+    private fun inOrder(work: suspend () -> Unit) {
+        val previous = draftWork
+        draftWork = scope.launch {
+            previous?.join()
+            work()
+        }
+    }
 
     fun showSource() {
         previewing = false
@@ -386,6 +442,11 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
     }
 
     fun markEdited() {
+        // A draft about two seconds after the first change, carrying every change until it runs.
+        if (draftTurn?.isActive != true) draftTurn = scope.launch {
+            delay(DraftRules.WRITE_DELAY_MS)
+            writeDraft()
+        }
         if (!edited) edited = true
         status = null
         // Said of the text as it was when Preview was chosen; the size is asked again at the next one.
@@ -413,6 +474,12 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     Triple(file, TextEditing.open(bytes), bytes)
                 }
             }
+            // The first open only: a draft of this file from an earlier session (a closed app, a kill), answered before the
+            // text can be changed.
+            val opened0 = opened.getOrNull()
+            val looked = if (!draftAsked && opened0 != null && opened0.second is TextEditing.Open.Editable) {
+                withContext(draftLane) { vault.readDraft(drafts, opened0.first) }
+            } else null
             if (sessionRefused(opened.exceptionOrNull())) return@launch
             if (!session.live(token)) return@launch
             val loaded = opened.getOrNull()
@@ -432,6 +499,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
             preview = null
             previewTooLong = false
             markdown = MarkdownDocument.handles(file.name, file.metadata.mime)
+            if (text is TextEditing.Open.Editable && !draftAsked && looked != null) {
+                draftAsked = true
+                offer = answered(looked, file, text.text, file.node.currentVersion?.id)
+            }
+            if (text is TextEditing.Open.Editable) {
+                sourceVersionId = file.node.currentVersion?.id
+                sourceKnown = true
+            }
             phase = when (text) {
                 is TextEditing.Open.Editable -> Phase.Editing.also {
                     buffer.append(text.text)
@@ -497,10 +572,14 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                             startedFrom = done.versionId
                         }
                         markWith(done.item, done.versionId)
+                        // The person's own version now: its own verdict speaks.
+                        contentUnknown = false
                         // Typed while it saved: still changed.
                         savedText = text
                         settle(text, bytes)
                         edited = !TextEditing.same(buffer, text)
+                        // The text is the file's now: its draft goes (or holds only what was typed meanwhile).
+                        flushDraft()
                         status = EditorWords.SAVED
                         saved(done.item.node.parentId)
                     }
@@ -528,7 +607,7 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                     val bytes = state.bytes(text)
                     val writer = writer(vault)
                     val (folder, _) = writer.editTarget(file, destination)
-                    bytes to TextSave.copy(bytes, file, folder, writer.copySources(from, named = file), TextSave.runs(writer, SaveRunJournal.of(context)),
+                    bytes to TextSave.copy(bytes, file, folder, writer.copySources(from, named = file, contentKnown = sourceKnown), TextSave.runs(writer, SaveRunJournal.of(context)),
                         stillOn = { session.live(token) })
                 }
             }
@@ -541,12 +620,16 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
                 // From here on the editor writes the copy, by the run's own row and version; the file someone else saved
                 // stays theirs. The copy went into the editor's folder: a row answered from elsewhere sets no version to go
                 // on from, and the next save finds it gone from here.
+                // The text went into the copy: the file it came from keeps no draft of it, unless typed into since.
+                if (TextEditing.same(buffer, text)) removeDraft(file)
                 target = made.file
                 startedFrom = if (destination?.holds(made.file) == true) made.versionId else null
                 markWith(made.file, made.versionId)
+                contentUnknown = false
                 savedText = text
                 settle(text, bytes)
                 edited = !TextEditing.same(buffer, text)
+                flushDraft()
                 status = EditorWords.savedCopy(made.file.name)
                 saved(made.file.node.parentId)
             }.onFailure { failure = failureWords(it) }
@@ -560,6 +643,9 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
 
     /* Their version, read in place of this text (after the person confirmed). */
     fun openTheirs() {
+        // This session's changes are discarded (the person confirmed it): so is their draft.
+        draftTurn?.cancel()
+        removeDraft(target)
         // Another text opens: nothing begun on this one publishes over it.
         session.reopened()
         stale = null
@@ -576,8 +662,146 @@ class TextEdit(val item: Opened, private val context: Context, private val scope
         load(target)
     }
 
+    /*
+     * A write turn (DraftRules.step): the text as it is now sealed and kept for the file being written, or removed once it is
+     * back at what was last opened or saved. Never for read-only text, an unanswered offer, or no version to start from.
+     */
+    private fun writeDraft() {
+        draftTurn?.cancel()
+        draftTurn = null
+        val vault = session.take()?.owner ?: return
+        val file = target
+        val baseline = savedText
+        // A lookup that couldn't answer is asked again first: nothing is written over the draft it may have missed.
+        if (draftUnread) return lookAgain(vault, file)
+        val step = DraftRules.step(editable = phase == Phase.Editing, offering = offer != null, unread = draftUnread,
+            startedFrom = startedFrom, atBaseline = baseline == null || TextEditing.same(buffer, baseline))
+        when (step) {
+            DraftRules.Step.NONE -> return
+            DraftRules.Step.REMOVE -> removeDraft(file)
+            DraftRules.Step.WRITE -> {
+                val state = saveState ?: return
+                val base = startedFrom ?: return
+                val text = buffer.toString()
+                val chosen = selection ?: (android.text.Selection.getSelectionStart(buffer) to android.text.Selection.getSelectionEnd(buffer))
+                val draft = Draft(DraftFrame(base, state.format, System.currentTimeMillis().toULong()), text,
+                    chosen.takeIf { it.first >= 0 && it.second >= 0 }?.let { DraftSelection(it.first.toUInt(), it.second.toUInt()) },
+                    sourceVersionId)
+                // Asked now: a sign-out's wipe before it lands keeps nothing of it.
+                val asked = drafts.generation
+                inOrder {
+                    val written = withContext(draftLane) { vault.writeDraft(drafts, draft, file, asked) }
+                    draftNotKept = !written
+                    if (written) ownsDraft = true
+                }
+            }
+        }
+    }
+
+    /*
+     * What a lookup's answer makes of the draft: an offer, nothing (none, or the file holds its text, which drops it), or no
+     * answer (unread: the quiet line, and no draft written until a lookup answers).
+     */
+    private fun answered(looked: DraftLookup, file: Opened, text: String, versionId: String?): PendingDraft? {
+        draftUnread = looked is DraftLookup.Unavailable
+        if (draftUnread) draftNotKept = true
+        val kept = looked.draft ?: return null
+        return when (val kind = DraftRules.offer(kept, versionId, text)) {
+            DraftOffer.SAME -> {
+                removeDraft(file, force = true)
+                null
+            }
+            else -> PendingDraft(kept, kind, versionId, file)
+        }
+    }
+
+    /* The lookup asked again, weighed against the text as last opened or saved; answered, the turn runs. */
+    private fun lookAgain(vault: Vault, file: Opened) {
+        inOrder {
+            val looked = withContext(draftLane) { vault.readDraft(drafts, file) }
+            if (target.id != file.id || offer != null || phase != Phase.Editing) return@inOrder
+            val late = answered(looked, file, savedText ?: return@inOrder, startedFrom)
+            if (late != null) {
+                offer = late
+                return@inOrder
+            }
+            if (!draftUnread) {
+                draftNotKept = false
+                writeDraft()
+            }
+        }
+    }
+
+    /* Written now: the app left the screen, a save landed, or a copy took the text elsewhere. */
+    fun flushDraft() {
+        writeDraft()
+    }
+
+    /*
+     * The file's draft deleted, after any write asked for before: one this session owns, or (`force`) one the person
+     * discarded, the file already holds, or whose family is gone.
+     */
+    private fun removeDraft(file: Opened, force: Boolean = false) {
+        val vault = session.take()?.owner ?: return
+        inOrder {
+            if (!force && !ownsDraft) return@inOrder
+            ownsDraft = false
+            withContext(draftLane) { vault.removeDraft(drafts, file) }
+        }
+    }
+
+    /*
+     * Restore: the draft's text in place of the opened one as an unsaved edit, in the format it was typed under. Someone saved
+     * since: the stale choices at once, and a save still starts from the draft's version, so nothing lands over theirs
+     * without asking.
+     */
+    fun restoreDraft() {
+        val pending = offer ?: return
+        val state = saveState ?: return
+        offer = null
+        val draft = pending.draft
+        saveState = state.inFormat(draft.frame.format)
+        format = draft.frame.format
+        if (pending.kind == DraftOffer.STALE) startedFrom = draft.frame.baseVersionId
+        // Its text is this session's from here, and the draft too; read from another version than the one just opened, its
+        // source can't be checked now.
+        ownsDraft = true
+        sourceKnown = draft.sourceVersionId != null && draft.sourceVersionId == sourceVersionId
+        contentUnknown = !sourceKnown
+        sourceVersionId = draft.sourceVersionId
+        buffer.replace(0, buffer.length, draft.text)
+        draft.selection?.let {
+            val end = buffer.length
+            val from = it.from.toInt().coerceIn(0, end)
+            val until = it.to.toInt().coerceIn(0, end)
+            android.text.Selection.setSelection(buffer, from, until)
+            selection = from to until
+        }
+        markEdited()
+        if (pending.kind == DraftOffer.STALE) stale = Stale(pending.openedVersionId)
+    }
+
+    /* Discard: the draft goes, nothing more is asked; the text stays as the file holds it. */
+    fun discardDraft() {
+        val pending = offer ?: return
+        offer = null
+        removeDraft(pending.file, force = true)
+    }
+
+    /*
+     * Closed by the person (Discard, nothing to keep, saved): the draft this session owns goes; an offer still unanswered keeps
+     * its draft, and an editor that wrote nothing (closed while loading) removes nothing. `gone` (the file's family cleared
+     * out): its draft goes whatever, offer or not.
+     */
+    fun closed(gone: Boolean = false) {
+        draftTurn?.cancel()
+        if (gone) removeDraft(target, force = true) else if (offer == null) removeDraft(target)
+        end()
+    }
+
     /* Closed, signed out or another session: the text goes with it, and nothing more lands here. */
     fun end() {
+        draftTurn?.cancel()
         session.close()
         work?.cancel()
         saveJob?.cancel()
@@ -632,6 +856,15 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
     }
     var leaving by remember { mutableStateOf(false) }
     var confirmTheirs by remember { mutableStateOf(false) }
+    // Leaving the screen (Home, another app, the screen off): the text as it is now is kept, in case the app is not brought back.
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle, edit) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) edit.flushDraft()
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     // While a save is on its way it may still publish: Close never offers Discard then, it waits (TextEdit.closing).
     val tryClose = {
         when {
@@ -698,6 +931,7 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
                         line?.let { Note(it, failed = !edit.closing && edit.failure != null) }
                         if (edit.previewTooLong && !side) Note(EditorWords.PREVIEW_TOO_LONG)
                         edit.format?.let(TextEditing::mixedNote)?.let { Note(it) }
+                        if (edit.draftNotKept) Note(EditorWords.DRAFT_NOT_KEPT)
                         // The EditText stays while the preview shows (out of sight, focus and TalkBack): it holds the text.
                         SourceAndPreview(side) {
                             PlainText(text = null, buffer = edit.buffer, onEdit = edit::markEdited, scroll = scroll, hidden = edit.previewing && !side)
@@ -730,6 +964,16 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
             // Back to the three choices: nothing was discarded.
             dismissButton = { TextButton(onClick = { confirmTheirs = false }) { Text(EditorWords.CANCEL) } },
         )
+        // A draft from an earlier session: answered before the text can be changed (no way out but the two answers).
+        edit.offer?.let { pending ->
+            AlertDialog(
+                onDismissRequest = {},
+                title = { Text(EditorWords.restoreOffer(DraftRules.whenSaved(pending.draft.frame.savedAt.toLong()))) },
+                confirmButton = { TextButton(onClick = edit::restoreDraft) { Text(EditorWords.RESTORE) } },
+                dismissButton = { TextButton(onClick = edit::discardDraft) { Text(EditorWords.DISCARD_DRAFT) } },
+                properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+            )
+        }
         if (leaving) AlertDialog(
             onDismissRequest = { leaving = false },
             title = { Text(EditorWords.DISCARD_TITLE) },
@@ -745,7 +989,7 @@ fun TextEditorScreen(edit: TextEdit, close: () -> Unit, marks: @Composable (Open
  * viewer's rows mark it, a family's mark by its member list, and "Saved from a link" in plain words.
  */
 @Composable
-fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
+fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened, contentUnknown: Boolean = false) {
     val alpine = Alpine.colors
     val family = model.families.familyOf(row) != null
     // This exact row's verdict, kept apart from the listing's (another device's newer version judged meanwhile never takes
@@ -757,9 +1001,9 @@ fun EditorMarks(model: DriveViewModel, state: DriveState, row: Opened) {
     val unjudged = family && model.families.verdict(row) == null
     LaunchedEffect(row.node, unjudged) { if (unjudged) model.families.judge(listOf(row)) }
     val saved = remember(row.node, state.trust) { com.hushos.app.data.savedLineOf(row.node, state.trust) }
-    if (!model.marked(row, state) && saved == null) return
+    if (!model.marked(row, state) && saved == null && !contentUnknown) return
     Column(Modifier.fillMaxWidth().padding(horizontal = AlpineSpace.S4).padding(bottom = AlpineSpace.S2)) {
-        UnverifiedMark(model, state, row)
+        UnverifiedMark(model, state, row, contentUnknown)
         saved?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = alpine.inkMuted) }
     }
 }

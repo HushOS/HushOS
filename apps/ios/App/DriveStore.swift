@@ -198,9 +198,19 @@ final class DriveStore {
      * the editor goes on instead of waiting for one that no longer exists.
      */
     func parkedEditorDropped(_ work: EditorWork) {
+        // Access confirmed lost: its draft goes too, as nothing may offer that text in the file again. Let go for any other
+        // reason (another session), the draft stays: it may be the only copy of the text.
+        if editAccess(work) == .lost { dropDraft(of: work.state?.target ?? work.file) }
         work.box.forget()
         holdForEditor(nil)
         editorClosed()
+    }
+
+    /* The editor's draft of `file` (Editing 1c), deleted on this phone: access to it confirmed lost. */
+    func dropDraft(of file: Opened) {
+        let vault = vault
+        // In order after the editor's writes asked before it: none of them lands after this.
+        DraftLane.enqueue { await vault.removeDraft(of: file) }
     }
 
     /* Its family removed, forked or refused (FileViewer's familyGone, for a file no viewer shows). */

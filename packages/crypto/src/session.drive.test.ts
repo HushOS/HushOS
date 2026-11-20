@@ -840,6 +840,118 @@ function captureUploads() {
     return sent;
 }
 
+describe('a lock that begins while uploads wait', () => {
+    test('stops them in the worker: the one sending is aborted, one queued never sends, a draft seal still runs', async () => {
+        const { session, call, grant } = await unlockedSession();
+        await call('driveOpenWorkspace', { userId: USER, grant });
+        await call('driveCreateNodes', {
+            workspaceId: WS,
+            nodes: [
+                {
+                    id: A,
+                    kind: 'folder',
+                    parentId: WS,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 1,
+                    metadata: meta('Drive'),
+                },
+                {
+                    id: B,
+                    kind: 'file',
+                    parentId: A,
+                    parentKeyEpoch: 1,
+                    keyEpoch: 2,
+                    metadata: meta('big.bin'),
+                },
+            ],
+        });
+        const size = CHUNK_SIZE + 3;
+        const file = new Blob([new Uint8Array(size).fill(5)]);
+        const prepared = (await call('driveUploadPrepare', {
+            workspaceId: WS,
+            nodeId: B,
+            versionId: C,
+            objectId: D,
+            plaintextSize: size,
+            thumbnail: null,
+        })) as { chunkCount: number };
+        expect(prepared.chunkCount).toBe(2);
+        await call('driveUploadEncrypt', { objectId: D, file, index: 0 });
+        await call('driveUploadEncrypt', { objectId: D, file, index: 1 });
+        // A store that never answers: the first part hangs in flight, the second waits its turn.
+        const sends: string[] = [];
+        let aborted = 0;
+        class Hanging {
+            upload = { onprogress: null };
+            status = 0;
+            timeout = 0;
+            onload: (() => void) | null = null;
+            onerror: (() => void) | null = null;
+            ontimeout: (() => void) | null = null;
+            onabort: (() => void) | null = null;
+            private url = '';
+            open(_method: string, url: string) {
+                this.url = url;
+            }
+            setRequestHeader() {}
+            getResponseHeader() {
+                return null;
+            }
+            abort() {
+                aborted += 1;
+                this.onabort?.();
+            }
+            send() {
+                sends.push(this.url);
+            }
+        }
+        vi.stubGlobal('XMLHttpRequest', Hanging);
+        try {
+            const first = call('driveUploadSend', {
+                objectId: D,
+                index: 0,
+                url: 'https://store/part/0',
+            });
+            const second = call('driveUploadSend', {
+                objectId: D,
+                index: 1,
+                url: 'https://store/part/1',
+            });
+            const seal = call('driveDraftSlot', { userId: USER, workspaceId: WS, nodeId: B });
+            await vi.waitFor(() => expect(sends).toEqual(['https://store/part/0']));
+            session.lockBegins();
+            expect(aborted).toBe(1);
+            await first;
+            await expect(second).rejects.toThrow('locked');
+            await expect(seal).rejects.toThrow('locked');
+            // The part queued before the lock never went out.
+            expect(sends).toEqual(['https://store/part/0']);
+            // Only the draft seal still runs while the worker drains.
+            await expect(
+                call('driveDraftSeal', {
+                    userId: USER,
+                    workspaceId: WS,
+                    nodeId: B,
+                    draft: {
+                        frame: {
+                            baseVersionId: C,
+                            encoding: 'utf-8',
+                            lineEnding: 'lf',
+                            mixed: false,
+                            savedAt: 1,
+                        },
+                        text: 'last words',
+                        selection: null,
+                        sourceVersionId: null,
+                    },
+                }),
+            ).resolves.toHaveProperty('record');
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
+});
+
 describe('a suite 3 object end to end', () => {
     test('uploads the file and zeros, and downloads exactly the file, every chunk fetched', async () => {
         const { call, grant } = await unlockedSession();

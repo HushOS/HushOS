@@ -87,6 +87,12 @@ data class Unverified(val integrity: Integrity, val signerId: String?, val write
     companion object {
         /* Nothing could be checked: whom this person trusts did not load. Never shown as clean. */
         fun unchecked(signerId: String? = null) = Unverified(Integrity.UNCHECKED, signerId, Writer.Unknown(null))
+
+        /*
+         * The editor's mark over text restored from another version than the one read (`contentUnknown`): never the read
+         * version's clean verdict; a mark the row already has stands, a clean row shows Couldn't check.
+         */
+        fun overRestored(read: Unverified?, contentUnknown: Boolean) = if (contentUnknown) read ?: unchecked() else read
     }
 }
 

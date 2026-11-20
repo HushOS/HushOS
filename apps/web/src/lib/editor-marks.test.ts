@@ -27,6 +27,18 @@ const row = (
 describe('the marks while editing', () => {
     const opened = row('v1', 'unverified');
 
+    test('text restored from another version shows as unchecked, never as the verified version read', () => {
+        const read = row('v2', 'verified');
+        const restored = nextRead({ row: read, versionId: 'v2' }, 'v2', undefined, true);
+        const marked = markedRow(read, read, restored);
+        expect(marked.integrity?.version).toBe('unchecked');
+        // The name record is still this row's.
+        expect(marked.integrity?.metadata).toBe('verified');
+        // A save of the restored text is the person's own version again: its own verdict speaks.
+        const saved = nextRead(restored, 'v3', row('v3', 'verified'));
+        expect(markedRow(row('v3', 'verified'), read, saved).integrity?.version).toBe('verified');
+    });
+
     test('another device’s newer version never takes the warning off the text read', () => {
         const theirs = row('v2', 'verified');
         const marked = markedRow(theirs, opened, { row: opened, versionId: 'v1' });

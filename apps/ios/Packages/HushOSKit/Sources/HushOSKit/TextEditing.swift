@@ -424,7 +424,11 @@ extension Vault {
      * folder's by its member list), so an Unverified file's copy stays Unverified; with `named`'s records
      * too when the copy's name and type come from that row.
      */
-    public func copySources(of file: Opened, named: Opened? = nil) async throws -> SaveSources {
+    /*
+     * `contentKnown` false: the text came from a version other than `file`'s (a draft restored from an earlier one), which
+     * can't be checked now: the copy's content is re-sealed, never vouched for (TextEditing.contentUnknown).
+     */
+    public func copySources(of file: Opened, named: Opened? = nil, contentKnown: Bool = true) async throws -> SaveSources {
         // The text's own version (`file`, the row it was read from) and, when the copy takes its name and type from another
         // row (`named`: a save adopted since, perhaps renamed), that row's records too: each checked now, against the trust
         // and members as they are at the copy, and the copy signed as the weakest of them (SaveRun.signing).
@@ -432,6 +436,7 @@ extension Vault {
         if let named, named.node != file.node { rows.append(named) }
         var sources: [SaveSource] = []
         for row in rows { sources.append(try await copySource(of: row)) }
+        if !contentKnown, let first = sources.first { sources[0] = TextEditing.contentUnknown(first) }
         return .from(sources)
     }
 

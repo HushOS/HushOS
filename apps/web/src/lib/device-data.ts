@@ -72,6 +72,10 @@ export const ACCOUNT_DATA = {
             // Each family's guard: the latest member list this device accepted, sealed
             // (lib/contact-guard.ts createIndexedDbFamilyGuard).
             'hushos-family-guard',
+            // The text editor's unsaved text by account and file, sealed under a key from the
+            // account root (lib/drafts.ts). Found by keyed slots: how many there are and when each
+            // was written is all a locked browser shows, never which file.
+            'hushos-drafts',
         ],
         // Each family folder's mirror (lib/groups/store.ts AREA_MIRROR_PREFIX).
         prefixes: ['hushos-drive-mirror:'],
@@ -167,6 +171,7 @@ export const STORAGE_OWNERS: Record<
     'apps/web/src/lib/contact-guard.ts': {
         databases: ['hushos-contact-guard', 'hushos-family-guard'],
     },
+    'apps/web/src/lib/drafts.ts': { databases: ['hushos-drafts'] },
     'apps/web/src/lib/groups/client.ts': { databases: [] },
     'apps/web/src/lib/spaces.ts': { databases: [] },
     'apps/web/src/lib/drive.ts': { databases: [] },

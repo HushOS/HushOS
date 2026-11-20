@@ -2565,7 +2565,7 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
      */
     override fun closeArchiveIn(workspaces: Set<String>, nodes: Set<String>) {
         // A family file open in the editor goes with the family's other plaintext.
-        textEdit?.let { open -> if (workspaces.any { it.equals(open.target.node.workspaceId, ignoreCase = true) }) closeEditor() }
+        textEdit?.let { open -> if (workspaces.any { it.equals(open.target.node.workspaceId, ignoreCase = true) }) closeEditor(gone = true) }
         val subject = state.value.archive ?: return
         // By its workspace when it has one; by its node only when it has none (a kept copy whose record predates its
         // workspace's): another workspace's node that shares its id never closes it.
@@ -2685,8 +2685,10 @@ class DriveViewModel(application: Application) : AndroidViewModel(application), 
         return false
     }
 
-    fun closeEditor() {
-        endTextEdit()
+    /* The person closed the editor (Discard, nothing to keep, saved), or (`gone`) the file's family cleared out. */
+    fun closeEditor(gone: Boolean = false) {
+        textEdit?.closed(gone)
+        textEdit = null
         _state.update { it.copy(editing = null) }
     }
 

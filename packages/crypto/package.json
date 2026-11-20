@@ -32,6 +32,7 @@
         "./ids": "./src/ids.ts",
         "./shares": "./src/shares.ts",
         "./stash": "./src/stash.ts",
+        "./drafts": "./src/drafts.ts",
         "./rollback-marks": "./src/rollback-marks.ts",
         "./groups": "./src/groups.ts",
         "./group-trust": "./src/group-trust.ts",

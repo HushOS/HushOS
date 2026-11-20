@@ -6,7 +6,13 @@ import {
     syntaxHighlighting,
 } from '@codemirror/language';
 import { highlightSelectionMatches, search, searchKeymap } from '@codemirror/search';
-import { Compartment, EditorState, type Extension, type Text } from '@codemirror/state';
+import {
+    Compartment,
+    EditorSelection,
+    EditorState,
+    type Extension,
+    type Text,
+} from '@codemirror/state';
 import {
     crosshairCursor,
     drawSelection,
@@ -19,6 +25,7 @@ import {
     lineNumbers,
     rectangularSelection,
 } from '@codemirror/view';
+import { type Draft, type DraftPlace, draftOffer } from '@hushos/crypto/drafts';
 import type { DriveNode } from '@hushos/drive/client';
 import type { FileReader } from '@hushos/drive/downloads';
 import { tags } from '@lezer/highlight';
@@ -62,6 +69,19 @@ import {
     invalidateFolders,
     nodeSize,
 } from '@/lib/drive';
+import { authClient } from '@/lib/auth-client';
+import { flushBeforeLock } from '@/lib/draft-flush';
+import {
+    createDraftWriter,
+    drafts,
+    draftWhen,
+    lookUpDraft,
+    savesSettled,
+    type DraftOwner,
+    type DraftSnapshot,
+    type DraftWriter,
+    type StoredDraft,
+} from '@/lib/drafts';
 import { allLanguages, editorLanguage, loadLanguage, wrapsLines } from '@/lib/editor-languages';
 import { frameThrottle, type FrameThrottle } from '@/lib/frame-throttle';
 import { holdPageWhile } from '@/lib/leave-guard';
@@ -85,6 +105,7 @@ import {
     savedState,
     TEXT_EDIT_LIMIT,
     utf8Length,
+    writable,
     type ReadOnlyReason,
     type SaveState,
     type TextFormat,
@@ -115,8 +136,10 @@ const EditorPreview = lazy(() =>
  * and line breaks (saveBytes); a file it can't save byte for byte opens read-only with a note.
  * Markdown shows the viewer's rendering beside the source on a wide screen, following typing and
  * scrolling with it both ways, and Source or Preview on a narrow one. Its text lives in this
- * component only: a lock or a sign-out unmounts the drive and the text goes with it, and nothing is
- * kept on this device (drafts are Editing 1c).
+ * component: a lock or a sign-out unmounts the drive and the text goes with it. What was typed and
+ * not saved is kept as a draft (Editing 1c, lib/drafts.ts): sealed on this device a couple of
+ * seconds after a change, and before a lock, so reopening the file after a closed tab, a crash or a
+ * lock and unlock offers it back.
  *
  * Not in the post-unlock preload: the first Edit fetches the editor with every grammar, parser and
  * the preview's renderer (editorAssets), the same set whatever the file, so which chunks a device
@@ -193,6 +216,25 @@ export const editorWords = {
     previewFailed: 'The preview couldn’t be shown.',
     halfCharacter: 'This text has half of an emoji or symbol in it. Delete it, then save.',
     refreshPreview: 'Refresh preview',
+    restoreOffer: (when: string) => `Restore your unsaved changes from ${when}`,
+    restore: 'Restore',
+    discardDraft: 'Discard',
+    draftNotKept: 'Your unsaved changes couldn’t be kept on this device.',
+};
+
+/* A file's slot in this browser, for the lookup's hold on writes. */
+const slotKey = (place: DraftPlace) =>
+    `${place.userId.toLowerCase()}/${place.workspaceId.toLowerCase()}/${place.nodeId.toLowerCase()}`;
+
+/* A draft found when the file opened, waiting for Restore or Discard. */
+type DraftOfferShown = {
+    draft: Draft;
+    /* Which session wrote it: restoring or discarding it makes it this one's to remove. */
+    owner: DraftOwner;
+    kind: 'current' | 'stale';
+    /* The version the file opened at: Save on top goes after it. */
+    openedVersionId: string | null;
+    place: DraftPlace;
 };
 
 const lightDark = (light: string, dark: string) => `light-dark(${light}, ${dark})`;
@@ -486,7 +528,7 @@ export function TextEditor({
      * The version the text now is: read (with the row it was read from), or published by a save or a
      * copy. The viewer's marks speak for it (lib/editor-marks.ts).
      */
-    onRead: (versionId: string | null, row?: DriveNode) => void;
+    onRead: (versionId: string | null, row?: DriveNode, contentUnknown?: boolean) => void;
 }) {
     const queryClient = useQueryClient();
     const leaving = useRef(onLeave);
@@ -549,6 +591,36 @@ export function TextEditor({
     const [confirmTheirs, setConfirmTheirs] = useState(false);
     /* Saved as a copy whose file can't be told: the session is over, nothing more is saved. */
     const [ended, setEnded] = useState(false);
+    /* The restore offer on screen, mirrored for the draft writer and the editor's editability. */
+    const [offer, setOfferShown] = useState<DraftOfferShown | null>(null);
+    const offerNow = useRef<DraftOfferShown | null>(null);
+    const setOffer = useCallback((value: DraftOfferShown | null) => {
+        offerNow.current = value;
+        setOfferShown(value);
+    }, []);
+    /* A draft is looked for once, at the first open: never again after Open theirs. */
+    const draftAsked = useRef(false);
+    /* The account session this editor opened under: no draft is written for another. */
+    const openedUnder = useRef(deviceSession.generation());
+    /*
+     * The lookup hasn't answered (still reading, or the store failed): nothing is written over a
+     * draft not yet read.
+     */
+    const draftPending = useRef<string | null>(null);
+    /*
+     * The version the session's text was first read from (what a copy is signed from), and whether
+     * it is the version read now: a draft restored from another version can't be checked, and its
+     * copy is re-sealed rather than vouched for.
+     */
+    const textSource = useRef<{ versionId: string | null; known: boolean }>({
+        versionId: null,
+        known: true,
+    });
+    /* The last draft couldn't be kept (quota, past the limit): said in one quiet line. */
+    const [draftNotKept, setDraftNotKept] = useState(false);
+    const writer = useRef<DraftWriter | null>(null);
+    /* Whether the editor on screen takes changes (a read-only file's never writes a draft). */
+    const editableNow = useRef(false);
     const language = editorLanguage(loadFrom.name);
     /*
      * Markdown shows the viewer's rendering beside the source (Source or Preview on a narrow screen),
@@ -584,6 +656,7 @@ export function TextEditor({
         let reader: FileReader | null = null;
         // Read for this account session only: a lock, a sign-out or another sign-in meanwhile shows nothing.
         const account = deviceSession.generation();
+        const account0 = account;
         const still = () => active && deviceSession.generation() === account;
         // The editor's whole fixed set, fetched beside the read: the text shows once both are here.
         const assets = editorAssets();
@@ -621,6 +694,91 @@ export function TextEditor({
                 await assets;
                 if (!still()) return;
                 const text = openText(bytes);
+                // The first open only: a draft of this file from an earlier session (a closed tab, a
+                // crash, a lock), offered before the text can be changed, never once Open theirs reloads.
+                let found: DraftOfferShown | null = null;
+                let waiting: Promise<StoredDraft | null> | null = null;
+                let unread = false;
+                const versionId = file.currentVersion?.id ?? null;
+                const account = unlockedNow();
+                const place = account
+                    ? { userId: account, workspaceId: file.workspaceId, nodeId: file.id }
+                    : null;
+                /* What a stored draft becomes against this text: an offer, or nothing (the file holds it). */
+                const offerFor = (
+                    stored: StoredDraft | null,
+                    opened: string,
+                    openedVersionId: string | null,
+                ) => {
+                    if (!stored || !place) return null;
+                    const kind = draftOffer(
+                        {
+                            baseVersionId: stored.draft.frame.baseVersionId,
+                            text: stored.draft.text,
+                        },
+                        { versionId: openedVersionId, text: opened },
+                    );
+                    if (kind !== 'same') return { ...stored, kind, openedVersionId, place };
+                    // The file already holds that text: the draft is spent, unless rewritten since.
+                    void drafts()
+                        .remove(place, stored.owner)
+                        .catch(() => {});
+                    return null;
+                };
+                if (text.editable && !draftAsked.current && place) {
+                    draftAsked.current = true;
+                    const looked = await lookUpDraft(drafts(), place);
+                    if (!still()) return;
+                    if (looked.status === 'answered')
+                        found = offerFor(looked.stored, text.text, versionId);
+                    else if (looked.status === 'waiting') waiting = looked.later;
+                    else unread = true;
+                }
+                if (text.editable) textSource.current = { versionId, known: true };
+                // Nothing is written to this file's slot until its draft has been read.
+                draftPending.current =
+                    (waiting !== null || unread) && place ? slotKey(place) : null;
+                if (unread) setDraftNotKept(true);
+                if (waiting && text.editable && place) {
+                    const openedAt = opening.current;
+                    // Answered late: weighed against the text and version open now (typing, a save
+                    // or a copy may have come meanwhile), and offered only while this very file is
+                    // still the one being written, opened as it was (not Open theirs since).
+                    void waiting.then(
+                        async (stored) => {
+                            // A save or a copy on its way settles first: what it changes (the version
+                            // the text is from, the file being written) is what the answer is weighed
+                            // against.
+                            await savesSettled(() => pending.current?.done ?? null);
+                            if (!mounted.current || deviceSession.generation() !== account0) return;
+                            const { file: writing, startedFrom } = target.current;
+                            const sameFile =
+                                writing.id === place.nodeId &&
+                                writing.workspaceId === place.workspaceId;
+                            // Another file now: nothing will write over this one's slot from here.
+                            if (!sameFile) {
+                                draftPending.current = null;
+                                return;
+                            }
+                            // Reopened (Open theirs): left unread, and still never written over.
+                            if (opening.current !== openedAt || !saved.current) return;
+                            draftPending.current = null;
+                            const late = offerFor(stored, saved.current.toString(), startedFrom);
+                            if (!late) {
+                                // Writes resume: text typed while it was read is kept from here.
+                                if (dirtyNow.current) writer.current?.changed();
+                                return;
+                            }
+                            setOffer(late);
+                            view.current?.dispatch({
+                                effects: editability.current.reconfigure(fixed(false)),
+                            });
+                        },
+                        () => {
+                            if (mounted.current) setDraftNotKept(true);
+                        },
+                    );
+                }
                 target.current = openedTarget(file);
                 // A copy of its own: what a save writes unchanged is exactly these bytes, nothing around them.
                 saveState.current = text.editable
@@ -629,6 +787,7 @@ export function TextEditor({
                 setTextFormat(text.editable ? text.format : null);
                 setMarkdown(previewKindOf(file.name, file.metadata?.mime) === 'markdown');
                 onRead(file.currentVersion?.id ?? null, file);
+                if (found) setOffer(found);
                 setPhase(
                     text.editable
                         ? { kind: 'editing', text: text.text }
@@ -642,7 +801,104 @@ export function TextEditor({
             active = false;
             void reader?.close();
         };
-    }, [loadFrom, attempt, queryClient, onTarget, onRead]);
+    }, [loadFrom, attempt, queryClient, onTarget, onRead, setOffer]);
+
+    /* Read when the editor closes: the offer still up, and whether the person chose to leave. */
+    const offerShown = useCallback(() => offerNow.current !== null, []);
+    const discardedNow = useCallback(() => guard.current.discarded, [guard]);
+    /* Where the file being written keeps its draft, for the account unlocked now. */
+    const placeNow = useCallback((): DraftPlace | null => {
+        const userId = unlockedNow();
+        const { file } = target.current;
+        return userId ? { userId, workspaceId: file.workspaceId, nodeId: file.id } : null;
+    }, []);
+    /*
+     * The text as it is now, for the draft writer, or null when nothing may be written: no editable
+     * text on screen, the offer still unanswered, a copy whose file can't be told, Open theirs under
+     * way, or no version the text started from.
+     */
+    const draftSnapshot = useCallback((): DraftSnapshot | null => {
+        const current = view.current;
+        const baseline = saved.current;
+        const state = saveState.current;
+        const { startedFrom } = target.current;
+        const place = placeNow();
+        if (
+            !current ||
+            !baseline ||
+            !state ||
+            !startedFrom ||
+            !place ||
+            !editableNow.current ||
+            offerNow.current ||
+            draftPending.current === slotKey(place) ||
+            endedNow.current ||
+            reloadingNow.current
+        )
+            return null;
+        const doc = current.state.doc;
+        const { anchor, head } = current.state.selection.main;
+        return {
+            place,
+            atBaseline: doc.eq(baseline),
+            draft: () => {
+                const text = doc.toString();
+                if (!writable(text)) return null;
+                return {
+                    frame: {
+                        baseVersionId: startedFrom,
+                        encoding: state.format.encoding,
+                        lineEnding: state.format.lineEnding,
+                        mixed: state.format.mixed,
+                        savedAt: 0,
+                    },
+                    text,
+                    selection: { from: anchor, to: head },
+                    sourceVersionId: textSource.current.versionId,
+                };
+            },
+        };
+    }, [placeNow]);
+    // Drafts (lib/drafts.ts): the text sealed a couple of seconds after a change, when the page is
+    // hidden or left, and before a lock; removed once the text is the file's again, on Discard, on
+    // Open theirs and after a copy took it elsewhere. Declared before the editor itself, so closing
+    // still reads its text.
+    useEffect(() => {
+        const made = createDraftWriter({
+            snapshot: draftSnapshot,
+            locked: () => sessionEnding() || deviceSession.generation() !== openedUnder.current,
+            // A lock is not an end: a draft sealed as it came still lands, as ciphertext.
+            ended: () => !deviceSession.open(),
+            store: drafts(),
+            onKept: (kept) => {
+                if (mounted.current) setDraftNotKept(!kept);
+            },
+        });
+        writer.current = made;
+        const unregister = flushBeforeLock(() => made.flush());
+        // Every lock of this tab (Lock, another tab's, the page being left, which locks first)
+        // seals the text with the key still there; the worker answers before it goes.
+        const unhook = authClient.beforeLock(() => void made.seize());
+        const hidden = () => {
+            if (document.visibilityState === 'hidden') void made.flush();
+        };
+        document.addEventListener('visibilitychange', hidden);
+        return () => {
+            document.removeEventListener('visibilitychange', hidden);
+            unhook();
+            unregister();
+            // An unanswered offer keeps its draft. Closed by choice (Discard, or nothing to keep), the
+            // draft goes; a lock, a sign-out or leaving the drive keeps what was typed (written now,
+            // unless the lock came first).
+            if (!offerShown()) {
+                const place = placeNow();
+                if (!discardedNow()) void made.flush();
+                else if (place) void made.remove(place);
+            }
+            made.stop();
+            if (writer.current === made) writer.current = null;
+        };
+    }, [draftSnapshot, placeNow, offerShown, discardedNow]);
 
     // The editor itself, once there is text to show.
     const shown = phase.kind === 'editing' || phase.kind === 'read-only' ? phase : null;
@@ -660,7 +916,7 @@ export function TextEditor({
                 extensions: [
                     baseExtensions(),
                     languageSlot.of([]),
-                    editability.current.of(fixed(editable)),
+                    editability.current.of(fixed(editable && !offerNow.current)),
                     wrapsLines(language) ? EditorView.lineWrapping : [],
                     EditorView.contentAttributes.of({
                         'aria-label': `Contents of ${loadFrom.name}`,
@@ -672,11 +928,13 @@ export function TextEditor({
                         if (!update.docChanged || !saved.current) return;
                         markDirty(!update.state.doc.eq(saved.current));
                         setEdits((count) => count + 1);
+                        writer.current?.changed();
                     }),
                 ],
             }),
         });
         view.current = made;
+        editableNow.current = editable;
         setSourceView(made);
         saved.current = made.state.doc;
         markDirty(false);
@@ -687,11 +945,14 @@ export function TextEditor({
             .then((extension) => {
                 if (active) made.dispatch({ effects: languageSlot.reconfigure(extension) });
             });
-        if (editable) made.focus();
+        if (editable && !offerNow.current) made.focus();
         return () => {
             active = false;
             made.destroy();
-            if (view.current === made) view.current = null;
+            if (view.current === made) {
+                view.current = null;
+                editableNow.current = false;
+            }
             setSourceView((shown) => (shown === made ? null : shown));
             saved.current = null;
         };
@@ -986,6 +1247,8 @@ export function TextEditor({
             onRead(versionId, file);
             saved.current = doc;
             markDirty(!(view.current?.state.doc.eq(doc) ?? true));
+            // The text is the file's now: its draft goes (or holds only what was typed meanwhile).
+            void writer.current?.flush();
             void invalidateFolders(queryClient, file.parentId);
         },
         [queryClient, markDirty, onRead],
@@ -1001,6 +1264,8 @@ export function TextEditor({
         async (onTopOf?: string) => {
             const current = view.current;
             if (!current || saving || savingNow.current || !editable || ended || reloading) return;
+            // A restore offer unanswered: the text it would replace is not saved over it.
+            if (offerNow.current) return;
             // Asked whether to discard (or discarded): a save started now could publish what is thrown away.
             if (askedToLeave()) return;
             const taken = token();
@@ -1071,10 +1336,12 @@ export function TextEditor({
 
     const copy = useCallback(async () => {
         const current = view.current;
-        if (!current || reloading || savingNow.current || askedToLeave()) return;
+        if (!current || reloading || savingNow.current || askedToLeave() || offerNow.current)
+            return;
         const taken = token();
         const doc = current.state.doc;
         const { file, source } = target.current;
+        const before = placeNow();
         const state = saveState.current;
         if (!state) return;
         // The copy keeps the file's encoding and line breaks too.
@@ -1094,6 +1361,8 @@ export function TextEditor({
                     stillOn: () => live(taken),
                     // Who wrote what the copy is made from, as trust stands now (not when it opened).
                     check: (nodes) => clientFor(file.workspaceId).checkNow(nodes),
+                    // Text from a restored draft of another version: re-sealed, never vouched for.
+                    sourceUnknown: !textSource.current.known,
                 },
             );
             if (!live(taken)) return;
@@ -1111,6 +1380,9 @@ export function TextEditor({
             if (!live(taken)) return;
             // Published either way: a close waiting on it goes on (asking first if typed meanwhile).
             landed = true;
+            // The text went into the copy, located or not: the file it came from keeps no draft of
+            // it, unless typed into since.
+            if (before && current.state.doc.eq(doc)) void writer.current?.remove(before);
             if (made.node && listed) {
                 settled(doc, listed, made.versionId, bytes);
                 onTarget(listed);
@@ -1141,6 +1413,7 @@ export function TextEditor({
         settled,
         onTarget,
         markDirty,
+        placeNow,
         reloading,
         token,
         live,
@@ -1170,13 +1443,85 @@ export function TextEditor({
             setFailure(editorWords.theirsGone);
             return;
         }
+        // This session's changes are discarded (the person confirmed it): so is their draft.
+        const place = placeNow();
+        if (place) void writer.current?.remove(place);
         // A new opened text: any earlier work still on its way publishes nothing over it.
         opening.current += 1;
         markDirty(false);
         onTarget(listed);
         setPhase({ kind: 'loading', progress: null });
         setLoadFrom(listed);
-    }, [queryClient, onTarget, markDirty, token, live]);
+    }, [queryClient, onTarget, markDirty, token, live, placeNow]);
+
+    /* The offer answered: the text takes changes again. */
+    const closeOffer = useCallback(() => {
+        setOffer(null);
+        const current = view.current;
+        if (!current) return;
+        current.dispatch({ effects: editability.current.reconfigure(fixed(!endedNow.current)) });
+        current.focus();
+        // Typed before a late offer came: kept from here.
+        if (dirtyNow.current) writer.current?.changed();
+    }, [setOffer]);
+    /*
+     * Restore: the draft's text in place of the opened one, as an unsaved edit (Undo goes back), in the
+     * session's format it was typed under. Someone saved since: the stale choices at once, and a save
+     * still starts from the draft's version, so nothing lands over theirs without asking.
+     */
+    const restoreDraft = useCallback(() => {
+        const shown = offerNow.current;
+        const current = view.current;
+        const state = saveState.current;
+        if (!shown || !current || !state) return;
+        const { draft } = shown;
+        const format: TextFormat = {
+            encoding: draft.frame.encoding,
+            lineEnding: draft.frame.lineEnding,
+            mixed: draft.frame.mixed,
+        };
+        saveState.current = { ...state, format };
+        setTextFormat(format);
+        if (shown.kind === 'stale')
+            target.current = { ...target.current, startedFrom: draft.frame.baseVersionId };
+        // Its text is this session's from here, and the draft too (Discard changes then removes it).
+        // Read from another version than the one just opened, its source can't be checked now.
+        writer.current?.adopt(shown.place, shown.owner);
+        textSource.current = {
+            versionId: draft.sourceVersionId,
+            known:
+                draft.sourceVersionId !== null &&
+                draft.sourceVersionId === textSource.current.versionId,
+        };
+        // The header's marks say so too: the version just read no longer speaks for this text.
+        if (!textSource.current.known) onRead(shown.openedVersionId, undefined, true);
+        closeOffer();
+        const end = draft.text.length;
+        const at = (offset: number) => Math.min(offset, end);
+        current.dispatch({
+            changes: { from: 0, to: current.state.doc.length, insert: draft.text },
+            selection: draft.selection
+                ? EditorSelection.single(at(draft.selection.from), at(draft.selection.to))
+                : undefined,
+            scrollIntoView: true,
+            userEvent: 'input.restore',
+        });
+        if (shown.kind === 'stale') setStale({ currentVersionId: shown.openedVersionId });
+    }, [closeOffer, onRead]);
+    /* The offer takes the keyboard when it shows, as the editor would have: Restore is one key away. */
+    const restoreButton = useRef<HTMLButtonElement>(null);
+    useEffect(() => {
+        if (offer) restoreButton.current?.focus();
+    }, [offer]);
+    /* Discard: the draft goes, nothing more is asked; the text stays as the file holds it. */
+    const discardDraft = useCallback(() => {
+        const shown = offerNow.current;
+        if (!shown) return;
+        // Discarded by the person: theirs to remove, unless another tab wrote it since.
+        writer.current?.adopt(shown.place, shown.owner);
+        void writer.current?.remove(shown.place);
+        closeOffer();
+    }, [closeOffer]);
 
     // Always the editor's while it is open (the browser's Save Page never opens over it); it saves
     // only when there are changes and nothing else is under way.
@@ -1198,7 +1543,7 @@ export function TextEditor({
     );
 
     const format = useFormatForDisplay();
-    const savable = editable && dirty && !saving && !ended && !reloading;
+    const savable = editable && dirty && !saving && !ended && !reloading && !offer;
     const header = actions
         ? createPortal(
               <div className="flex min-w-0 items-center gap-3">
@@ -1256,6 +1601,11 @@ export function TextEditor({
                           </output>
                       )
                   )}
+                  {draftNotKept && !failure && !finishing && (
+                      <output className="truncate text-[13px] text-muted-foreground max-sm:hidden">
+                          {editorWords.draftNotKept}
+                      </output>
+                  )}
                   {editable && (
                       <Button
                           disabled={!savable}
@@ -1292,6 +1642,25 @@ export function TextEditor({
     else
         body = (
             <div className="flex min-h-0 flex-1 flex-col">
+                {offer && (
+                    <div
+                        data-draft-offer
+                        className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground"
+                    >
+                        <p className="min-w-0 flex-1">
+                            {editorWords.restoreOffer(draftWhen(offer.draft.frame.savedAt))}
+                        </p>
+                        <div className="flex shrink-0 gap-2">
+                            <Button variant="outline" onClick={discardDraft}>
+                                {editorWords.discardDraft}
+                            </Button>
+                            {/* Asked before anything else: the text can't be changed until it is answered. */}
+                            <Button ref={restoreButton} variant="outline" onClick={restoreDraft}>
+                                {editorWords.restore}
+                            </Button>
+                        </div>
+                    </div>
+                )}
                 {phase.kind === 'read-only' && (
                     <p className="shrink-0 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground">
                         {READ_ONLY_WORDS[phase.reason]}
@@ -1301,6 +1670,12 @@ export function TextEditor({
                     <p className="shrink-0 border-b border-rule bg-accent px-5 py-2.5 text-sm text-accent-foreground">
                         {mixedNote(textFormat)}
                     </p>
+                )}
+                {draftNotKept && (
+                    // On a phone the header has no room for it: said here instead.
+                    <output className="shrink-0 border-b border-rule px-5 py-2 text-[13px] text-muted-foreground sm:hidden">
+                        {editorWords.draftNotKept}
+                    </output>
                 )}
                 {warning && (
                     // On a phone the header has no room for it: said here instead, and read out the same way.

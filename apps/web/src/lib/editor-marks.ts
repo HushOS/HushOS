@@ -11,6 +11,11 @@ export type EditorRead = {
     row: DriveNode;
     /* The version the text is now: the one read, or the one the last save or copy published (null: unknown). */
     versionId: string | null;
+    /*
+     * The text came from a version that can't be checked now (a draft restored from another one):
+     * its content shows as unchecked, never as the version read.
+     */
+    contentUnknown?: boolean;
 };
 
 /*
@@ -23,9 +28,10 @@ export function nextRead(
     before: EditorRead,
     versionId: string | null,
     row?: DriveNode,
+    contentUnknown = false,
 ): EditorRead {
     const speaks = row && versionId !== null && row.currentVersion?.id === versionId;
-    return { row: speaks ? row : before.row, versionId };
+    return { row: speaks ? row : before.row, versionId, contentUnknown };
 }
 
 /*
@@ -37,6 +43,16 @@ export function markedRow(
     target: DriveNode,
     read: EditorRead,
 ): DriveNode {
+    const row = checkedRow(listed, target, read);
+    if (!read.contentUnknown) return row;
+    // Text from another version than this row's: no verdict of this row's version speaks for it.
+    return {
+        ...row,
+        integrity: { metadata: row.integrity?.metadata ?? 'unchecked', version: 'unchecked' },
+    };
+}
+
+function checkedRow(listed: DriveNode | null, target: DriveNode, read: EditorRead): DriveNode {
     if (
         listed &&
         read.versionId !== null &&
