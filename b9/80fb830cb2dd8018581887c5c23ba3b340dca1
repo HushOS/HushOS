@@ -1,0 +1,24 @@
+e2e/README.md
+  s_c60e24772e04af::t_32269122b75791 1-16,18-37
+  s_c60e24772e04af::t_d908913568a36e 17
+AGENTS.md
+  s_c60e24772e04af::t_9bde1133048473 31
+CONTRIBUTING.md
+  s_c60e24772e04af::t_a90ab6cf798602 613,649-650,652,666
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b980fb830cb2dd8018581887c5c23ba3b340dca1",
+  "prompts": {},
+  "sessions": {
+    "s_c60e24772e04af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf9d9685-1460-4c47-aaac-9380f26e556c",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "TheBinaryGuy <hello@thebinary.dev>"
+    }
+  }
+}
