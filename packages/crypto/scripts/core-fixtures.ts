@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { encryptKey } from '../src/aead';
-import { rememberAccountKey } from '../src/device';
-import { attemptDigest, deviceSessionStatement, emailDigest } from '../src/device-identity';
+import { encryptKey } from '../src/primitives/aead';
+import { rememberAccountKey } from '../src/account/device';
+import { attemptDigest, deviceSessionStatement, emailDigest } from '../src/account/device-identity';
 import {
     CHUNK_SIZE,
     CONTENT_SUITE,
@@ -20,7 +20,7 @@ import {
     UNPADDED_CONTENT_SUITE,
     wrapContentKey,
     wrapNodeKey,
-} from '../src/drive';
+} from '../src/drive/drive';
 import sodium from 'libsodium-wrappers';
 import {
     createIdentity,
@@ -28,32 +28,32 @@ import {
     publicIdentity,
     upgradeIdentity,
     type IdentityEnvelope,
-} from '../src/identity';
-import { decode, encode, wrappingKey } from '../src/keys';
-import { sealShareKey, shareContext } from '../src/shares';
-import { hybridKey, hybridKeyWithSalt } from '../src/hybrid';
-import { kemEncapsulate } from '../src/pq';
-import { fingerprint, fingerprintOfKeys, keyDigest } from '../src/fingerprint';
+} from '../src/account/identity';
+import { decode, encode, wrappingKey } from '../src/primitives/keys';
+import { sealShareKey, shareContext } from '../src/drive/shares';
+import { hybridKey, hybridKeyWithSalt } from '../src/primitives/hybrid';
+import { kemEncapsulate } from '../src/primitives/pq';
+import { fingerprint, fingerprintOfKeys, keyDigest } from '../src/primitives/fingerprint';
 import {
     generateLinkSecret,
     generateLinkSalt,
     passwordKey,
     sealLinkKeyWith,
     sealLinkSecret,
-} from '../src/links';
-import { createRecovery } from '../src/recovery';
+} from '../src/drive/links';
+import { createRecovery } from '../src/account/recovery';
 import {
     recoveryStepKey,
     signTwoStepPhrase,
     stepTokenDigest,
     twoStepPhraseStatement,
-} from '../src/two-step';
-import { createSettingsKey, sealSettings } from '../src/contacts';
+} from '../src/account/two-step';
+import { createSettingsKey, sealSettings } from '../src/trust/contacts';
 import {
     createSuccessor,
     openIdentityEncryptionKey,
     openIdentitySigningKey,
-} from '../src/identity';
+} from '../src/account/identity';
 import {
     digest,
     keysStatement,
@@ -65,16 +65,21 @@ import {
     versionResealedStatement,
     versionSavedStatement,
     versionStatement,
-} from '../src/signatures';
-import { deriveId, type IdKind } from '../src/ids';
+} from '../src/primitives/signatures';
+import { deriveId, type IdKind } from '../src/primitives/ids';
 import { accountKeyContext, ENVELOPE_VERSION } from '../src/protocol';
 import {
     createWorkspaceGrant,
     grantAreaKey,
     openWorkspaceKey,
     rewrapAreaSelfGrant,
-} from '../src/workspace';
-import { carriedRekeyed, judgeRekeyed, readRekeyed, rekeyedCases } from '../src/rekeyed-testkit';
+} from '../src/drive/workspace';
+import {
+    carriedRekeyed,
+    judgeRekeyed,
+    readRekeyed,
+    rekeyedCases,
+} from '../src/groups/rekeyed-testkit';
 import { isDeepStrictEqual } from 'node:util';
 
 /*
@@ -650,7 +655,7 @@ const signatures = {
 
 // Re-keyed records (docs/integrity-design.md): the node's metadata and suite 3 version as the account
 // wrote and signed them above, re-keyed to the next epoch by the granter keeping them as origins, and
-// the cases both twins judge alike (src/rekeyed-testkit.ts, tests/common/rekeyed.rs).
+// the cases both twins judge alike (src/groups/rekeyed-testkit.ts, tests/common/rekeyed.rs).
 const rekeyerKeys = { userId: granterUserId, secretKey: granterKeys.signingKey };
 const otherVersionSigned = {
     workspaceId,

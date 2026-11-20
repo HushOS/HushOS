@@ -1,5 +1,5 @@
 {
-    "about": "The typed-words check of a join code (docs/groups-design.md 3.2): the Rust core's join_check and the web's joinCheck (packages/crypto/src/join-check.ts) must give each case's `expected`. `code` is the shared code unless a case names its own.",
+    "about": "The typed-words check of a join code (docs/groups-design.md 3.2): the Rust core's join_check and the web's joinCheck (packages/crypto/src/groups/join-check.ts) must give each case's `expected`. `code` is the shared code unless a case names its own.",
     "code": [
         "abandon",
         "ability",

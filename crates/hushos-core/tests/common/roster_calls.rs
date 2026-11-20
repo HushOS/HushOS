@@ -1,5 +1,5 @@
 //! Roster calls (groups 1d, Core 5a), for the shared fixtures: the twin of
-//! `packages/crypto/src/roster-calls-testkit.ts`. Both twins build the same
+//! `packages/crypto/src/groups/roster-calls-testkit.ts`. Both twins build the same
 //! family from the same people (group testkit persons 1 to 5) and keys, the
 //! same calls in the same order through their own code (here the
 //! [`AreaLedger`] builders, there the worker's `groupStage` and

@@ -23,7 +23,7 @@ Decisions settled with the owner (2026-10-15):
 
 ## 1. Devices
 
-A device is one app installation or one browser profile. Today the server knows only sessions, and a browser's remembered unlock lives entirely on the device (`packages/crypto/src/device.ts`).
+A device is one app installation or one browser profile. Today the server knows only sessions, and a browser's remembered unlock lives entirely on the device (`packages/crypto/src/account/device.ts`).
 
 | Table                   | Holds                                                                                                                                                                                                                                      |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -423,7 +423,7 @@ Milestone 1 is built. Where it differs from sections 1 and 8, this section is wh
 ["hushos/device/session",1,userId,deviceId,sha256(attemptToken)]
 ```
 
-(ids lowercased, the digest of the attempt token's UTF-8, base64url; built identically in `packages/db/src/signatures.ts`, `packages/crypto/src/device-identity.ts` and `crates/hushos-core/src/devices.rs`, held together by the fixtures). The attempt is consumed before anything is checked, so a signature is good for one sign-in. A valid proof brings the device back with its approval unchanged and ends its previous session; a missing, wrong or revoked one makes a new device and never fails the sign-in. The client sends a proof only when the email being signed in with has the digest stored beside the key. A device that never got a key (a browser without Ed25519 in Web Crypto) is lent to the next sign-in by its own session cookie, and only then.
+(ids lowercased, the digest of the attempt token's UTF-8, base64url; built identically in `packages/db/src/signatures.ts`, `packages/crypto/src/account/device-identity.ts` and `crates/hushos-core/src/devices.rs`, held together by the fixtures). The attempt is consumed before anything is checked, so a signature is good for one sign-in. A valid proof brings the device back with its approval unchanged and ends its previous session; a missing, wrong or revoked one makes a new device and never fails the sign-in. The client sends a proof only when the email being signed in with has the digest stored beside the key. A device that never got a key (a browser without Ed25519 in Web Crypto) is lent to the next sign-in by its own session cookie, and only then.
 
 **Where the key lives.** Only the web key is non-exportable (an Ed25519 `CryptoKey` in its own IndexedDB database, `hushos-device-identity`). The Secure Enclave holds no Ed25519 keys, and Android's Keystore has Ed25519 only from API 33 (the app's minimum is 29), so on the phones the 32-byte seed is kept wrapped: in the shared Keychain (`device-identity`, after first unlock, this device only; the Files extensions share it) and in the Keystore-backed encrypted preferences.
 

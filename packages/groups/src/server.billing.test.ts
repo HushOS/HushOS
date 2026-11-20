@@ -245,8 +245,8 @@ vi.mock('@hushos/db', async (importOriginal) => {
 
 const { groupsRepository, billingRepository, driveRepository, scopedId } =
     await import('@hushos/db');
-const { areaKeyCommitment } = await import('../../crypto/src/area-keys');
-const { tombstoneAt } = await import('../../crypto/src/group-testkit');
+const { areaKeyCommitment } = await import('../../crypto/src/groups/area-keys');
+const { tombstoneAt } = await import('../../crypto/src/groups/group-testkit');
 const {
     closeDatabase,
     createTestAccount,

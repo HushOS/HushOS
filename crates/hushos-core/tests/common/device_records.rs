@@ -1,5 +1,5 @@
 //! The device record and the settings pin, for the shared fixtures, the twin
-//! of `packages/crypto/src/device-record-testkit.ts`: both build the same
+//! of `packages/crypto/src/account/device-record-testkit.ts`: both build the same
 //! cases in the same order from the same people (person 1 reads, person 2 is
 //! the other member), seal each case's chain record with their own acceptance
 //! (`AreaLedger::accept_served`; the worker's `groupAccept`) and change it as

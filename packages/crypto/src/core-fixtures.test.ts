@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { restoreAccountKey } from './device';
-import { deviceSessionStatement, emailDigest } from './device-identity';
+import { restoreAccountKey } from './account/device';
+import { deviceSessionStatement, emailDigest } from './account/device-identity';
 import {
     chunkCount,
     ciphertextSize,
@@ -19,12 +19,12 @@ import {
     sealMetadata,
     openNodeKey,
     openVersion,
-} from './drive';
-import { decryptKey } from './aead';
-import { openLinkKey, openLinkSecret, passwordKey } from './links';
-import { openRecovery, readRecoveryPhrase } from './recovery';
-import { stepTokenDigest, twoStepPhraseStatement, verifyTwoStepPhrase } from './two-step';
-import { openReportKey } from './reports';
+} from './drive/drive';
+import { decryptKey } from './primitives/aead';
+import { openLinkKey, openLinkSecret, passwordKey } from './drive/links';
+import { openRecovery, readRecoveryPhrase } from './account/recovery';
+import { stepTokenDigest, twoStepPhraseStatement, verifyTwoStepPhrase } from './account/two-step';
+import { openReportKey } from './drive/reports';
 import {
     openIdentityEncryptionKey,
     openIdentityKemKey,
@@ -36,9 +36,9 @@ import {
     verifySuccessionChain,
     verifySuccessionLink,
     type IdentityEnvelope,
-} from './identity';
-import { fingerprint, fingerprintOfKeys, keyDigest } from './fingerprint';
-import { pinVerified } from './pins';
+} from './account/identity';
+import { fingerprint, fingerprintOfKeys, keyDigest } from './primitives/fingerprint';
+import { pinVerified } from './trust/pins';
 import {
     integrityOf,
     keysStatement,
@@ -55,16 +55,16 @@ import {
     versionSavedStatement,
     versionStatement,
     versionStatements,
-} from './signatures';
-import { deriveId, type IdKind } from './ids';
-import { openAreaSelfGrant, openWorkspaceKey } from './workspace';
-import { openShareKey } from './shares';
-import { openSettings, openSettingsKey } from './contacts';
+} from './primitives/signatures';
+import { deriveId, type IdKind } from './primitives/ids';
+import { openAreaSelfGrant, openWorkspaceKey } from './drive/workspace';
+import { openShareKey } from './drive/shares';
+import { openSettings, openSettingsKey } from './trust/contacts';
 import web from '../../../crates/hushos-core/fixtures/web.json';
-import { decode, encode, wrappingKey } from './keys';
+import { decode, encode, wrappingKey } from './primitives/keys';
 import { accountKeyContext } from './protocol';
 import core from './__fixtures__/core.json';
-import { carriedRekeyed, judgeRekeyed, readRekeyed } from './rekeyed-testkit';
+import { carriedRekeyed, judgeRekeyed, readRekeyed } from './groups/rekeyed-testkit';
 
 /* The file's bytes as the fixture writes them; an empty file is the empty string, which decode refuses. */
 const fileOf = (value: string) => (value === '' ? new Uint8Array(0) : decode(value));

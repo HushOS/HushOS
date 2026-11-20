@@ -1,11 +1,11 @@
 //! The contact guard as a phone keeps it (docs/optional-verification.md 2.8):
 //! one record per account, sealed at rest so a phone holds only ciphertext of
 //! whom its account shared with. The web keeps one row per person
-//! (`packages/crypto/src/contact-guard.ts`); the key is the same derivation,
+//! (`packages/crypto/src/trust/contact-guard.ts`); the key is the same derivation,
 //! the record's layout is the phone's own.
 //!
 //! Sealed in the device-store envelope (`[1][24-byte nonce][XChaCha20-Poly1305]`,
-//! base64url, `packages/crypto/src/device-store.ts`) under a key from the
+//! base64url, `packages/crypto/src/account/device-store.ts`) under a key from the
 //! settings key (HKDF-SHA-256, salt 32 zero bytes, info
 //! `hushos/contact-guard/v1`, the web's). A master-key rotation only re-wraps
 //! the settings key, so a guard written before one still opens after it. The

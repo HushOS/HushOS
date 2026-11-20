@@ -1,5 +1,5 @@
 //! Two-step sign-in, the parts an app builds and reads (`docs/two-step-design.md` 4, 5),
-//! as `packages/crypto/src/two-step.ts` and `packages/auth/src/login-reply.ts` do on the web.
+//! as `packages/crypto/src/account/two-step.ts` and `packages/auth/src/login-reply.ts` do on the web.
 //!
 //! Codes are checked only on the server, so nothing here makes or checks one. What is here:
 //!

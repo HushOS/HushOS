@@ -1,6 +1,6 @@
 //! The record half of a walk in a family folder (docs/integrity-design.md,
 //! "Re-keyed records"), the twin of `rekeyRecord` and `rekeyNode` in
-//! `packages/crypto/src/rotation-records.ts`, which the web worker runs.
+//! `packages/crypto/src/groups/rotation-records.ts`, which the web worker runs.
 //! [`crate::AreaLedger::rotate_node`] calls it between making a node's fresh
 //! key and marking it pending, so a node whose records do not re-key leaves
 //! nothing behind.

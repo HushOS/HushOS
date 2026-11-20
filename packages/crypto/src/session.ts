@@ -1,13 +1,13 @@
-import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './contact-guard';
-import { CryptoError, RefusedError } from './errors';
-import { recoveryStepKey, signTwoStepPhrase } from './two-step';
-import { checkPassword, normalizePassword } from './password';
+import { guardRowId, openGuardRow, sealGuardRow, type GuardRowKind } from './trust/contact-guard';
+import { CryptoError, RefusedError } from './primitives/errors';
+import { recoveryStepKey, signTwoStepPhrase } from './account/two-step';
+import { checkPassword, normalizePassword } from './primitives/password';
 import {
     createSecurityChange,
     type SecurityAction,
     type SecurityChallenge,
     type SecurityUpdate,
-} from './security';
+} from './trust/security';
 import {
     createIdentity,
     createSuccessor,
@@ -23,7 +23,7 @@ import {
     openIdentityMlDsaKey,
     publicIdentity,
     type IdentityEnvelope,
-} from './identity';
+} from './account/identity';
 import {
     createGroupSession,
     isGroupMessage,
@@ -32,8 +32,8 @@ import {
     type GroupResults,
     type GroupRotationTrust,
     type RecordJudge,
-} from './session-groups';
-import type { ServedIdentity } from './group-trust';
+} from './groups/session-groups';
+import type { ServedIdentity } from './groups/group-trust';
 import {
     createSettingsKey,
     openSettingsKey,
@@ -41,9 +41,9 @@ import {
     type Settings,
     type SettingsEnvelope,
     type SettingsKeyEnvelope,
-} from './contacts';
-import { settingsOpenFor } from './settings-marks';
-import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './shares';
+} from './trust/contacts';
+import { settingsOpenFor } from './trust/settings-marks';
+import { openShareKey, sealShareKey, type GranteeSecrets, type ShareContext } from './drive/shares';
 import {
     copyForm,
     integrityOf,
@@ -63,18 +63,18 @@ import {
     type StatementForms,
     type TrustedSigner,
     type VersionStatement,
-} from './signatures';
-import { openReportKey, sealReportKey } from './reports';
-import { rekeyedFor } from './rekeyed-scope';
+} from './primitives/signatures';
+import { openReportKey, sealReportKey } from './drive/reports';
+import { rekeyedFor } from './groups/rekeyed-scope';
 import {
     openVersionUnder,
     rekeyNode as rekeyNodeRecords,
     type RotateNodeInput,
     type RotatedNode,
     type ServedRekey,
-} from './rotation-records';
-import { FAMILY_FOLDER, createAreaLedger } from './area-ledger';
-import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './pq';
+} from './groups/rotation-records';
+import { FAMILY_FOLDER, createAreaLedger } from './groups/area-ledger';
+import { KEM_PUBLIC_KEY_BYTES, ML_DSA_PUBLIC_KEY_BYTES } from './primitives/pq';
 import {
     generateLinkSalt,
     generateLinkSecret,
@@ -83,16 +83,20 @@ import {
     passwordKey,
     sealLinkKeyWith,
     sealLinkSecret,
-} from './links';
+} from './drive/links';
 import {
     createRecovery,
     openRecovery,
     readRecoveryPhrase,
     signRecoveryReset,
     type RecoveryEnvelope,
-} from './recovery';
-import { rememberAccountKey, restoreAccountKey, type RememberedAccount } from './device';
-import { createWorkspaceGrant, openWorkspaceKey, type WorkspaceKeyEnvelope } from './workspace';
+} from './account/recovery';
+import { rememberAccountKey, restoreAccountKey, type RememberedAccount } from './account/device';
+import {
+    createWorkspaceGrant,
+    openWorkspaceKey,
+    type WorkspaceKeyEnvelope,
+} from './drive/workspace';
 import {
     CHUNK_SIZE,
     CONTENT_SUITE,
@@ -119,19 +123,19 @@ import {
     type NodeMetadata,
     sealDocument,
     openDocument,
-} from './drive';
+} from './drive/drive';
 import { client, ready } from '@serenity-kit/opaque';
-import { encryptKey, decryptKey } from './aead';
-import { deriveStashKey, openStash, sealStash } from './stash';
-import { type Draft, type DraftPlace, draftSlot, openDraft, sealDraft } from './drafts';
+import { encryptKey, decryptKey } from './primitives/aead';
+import { deriveStashKey, openStash, sealStash } from './account/stash';
+import { type Draft, type DraftPlace, draftSlot, openDraft, sealDraft } from './account/drafts';
 import {
     openRollbackMarks,
     RollbackMarksError,
     sealRollbackMarks,
     updateRollbackMarks,
     type RollbackMarks,
-} from './rollback-marks';
-import { encode, decode, wrappingKey, checkProfile } from './keys';
+} from './trust/rollback-marks';
+import { encode, decode, wrappingKey, checkProfile } from './primitives/keys';
 import {
     accountKeyContext,
     ENVELOPE_VERSION,
@@ -793,7 +797,7 @@ export type {
     RotatedNode,
     RotatedRecord,
     ServedRekey,
-} from './rotation-records';
+} from './groups/rotation-records';
 export type DriveOpenedNode =
     | { id: string; metadata: NodeMetadata; content?: DriveContentInfo | null; error?: undefined }
     | { id: string; metadata?: undefined; content?: undefined; error: string };

@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { GROUP } from '../src/group-testkit';
-import { parseRoster } from '../src/groups';
+import { GROUP } from '../src/groups/group-testkit';
+import { parseRoster } from '../src/groups/groups';
 import {
     core,
     coreJoin,

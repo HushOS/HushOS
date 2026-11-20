@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
-import { CHUNK_SIZE } from './drive';
-import { createIdentity } from './identity';
+import { createDeviceKey, rememberAccountKey } from './account/device';
+import { CHUNK_SIZE } from './drive/drive';
+import { createIdentity } from './account/identity';
 import { createCryptoSession } from './session';
-import { createWorkspaceGrant } from './workspace';
+import { createWorkspaceGrant } from './drive/workspace';
 
 /*
  * In-memory upload bytes in the worker: attached once, read chunk by chunk

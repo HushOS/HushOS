@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
-import { fixture as removals } from '../src/removal-calls-testkit';
-import { fixture } from '../src/roster-calls-testkit';
-import { fixture as settingsAreas } from '../src/settings-areas-testkit';
+import { fixture as removals } from '../src/groups/removal-calls-testkit';
+import { fixture } from '../src/groups/roster-calls-testkit';
+import { fixture as settingsAreas } from '../src/trust/settings-areas-testkit';
 
 /*
  * Roster calls (groups 1d, Core 5a) as the web builds them, for the Rust core
@@ -10,7 +10,7 @@ import { fixture as settingsAreas } from '../src/settings-areas-testkit';
  * call's body or refusal from the worker's groupStage, the admin's join codes
  * and the outbox entries the web keeps, the settings documents it sealed and
  * the family folders it opened (settings-areas-testkit.ts). Every case is checked against its
- * declaration before anything is written (src/roster-calls-testkit.ts).
+ * declaration before anything is written (src/groups/roster-calls-testkit.ts).
  * Regenerate with `bun run fixtures:groups` at the repository root.
  */
 

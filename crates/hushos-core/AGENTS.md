@@ -54,17 +54,17 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 - Hand-written scenario files in `fixtures/` carry stated outcomes. Both twins run them through a shared testkit.
 - Each twin must reproduce the other's full verdict, not only pass or fail.
 
-| Area         | Web to core                                                                                                                                          | Core to web                                                                                                                                                                         | Shared                                                                                                                                                                                                                                                                                                             |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Base         | `fixtures/web.json`, sealed by `packages/crypto/scripts/core-fixtures.ts`, opened by `tests/web_fixtures.rs`                                         | `packages/crypto/src/__fixtures__/core.json`, sealed by `examples/fixtures.rs`, opened by `packages/crypto/src/core-fixtures.test.ts`                                               | `tests/common/rekeyed.rs`, `packages/crypto/src/rekeyed-testkit.ts`                                                                                                                                                                                                                                                |
-| Groups       | `fixtures/web-groups.json`, from `packages/crypto/scripts/group-fixtures.ts`, read by `tests/web_group_fixtures.rs`                                  | `packages/crypto/src/__fixtures__/core-groups.json`, from `examples/group_fixtures.rs`, read by `packages/crypto/src/group-fixtures.test.ts`                                        | `tests/common/groups.rs`, `group-testkit.ts`                                                                                                                                                                                                                                                                       |
-| Area ledger  | `fixtures/web-area-ledger.json`, from `packages/crypto/scripts/area-ledger-fixtures.ts`, read by `tests/area_ledger_fixtures.rs`                     | `packages/crypto/src/__fixtures__/core-area-ledger.json`, from `examples/area_ledger_fixtures.rs`, read by `packages/crypto/src/area-ledger-fixtures.test.ts`                       | `fixtures/area-ledger-scenarios.json`, `fixtures/merge-pin-cases.json`, `tests/common/area_ledger.rs`, `packages/crypto/src/area-ledger-testkit.ts`, `tests/common/rotations.rs`, `packages/crypto/src/rotation-testkit.ts`, `tests/common/device_records.rs`, `packages/crypto/src/device-record-testkit.ts`      |
-| Joining      | `fixtures/web-join.json`, from `packages/crypto/scripts/join-fixtures.ts`, read by `tests/join_fixtures.rs`                                          | `packages/crypto/src/__fixtures__/core-join.json`, from `examples/join_fixtures.rs`, read by `join-fixtures.test.ts` and (for consent) `packages/db/src/auth.consent.test.ts`       | `fixtures/join-check-cases.json`, `fixtures/join-session-scenarios.json`, `tests/common/join.rs`, `join-testkit.ts`                                                                                                                                                                                                |
-| Roster calls | `fixtures/web-roster-calls.json`, from `packages/crypto/scripts/roster-call-fixtures.ts`, read by `tests/roster_call_fixtures.rs`                    | `packages/crypto/src/__fixtures__/core-roster-calls.json`, from `examples/roster_call_fixtures.rs`, read by `roster-call-fixtures.test.ts` and `packages/groups/src/server.test.ts` | `fixtures/outbox-steps.json`, `fixtures/roster-call-sessions.json`, `fixtures/settings-area-cases.json`, `tests/common/roster_calls.rs`, `roster-calls-testkit.ts`, `tests/common/removal_calls.rs`, `removal-calls-testkit.ts`, `tests/common/settings_areas.rs`, `packages/crypto/src/settings-areas-testkit.ts` |
-| Pins         | `fixtures/pin-cases.json` (hand-stated outcomes, written by `packages/crypto/scripts/pin-cases.ts`)                                                  | Read by `tests/pin_cases.rs` and `packages/drive/src/pin-cases.test.ts`                                                                                                             | Chain cases are unit tests in each twin: `first_seen/tests.rs`, `packages/crypto/src/first-seen.test.ts`                                                                                                                                                                                                           |
-| Save path    | `fixtures/save-estimate-cases.json` (the room a save run's results take, written from `packages/drive/src/save-runs.ts`)                             | Read by `tests/save_estimate.rs` and `packages/drive/src/save-runs.test.ts`                                                                                                         | The weakest-source rule is a unit test in each twin: `signatures.rs`, `packages/drive/src/save-runs.test.ts`                                                                                                                                                                                                       |
-| ML-DSA       | `fixtures/ml-dsa-65-acvp.json`, a subset of NIST's ACVP-Server vectors (commit and file hashes inside)                                               | Passed by `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts`                                                                                                             |                                                                                                                                                                                                                                                                                                                    |
-| Old apps     | `fixtures/v0.10.0/planted-join.json`, made by the core at the tag `v0.10.0` with `fixtures/v0.10.0/planted_join.rs` (how to run it is in its header) | Read by `tests/planted_join.rs` and `packages/crypto/src/planted-join.test.ts`                                                                                                      |                                                                                                                                                                                                                                                                                                                    |
+| Area         | Web to core                                                                                                                                          | Core to web                                                                                                                                                                         | Shared                                                                                                                                                                                                                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Base         | `fixtures/web.json`, sealed by `packages/crypto/scripts/core-fixtures.ts`, opened by `tests/web_fixtures.rs`                                         | `packages/crypto/src/__fixtures__/core.json`, sealed by `examples/fixtures.rs`, opened by `packages/crypto/src/core-fixtures.test.ts`                                               | `tests/common/rekeyed.rs`, `packages/crypto/src/groups/rekeyed-testkit.ts`                                                                                                                                                                                                                                                          |
+| Groups       | `fixtures/web-groups.json`, from `packages/crypto/scripts/group-fixtures.ts`, read by `tests/web_group_fixtures.rs`                                  | `packages/crypto/src/__fixtures__/core-groups.json`, from `examples/group_fixtures.rs`, read by `packages/crypto/src/groups/group-fixtures.test.ts`                                 | `tests/common/groups.rs`, `group-testkit.ts`                                                                                                                                                                                                                                                                                        |
+| Area ledger  | `fixtures/web-area-ledger.json`, from `packages/crypto/scripts/area-ledger-fixtures.ts`, read by `tests/area_ledger_fixtures.rs`                     | `packages/crypto/src/__fixtures__/core-area-ledger.json`, from `examples/area_ledger_fixtures.rs`, read by `packages/crypto/src/groups/area-ledger-fixtures.test.ts`                | `fixtures/area-ledger-scenarios.json`, `fixtures/merge-pin-cases.json`, `tests/common/area_ledger.rs`, `packages/crypto/src/groups/area-ledger-testkit.ts`, `tests/common/rotations.rs`, `packages/crypto/src/groups/rotation-testkit.ts`, `tests/common/device_records.rs`, `packages/crypto/src/account/device-record-testkit.ts` |
+| Joining      | `fixtures/web-join.json`, from `packages/crypto/scripts/join-fixtures.ts`, read by `tests/join_fixtures.rs`                                          | `packages/crypto/src/__fixtures__/core-join.json`, from `examples/join_fixtures.rs`, read by `join-fixtures.test.ts` and (for consent) `packages/db/src/auth.consent.test.ts`       | `fixtures/join-check-cases.json`, `fixtures/join-session-scenarios.json`, `tests/common/join.rs`, `join-testkit.ts`                                                                                                                                                                                                                 |
+| Roster calls | `fixtures/web-roster-calls.json`, from `packages/crypto/scripts/roster-call-fixtures.ts`, read by `tests/roster_call_fixtures.rs`                    | `packages/crypto/src/__fixtures__/core-roster-calls.json`, from `examples/roster_call_fixtures.rs`, read by `roster-call-fixtures.test.ts` and `packages/groups/src/server.test.ts` | `fixtures/outbox-steps.json`, `fixtures/roster-call-sessions.json`, `fixtures/settings-area-cases.json`, `tests/common/roster_calls.rs`, `roster-calls-testkit.ts`, `tests/common/removal_calls.rs`, `removal-calls-testkit.ts`, `tests/common/settings_areas.rs`, `packages/crypto/src/trust/settings-areas-testkit.ts`            |
+| Pins         | `fixtures/pin-cases.json` (hand-stated outcomes, written by `packages/crypto/scripts/pin-cases.ts`)                                                  | Read by `tests/pin_cases.rs` and `packages/drive/src/pin-cases.test.ts`                                                                                                             | Chain cases are unit tests in each twin: `first_seen/tests.rs`, `packages/crypto/src/trust/first-seen.test.ts`                                                                                                                                                                                                                      |
+| Save path    | `fixtures/save-estimate-cases.json` (the room a save run's results take, written from `packages/drive/src/save-runs.ts`)                             | Read by `tests/save_estimate.rs` and `packages/drive/src/save-runs.test.ts`                                                                                                         | The weakest-source rule is a unit test in each twin: `signatures.rs`, `packages/drive/src/save-runs.test.ts`                                                                                                                                                                                                                        |
+| ML-DSA       | `fixtures/ml-dsa-65-acvp.json`, a subset of NIST's ACVP-Server vectors (commit and file hashes inside)                                               | Passed by `pq.rs`'s tests and `packages/crypto/src/primitives/ml-dsa-acvp.test.ts`                                                                                                  |                                                                                                                                                                                                                                                                                                                                     |
+| Old apps     | `fixtures/v0.10.0/planted-join.json`, made by the core at the tag `v0.10.0` with `fixtures/v0.10.0/planted_join.rs` (how to run it is in its header) | Read by `tests/planted_join.rs` and `packages/crypto/src/groups/planted-join.test.ts`                                                                                               |                                                                                                                                                                                                                                                                                                                                     |
 
 - The base files cover the sealed box, argon2id, BIP-39, settings, shares, rewraps, `ids`, `rekeyed`, `node.attributed`, the area self-grant, the device session proof and the recovery phrase's answer to a second step (`twoStepPhrase`).
 - `bun run fixtures:groups` rebuilds the group and area-ledger files.
@@ -72,39 +72,39 @@ Every module with a TypeScript twin is held to it by fixtures in both directions
 
 ## Module map
 
-| Module                    | Twin in TypeScript                                                                                                  | Holds                                                                        |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `bytes.rs`                |                                                                                                                     | `SecretBytes`, encoding helpers                                              |
-| `envelope.rs`             |                                                                                                                     | Contexts, seals, the re-keying primitives                                    |
-| `ids.rs`                  |                                                                                                                     | Scoped ids                                                                   |
-| `drive.rs`                | `packages/crypto/src/drive.ts`                                                                                      | Node, metadata and version envelopes, content suites, node keys, origin keys |
-| `identity.rs`             |                                                                                                                     | Identity envelopes, upgrades, successions                                    |
-| `pq.rs`                   |                                                                                                                     | ML-DSA-65                                                                    |
-| `signatures.rs`           | `packages/db/src/signatures.ts` (statement bytes)                                                                   | Hybrid signatures, record statements and integrity verdicts                  |
-| `shares.rs`               |                                                                                                                     | Share suite 4, `seal_hybrid`/`open_hybrid`                                   |
-| `links.rs`                |                                                                                                                     | Link keys                                                                    |
-| `reports.rs`              | `packages/crypto/src/reports.ts`                                                                                    | Report seals, `pair_key`                                                     |
-| `recovery.rs`             |                                                                                                                     | Recovery phrases                                                             |
-| `two_step.rs`             | `packages/crypto/src/two-step.ts`, `packages/auth/src/login-reply.ts`                                               | The phrase's answer to a second step, reading a sign-in's reply, passkeys    |
-| `device_approval.rs`      | `packages/crypto/src/device-approval.ts`, `packages/auth/src/device-step.ts`                                        | Approving on another device: the commitment, the code, the statement         |
-| `contacts.rs`             | `packages/crypto/src/contacts.ts`                                                                                   | Fingerprints, key digests, pins, the settings document                       |
-| `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/first-seen.test.ts`                                           | First-seen pins and the guard's rule                                         |
-| `canonical.rs`            |                                                                                                                     | The group statement grammar                                                  |
-| `groups.rs`               |                                                                                                                     | Group keys, rosters, area rows, group seals                                  |
-| `group_trust.rs`          |                                                                                                                     | Accepting a roster chain, writer trust, group verdicts                       |
-| `succession_path.rs`      | `packages/crypto/src/succession-path.ts`                                                                            | The group core's walk along a member's links (crate-private)                 |
-| `area_ledger.rs`          | `packages/crypto/src/area-ledger.ts` (the worker's Drive key store and family write rules)                          | `AreaLedger`, one per unlocked session                                       |
-| `rotation_records.rs`     | `rekeyRecord`/`rekeyNode` in `packages/crypto/src/rotation-records.ts`                                              | Re-keyed walks                                                               |
-| `group_verdicts.rs`       | `recordVerdicts`/`judgeWith` in `packages/crypto/src/group-verdicts.ts`                                             | Record verdicts in family folders                                            |
-| `device_record.rs`        | The worker's device store and `accept` (`session-groups.ts`), `record-acceptance.ts`, `packages/crypto/src/pins.ts` | The chain record, the floor, the guard                                       |
-| `join.rs`                 | The worker's join (`session-groups.ts`), `packages/crypto/src/join-session.ts`                                      | Joining a family, pair codes, first use                                      |
-| `consent.rs`              | `consent-due.ts`, the worker's `identityConsent`                                                                    | Successor consent                                                            |
-| `roster_calls.rs`         | The worker's `groupStage`, `groupOpenSeal`, `groupGrants`, `groupJoinCode`; `packages/crypto/src/outbox.ts`         | Staged roster calls and the outbox                                           |
-| `roster_calls/removal.rs` | `groupStage` kinds `remove`, `markLeft`, `rotate`, `retire`; `groupRestage`; `groupPreviousRoot`                    | Calls that rotate folders                                                    |
-| `ledger_settings.rs`      | `settingsOpenFor` in `packages/crypto/src/settings-marks.ts`                                                        | Settings and family checks in the ledger                                     |
-| `area_open.rs`            | The worker's `groupOpenArea`, `grantAreaKey`/`openAreaSelfGrant`, `rewrapAreaSelfGrant`                             | Opening a family folder, self-grants                                         |
-| `images_pdf.rs`           | `apps/web/src/lib/images-pdf/jpeg.ts`, `geometry.ts` (held to `e2e/fixtures/images`)                                | The JPEG segment cutter, page geometry, `ImagesPdfWriter` for the phones     |
-| `drafts.rs`               | `packages/crypto/src/drafts.ts` (held to `fixtures/drafts.json`, from `packages/crypto/scripts/draft-fixtures.ts`)  | The editor's sealed drafts: key, slot, record, restore decision, caps        |
+| Module                    | Twin in TypeScript                                                                                                         | Holds                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `bytes.rs`                |                                                                                                                            | `SecretBytes`, encoding helpers                                              |
+| `envelope.rs`             |                                                                                                                            | Contexts, seals, the re-keying primitives                                    |
+| `ids.rs`                  |                                                                                                                            | Scoped ids                                                                   |
+| `drive.rs`                | `packages/crypto/src/drive/drive.ts`                                                                                       | Node, metadata and version envelopes, content suites, node keys, origin keys |
+| `identity.rs`             |                                                                                                                            | Identity envelopes, upgrades, successions                                    |
+| `pq.rs`                   |                                                                                                                            | ML-DSA-65                                                                    |
+| `signatures.rs`           | `packages/db/src/signatures.ts` (statement bytes)                                                                          | Hybrid signatures, record statements and integrity verdicts                  |
+| `shares.rs`               |                                                                                                                            | Share suite 4, `seal_hybrid`/`open_hybrid`                                   |
+| `links.rs`                |                                                                                                                            | Link keys                                                                    |
+| `reports.rs`              | `packages/crypto/src/drive/reports.ts`                                                                                     | Report seals, `pair_key`                                                     |
+| `recovery.rs`             |                                                                                                                            | Recovery phrases                                                             |
+| `two_step.rs`             | `packages/crypto/src/account/two-step.ts`, `packages/auth/src/login-reply.ts`                                              | The phrase's answer to a second step, reading a sign-in's reply, passkeys    |
+| `device_approval.rs`      | `packages/crypto/src/account/device-approval.ts`, `packages/auth/src/device-step.ts`                                       | Approving on another device: the commitment, the code, the statement         |
+| `contacts.rs`             | `packages/crypto/src/trust/contacts.ts`                                                                                    | Fingerprints, key digests, pins, the settings document                       |
+| `first_seen.rs`           | `packages/drive` (`comparePin`), `packages/crypto/src/trust/first-seen.test.ts`                                            | First-seen pins and the guard's rule                                         |
+| `canonical.rs`            |                                                                                                                            | The group statement grammar                                                  |
+| `groups.rs`               |                                                                                                                            | Group keys, rosters, area rows, group seals                                  |
+| `group_trust.rs`          |                                                                                                                            | Accepting a roster chain, writer trust, group verdicts                       |
+| `succession_path.rs`      | `packages/crypto/src/groups/succession-path.ts`                                                                            | The group core's walk along a member's links (crate-private)                 |
+| `area_ledger.rs`          | `packages/crypto/src/groups/area-ledger.ts` (the worker's Drive key store and family write rules)                          | `AreaLedger`, one per unlocked session                                       |
+| `rotation_records.rs`     | `rekeyRecord`/`rekeyNode` in `packages/crypto/src/groups/rotation-records.ts`                                              | Re-keyed walks                                                               |
+| `group_verdicts.rs`       | `recordVerdicts`/`judgeWith` in `packages/crypto/src/groups/group-verdicts.ts`                                             | Record verdicts in family folders                                            |
+| `device_record.rs`        | The worker's device store and `accept` (`session-groups.ts`), `record-acceptance.ts`, `packages/crypto/src/trust/pins.ts`  | The chain record, the floor, the guard                                       |
+| `join.rs`                 | The worker's join (`session-groups.ts`), `packages/crypto/src/groups/join-session.ts`                                      | Joining a family, pair codes, first use                                      |
+| `consent.rs`              | `consent-due.ts`, the worker's `identityConsent`                                                                           | Successor consent                                                            |
+| `roster_calls.rs`         | The worker's `groupStage`, `groupOpenSeal`, `groupGrants`, `groupJoinCode`; `packages/crypto/src/groups/outbox.ts`         | Staged roster calls and the outbox                                           |
+| `roster_calls/removal.rs` | `groupStage` kinds `remove`, `markLeft`, `rotate`, `retire`; `groupRestage`; `groupPreviousRoot`                           | Calls that rotate folders                                                    |
+| `ledger_settings.rs`      | `settingsOpenFor` in `packages/crypto/src/trust/settings-marks.ts`                                                         | Settings and family checks in the ledger                                     |
+| `area_open.rs`            | The worker's `groupOpenArea`, `grantAreaKey`/`openAreaSelfGrant`, `rewrapAreaSelfGrant`                                    | Opening a family folder, self-grants                                         |
+| `images_pdf.rs`           | `apps/web/src/lib/images-pdf/jpeg.ts`, `geometry.ts` (held to `e2e/fixtures/images`)                                       | The JPEG segment cutter, page geometry, `ImagesPdfWriter` for the phones     |
+| `drafts.rs`               | `packages/crypto/src/account/drafts.ts` (held to `fixtures/drafts.json`, from `packages/crypto/scripts/draft-fixtures.ts`) | The editor's sealed drafts: key, slot, record, restore decision, caps        |
 
 ## Primitives
 
@@ -200,7 +200,7 @@ Design: docs/identity-pq-design.md.
 - Keys come from the 32-byte ξ.
 - Signing is hedged, through `sign_internal` over `0 || len(ctx) || ctx || M`.
 - `fixtures/ml-dsa-65-acvp.json` is a subset of NIST's ACVP-Server vectors (commit and file hashes inside).
-    - `pq.rs`'s tests and `packages/crypto/src/ml-dsa-acvp.test.ts` both pass it.
+    - `pq.rs`'s tests and `packages/crypto/src/primitives/ml-dsa-acvp.test.ts` both pass it.
     - Do not move either library without them.
 
 ### Identity envelopes
@@ -304,7 +304,7 @@ Design: docs/identity-pq-design.md.
     - `None` means: drop the origin and sign legacy re-sealed.
     - An error stops the rotation. It comes from a malformed new key or epoch, refused served ids, or a current envelope that `old_key` does not open.
 - Fixtures: `rekeyed` in both base files.
-    - `tests/common/rekeyed.rs` and `packages/crypto/src/rekeyed-testkit.ts` read the same JSON.
+    - `tests/common/rekeyed.rs` and `packages/crypto/src/groups/rekeyed-testkit.ts` read the same JSON.
     - They build the same 50 cases, each with whether the next rotation carries its origin, with the same declared verdicts.
     - Each generator checks its own verdicts before writing.
 
@@ -368,7 +368,7 @@ Design: docs/identity-pq-design.md.
     - `approval_code_expected` is what an approving phone calls: it gives the code only when what was revealed is the commitment the phone saw first, and errors otherwise (the app then ends the request as `mismatch`).
     - `approval_qr` and `approval_qr_read` are the QR text; `approval_code_normalize` and `approval_words` read a typed code and complete its word; `approval_prompts_allowed` is the phone's own five-a-day limit per class.
     - The replies of the approval routes are read in `two_step.rs` (`approval_start_reply_read`, `approval_status_reply_read`, `approvals_reply_read`, `approval_ack_reply_read`, `device_enrolment_reply_read`, `device_confirmed_reply_read`), as every other step reply is, and `approval_asks` words the prompt.
-    - Fixtures of their own, in both directions, every value derived from a label so a run changes nothing unless the construction did: `fixtures/web-device-approval.json` (made by `packages/crypto/scripts/device-approval-fixtures.ts`, read by `tests/device_approval_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-device-approval.json` (made by `examples/device_approval_fixtures.rs`, read by `packages/crypto/src/device-approval.test.ts`). The server's copy (`packages/db/src/signatures.ts`) is held to both. Regenerate with `bun run fixtures:device-approval`.
+    - Fixtures of their own, in both directions, every value derived from a label so a run changes nothing unless the construction did: `fixtures/web-device-approval.json` (made by `packages/crypto/scripts/device-approval-fixtures.ts`, read by `tests/device_approval_fixtures.rs`) and `packages/crypto/src/__fixtures__/core-device-approval.json` (made by `examples/device_approval_fixtures.rs`, read by `packages/crypto/src/account/device-approval.test.ts`). The server's copy (`packages/db/src/signatures.ts`) is held to both. Regenerate with `bun run fixtures:device-approval`.
 - Fixtures: `twoStepPhrase` in both base files (the web's statement and signature made here byte for byte, and this crate's verified by the web's `verifyTwoStepPhrase`).
 
 ## Contacts, pins and settings (`contacts.rs`, `first_seen.rs`)
@@ -636,7 +636,7 @@ The model: every device verifies the roster chain from version 1, or continues f
 
 ### Succession paths (`succession_path.rs`)
 
-- `succession_path` is crate-private, the twin of `packages/crypto/src/succession-path.ts`.
+- `succession_path` is crate-private, the twin of `packages/crypto/src/groups/succession-path.ts`.
 - It is the group core's own walk along a member's links.
     - Each link is verified once (memoized per call site) by its successor consent (`succession_consent_verify`).
     - The verified links form a graph, followed from a start key set.
@@ -697,7 +697,7 @@ The model: every device verifies the roster chain from version 1, or continues f
 
 - `AreaLedger` is a `uniffi::Object`, one per unlocked session.
     - The app, the File Provider extension and the DocumentsProvider each fill theirs from listings.
-- It is the twin of the web worker's Drive key store and family write rules in `packages/crypto/src/area-ledger.ts`. `session.ts` and `session-groups.ts` call it.
+- It is the twin of the web worker's Drive key store and family write rules in `packages/crypto/src/groups/area-ledger.ts`. `session.ts` and `session-groups.ts` call it.
 - It holds:
     - Every workspace and node key, each node key with the area version its path is rooted at.
     - A walk's pending keys.
@@ -764,7 +764,7 @@ The model: every device verifies the roster chain from version 1, or continues f
 #### Area ledger fixtures
 
 - `fixtures/area-ledger-scenarios.json`: hand-written scenarios with stated outcomes, two-family ones included.
-    - Both twins run them through `tests/common/area_ledger.rs` and `packages/crypto/src/area-ledger-testkit.ts`, which calls the worker's own ledger functions.
+    - Both twins run them through `tests/common/area_ledger.rs` and `packages/crypto/src/groups/area-ledger-testkit.ts`, which calls the worker's own ledger functions.
     - One scenario: a refusal never lowers the floor.
 - `fixtures/web-area-ledger.json` and `core-area-ledger.json`:
     - Every step's outcome must match.
@@ -795,7 +795,7 @@ The model: every device verifies the roster chain from version 1, or continues f
     - The top level (`AREA_ROOT`).
     - A second walk of a node to a target it is pending at (`ITEM_CHANGED`, both twins).
 - Keys and seeds go through borrowed-slice internals (`*_with`) and are wiped.
-- Fixtures: `rotations` in both area-ledger fixture files (`tests/common/rotations.rs`, `packages/crypto/src/rotation-testkit.ts`).
+- Fixtures: `rotations` in both area-ledger fixture files (`tests/common/rotations.rs`, `packages/crypto/src/groups/rotation-testkit.ts`).
     - Eleven cases on a family whose roster 2 removed person 3:
         - A removal's walk keeping every writer's record.
         - A second walk carrying bound origins, and dropping a gone writer's and an unbound one.
@@ -829,7 +829,7 @@ The model: every device verifies the roster chain from version 1, or continues f
 
 ### Device record, floor and guard (`device_record.rs`)
 
-Twin of the worker's device store and `accept` (`session-groups.ts`), the data layer's order (`packages/crypto/src/record-acceptance.ts`, `acceptFromRecord`, which `apps/web/src/lib/groups/sync.ts` calls) and `mergePin`/`pinAhead` (in `packages/crypto/src/pins.ts`).
+Twin of the worker's device store and `accept` (`session-groups.ts`), the data layer's order (`packages/crypto/src/trust/record-acceptance.ts`, `acceptFromRecord`, which `apps/web/src/lib/groups/sync.ts` calls) and `mergePin`/`pinAhead` (in `packages/crypto/src/trust/pins.ts`).
 
 #### Opening the account
 
@@ -944,7 +944,7 @@ Twin of the worker's device store and `accept` (`session-groups.ts`), the data l
 
 #### Device record fixtures
 
-- `deviceRecords` in both area-ledger fixture files (`tests/common/device_records.rs`, `packages/crypto/src/device-record-testkit.ts`): 26 cases built alike.
+- `deviceRecords` in both area-ledger fixture files (`tests/common/device_records.rs`, `packages/crypto/src/account/device-record-testkit.ts`): 26 cases built alike.
     - Cold: the cache continued, a refused continuation, unreadable records, newer or damaged caches from version 1, cuts below the record's pin with and without it, a refused pin, the cache and the committed chain as marks, no mark.
     - Warm, with a chain committed first: the record at the floor, behind it, damaged and headless caches, the refused continuation that must keep the floor, settings ahead of the record, settings on a branch, and a branch at roster 2 that only the cache shows at 2.
     - The last two: version 1 settings set nothing, and an unreadable record is the answer before settings are open.
@@ -959,7 +959,7 @@ Twin of the worker's device store and `accept` (`session-groups.ts`), the data l
 
 ### Joining (`join.rs`)
 
-The whole newcomer side. Twin of the worker's join (`session-groups.ts`: `admission`, `groupJoinPreview`, `groupJoinCheck`, `groupAccept` with `joining`) and its escalation (`packages/crypto/src/join-session.ts`).
+The whole newcomer side. Twin of the worker's join (`session-groups.ts`: `admission`, `groupJoinPreview`, `groupJoinCheck`, `groupAccept` with `joining`) and its escalation (`packages/crypto/src/groups/join-session.ts`).
 
 #### Preview
 
@@ -1110,7 +1110,7 @@ Design: docs/optional-verification.md.
 
 ### Roster calls (`roster_calls.rs`)
 
-Twin of the worker's `groupStage` (admission, role changes), `groupOpenSeal`, `groupGrants` and `groupJoinCode` (`session-groups.ts`), and of `packages/crypto/src/outbox.ts` (`outboxStep`, `readOutboxEntry`, which the web's outbox drives).
+Twin of the worker's `groupStage` (admission, role changes), `groupOpenSeal`, `groupGrants` and `groupJoinCode` (`session-groups.ts`), and of `packages/crypto/src/groups/outbox.ts` (`outboxStep`, `readOutboxEntry`, which the web's outbox drives).
 
 #### Opening the group key
 
@@ -1283,7 +1283,7 @@ Twin of the worker's `groupStage` (admission, role changes), `groupOpenSeal`, `g
 
 ### Settings in the ledger (`ledger_settings.rs`)
 
-Twin of the worker's `settingsKeyOpen`/`settingsOpen` (`settingsOpenFor` in `packages/crypto/src/settings-marks.ts`) and its settings marks (`settingsMarks`, `contactPinOf`, `settingsPinOf`, `refuseDowngrade`, which `session-groups.ts` calls).
+Twin of the worker's `settingsKeyOpen`/`settingsOpen` (`settingsOpenFor` in `packages/crypto/src/trust/settings-marks.ts`) and its settings marks (`settingsMarks`, `contactPinOf`, `settingsPinOf`, `refuseDowngrade`, which `session-groups.ts` calls).
 
 #### Opening
 
@@ -1358,7 +1358,7 @@ Twin of the worker's `groupOpenArea` and `grantAreaKey`/`openAreaSelfGrant`.
 
 #### Settings and area fixtures
 
-- `fixtures/settings-area-cases.json`, run by `tests/common/settings_areas.rs` and `packages/crypto/src/settings-areas-testkit.ts` into the roster-call documents (`settingsReadings`, `areaOpens`).
+- `fixtures/settings-area-cases.json`, run by `tests/common/settings_areas.rs` and `packages/crypto/src/trust/settings-areas-testkit.ts` into the roster-call documents (`settingsReadings`, `areaOpens`).
     - 28 settings cases on person 1's device: envelopes, contacts and group pins of every odd shape, downgrades and older documents, a lone surrogate in a contact name, then acceptance, person 4's admission and person 2's join code.
     - 18 area cases on person 2's device: self-grants current, stale, served ahead, beyond listed, of another family, folder, root or key, damaged; the granter gone; stores only at the current key.
 - Each twin's envelopes and self-grants are read by the other to the same full outcomes.

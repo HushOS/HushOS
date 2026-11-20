@@ -3,8 +3,8 @@ import { readFileSync } from 'node:fs';
 import {
     successionConsentStatement as coreConsentStatement,
     type SuccessionStatement as CoreLink,
-} from '../../crypto/src/signatures';
-import { verifySuccessionConsent as coreConsentHolds } from '../../crypto/src/identity';
+} from '../../crypto/src/primitives/signatures';
+import { verifySuccessionConsent as coreConsentHolds } from '../../crypto/src/account/identity';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, test } from 'vitest';
 import { bytes, freshV2, registered, seedOf, signedIn } from '../test/accounts';

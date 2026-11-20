@@ -4,7 +4,7 @@
 //! `packages/crypto/scripts/area-ledger-fixtures.ts`): every stated outcome
 //! holds here, every step gives here what it gave on the web, and every key
 //! envelope the web's ledger made opens here to the key it says. The other
-//! direction is `packages/crypto/src/area-ledger-fixtures.test.ts`. The
+//! direction is `packages/crypto/src/groups/area-ledger-fixtures.test.ts`. The
 //! nodes the web walked (`rotations`) read here as both twins declare, and
 //! walk here to the same records. The web's chain records (`deviceRecords`)
 //! open here and reach here what they reached on the web, the app's own

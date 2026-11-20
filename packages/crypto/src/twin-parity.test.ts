@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { deviceSessionStatement } from './device-identity';
-import { CryptoError } from './errors';
-import { publicIdentity, type IdentityEnvelope } from './identity';
-import { decode } from './keys';
-import { shareStatement } from './signatures';
+import { deviceSessionStatement } from './account/device-identity';
+import { CryptoError } from './primitives/errors';
+import { publicIdentity, type IdentityEnvelope } from './account/identity';
+import { decode } from './primitives/keys';
+import { shareStatement } from './primitives/signatures';
 import core from './__fixtures__/core.json';
 
 /*

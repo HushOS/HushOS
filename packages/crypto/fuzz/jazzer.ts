@@ -1,5 +1,5 @@
 import { FuzzedDataProvider } from '@jazzer.js/core';
-import { decode, encode } from '../src/keys';
+import { decode, encode } from '../src/primitives/keys';
 import { groups } from './fixtures';
 import { verdict, type Target } from './verdicts';
 

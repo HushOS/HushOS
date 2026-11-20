@@ -1,6 +1,6 @@
 //! The family write rules (docs/groups-design.md 2.6 and 2.10, flags F9 and
 //! F14) and the keys they hold, the twin of the web worker's area ledger
-//! (`packages/crypto/src/area-ledger.ts`, which `session.ts` and
+//! (`packages/crypto/src/groups/area-ledger.ts`, which `session.ts` and
 //! `session-groups.ts` use):
 //!
 //! - an area is written only under its **write version**: the latest the

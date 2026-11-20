@@ -1,5 +1,5 @@
 //! An editor's unsaved text, sealed on the device it was typed on
-//! (docs/editing-design.md 3, "Draft"): the twin of `packages/crypto/src/drafts.ts`,
+//! (docs/editing-design.md 3, "Draft"): the twin of `packages/crypto/src/account/drafts.ts`,
 //! held to it by `fixtures/drafts.json`.
 //!
 //! Key: HKDF-SHA-256 of the account root, salt 32 zero bytes, info the compact

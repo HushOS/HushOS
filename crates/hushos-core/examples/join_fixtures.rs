@@ -1,5 +1,5 @@
 //! Joining and consent (groups 1d, Core 4) as this core decides them, for the
-//! web to match (`packages/crypto/src/join-fixtures.test.ts`) and for the
+//! web to match (`packages/crypto/src/groups/join-fixtures.test.ts`) and for the
 //! server's consent check (`packages/db/src/auth.consent.test.ts`): the join
 //! previews over the histories this core signed and the records its
 //! acceptance sealed, the typed-words checks of `fixtures/join-check-cases.json`,

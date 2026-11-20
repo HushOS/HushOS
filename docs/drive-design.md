@@ -17,7 +17,7 @@ Content suite 3 is current: suite 2's layout (the thumbnail sealed into the obje
 
 Writer signatures, share suite 3, identity succession and the settings key are specified in [integrity-design.md](integrity-design.md), whose API contract the server implements. Where this document and that one differ, that one is current.
 
-The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive.ts`.
+The code lives in `packages/drive`, `packages/db/src/drive.ts` and `packages/crypto/src/drive/drive.ts`.
 
 ### Implemented as designed
 

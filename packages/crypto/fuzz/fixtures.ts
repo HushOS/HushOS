@@ -1,15 +1,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { acceptRosters, type AcceptedRosters } from '../src/group-trust';
-import type { SignedGroupStatement } from '../src/groups';
-import { READER, mlDsaKeysOf, person, GROUP, type Person } from '../src/group-testkit';
+import { acceptRosters, type AcceptedRosters } from '../src/groups/group-trust';
+import type { SignedGroupStatement } from '../src/groups/groups';
+import { READER, mlDsaKeysOf, person, GROUP, type Person } from '../src/groups/group-testkit';
 import {
     openIdentityEncryptionKey,
     openIdentityKemKey,
     type IdentityEnvelope,
-} from '../src/identity';
-import { decode } from '../src/keys';
-import type { GranteeSecrets } from '../src/shares';
+} from '../src/account/identity';
+import { decode } from '../src/primitives/keys';
+import type { GranteeSecrets } from '../src/drive/shares';
 
 /*
  * The fixture documents both twins share, read once per process from the

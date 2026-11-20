@@ -1,10 +1,10 @@
 import { client, ready, server } from '@serenity-kit/opaque';
 import { describe, expect, test } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
-import { RefusedError } from './errors';
+import { createDeviceKey, rememberAccountKey } from './account/device';
+import { RefusedError } from './primitives/errors';
 import { KEY_STRETCHING, OPAQUE_IDENTIFIERS, OPAQUE_PROFILE_VERSION } from './protocol';
 import { createCryptoSession } from './session';
-import { createWorkspaceGrant } from './workspace';
+import { createWorkspaceGrant } from './drive/workspace';
 
 /*
  * Proving the password again while unlocked (removing a device,

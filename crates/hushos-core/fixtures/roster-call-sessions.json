@@ -1,5 +1,5 @@
 {
-    "description": "A manager's device over time (Core 5a): each scenario's steps through both twins' session interpreters (crates/hushos-core/tests/common/roster_calls.rs session_run, packages/crypto/src/roster-calls-testkit.ts sessionRun) must give exactly `expected`. Hand-written; the fuzz kind roster_call_session draws steps in the same vocabulary.",
+    "description": "A manager's device over time (Core 5a): each scenario's steps through both twins' session interpreters (crates/hushos-core/tests/common/roster_calls.rs session_run, packages/crypto/src/groups/roster-calls-testkit.ts sessionRun) must give exactly `expected`. Hand-written; the fuzz kind roster_call_session draws steps in the same vocabulary.",
     "scenarios": [
         {
             "name": "a-kept-call-across-a-lock-a-relaunch-and-another-manager",

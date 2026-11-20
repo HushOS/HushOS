@@ -1,7 +1,7 @@
 //! The settings document opened by the ledger itself (groups 1d, Core 6;
 //! docs/groups-mobile-plan.md, Core 5a's residual), the twin of the web
 //! worker's `settingsKeyOpen`/`settingsOpen` (`packages/crypto/src/session.ts`)
-//! and of the session's settings marks (`packages/crypto/src/settings-marks.ts`,
+//! and of the session's settings marks (`packages/crypto/src/trust/settings-marks.ts`,
 //! which `session-groups.ts` calls):
 //!
 //! - [`AreaLedger::use_settings_envelope`] takes the envelopes the server

@@ -1,7 +1,7 @@
 //! People, group keys and JSON shapes for the group fixtures, shared by
 //! `tests/web_group_fixtures.rs` and `examples/group_fixtures.rs` (which
 //! includes this file by path). Every key comes from the same fixed seeds as
-//! `packages/crypto/src/group-testkit.ts`, so both twins derive the same people
+//! `packages/crypto/src/groups/group-testkit.ts`, so both twins derive the same people
 //! and group keys, and each checks the other's derivation.
 #![allow(dead_code)]
 

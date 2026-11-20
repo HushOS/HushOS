@@ -1,5 +1,5 @@
 //! The family write rules as steps, the twin of
-//! `packages/crypto/src/area-ledger-testkit.ts`: both read the same steps the
+//! `packages/crypto/src/groups/area-ledger-testkit.ts`: both read the same steps the
 //! same way (a step that does not fit is a skip, as the fuzz shapes say), run
 //! them on their own ledger, and must give the same outcome for every step.
 //! Used by `tests/area_ledger_fixtures.rs`, `examples/area_ledger_fixtures.rs`

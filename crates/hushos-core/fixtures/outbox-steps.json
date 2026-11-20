@@ -1,5 +1,5 @@
 {
-    "description": "What one answer to a roster call means for its outbox entry (F7, docs/groups-server.md 6): outbox_step in crates/hushos-core/src/roster_calls.rs and outboxStep in packages/crypto/src/outbox.ts must both give `step` for `status` and `code` (null: no code). Hand-written; both twins' tests read it.",
+    "description": "What one answer to a roster call means for its outbox entry (F7, docs/groups-server.md 6): outbox_step in crates/hushos-core/src/roster_calls.rs and outboxStep in packages/crypto/src/groups/outbox.ts must both give `step` for `status` and `code` (null: no code). Hand-written; both twins' tests read it.",
     "cases": [
         {
             "status": 200,

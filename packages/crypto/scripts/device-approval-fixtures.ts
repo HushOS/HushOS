@@ -7,9 +7,9 @@ import {
     deviceStepStatement,
     deviceTurnOnStatement,
     turnOnCodeDigest,
-} from '../src/device-approval';
-import { encode } from '../src/keys';
-import { stepTokenDigest } from '../src/two-step';
+} from '../src/account/device-approval';
+import { encode } from '../src/primitives/keys';
+import { stepTokenDigest } from '../src/account/two-step';
 
 /*
  * Approving on another device as the web builds it (docs/two-step-design.md 12), for the Rust

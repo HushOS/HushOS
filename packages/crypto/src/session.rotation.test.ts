@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'vitest';
-import { createDeviceKey, rememberAccountKey } from './device';
-import { createIdentity, openIdentitySigningKey } from './identity';
-import { generateKey, wrapContentKey } from './drive';
-import { openLinkKey } from './links';
+import { createDeviceKey, rememberAccountKey } from './account/device';
+import { createIdentity, openIdentitySigningKey } from './account/identity';
+import { generateKey, wrapContentKey } from './drive/drive';
+import { openLinkKey } from './drive/links';
 import { createCryptoSession } from './session';
-import { createWorkspaceGrant } from './workspace';
-import { decode, encode } from './keys';
+import { createWorkspaceGrant } from './drive/workspace';
+import { decode, encode } from './primitives/keys';
 import {
     metadataSavedStatement,
     metadataStatement,
@@ -13,7 +13,7 @@ import {
     verifyStatement,
     versionResealedStatement,
     versionStatement,
-} from './signatures';
+} from './primitives/signatures';
 import sodium from 'libsodium-wrappers';
 
 /*
@@ -111,8 +111,8 @@ describe('rotation', () => {
         const contentKey = generateKey();
         const bKey = await (async () => {
             // The test needs B's key to wrap a content key; take it the way a device would, from its envelope.
-            const { openNodeKey } = await import('./drive');
-            const { openWorkspaceKey } = await import('./workspace');
+            const { openNodeKey } = await import('./drive/drive');
+            const { openWorkspaceKey } = await import('./drive/workspace');
             const wsKey = await openWorkspaceKey(root, USER, grant);
             const aKey = await openNodeKey(decode(a.keyEnvelope, 72), wsKey, {
                 workspaceId: WS,

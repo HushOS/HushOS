@@ -1,5 +1,5 @@
 {
-    "about": "merge_pin and pin_ahead (packages/crypto/src/pins.ts mergePin, pinAhead): each case's stated result, which both twins must give (tests/common/device_records.rs, src/device-record-testkit.ts); `ahead` is pin_ahead(current, merged); `refused` is an opened area of another family than `groupId`.",
+    "about": "merge_pin and pin_ahead (packages/crypto/src/trust/pins.ts mergePin, pinAhead): each case's stated result, which both twins must give (tests/common/device_records.rs, src/account/device-record-testkit.ts); `ahead` is pin_ahead(current, merged); `refused` is an opened area of another family than `groupId`.",
     "cases": [
         {
             "name": "no-current-pin",

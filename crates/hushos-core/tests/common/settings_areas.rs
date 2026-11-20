@@ -1,6 +1,6 @@
 //! The settings document opened by the ledger and family folders opened from
 //! route 25 (groups 1d, Core 6), for the shared fixtures: the twin of
-//! `packages/crypto/src/settings-areas-testkit.ts`. Both twins run the cases
+//! `packages/crypto/src/trust/settings-areas-testkit.ts`. Both twins run the cases
 //! of `fixtures/settings-area-cases.json` over the roster-call family through
 //! their own code (here [`AreaLedger::use_settings_envelope`] and
 //! [`AreaLedger::open_family_area`]; there the worker's `settingsKeyOpen`,

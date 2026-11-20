@@ -2,7 +2,7 @@ import Foundation
 
 /*
  * A contact's fingerprint as twelve words to read aloud, exactly as the web's
- * `fingerprintWords` (packages/crypto/src/fingerprint.ts) draws them: the first
+ * `fingerprintWords` (packages/crypto/src/primitives/fingerprint.ts) draws them: the first
  * 132 bits of the 40-hex-digit fingerprint, eleven bits at a time, most
  * significant first, each naming a word in the BIP-39 English list. Every client
  * must draw the same words from the same fingerprint, or two people comparing

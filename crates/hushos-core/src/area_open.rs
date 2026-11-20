@@ -2,7 +2,7 @@
 //! twin of the web worker's `groupOpenArea` (`packages/crypto/src/area-open.ts`,
 //! which `session-groups.ts` calls) and of the area self-grant
 //! (docs/envelope-migrations.md 5; `grantAreaKey`, `openAreaSelfGrant` in
-//! `packages/crypto/src/workspace.ts`):
+//! `packages/crypto/src/drive/workspace.ts`):
 //!
 //! - the **self-grant** (the member's own wrap of the area key under their
 //!   account root, bound to the family by `["hushos/group/area-self-grant",1,

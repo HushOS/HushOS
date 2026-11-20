@@ -1,8 +1,8 @@
 //! The roster calls a family manager sends from a phone (groups 1d, Core 5a:
 //! docs/groups-mobile-plan.md), the twin of the worker's `groupStage` for the
 //! admission and role changes, `groupOpenSeal`, `groupJoinCode`
-//! (`packages/crypto/src/session-groups.ts`), and of the outbox's reading and
-//! answer table (`packages/crypto/src/outbox.ts`, which
+//! (`packages/crypto/src/groups/session-groups.ts`), and of the outbox's reading and
+//! answer table (`packages/crypto/src/groups/outbox.ts`, which
 //! `apps/web/src/lib/groups/outbox.ts` drives).
 //!
 //! - A call is built on the family's committed chain only (the one
@@ -287,7 +287,7 @@ pub enum GrantsCall {
 }
 
 /// What one answer to a roster call means for its outbox entry (F7; the
-/// worker's outbox table in `packages/crypto/src/outbox.ts`).
+/// worker's outbox table in `packages/crypto/src/groups/outbox.ts`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "uniffi", derive(uniffi::Enum))]
 pub enum OutboxStep {

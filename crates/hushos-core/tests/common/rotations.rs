@@ -1,5 +1,5 @@
 //! A family folder's walk, node by node, the twin of
-//! `packages/crypto/src/rotation-testkit.ts`: both build the same cases in the
+//! `packages/crypto/src/groups/rotation-testkit.ts`: both build the same cases in the
 //! same order from the same keys (the shared people of `groups.rs`, the named
 //! keys of the area-ledger scenarios), walk each case's nodes in order with
 //! their own walk (here [`AreaLedger::rotate_node`]), and read the other

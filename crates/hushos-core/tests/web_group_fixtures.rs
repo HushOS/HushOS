@@ -1,7 +1,7 @@
 //! The group statements, signatures and seals the web made
 //! (`packages/crypto/scripts/group-fixtures.ts`) must rebuild here byte for
 //! byte, verify, and open. The other direction is
-//! `packages/crypto/src/group-fixtures.test.ts`. Regenerate both with
+//! `packages/crypto/src/groups/group-fixtures.test.ts`. Regenerate both with
 //! `bun run fixtures`.
 
 mod common;

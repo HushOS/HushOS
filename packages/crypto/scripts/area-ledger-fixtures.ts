@@ -1,7 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
-import { readSteps, runSteps, unmet } from '../src/area-ledger-testkit';
-import { rotationFixture } from '../src/rotation-testkit';
+import { readSteps, runSteps, unmet } from '../src/groups/area-ledger-testkit';
+import { rotationFixture } from '../src/groups/rotation-testkit';
 import {
     deviceCases,
     mergeResult,
@@ -9,19 +9,19 @@ import {
     says,
     storeRows,
     type MergeCase,
-} from '../src/device-record-testkit';
-import { servedRaceMessage } from '../src/record-acceptance';
+} from '../src/account/device-record-testkit';
+import { servedRaceMessage } from '../src/trust/record-acceptance';
 
 /*
- * The family write rules as the web's ledger (src/area-ledger.ts) runs the
+ * The family write rules as the web's ledger (src/groups/area-ledger.ts) runs the
  * shared scenarios (crates/hushos-core/fixtures/area-ledger-scenarios.json):
  * every step's outcome and every key envelope a step made, for the Rust core
  * to match step for step and open (crates/hushos-core/tests/area_ledger_fixtures.rs).
  * Each scenario's stated outcomes are checked here before anything is
  * written. Also the nodes the web's walk rotated (`rotations`,
- * src/rotation-testkit.ts), each read back here as its case declares, for
+ * src/groups/rotation-testkit.ts), each read back here as its case declares, for
  * the core to read. And the chain records the worker sealed with the outcomes
- * the web's order reached on them (`deviceRecords`, src/device-record-testkit.ts),
+ * the web's order reached on them (`deviceRecords`, src/account/device-record-testkit.ts),
  * the data layer's own records, and the merge cases' results
  * (crates/hushos-core/fixtures/merge-pin-cases.json), each checked against its
  * case first. Fresh keys differ on every run. Regenerate with

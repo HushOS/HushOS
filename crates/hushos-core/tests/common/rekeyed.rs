@@ -1,7 +1,7 @@
 //! Re-keyed records as JSON, shared by `tests/web_fixtures.rs`,
 //! `examples/fixtures.rs` and the fuzz crate's `record_integrity` target (both
 //! include this file by path). The twin is
-//! `packages/crypto/src/rekeyed-testkit.ts`: both read the same document the
+//! `packages/crypto/src/groups/rekeyed-testkit.ts`: both read the same document the
 //! same way (a field that does not fit is a skip) and give the same verdict,
 //! and both build the same cases, in the same order, with the same
 //! expectations, from their own keys.

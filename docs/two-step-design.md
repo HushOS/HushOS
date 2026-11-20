@@ -366,7 +366,7 @@ The first way back: section 2. A backup code passes one step; it does not remove
 
 **Recommendation: the phrase satisfies the step, at once, with a security notice.**
 
-- **How it works.** The step screen offers "Use your recovery phrase". The step token's response carries the account's id and the recovery envelope's `wrappingSalt` and `recoveryVersion` (section 4). The id is there because the statement names it and a sign-in has not been told it yet; the salt because the signing key depends on it: `seed = derive(secret, wrappingSalt, 'authentication')`, as a phrase reset derives it (`packages/crypto/src/recovery.ts`). The device derives that key and signs:
+- **How it works.** The step screen offers "Use your recovery phrase". The step token's response carries the account's id and the recovery envelope's `wrappingSalt` and `recoveryVersion` (section 4). The id is there because the statement names it and a sign-in has not been told it yet; the salt because the signing key depends on it: `seed = derive(secret, wrappingSalt, 'authentication')`, as a phrase reset derives it (`packages/crypto/src/account/recovery.ts`). The device derives that key and signs:
 
     ```
     ["hushos/two-step/phrase",1,userId,sha256(stepToken)]
@@ -928,7 +928,7 @@ The server, the web app and both phone apps do what sections 3 and 12 say, with 
 
 Approve on another device is a method of the step on the server, the web, the iPhone and Android, as this section says, with these points settled in the building.
 
-**The bytes.** The three values are built identically in `packages/crypto/src/device-approval.ts` (the web), `crates/hushos-core/src/device_approval.rs` (the phones) and `packages/db/src/signatures.ts` (the server), and fixtures in both directions hold them together (`fixtures/web-device-approval.json`, `__fixtures__/core-device-approval.json`).
+**The bytes.** The three values are built identically in `packages/crypto/src/account/device-approval.ts` (the web), `crates/hushos-core/src/device_approval.rs` (the phones) and `packages/db/src/signatures.ts` (the server), and fixtures in both directions hold them together (`fixtures/web-device-approval.json`, `__fixtures__/core-device-approval.json`).
 
 - The labels and the purpose are ASCII. Ids are lowercase UUIDs, 36 characters. `sha256(stepToken)` is the SHA-256 of the step token's UTF-8 bytes, which is what the server keeps of a token. The keys, the nonce and the digest are 32 bytes each. Every field but the purpose has a fixed length and the purposes are a fixed list, so the plain concatenation reads one way only.
 - `approverEphemeralKey` is 32 fresh random bytes. Nothing is sealed to it in this design, so it is not a key; it is the approving device's own value, fixed before the asking device reveals.

@@ -22,7 +22,7 @@ import { describe, expect, test } from 'vitest';
  * which modules name the groupAccept operation at all.
  *
  * The worker turns `joining` and `creating` into the core's `anchor`
- * (packages/crypto/src/session-groups.ts; it was `firstKeysChecked`), so the
+ * (packages/crypto/src/groups/session-groups.ts; it was `firstKeysChecked`), so the
  * same rule is checked where the anchor itself is set: in the crypto package
  * and in Drive, the shipped modules that could call acceptance, every site
  * that gives it anything but `null` must be one of the sites listed below,
@@ -58,23 +58,23 @@ const ANCHOR_SITES = [
     // The server's acceptance of its own stored history, anchored on the version 1 keys stored at
     // creation, behind the capability only the server entry holds; its StoredChain opens and
     // vouches for nothing on a device (I14). No device anchor is `stored`.
-    "packages/crypto/src/group-trust.ts › acceptStored: 'stored'",
+    "packages/crypto/src/groups/group-trust.ts › acceptStored: 'stored'",
     // Creation, inside the worker, over the group key it just made: the staged chain the
     // creating call seals and grants against (design 3.1).
-    "packages/crypto/src/session-groups.ts › create: 'created'",
+    "packages/crypto/src/groups/session-groups.ts › create: 'created'",
     // The worker's acceptance run (acceptRun, which accept, a join's joinRun and a first use's
     // firstUseRun call): a join carrying the compared join code where nothing marks the family
     // (a first use's commit passes none: its record's pin is a mark), and the creating device's
     // committed creation over served first keys equal to the seed it still holds; then the
     // variable is passed on.
-    "packages/crypto/src/session-groups.ts › acceptRun: 'join'",
-    "packages/crypto/src/session-groups.ts › acceptRun: 'created'",
-    'packages/crypto/src/session-groups.ts › acceptRun: (shorthand)',
+    "packages/crypto/src/groups/session-groups.ts › acceptRun: 'join'",
+    "packages/crypto/src/groups/session-groups.ts › acceptRun: 'created'",
+    'packages/crypto/src/groups/session-groups.ts › acceptRun: (shorthand)',
     // The join's admission (preview, check, first use, and each join's own re-check): verifies
     // over the served first keys on first use only to work out the code the person compares or
     // the roster a first use's record keeps, only where nothing (the session floor included)
     // marks the family, and commits, keeps and marks nothing.
-    "packages/crypto/src/session-groups.ts › admission: marks || floorPin ? null : 'first-use'",
+    "packages/crypto/src/groups/session-groups.ts › admission: marks || floorPin ? null : 'first-use'",
 ].sort();
 
 function modules(dir: string): string[] {

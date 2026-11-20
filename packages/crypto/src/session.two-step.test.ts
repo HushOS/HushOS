@@ -1,8 +1,8 @@
 import { client, ready, server } from '@serenity-kit/opaque';
 import { describe, expect, test } from 'vitest';
-import { RefusedError } from './errors';
-import { encryptKey } from './aead';
-import { wrappingKey } from './keys';
+import { RefusedError } from './primitives/errors';
+import { encryptKey } from './primitives/aead';
+import { wrappingKey } from './primitives/keys';
 import {
     accountKeyContext,
     ENVELOPE_VERSION,
@@ -10,15 +10,15 @@ import {
     OPAQUE_IDENTIFIERS,
     OPAQUE_PROFILE_VERSION,
 } from './protocol';
-import { createIdentity } from './identity';
-import { createRecovery } from './recovery';
+import { createIdentity } from './account/identity';
+import { createRecovery } from './account/recovery';
 import { createCryptoSession } from './session';
 import {
     recoveryStepKey,
     signTwoStepPhrase,
     stepTokenDigest,
     verifyTwoStepPhrase,
-} from './two-step';
+} from './account/two-step';
 
 /*
  * The recovery phrase as a second step, in the worker (docs/two-step-design.md 5). A sign-in
